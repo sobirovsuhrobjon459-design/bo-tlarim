@@ -84,16 +84,24 @@ class Test(Base):
     topic: Mapped[str] = mapped_column(String(200), default="")
     price: Mapped[int] = mapped_column(default=0)
     duration: Mapped[int] = mapped_column(default=30)  # daqiqalarda
+
+    # "full"  — savol matni va variantlar to'liq botda kiritiladi
+    # "key"   — faqat javoblar kaliti kiritiladi (savollar tashqarida, masalan kanalda)
+    mode: Mapped[str] = mapped_column(String(10), default="full")
+
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
     teacher: Mapped["Teacher"] = relationship(back_populates="tests")
     questions: Mapped[list["Question"]] = relationship(
         back_populates="test", cascade="all, delete-orphan", order_by="Question.id"
     )
+    key_questions: Mapped[list["KeyQuestion"]] = relationship(
+        back_populates="test", cascade="all, delete-orphan", order_by="KeyQuestion.number"
+    )
 
 
 class Question(Base):
-    """Testning bitta savoli (4 ta variant: A, B, C, D)."""
+    """Testning bitta savoli — 'full' rejimida ishlatiladi (4 ta variant: A, B, C, D)."""
 
     __tablename__ = "questions"
 
@@ -107,6 +115,27 @@ class Question(Base):
     correct: Mapped[str] = mapped_column(String(1))  # "A" | "B" | "C" | "D"
 
     test: Mapped["Test"] = relationship(back_populates="questions")
+
+
+class KeyQuestion(Base):
+    """
+    Faqat javoblar kaliti — 'key' rejimida ishlatiladi.
+
+    Savol matni saqlanmaydi (chunki haqiqiy savollar tashqarida, masalan
+    o'qituvchining Telegram kanalida joylashtirilgan bo'ladi). Bu yerda faqat:
+    savol raqami, turi (single/multi) va to'g'ri javob(lar) saqlanadi.
+    """
+
+    __tablename__ = "key_questions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    test_id: Mapped[int] = mapped_column(ForeignKey("tests.id"), index=True)
+    number: Mapped[int]
+    question_type: Mapped[str] = mapped_column(String(10), default="single")  # "single" | "multi"
+    option_count: Mapped[int] = mapped_column(default=4)  # variantlar soni (A, B, C... shu sonigacha)
+    correct: Mapped[str] = mapped_column(String(50))  # "B" yoki ko'p tanlovda "A,C"
+
+    test: Mapped["Test"] = relationship(back_populates="key_questions")
 
 
 class Attempt(Base):
@@ -127,14 +156,21 @@ class Attempt(Base):
 
 
 class StudentAnswer(Base):
-    """O'quvchining har bir savolga bergan aniq javobi."""
+    """
+    O'quvchining har bir savolga bergan aniq javobi.
+
+    question_ref ma'nosi testning rejimiga bog'liq:
+    - 'full' rejimida — Question.id
+    - 'key' rejimida — KeyQuestion.number (savol tartib raqami)
+    Ikkala rejim ham qo'llab-quvvatlanishi uchun bu oddiy raqam, chet kalit (FK) emas.
+    """
 
     __tablename__ = "student_answers"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     attempt_id: Mapped[int] = mapped_column(ForeignKey("test_attempts.id"), index=True)
-    question_id: Mapped[int] = mapped_column(ForeignKey("questions.id"), index=True)
-    chosen: Mapped[str | None] = mapped_column(String(1), default=None)
+    question_ref: Mapped[int] = mapped_column(index=True)
+    chosen: Mapped[str | None] = mapped_column(String(50), default=None)
     is_correct: Mapped[bool] = mapped_column(default=False)
 
 
@@ -163,6 +199,8 @@ class Credentials(BaseModel):
 
 
 class QuestionIn(BaseModel):
+    """'full' rejimidagi bitta savol: to'liq matn va 4 variant."""
+
     text: str = Field(min_length=1, max_length=1000)
     a: str = Field(min_length=1, max_length=500)
     b: str = Field(min_length=1, max_length=500)
@@ -171,13 +209,24 @@ class QuestionIn(BaseModel):
     correct: str = Field(pattern="^[ABCD]$")
 
 
+class KeyQuestionIn(BaseModel):
+    """'key' rejimidagi bitta savol: faqat raqami, turi, variantlar soni va to'g'ri javob."""
+
+    number: int = Field(ge=1, le=300)
+    question_type: str = Field(pattern="^(single|multi)$")
+    option_count: int = Field(ge=2, le=8)
+    correct: str = Field(min_length=1, max_length=50)
+
+
 class TestIn(BaseModel):
     title: str = Field(min_length=2, max_length=200)
     subject: str = Field(min_length=2, max_length=100)
     topic: str = Field("", max_length=200)
     price: int = Field(0, ge=0, le=10_000_000)
     duration: int = Field(30, ge=1, le=300)
-    questions: list[QuestionIn] = Field(min_length=1, max_length=300)
+    mode: str = Field("full", pattern="^(full|key)$")
+    questions: list[QuestionIn] = Field(default_factory=list, max_length=300)
+    key_questions: list[KeyQuestionIn] = Field(default_factory=list, max_length=300)
 
 
 class FinishIn(BaseModel):

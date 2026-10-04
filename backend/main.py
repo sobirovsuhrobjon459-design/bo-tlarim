@@ -50,6 +50,7 @@ from .database import (
     Base,
     Credentials,
     FinishIn,
+    KeyQuestion,
     Payment,
     PriceUpdate,
     Question,
@@ -106,17 +107,21 @@ def build_test_stats(db: Session, test: Test) -> dict:
     results = best_attempts(db, test)
     percents = [attempt.percent for attempt, _ in results]
 
-    question_stats = []
-    for question in test.questions:
+    def question_wrong_stats(ref: int, label: str) -> dict:
         base_query = (
             select(func.count())
             .select_from(StudentAnswer)
             .join(Attempt, Attempt.id == StudentAnswer.attempt_id)
-            .where(StudentAnswer.question_id == question.id, Attempt.status == "done")
+            .where(StudentAnswer.question_ref == ref, Attempt.test_id == test.id, Attempt.status == "done")
         )
         total_answers = db.scalar(base_query)
         wrong_answers = db.scalar(base_query.where(StudentAnswer.is_correct.is_(False)))
-        question_stats.append({"text": question.text, "total": total_answers, "wrong": wrong_answers})
+        return {"text": label, "total": total_answers, "wrong": wrong_answers}
+
+    if test.mode == "key":
+        question_stats = [question_wrong_stats(kq.number, f"{kq.number}-savol") for kq in test.key_questions]
+    else:
+        question_stats = [question_wrong_stats(q.id, q.text) for q in test.questions]
 
     return {
         "total": len(results),
@@ -161,6 +166,11 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes
 
     SimpleDocTemplate(buffer, pagesize=A4).build(elements)
     return buffer.getvalue()
+
+
+def _question_count(test: Test) -> int:
+    """Testning rejimiga qarab savollar sonini qaytaradi."""
+    return len(test.key_questions) if test.mode == "key" else len(test.questions)
 
 
 def _get_own_test(db: Session, teacher: Teacher, test_id: int) -> Test:
@@ -272,7 +282,8 @@ def list_tests(teacher: Teacher = Depends(get_current_teacher), db: Session = De
                 "code": test.code,
                 "title": test.title,
                 "subject": test.subject,
-                "count": len(test.questions),
+                "mode": test.mode,
+                "count": _question_count(test),
                 "price": test.price,
                 "students": participant_count,
             }
@@ -284,6 +295,11 @@ def list_tests(teacher: Teacher = Depends(get_current_teacher), db: Session = De
 @app.post("/api/teacher/tests")
 def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
     """Yangi test (va uning savollarini) yaratadi, tasodifiy noyob kod beradi."""
+
+    if body.mode == "key" and not body.key_questions:
+        raise HTTPException(status_code=422, detail="Kamida bitta savol kiriting")
+    if body.mode == "full" and not body.questions:
+        raise HTTPException(status_code=422, detail="Kamida bitta savol kiriting")
 
     prefix = "".join(ch for ch in body.subject.upper() if ch in string.ascii_uppercase)[:4] or "TEST"
 
@@ -300,7 +316,13 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         topic=body.topic,
         price=body.price,
         duration=body.duration,
-        questions=[Question(**question.model_dump()) for question in body.questions],
+        mode=body.mode,
+        questions=[Question(**question.model_dump()) for question in body.questions] if body.mode == "full" else [],
+        key_questions=(
+            [KeyQuestion(**key_question.model_dump()) for key_question in body.key_questions]
+            if body.mode == "key"
+            else []
+        ),
     )
     db.add(test)
     db.commit()
@@ -398,7 +420,7 @@ def get_test(code: str, user: User = Depends(get_current_user), db: Session = De
         "code": test.code,
         "title": test.title,
         "subject": test.subject,
-        "count": len(test.questions),
+        "count": _question_count(test),
         "duration": test.duration,
         "price": test.price,
         "paid": _is_paid(db, user, test),
@@ -449,13 +471,24 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
 
     remaining_seconds = int(test.duration * 60 - (datetime.utcnow() - attempt.started_at).total_seconds())
 
+    if test.mode == "key":
+        # Savol matni yuborilmaydi — faqat raqami, turi va nechta variant borligi.
+        questions_payload = [
+            {"number": kq.number, "question_type": kq.question_type, "option_count": kq.option_count}
+            for kq in test.key_questions
+        ]
+    else:
+        # To'g'ri javob (correct) yuborilmaydi — aks holda o'quvchi brauzer orqali ko'rib olishi mumkin.
+        questions_payload = [
+            {"id": q.id, "text": q.text, "a": q.a, "b": q.b, "c": q.c, "d": q.d} for q in test.questions
+        ]
+
     return {
         "attempt_id": attempt.id,
+        "mode": test.mode,
         "duration": test.duration,
         "remaining": remaining_seconds,
-        "questions": [
-            {"id": q.id, "text": q.text, "a": q.a, "b": q.b, "c": q.c, "d": q.d} for q in test.questions
-        ],
+        "questions": questions_payload,
     }
 
 
@@ -474,14 +507,37 @@ def finish_attempt(
     test = db.get(Test, attempt.test_id)
     correct_count = 0
 
-    for question in test.questions:
-        chosen = (body.answers.get(str(question.id)) or "").upper()
-        chosen = chosen if chosen in "ABCD" and len(chosen) == 1 else None
-        is_correct = chosen == question.correct
-        correct_count += is_correct
-        db.add(StudentAnswer(attempt_id=attempt.id, question_id=question.id, chosen=chosen, is_correct=is_correct))
+    if test.mode == "key":
+        total_questions = len(test.key_questions)
+        for key_question in test.key_questions:
+            raw_answer = (body.answers.get(str(key_question.number)) or "").upper().replace(" ", "")
 
-    total_questions = len(test.questions)
+            if key_question.question_type == "multi":
+                chosen_letters = {letter for letter in raw_answer.split(",") if letter}
+                correct_letters = set(key_question.correct.split(","))
+                is_correct = bool(chosen_letters) and chosen_letters == correct_letters
+                chosen_value = ",".join(sorted(chosen_letters)) if chosen_letters else None
+            else:
+                is_correct = raw_answer == key_question.correct
+                chosen_value = raw_answer or None
+
+            correct_count += is_correct
+            db.add(
+                StudentAnswer(
+                    attempt_id=attempt.id,
+                    question_ref=key_question.number,
+                    chosen=chosen_value,
+                    is_correct=is_correct,
+                )
+            )
+    else:
+        total_questions = len(test.questions)
+        for question in test.questions:
+            chosen = (body.answers.get(str(question.id)) or "").upper()
+            chosen = chosen if chosen in "ABCD" and len(chosen) == 1 else None
+            is_correct = chosen == question.correct
+            correct_count += is_correct
+            db.add(StudentAnswer(attempt_id=attempt.id, question_ref=question.id, chosen=chosen, is_correct=is_correct))
     attempt.correct = correct_count
     attempt.wrong = total_questions - correct_count
     attempt.percent = round(correct_count / total_questions * 100, 1)

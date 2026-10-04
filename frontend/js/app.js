@@ -293,6 +293,7 @@ async function startTest(code) {
 
   quizState = {
     attemptId: data.attempt_id,
+    mode: data.mode,
     questions: data.questions,
     index: 0,
     answers: {},
@@ -307,6 +308,14 @@ async function startTest(code) {
 }
 
 function renderQuizQuestion() {
+  if (quizState.mode === "key") {
+    renderKeyQuizQuestion();
+  } else {
+    renderFullQuizQuestion();
+  }
+}
+
+function renderFullQuizQuestion() {
   const question = quizState.questions[quizState.index];
   const total = quizState.questions.length;
   const isLast = quizState.index === total - 1;
@@ -335,6 +344,68 @@ function renderQuizQuestion() {
       quizState.answers[question.id] = optionEl.dataset.letter;
       document.querySelectorAll("#options-container .option").forEach((el) => el.classList.remove("selected"));
       optionEl.classList.add("selected");
+    });
+  });
+
+  document.getElementById("next-button").addEventListener(
+    "click",
+    guarded(async () => {
+      if (isLast) {
+        await finishQuiz();
+      } else {
+        quizState.index += 1;
+        renderQuizQuestion();
+      }
+    })
+  );
+
+  updateQuizTimer();
+}
+
+function renderKeyQuizQuestion() {
+  const question = quizState.questions[quizState.index];
+  const total = quizState.questions.length;
+  const isLast = quizState.index === total - 1;
+  const progressPercent = Math.round(((quizState.index + 1) / total) * 100);
+  const isMulti = question.question_type === "multi";
+
+  const selectedAnswer = quizState.answers[question.number] || "";
+  const selectedLetters = new Set(selectedAnswer ? selectedAnswer.split(",") : []);
+
+  const optionsHtml = Array.from({ length: question.option_count }, (_, index) => {
+    const letter = String.fromCharCode(65 + index);
+    const selected = selectedLetters.has(letter) ? "selected" : "";
+    return `<div class="option ${selected}" data-letter="${letter}" style="text-align:center"><b>${letter}</b></div>`;
+  }).join("");
+
+  showPage(`
+    <div class="row-between">
+      <b>${question.number}-savol / ${total}</b>
+      <b id="quiz-timer"></b>
+    </div>
+    <div class="progress-track"><div class="progress-fill" style="width:${progressPercent}%"></div></div>
+    <p class="subtitle">${isMulti ? "Bir nechta to'g'ri javobni tanlang" : "To'g'ri javobni tanlang"}</p>
+    <div id="options-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(60px,1fr));gap:10px">${optionsHtml}</div>
+    <button class="btn" id="next-button" style="margin-top:16px">${isLast ? "🏁 TESTNI YAKUNLASH" : "Keyingi →"}</button>
+  `);
+
+  document.querySelectorAll("#options-container .option").forEach((optionEl) => {
+    optionEl.addEventListener("click", () => {
+      const letter = optionEl.dataset.letter;
+
+      if (isMulti) {
+        if (selectedLetters.has(letter)) {
+          selectedLetters.delete(letter);
+        } else {
+          selectedLetters.add(letter);
+        }
+        quizState.answers[question.number] = [...selectedLetters].sort().join(",");
+        optionEl.classList.toggle("selected");
+      } else {
+        quizState.answers[question.number] = letter;
+        document.querySelectorAll("#options-container .option").forEach((el) => el.classList.remove("selected"));
+        optionEl.classList.add("selected");
+      }
     });
   });
 
@@ -506,7 +577,7 @@ async function renderTeacherDashboard() {
         (test) => `
           <div class="card card-entrance" data-test-id="${test.id}">
             <div class="card-body">
-              <h3>${escapeHtml(test.title)}</h3>
+              <h3>${escapeHtml(test.title)} ${test.mode === "key" ? "🔑" : ""}</h3>
               <p>${escapeHtml(test.subject)} • ${test.count} savol • ${test.price ? formatNumber(test.price) + " so'm" : "Bepul"}</p>
               <p>Kod: <b>${test.code}</b> • 👥 ${test.students} qatnashchi</p>
             </div>
@@ -529,32 +600,69 @@ async function renderTeacherDashboard() {
   `);
 
   document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
-  document.getElementById("new-test-button").addEventListener("click", renderNewTestForm);
+  document.getElementById("new-test-button").addEventListener("click", () => renderNewTestForm("full"));
   document.querySelectorAll("[data-test-id]").forEach((card) => {
     card.addEventListener("click", guarded(() => renderTestResults(Number(card.dataset.testId))));
   });
 }
 
-function renderNewTestForm() {
-  showPage(`
-    <button class="back-button" data-action="dashboard">←</button>
-    <h2>Yangi test</h2>
+function renderNewTestForm(mode) {
+  const modeTabs = `
+    <div class="row-between" style="gap:8px;margin-bottom:10px">
+      <button class="btn ${mode === "full" ? "" : "btn-ghost"}" id="mode-full-button" style="flex:1">📝 To'liq savol</button>
+      <button class="btn ${mode === "key" ? "" : "btn-ghost"}" id="mode-key-button" style="flex:1">🔑 Javoblar kaliti</button>
+    </div>
+  `;
+
+  const commonFields = `
     <input class="input" id="field-title" placeholder="Test nomi" />
     <input class="input" id="field-subject" placeholder="Fan" />
     <input class="input" id="field-topic" placeholder="Mavzu" />
     <input class="input" id="field-price" type="number" placeholder="Narxi (so'm, 0 = bepul)" value="0" />
     <input class="input" id="field-duration" type="number" placeholder="Davomiyligi (daqiqa)" value="30" />
-    <h3>Savollar</h3>
-    <div id="questions-container"></div>
-    <button class="btn btn-ghost" id="add-question-button">➕ Savol qo'shish</button>
-    <button class="btn" id="save-test-button">💾 Testni saqlash</button>
-  `);
+  `;
+
+  if (mode === "key") {
+    showPage(`
+      <button class="back-button" data-action="dashboard">←</button>
+      <h2>Yangi test</h2>
+      ${modeTabs}
+      ${commonFields}
+      <h3>Javoblar kaliti</h3>
+      <p class="subtitle">
+        Savol matni kerak emas — u tashqarida (masalan, kanalingizda) joylashtirilgan bo'ladi.
+        Har bir savol uchun faqat turini, variantlar sonini va to'g'ri javobni kiriting.
+      </p>
+      <div id="key-questions-container"></div>
+      <button class="btn btn-ghost" id="add-key-question-button">➕ Savol qo'shish</button>
+      <button class="btn" id="save-test-button">💾 Testni saqlash</button>
+    `);
+  } else {
+    showPage(`
+      <button class="back-button" data-action="dashboard">←</button>
+      <h2>Yangi test</h2>
+      ${modeTabs}
+      ${commonFields}
+      <h3>Savollar</h3>
+      <div id="questions-container"></div>
+      <button class="btn btn-ghost" id="add-question-button">➕ Savol qo'shish</button>
+      <button class="btn" id="save-test-button">💾 Testni saqlash</button>
+    `);
+  }
 
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
-  document.getElementById("add-question-button").addEventListener("click", addQuestionBlock);
-  document.getElementById("save-test-button").addEventListener("click", guarded(saveNewTest));
+  document.getElementById("mode-full-button").addEventListener("click", () => renderNewTestForm("full"));
+  document.getElementById("mode-key-button").addEventListener("click", () => renderNewTestForm("key"));
 
-  addQuestionBlock();
+  if (mode === "key") {
+    document.getElementById("add-key-question-button").addEventListener("click", addKeyQuestionBlock);
+    document.getElementById("save-test-button").addEventListener("click", guarded(() => saveNewTest("key")));
+    addKeyQuestionBlock();
+  } else {
+    document.getElementById("add-question-button").addEventListener("click", addQuestionBlock);
+    document.getElementById("save-test-button").addEventListener("click", guarded(() => saveNewTest("full")));
+    addQuestionBlock();
+  }
 }
 
 function addQuestionBlock() {
@@ -578,23 +686,63 @@ function addQuestionBlock() {
   document.getElementById("questions-container").appendChild(block);
 }
 
-async function saveNewTest() {
-  const questions = [...document.querySelectorAll(".question-block")].map((block) => {
-    const data = {};
-    block.querySelectorAll("[data-field]").forEach((field) => {
-      data[field.dataset.field] = field.value.trim();
-    });
-    return data;
-  });
+function addKeyQuestionBlock() {
+  const container = document.getElementById("key-questions-container");
+  const number = container.querySelectorAll(".question-block").length + 1;
 
+  const block = document.createElement("div");
+  block.className = "question-block";
+  block.innerHTML = `
+    <div class="row-between">
+      <b class="question-number">${number}-savol</b>
+      <button class="btn btn-ghost" type="button" data-action="remove-question" style="width:auto;padding:6px 12px">🗑</button>
+    </div>
+    <select class="input" data-field="question_type">
+      <option value="single">Bitta to'g'ri javob</option>
+      <option value="multi">Bir nechta to'g'ri javob</option>
+    </select>
+    <input class="input" data-field="option_count" type="number" min="2" max="8" value="4" placeholder="Variantlar soni" />
+    <input class="input" data-field="correct" placeholder="To'g'ri javob (masalan B yoki A,C)" style="text-transform:uppercase" />
+  `;
+  block.querySelector('[data-action="remove-question"]').addEventListener("click", () => {
+    block.remove();
+    container.querySelectorAll(".question-block").forEach((item, index) => {
+      item.querySelector(".question-number").textContent = `${index + 1}-savol`;
+    });
+  });
+  container.appendChild(block);
+}
+
+async function saveNewTest(mode) {
   const body = {
     title: document.getElementById("field-title").value.trim(),
     subject: document.getElementById("field-subject").value.trim(),
     topic: document.getElementById("field-topic").value.trim(),
     price: Number(document.getElementById("field-price").value) || 0,
     duration: Number(document.getElementById("field-duration").value) || 30,
-    questions,
+    mode,
+    questions: [],
+    key_questions: [],
   };
+
+  if (mode === "key") {
+    body.key_questions = [...document.querySelectorAll("#key-questions-container .question-block")].map(
+      (block, index) => ({
+        number: index + 1,
+        question_type: block.querySelector('[data-field="question_type"]').value,
+        option_count: Number(block.querySelector('[data-field="option_count"]').value) || 4,
+        correct: block.querySelector('[data-field="correct"]').value.trim().toUpperCase(),
+      })
+    );
+  } else {
+    body.questions = [...document.querySelectorAll("#questions-container .question-block")].map((block) => {
+      const data = {};
+      block.querySelectorAll("[data-field]").forEach((field) => {
+        data[field.dataset.field] = field.value.trim();
+      });
+      return data;
+    });
+  }
 
   const result = await api("/api/teacher/tests", { method: "POST", body });
   showToast(`✅ Test yaratildi! Kodi: ${result.code}`);
