@@ -33,7 +33,10 @@ applyTheme();
 // Telegram'siz (oddiy brauzerda) sinash uchun shartli foydalanuvchi ID
 const DEV_USER_ID = "1";
 
-let teacherToken = sessionStorage.getItem("teacherToken") || "";
+// localStorage ishlatiladi (sessionStorage emas) — shunda Mini App yopib qayta
+// ochilganda ham o'qituvchi login/parolni qayta kiritmaydi (YouTube'dagidek).
+let teacherToken = localStorage.getItem("teacherToken") || "";
+let teacherUsername = localStorage.getItem("teacherUsername") || "";
 let quizState = null;
 let quizTimerId = null;
 
@@ -373,11 +376,41 @@ async function renderRating(code) {
 /* ---------- 4) O'qituvchi oqimi ---------- */
 
 async function enterTeacherArea() {
-  if (teacherToken) {
-    await renderTeacherDashboard();
+  if (teacherToken && teacherUsername) {
+    renderTeacherWelcomeBack();
   } else {
     renderTeacherAuth();
   }
+}
+
+function renderTeacherWelcomeBack() {
+  showPage(`
+    <button class="back-button" data-action="home">←</button>
+    <h2>O'qituvchi</h2>
+    <div class="card" style="cursor:default">
+      <div class="card-icon">👤</div>
+      <div class="card-body">
+        <h3>${escapeHtml(teacherUsername)}</h3>
+        <p>Oldin shu akkaunt bilan kirgansiz</p>
+      </div>
+    </div>
+    <button class="btn" id="continue-button">Davom etish →</button>
+    <button class="btn btn-ghost" id="switch-account-button">Boshqa akkaunt bilan kirish</button>
+  `);
+
+  document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
+  document.getElementById("continue-button").addEventListener("click", guarded(renderTeacherDashboard));
+  document.getElementById("switch-account-button").addEventListener("click", () => {
+    clearRememberedTeacher();
+    renderTeacherAuth();
+  });
+}
+
+function clearRememberedTeacher() {
+  teacherToken = "";
+  teacherUsername = "";
+  localStorage.removeItem("teacherToken");
+  localStorage.removeItem("teacherUsername");
 }
 
 function renderTeacherAuth() {
@@ -401,7 +434,9 @@ async function submitTeacherAuth(mode) {
 
   const result = await api(`/api/auth/${mode}`, { method: "POST", body: { username, password } });
   teacherToken = result.token;
-  sessionStorage.setItem("teacherToken", teacherToken);
+  teacherUsername = username;
+  localStorage.setItem("teacherToken", teacherToken);
+  localStorage.setItem("teacherUsername", teacherUsername);
   await renderTeacherDashboard();
 }
 
@@ -412,8 +447,7 @@ async function renderTeacherDashboard() {
   try {
     [stats, tests] = await Promise.all([api("/api/teacher/stats"), api("/api/teacher/tests")]);
   } catch (error) {
-    teacherToken = "";
-    sessionStorage.removeItem("teacherToken");
+    clearRememberedTeacher();
     throw error;
   }
 
