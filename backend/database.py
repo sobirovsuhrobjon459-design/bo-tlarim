@@ -26,6 +26,9 @@ SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")
 # 1 bo'lsa, Telegram'siz (oddiy brauzerda) ham sinash mumkin bo'ladi. Productionda 0 bo'lsin.
 DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
 
+# Shu Telegram ID'ga ega foydalanuvchi "ADMIN" bo'limini ko'radi va boshqara oladi.
+ADMIN_ID = int(os.getenv("ADMIN_ID") or 0)
+
 
 # ========== 2) Bazaga ulanish ==========
 

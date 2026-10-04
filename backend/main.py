@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 
 from .auth import (
     create_teacher_token,
+    get_current_admin,
     get_current_teacher,
     get_current_user,
     get_db,
@@ -43,6 +44,7 @@ from .auth import (
     verify_password,
 )
 from .database import (
+    ADMIN_ID,
     BOT_TOKEN,
     Attempt,
     Base,
@@ -197,7 +199,7 @@ def ping() -> dict:
 @app.get("/api/me")
 def get_me(user: User = Depends(get_current_user)) -> dict:
     """Mini App ochilganda chaqiriladi — Telegram orqali aniqlangan foydalanuvchini qaytaradi."""
-    return {"id": user.id, "full_name": user.full_name}
+    return {"id": user.id, "full_name": user.full_name, "is_admin": bool(ADMIN_ID) and user.tg_id == ADMIN_ID}
 
 
 # ========== 4) O'qituvchi autentifikatsiyasi ==========
@@ -504,6 +506,47 @@ def test_rating(code: str, user: User = Depends(get_current_user), db: Session =
 
     test = _get_test_by_code(db, code)
     return [{"name": u.full_name, "percent": a.percent} for a, u in best_attempts(db, test)[:50]]
+
+
+# ========== 7) Admin endpointlari ==========
+
+
+@app.get("/api/admin/stats")
+def admin_overview(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Butun platforma bo'yicha umumiy statistika — faqat ADMIN_ID'ga ega foydalanuvchi ko'ra oladi."""
+
+    total_revenue = db.scalar(select(func.sum(Payment.amount)).where(Payment.status == "paid")) or 0
+
+    return {
+        "users": db.scalar(select(func.count()).select_from(User)),
+        "teachers": db.scalar(select(func.count()).select_from(Teacher)),
+        "tests": db.scalar(select(func.count()).select_from(Test)),
+        "attempts": db.scalar(select(func.count()).select_from(Attempt).where(Attempt.status == "done")),
+        "revenue": total_revenue,
+    }
+
+
+@app.get("/api/admin/top-students")
+def admin_top_students(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Kamida bitta testni tugatgan o'quvchilarning, barcha testlar bo'yicha o'rtacha natijasiga ko'ra reytingi."""
+
+    query = (
+        select(
+            User.full_name,
+            func.avg(Attempt.percent).label("avg_percent"),
+            func.count(Attempt.id).label("attempts_count"),
+        )
+        .join(Attempt, Attempt.user_id == User.id)
+        .where(Attempt.status == "done")
+        .group_by(User.id)
+        .order_by(func.avg(Attempt.percent).desc())
+        .limit(20)
+    )
+
+    return [
+        {"name": name, "avg_percent": round(avg_percent, 1), "attempts": attempts_count}
+        for name, avg_percent, attempts_count in db.execute(query).all()
+    ]
 
 
 # Barcha boshqa manzillarni frontend papkasidan beradi (index.html, css, js)

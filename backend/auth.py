@@ -17,7 +17,7 @@ from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .database import BOT_TOKEN, DEV_MODE, SECRET_KEY, SessionLocal, Teacher, User
+from .database import ADMIN_ID, BOT_TOKEN, DEV_MODE, SECRET_KEY, SessionLocal, Teacher, User
 
 INIT_DATA_MAX_AGE_SECONDS = 24 * 60 * 60  # 1 kun
 TEACHER_TOKEN_LIFETIME_SECONDS = 7 * 24 * 60 * 60  # 7 kun
@@ -170,3 +170,12 @@ def get_current_teacher(
         raise HTTPException(status_code=403, detail="Siz o'qituvchi sifatida ro'yxatdan o'tmagansiz")
 
     return teacher
+
+
+def get_current_admin(user: User = Depends(get_current_user)) -> User:
+    """Joriy foydalanuvchining Telegram ID'si ADMIN_ID bilan mosligini tekshiradi."""
+
+    if not ADMIN_ID or user.tg_id != ADMIN_ID:
+        raise HTTPException(status_code=403, detail="Bu bo'lim faqat admin uchun")
+
+    return user

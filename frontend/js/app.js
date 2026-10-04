@@ -37,6 +37,7 @@ const DEV_USER_ID = "1";
 // ochilganda ham o'qituvchi login/parolni qayta kiritmaydi (YouTube'dagidek).
 let teacherToken = localStorage.getItem("teacherToken") || "";
 let teacherUsername = localStorage.getItem("teacherUsername") || "";
+let isAdmin = false;
 let quizState = null;
 let quizTimerId = null;
 
@@ -163,21 +164,69 @@ function renderHome(userName, backendOk) {
       <div class="card-body"><h3>O'QITUVCHI</h3><p>Test yaratish va natijalarni boshqarish</p></div>
     </div>
 
+    ${
+      isAdmin
+        ? `<div class="card card-entrance" data-action="admin">
+             <div class="card-icon">👑</div>
+             <div class="card-body"><h3>ADMIN</h3><p>Umumiy statistika va boshqaruv</p></div>
+           </div>`
+        : ""
+    }
+
     ${statusHtml}
   `);
 
   document.querySelector('[data-action="student"]').addEventListener("click", renderStudentSearch);
   document.querySelector('[data-action="teacher"]').addEventListener("click", guarded(enterTeacherArea));
+  document.querySelector('[data-action="admin"]')?.addEventListener("click", guarded(renderAdminDashboard));
 }
 
 async function loadHome() {
   renderSkeleton();
   try {
     const me = await api("/api/me");
+    isAdmin = Boolean(me.is_admin);
     renderHome(me.full_name || null, true);
   } catch (error) {
+    isAdmin = false;
     renderHome(null, false);
   }
+}
+
+async function renderAdminDashboard() {
+  const [stats, topStudents] = await Promise.all([api("/api/admin/stats"), api("/api/admin/top-students")]);
+
+  const topRows =
+    topStudents
+      .map(
+        (row, index) => `
+          <div class="card row-between" style="cursor:default">
+            <span>${index + 1}. ${escapeHtml(row.name)}</span>
+            <b>${row.avg_percent}% <span style="color:var(--color-text-muted);font-weight:400">(${row.attempts} ta)</span></b>
+          </div>`
+      )
+      .join("") || "<p>Hali ma'lumot yo'q</p>";
+
+  showPage(`
+    <button class="back-button" data-action="home">←</button>
+    <h2>👑 Admin</h2>
+    <div class="stats-grid">
+      <div class="stat-tile">👥<span class="stat-value">${stats.users}</span>Foydalanuvchilar</div>
+      <div class="stat-tile">🧑‍🏫<span class="stat-value">${stats.teachers}</span>O'qituvchilar</div>
+      <div class="stat-tile">📚<span class="stat-value">${stats.tests}</span>Testlar</div>
+      <div class="stat-tile">✅<span class="stat-value">${stats.attempts}</span>Yakunlangan urinishlar</div>
+    </div>
+    <div class="card" style="cursor:default">
+      <div class="card-body">
+        <h3>💰 Jami to'lovlar</h3>
+        <p>${formatNumber(stats.revenue)} so'm (hozircha mock to'lovlar)</p>
+      </div>
+    </div>
+    <h3>🏆 Eng yaxshi o'quvchilar (barcha testlar bo'yicha)</h3>
+    ${topRows}
+  `);
+
+  document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
 }
 
 /* ---------- 3) O'quvchi oqimi ---------- */
