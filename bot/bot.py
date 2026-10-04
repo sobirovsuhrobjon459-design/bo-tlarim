@@ -2,7 +2,7 @@
 Telegram bot.
 
 Vazifasi: foydalanuvchi /start bosganda salomlashish va Mini App'ni ochish
-uchun bitta ▶️ PLAY tugmasi (chat menyusida, xabar yozish maydoni yonida)
+uchun bitta PLAY tugmasi (chat menyusida, xabar yozish maydoni yonida)
 ko'rsatish, tushunarsiz xabarlarga ham javob berish.
 
 MUHIM: bu fayl backend bilan BIRGA, bitta jarayon ichida ishga tushadi
@@ -49,7 +49,7 @@ async def handle_start(message: Message) -> None:
         f"Assalomu alaykum, {message.from_user.first_name}! 👋\n\n"
         "🎓 <b>Test Platformasiga xush kelibsiz!</b>\n\n"
         "Bilimingizni sinang, natijangizni kuzating va rivojlaning.\n\n"
-        "Boshlash uchun pastda, xabar yozish maydoni yonidagi <b>▶️ PLAY</b> tugmasini bosing."
+        "Boshlash uchun pastda, xabar yozish maydoni yonidagi <b>PLAY</b> tugmasini bosing."
     )
 
     # Eski reply-keyboard PLAY tugmasi qolib ketgan bo'lsa, uni tozalaydi —
@@ -64,7 +64,7 @@ async def handle_help(message: Message) -> None:
 
     await message.answer(
         "ℹ️ Bu bot Test Platformasi Mini App'ini ochadi.\n\n"
-        "Pastdagi ▶️ PLAY tugmasini bosib Mini App'ni oching — u yerda test ishlashingiz "
+        "Pastdagi PLAY tugmasini bosib Mini App'ni oching — u yerda test ishlashingiz "
         "yoki o'qituvchi sifatida test yaratishingiz mumkin."
     )
 
@@ -75,15 +75,15 @@ async def handle_unknown(message: Message) -> None:
 
     await message.answer(
         "Buyruqni tushunmadim 🤔\nBoshlash uchun /start yuboring yoki pastdagi "
-        "▶️ PLAY tugmasini bosing."
+        "PLAY tugmasini bosing."
     )
 
 
 async def _setup_menu_button() -> None:
-    """Chat ichidagi doimiy ▶️ PLAY tugmasini Mini App'ga ulaydi — Mini App'ni ochishning yagona yo'li shu."""
+    """Chat ichidagi doimiy PLAY tugmasini Mini App'ga ulaydi — Mini App'ni ochishning yagona yo'li shu."""
     if WEBAPP_URL.startswith("https://"):
         await bot.set_chat_menu_button(
-            menu_button=MenuButtonWebApp(text="▶️ PLAY", web_app=WebAppInfo(url=WEBAPP_URL))
+            menu_button=MenuButtonWebApp(text="PLAY", web_app=WebAppInfo(url=WEBAPP_URL))
         )
 
 
