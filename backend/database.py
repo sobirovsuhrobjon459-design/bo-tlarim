@@ -270,6 +270,13 @@ class TeacherRegisterIn(BaseModel):
     last_name: str = Field(min_length=2, max_length=100)
 
 
+class NameUpdateIn(BaseModel):
+    """Foydalanuvchi (o'quvchi yoki o'qituvchi) o'z ism-familiyasini tahrirlaganda yuboriladi."""
+
+    first_name: str = Field(min_length=2, max_length=100)
+    last_name: str = Field(min_length=2, max_length=100)
+
+
 class QuestionIn(BaseModel):
     """'full' rejimidagi bitta savol: to'liq matn va 4 variant."""
 

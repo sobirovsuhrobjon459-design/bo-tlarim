@@ -181,7 +181,7 @@ function renderHome(userName, backendOk) {
     ${statusHtml}
   `);
 
-  document.querySelector('[data-action="student"]').addEventListener("click", renderStudentSearch);
+  document.querySelector('[data-action="student"]').addEventListener("click", guarded(renderStudentHome));
   document.querySelector('[data-action="teacher"]').addEventListener("click", guarded(enterTeacherArea));
   document.querySelector('[data-action="admin"]')?.addEventListener("click", guarded(renderAdminDashboard));
 }
@@ -283,10 +283,93 @@ async function renderAdminDashboard() {
 
 /* ---------- 3) O'quvchi oqimi ---------- */
 
-function renderStudentSearch() {
+async function renderStudentHome() {
+  const [me, attempts] = await Promise.all([api("/api/me"), api("/api/me/attempts")]);
+
+  const inProgressRows =
+    attempts.in_progress
+      .map(
+        (item) => `
+          <div class="card card-entrance" data-resume-code="${item.code}">
+            <div class="card-body">
+              <h3>${escapeHtml(item.title)}</h3>
+              <p>${escapeHtml(item.subject)} • Kod: ${item.code}</p>
+            </div>
+          </div>`
+      )
+      .join("") ||
+    `<div class="card" style="cursor:default"><div class="card-body"><p>Hozircha sizga hech qanday test belgilanmagan.</p></div></div>`;
+
+  const completedRows =
+    attempts.completed
+      .map(
+        (item) => `
+          <div class="card row-between" style="cursor:default">
+            <span>${escapeHtml(item.title)}</span>
+            <b>${item.percent}%</b>
+          </div>`
+      )
+      .join("") ||
+    `<div class="card" style="cursor:default"><div class="card-body"><p>Siz hali birorta ham testni tugatmagansiz.</p></div></div>`;
+
   showPage(`
     <button class="back-button" data-action="home">←</button>
-    <h2>O'quvchi</h2>
+    <div class="card" style="cursor:default">
+      <div class="card-body" style="width:100%">
+        <div class="row-between">
+          <h3>${escapeHtml(me.full_name)} <span style="color:var(--color-primary);font-weight:400">o'quvchi</span></h3>
+          <button class="btn btn-ghost" id="edit-name-button" style="width:auto;padding:6px 10px">✏️</button>
+        </div>
+        <p>Telegram ID: <b>${me.tg_id}</b></p>
+      </div>
+    </div>
+    <button class="btn" id="find-test-button">🔍 Yangi test qidirish</button>
+    <h3>Jarayondagi testlar</h3>
+    ${inProgressRows}
+    <h3>Yakunlangan testlar</h3>
+    ${completedRows}
+  `);
+
+  document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
+  document.getElementById("find-test-button").addEventListener("click", renderTestCodeSearch);
+  document.getElementById("edit-name-button").addEventListener(
+    "click",
+    guarded(() => renderEditName(me, renderStudentHome))
+  );
+  document.querySelectorAll("[data-resume-code]").forEach((card) => {
+    card.addEventListener("click", guarded(() => startTest(card.dataset.resumeCode)));
+  });
+}
+
+function renderEditName(me, onDone) {
+  const [currentFirst, ...rest] = (me.full_name || "").split(" ");
+  const currentLast = rest.join(" ");
+
+  showPage(`
+    <button class="back-button" data-action="back">←</button>
+    <h2>Ism-familiyani tahrirlash</h2>
+    <input class="input" id="edit-first-name" placeholder="Ism" value="${escapeHtml(currentFirst || "")}" />
+    <input class="input" id="edit-last-name" placeholder="Familiya" value="${escapeHtml(currentLast || "")}" />
+    <button class="btn" id="save-name-button">✅ Saqlash</button>
+  `);
+
+  document.querySelector('[data-action="back"]').addEventListener("click", guarded(onDone));
+  document.getElementById("save-name-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const first_name = document.getElementById("edit-first-name").value.trim();
+      const last_name = document.getElementById("edit-last-name").value.trim();
+      await api("/api/me/name", { method: "POST", body: { first_name, last_name } });
+      showToast("✅ Saqlandi");
+      await onDone();
+    })
+  );
+}
+
+function renderTestCodeSearch() {
+  showPage(`
+    <button class="back-button" data-action="student-home">←</button>
+    <h2>Test qidirish</h2>
     <input
       class="input"
       id="test-code-input"
@@ -297,7 +380,7 @@ function renderStudentSearch() {
     <div id="search-result"></div>
   `);
 
-  document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
+  document.querySelector('[data-action="student-home"]').addEventListener("click", guarded(renderStudentHome));
   document.getElementById("search-button").addEventListener(
     "click",
     guarded(async () => {
@@ -570,7 +653,7 @@ async function renderRating(code) {
     ${rows}
   `);
 
-  document.querySelector('[data-action="student"]').addEventListener("click", renderStudentSearch);
+  document.querySelector('[data-action="student"]').addEventListener("click", guarded(renderStudentHome));
 }
 
 /* ---------- 4) O'qituvchi oqimi ---------- */

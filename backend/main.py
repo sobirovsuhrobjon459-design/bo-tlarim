@@ -56,6 +56,7 @@ from .database import (
     CreditPurchaseIn,
     FinishIn,
     KeyQuestion,
+    NameUpdateIn,
     Payment,
     PriceUpdate,
     Question,
@@ -315,9 +316,50 @@ def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)
     return {
         "id": user.id,
         "full_name": user.full_name,
+        "tg_id": user.tg_id,
         "is_admin": bool(ADMIN_ID) and user.tg_id == ADMIN_ID,
         "is_teacher": is_teacher,
     }
+
+
+@app.post("/api/me/name")
+def update_my_name(body: NameUpdateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Foydalanuvchi o'z ism-familiyasini tahrirlaydi (Telegram ismi ishonchli bo'lmasligi mumkin)."""
+
+    user.full_name = f"{body.first_name.strip()} {body.last_name.strip()}".strip()
+    db.commit()
+    return {"full_name": user.full_name}
+
+
+@app.get("/api/me/attempts")
+def my_attempts(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Joriy foydalanuvchining jarayondagi va yakunlangan testlari — o'quvchi dashboard'i uchun."""
+
+    attempts = db.scalars(select(Attempt).where(Attempt.user_id == user.id).order_by(Attempt.id.desc())).all()
+
+    in_progress = []
+    completed = []
+
+    for attempt in attempts:
+        test = db.get(Test, attempt.test_id)
+        if not test:
+            continue
+
+        if attempt.status == "in_progress":
+            in_progress.append({"code": test.code, "title": test.title, "subject": test.subject})
+        elif attempt.status == "done":
+            completed.append(
+                {
+                    "code": test.code,
+                    "title": test.title,
+                    "subject": test.subject,
+                    "percent": attempt.percent,
+                    "correct": attempt.correct,
+                    "wrong": attempt.wrong,
+                }
+            )
+
+    return {"in_progress": in_progress, "completed": completed}
 
 
 # ========== 4) O'qituvchi ro'yxatdan o'tishi ==========
