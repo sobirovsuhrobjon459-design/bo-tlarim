@@ -142,7 +142,9 @@ function renderHome(userName, backendOk) {
   const greeting = userName
     ? `Xush kelibsiz, ${escapeHtml(userName)} 👋`
     : "Test Platformasiga xush kelibsiz 👋";
-  const statusText = backendOk ? "Backend ishlayapti ✅" : "Backend bilan aloqa yo'q ❌";
+
+  // Hammasi joyida bo'lganda hech narsa ko'rsatilmaydi — faqat haqiqiy xatoda ogohlantirish chiqadi.
+  const statusHtml = backendOk ? "" : `<p class="status">Backend bilan aloqa yo'q ❌</p>`;
 
   showPage(`
     <h1 class="fade-up">${greeting}</h1>
@@ -158,7 +160,7 @@ function renderHome(userName, backendOk) {
       <div class="card-body"><h3>O'QITUVCHI</h3><p>Test yaratish va natijalarni boshqarish</p></div>
     </div>
 
-    <p class="status">${statusText}</p>
+    ${statusHtml}
   `);
 
   document.querySelector('[data-action="student"]').addEventListener("click", renderStudentSearch);
