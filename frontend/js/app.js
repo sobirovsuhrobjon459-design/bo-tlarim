@@ -442,6 +442,7 @@ async function renderTeacherDashboard() {
     </div>
     <button class="btn" id="new-test-button">➕ YANGI TEST YARATISH</button>
     ${testCards}
+    <p class="status">Backend ishlayapti ✅</p>
   `);
 
   document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
