@@ -630,9 +630,19 @@ async function renderTeacherDashboard() {
       <div class="stat-tile">📊<span class="stat-value">${stats.avg}%</span>O'rtacha natija</div>
       <div class="stat-tile">🏆<span class="stat-value">${stats.max}%</span>Eng yuqori</div>
     </div>
-    <div class="card row-between" style="cursor:default">
-      <span>💰 Balansingiz: <b>${formatNumber(stats.balance)} so'm</b></span>
-      <button class="btn btn-ghost" id="topup-button" style="width:auto;padding:8px 16px">➕ To'ldirish</button>
+    <div class="card" style="cursor:default">
+      <div class="card-body">
+        <div class="row-between"><span>💰 Balansingiz</span><b>${formatNumber(stats.balance)} so'm</b></div>
+        <p>Pullik testlardan tushgan daromad</p>
+        <button class="btn btn-ghost" id="topup-button">➕ Balansni to'ldirish</button>
+      </div>
+    </div>
+    <div class="card" style="cursor:default">
+      <div class="card-body">
+        <div class="row-between"><span>🎫 Kredit balansi</span><b>${stats.credits} ta</b></div>
+        <p>Har bir o'quvchi natijasi uchun 1 kredit sarflanadi (bepul testlar uchun)</p>
+        <button class="btn btn-ghost" id="buy-credit-button">🛒 Kredit sotib olish</button>
+      </div>
     </div>
     <button class="btn" id="new-test-button">➕ YANGI TEST YARATISH</button>
     ${testCards}
@@ -641,6 +651,7 @@ async function renderTeacherDashboard() {
 
   document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
   document.getElementById("topup-button").addEventListener("click", guarded(renderTopUpForm));
+  document.getElementById("buy-credit-button").addEventListener("click", guarded(renderCreditPurchaseForm));
   document.getElementById("new-test-button").addEventListener("click", () => renderNewTestForm("full"));
   document.querySelectorAll("[data-test-id]").forEach((card) => {
     card.addEventListener("click", guarded(() => renderTestResults(Number(card.dataset.testId))));
@@ -679,10 +690,7 @@ async function renderTopUpForm() {
         <p>3. Admin tasdiqlagach, balansingiz avtomatik oshadi.</p>
       </div>
     </div>
-    <p class="subtitle">
-      Joriy balans: <b>${formatNumber(balanceInfo.balance)} so'm</b>
-      (bepul test yaratish narxi: ${formatNumber(balanceInfo.free_test_fee)} so'm)
-    </p>
+    <p class="subtitle">Joriy balans: <b>${formatNumber(balanceInfo.balance)} so'm</b></p>
     <input class="input" id="topup-amount-input" type="number" min="1000" step="1000" placeholder="Tashlagan summangiz (so'm)" />
     <button class="btn" id="submit-topup-button">📨 So'rov yuborish</button>
     <h3>So'rovlar tarixi</h3>
@@ -701,6 +709,84 @@ async function renderTopUpForm() {
       await api("/api/teacher/topup-requests", { method: "POST", body: { amount } });
       showToast("✅ So'rov yuborildi, admin tasdiqlashini kuting");
       await renderTopUpForm();
+    })
+  );
+}
+
+async function renderCreditPurchaseForm() {
+  const [balanceInfo, history] = await Promise.all([
+    api("/api/teacher/balance"),
+    api("/api/teacher/credit-purchases"),
+  ]);
+
+  const tierRows = balanceInfo.credit_price_tiers
+    .map((tier) => {
+      const range = tier.to ? `${tier.from}-${tier.to} ta` : `${tier.from}+ ta`;
+      return `<p>${range} kredit: ${formatNumber(tier.price_per_credit)} so'm/kredit</p>`;
+    })
+    .join("");
+
+  const statusLabels = { pending: "⏳ Kutilmoqda", paid: "✅ To'landi", cancelled: "❌ Bekor qilindi" };
+  const historyRows =
+    history
+      .map(
+        (purchase) => `
+          <div class="card row-between" style="cursor:default">
+            <span>${purchase.credits} ta kredit (${formatNumber(purchase.amount)} so'm)</span>
+            <b>${statusLabels[purchase.status]}</b>
+          </div>`
+      )
+      .join("") || "<p>Hali buyurtmalar yo'q</p>";
+
+  showPage(`
+    <button class="back-button" data-action="dashboard">←</button>
+    <h2>Kredit sotib olish</h2>
+    <p class="subtitle">Necha dona kredit sotib olmoqchisiz?</p>
+    <input class="input" id="credit-count-input" type="number" min="1" placeholder="Kredit miqdori" value="10" />
+    <div class="card" style="cursor:default">
+      <div class="card-body">
+        <h3>Narxlash tizimi</h3>
+        ${tierRows}
+      </div>
+    </div>
+    <p class="subtitle">Jami narx: <b id="credit-price-preview">—</b></p>
+    <button class="btn" id="pay-with-payme-button">💳 Payme orqali to'lash</button>
+    <h3>Buyurtmalar tarixi</h3>
+    ${historyRows}
+  `);
+
+  document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
+
+  const creditInput = document.getElementById("credit-count-input");
+  const pricePreview = document.getElementById("credit-price-preview");
+
+  const updatePricePreview = guarded(async () => {
+    const credits = Number(creditInput.value) || 0;
+    if (credits < 1) {
+      pricePreview.textContent = "—";
+      return;
+    }
+    const price = await api(`/api/teacher/credit-price?credits=${credits}`);
+    pricePreview.textContent = `${formatNumber(price.amount)} so'm`;
+  });
+
+  creditInput.addEventListener("input", updatePricePreview);
+  updatePricePreview();
+
+  document.getElementById("pay-with-payme-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const credits = Number(creditInput.value) || 0;
+      if (credits < 1) {
+        showToast("Kredit sonini kiriting");
+        return;
+      }
+      const purchase = await api("/api/teacher/credit-purchases", { method: "POST", body: { credits } });
+      if (telegram?.openLink) {
+        telegram.openLink(purchase.checkout_url);
+      } else {
+        window.open(purchase.checkout_url, "_blank");
+      }
     })
   );
 }

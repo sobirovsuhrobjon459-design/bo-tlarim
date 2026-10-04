@@ -16,6 +16,8 @@ lekin "Web Service" bepul — shuning uchun ikkalasini bitta xizmatga birlashtir
 """
 
 import asyncio
+import base64
+import hmac
 import io
 import logging
 import random
@@ -25,8 +27,8 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -45,10 +47,13 @@ from .database import (
     ADMIN_CARD_NUMBER,
     ADMIN_ID,
     BOT_TOKEN,
-    FREE_TEST_FEE,
+    PAYME_MERCHANT_ID,
+    PAYME_SECRET_KEY,
     PLATFORM_COMMISSION_PERCENT,
     Attempt,
     Base,
+    CreditPurchase,
+    CreditPurchaseIn,
     FinishIn,
     KeyQuestion,
     Payment,
@@ -200,6 +205,35 @@ def _is_paid(db: Session, user: User, test: Test) -> bool:
     return payment is not None
 
 
+# Kredit narxi qancha ko'p sotib olinsa, shuncha arzonlashadi (optom chegirma).
+# Har bir qator: (eng kami, eng ko'pi yoki None=cheksiz, 1 dona kredit narxi so'mda)
+CREDIT_PRICE_TIERS = [
+    (1, 49, 1000),
+    (50, 199, 800),
+    (200, 499, 650),
+    (500, None, 500),
+]
+
+CREDIT_PRICE_TIERS_DISPLAY = [
+    {"from": low, "to": high, "price_per_credit": price} for low, high, price in CREDIT_PRICE_TIERS
+]
+
+
+def _calculate_credit_price(credit_count: int) -> int:
+    """Kredit sonining jami narxini optom chegirma jadvali bo'yicha hisoblaydi."""
+    for low, high, price_per_credit in CREDIT_PRICE_TIERS:
+        if credit_count >= low and (high is None or credit_count <= high):
+            return credit_count * price_per_credit
+    return credit_count * CREDIT_PRICE_TIERS[0][2]
+
+
+def _build_payme_checkout_url(purchase_id: int, amount: int) -> str:
+    """Payme'ning hosted to'lov sahifasiga olib boruvchi havolani yaratadi (amount — so'mda)."""
+    params = f"m={PAYME_MERCHANT_ID};ac.purchase_id={purchase_id};a={amount * 100}"
+    encoded = base64.b64encode(params.encode()).decode()
+    return f"https://checkout.paycom.uz/{encoded}"
+
+
 def _is_group_member(group_id: int, user_tg_id: int) -> bool:
     """Telegram'dan so'rab, foydalanuvchi shu guruhning a'zosi ekanini tekshiradi."""
 
@@ -331,17 +365,19 @@ def teacher_overview(teacher: Teacher = Depends(get_current_teacher), db: Sessio
         "avg": round(sum(a.percent for a in attempts) / len(attempts), 1) if attempts else 0,
         "max": max((a.percent for a in attempts), default=0),
         "balance": teacher.balance,
+        "credits": teacher.credits,
     }
 
 
 @app.get("/api/teacher/balance")
 def teacher_balance(teacher: Teacher = Depends(get_current_teacher)):
-    """O'qituvchining joriy balansi va balans to'ldirish uchun kerakli ma'lumotlar."""
+    """O'qituvchining joriy pul va kredit balansi, hamda to'ldirish uchun kerakli ma'lumotlar."""
 
     return {
         "balance": teacher.balance,
-        "free_test_fee": FREE_TEST_FEE,
+        "credits": teacher.credits,
         "admin_card": ADMIN_CARD_NUMBER,
+        "credit_price_tiers": CREDIT_PRICE_TIERS_DISPLAY,
     }
 
 
@@ -366,6 +402,47 @@ def list_own_topup_requests(teacher: Teacher = Depends(get_current_teacher), db:
         select(TopUpRequest).where(TopUpRequest.teacher_id == teacher.id).order_by(TopUpRequest.id.desc())
     ).all()
     return [{"id": r.id, "amount": r.amount, "status": r.status} for r in requests]
+
+
+@app.get("/api/teacher/credit-price")
+def preview_credit_price(credits: int, teacher: Teacher = Depends(get_current_teacher)):
+    """O'qituvchi qancha kredit sotib olmoqchi ekanini yozganda, narxini jonli ko'rsatish uchun."""
+
+    if credits < 1:
+        raise HTTPException(status_code=422, detail="Kredit soni kamida 1 bo'lishi kerak")
+    return {"credits": credits, "amount": _calculate_credit_price(credits)}
+
+
+@app.post("/api/teacher/credit-purchases")
+def create_credit_purchase(
+    body: CreditPurchaseIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
+):
+    """Kredit sotib olish buyurtmasini yaratadi va Payme to'lov havolasini qaytaradi."""
+
+    if not PAYME_MERCHANT_ID:
+        raise HTTPException(status_code=503, detail="Payme hali sozlanmagan, admin bilan bog'laning")
+
+    amount = _calculate_credit_price(body.credits)
+    purchase = CreditPurchase(teacher_id=teacher.id, credits=body.credits, amount=amount)
+    db.add(purchase)
+    db.commit()
+
+    return {
+        "id": purchase.id,
+        "credits": purchase.credits,
+        "amount": purchase.amount,
+        "checkout_url": _build_payme_checkout_url(purchase.id, amount),
+    }
+
+
+@app.get("/api/teacher/credit-purchases")
+def list_own_credit_purchases(teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """O'qituvchining o'zi yaratgan kredit sotib olish buyurtmalari tarixi."""
+
+    purchases = db.scalars(
+        select(CreditPurchase).where(CreditPurchase.teacher_id == teacher.id).order_by(CreditPurchase.id.desc())
+    ).all()
+    return [{"id": p.id, "credits": p.credits, "amount": p.amount, "status": p.status} for p in purchases]
 
 
 @app.get("/api/teacher/tests")
@@ -406,14 +483,6 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
     if body.price > 0 and body.enrollment_type == "closed":
         raise HTTPException(status_code=422, detail="Pullik testlar faqat ochiq test sifatida yaratiladi")
 
-    # Bepul testlar uchun bir martalik to'lov o'qituvchi balansidan yechiladi
-    # (chunki tekshirish xizmati — bizning serverimiz — bepul emas).
-    if body.price == 0 and teacher.balance < FREE_TEST_FEE:
-        raise HTTPException(
-            status_code=402,
-            detail=f"Balansingizda yetarli mablag' yo'q (kerak: {FREE_TEST_FEE} so'm). Avval balansni to'ldiring.",
-        )
-
     prefix = "".join(ch for ch in body.subject.upper() if ch in string.ascii_uppercase)[:4] or "TEST"
 
     while True:
@@ -441,9 +510,6 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
             else []
         ),
     )
-    if body.price == 0:
-        teacher.balance -= FREE_TEST_FEE
-
     db.add(test)
     db.commit()
 
@@ -600,6 +666,14 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
         attempt = None
 
     if not attempt:
+        # Bepul testga yangi urinish boshlashdan oldin, o'qituvchining kredit
+        # balansi borligi tekshiriladi (har bir natija uchun 1 kredit sarflanadi).
+        if test.price == 0 and test.teacher.credits <= 0:
+            raise HTTPException(
+                status_code=402,
+                detail="O'qituvchining krediti tugagan, hozircha bu bepul testni boshlab bo'lmaydi",
+            )
+
         attempt = Attempt(test_id=test.id, user_id=user.id)
         db.add(attempt)
         db.commit()
@@ -679,6 +753,11 @@ def finish_attempt(
     attempt.finished_at = datetime.utcnow()
     attempt.status = "done"
     attempt.seconds = int(min((attempt.finished_at - attempt.started_at).total_seconds(), test.duration * 60))
+
+    # Bepul test uchun har bir yakunlangan natija o'qituvchidan 1 kredit "yeydi".
+    if test.price == 0:
+        test.teacher.credits -= 1
+
     db.commit()
 
     return {
@@ -699,7 +778,193 @@ def test_rating(code: str, user: User = Depends(get_current_user), db: Session =
     return [{"name": u.full_name, "percent": a.percent} for a, u in best_attempts(db, test)[:50]]
 
 
-# ========== 7) Admin endpointlari ==========
+# ========== 7) Payme webhook (Merchant API) ==========
+#
+# Payme to'lov qilingan/bekor qilinganda shu bitta manzilga JSON-RPC so'rov
+# yuboradi. Hujjat: https://developer.help.paycom.uz/
+# Har bir metod alohida funksiyada — shunday o'qish osonroq.
+
+
+def _payme_error(request_id, code: int, message: str) -> JSONResponse:
+    return JSONResponse({"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}})
+
+
+def _payme_result(request_id, result: dict) -> JSONResponse:
+    return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+
+def _payme_check_auth(request: Request) -> bool:
+    """Payme har bir so'rovda 'Paycom:{secret_key}' ko'rinishida Basic Auth yuboradi."""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(auth_header[6:]).decode()
+        _, _, secret = decoded.partition(":")
+        return hmac.compare_digest(secret, PAYME_SECRET_KEY)
+    except Exception:
+        return False
+
+
+def _payme_state(status: str) -> int:
+    return {"pending": 1, "paid": 2, "cancelled": -1}.get(status, 1)
+
+
+def _payme_check_perform_transaction(request_id, params: dict, db: Session) -> JSONResponse:
+    purchase_id = params.get("account", {}).get("purchase_id")
+    amount = params.get("amount")
+
+    purchase = db.get(CreditPurchase, int(purchase_id)) if purchase_id else None
+    if not purchase:
+        return _payme_error(request_id, -31050, "Buyurtma topilmadi")
+    if purchase.status != "pending":
+        return _payme_error(request_id, -31051, "Buyurtma allaqachon ko'rib chiqilgan")
+    if amount != purchase.amount * 100:
+        return _payme_error(request_id, -31001, "Summa mos kelmadi")
+
+    return _payme_result(request_id, {"allow": True})
+
+
+def _payme_create_transaction(request_id, params: dict, db: Session) -> JSONResponse:
+    payme_id = params.get("id")
+    purchase_id = params.get("account", {}).get("purchase_id")
+    amount = params.get("amount")
+
+    purchase = db.get(CreditPurchase, int(purchase_id)) if purchase_id else None
+    if not purchase:
+        return _payme_error(request_id, -31050, "Buyurtma topilmadi")
+
+    if purchase.payme_transaction_id and purchase.payme_transaction_id != payme_id:
+        return _payme_error(request_id, -31008, "Boshqa tranzaksiya allaqachon mavjud")
+    if purchase.status == "paid":
+        return _payme_error(request_id, -31008, "Buyurtma allaqachon to'langan")
+    if amount != purchase.amount * 100:
+        return _payme_error(request_id, -31001, "Summa mos kelmadi")
+
+    if not purchase.payme_transaction_id:
+        purchase.payme_transaction_id = payme_id
+        db.commit()
+
+    create_time = int(purchase.created_at.timestamp() * 1000)
+    return _payme_result(request_id, {"create_time": create_time, "transaction": str(purchase.id), "state": 1})
+
+
+def _payme_perform_transaction(request_id, params: dict, db: Session) -> JSONResponse:
+    payme_id = params.get("id")
+    purchase = db.scalar(select(CreditPurchase).where(CreditPurchase.payme_transaction_id == payme_id))
+    if not purchase:
+        return _payme_error(request_id, -31003, "Tranzaksiya topilmadi")
+
+    if purchase.status == "cancelled":
+        return _payme_error(request_id, -31008, "Tranzaksiya bekor qilingan")
+
+    if purchase.status != "paid":
+        purchase.status = "paid"
+        purchase.performed_at = datetime.utcnow()
+        purchase.teacher.credits += purchase.credits
+        db.commit()
+
+    perform_time = int(purchase.performed_at.timestamp() * 1000)
+    return _payme_result(request_id, {"transaction": str(purchase.id), "perform_time": perform_time, "state": 2})
+
+
+def _payme_cancel_transaction(request_id, params: dict, db: Session) -> JSONResponse:
+    payme_id = params.get("id")
+    purchase = db.scalar(select(CreditPurchase).where(CreditPurchase.payme_transaction_id == payme_id))
+    if not purchase:
+        return _payme_error(request_id, -31003, "Tranzaksiya topilmadi")
+
+    was_paid = purchase.status == "paid"
+
+    if purchase.status != "cancelled":
+        if was_paid:
+            purchase.teacher.credits -= purchase.credits
+        purchase.status = "cancelled"
+        purchase.cancelled_at = datetime.utcnow()
+        db.commit()
+
+    cancel_time = int(purchase.cancelled_at.timestamp() * 1000)
+    state = -2 if was_paid else -1
+    return _payme_result(request_id, {"transaction": str(purchase.id), "cancel_time": cancel_time, "state": state})
+
+
+def _payme_check_transaction(request_id, params: dict, db: Session) -> JSONResponse:
+    payme_id = params.get("id")
+    purchase = db.scalar(select(CreditPurchase).where(CreditPurchase.payme_transaction_id == payme_id))
+    if not purchase:
+        return _payme_error(request_id, -31003, "Tranzaksiya topilmadi")
+
+    return _payme_result(
+        request_id,
+        {
+            "create_time": int(purchase.created_at.timestamp() * 1000),
+            "perform_time": int(purchase.performed_at.timestamp() * 1000) if purchase.performed_at else 0,
+            "cancel_time": int(purchase.cancelled_at.timestamp() * 1000) if purchase.cancelled_at else 0,
+            "transaction": str(purchase.id),
+            "state": _payme_state(purchase.status),
+            "reason": None,
+        },
+    )
+
+
+def _payme_get_statement(request_id, params: dict, db: Session) -> JSONResponse:
+    from_dt = datetime.utcfromtimestamp(params.get("from", 0) / 1000)
+    to_dt = datetime.utcfromtimestamp(params.get("to", 0) / 1000)
+
+    purchases = db.scalars(
+        select(CreditPurchase)
+        .where(CreditPurchase.created_at >= from_dt, CreditPurchase.created_at <= to_dt)
+        .where(CreditPurchase.payme_transaction_id.is_not(None))
+    ).all()
+
+    transactions = [
+        {
+            "id": purchase.payme_transaction_id,
+            "time": int(purchase.created_at.timestamp() * 1000),
+            "amount": purchase.amount * 100,
+            "account": {"purchase_id": str(purchase.id)},
+            "create_time": int(purchase.created_at.timestamp() * 1000),
+            "perform_time": int(purchase.performed_at.timestamp() * 1000) if purchase.performed_at else 0,
+            "cancel_time": int(purchase.cancelled_at.timestamp() * 1000) if purchase.cancelled_at else 0,
+            "transaction": str(purchase.id),
+            "state": _payme_state(purchase.status),
+            "reason": None,
+        }
+        for purchase in purchases
+    ]
+    return _payme_result(request_id, {"transactions": transactions})
+
+
+PAYME_METHOD_HANDLERS = {
+    "CheckPerformTransaction": _payme_check_perform_transaction,
+    "CreateTransaction": _payme_create_transaction,
+    "PerformTransaction": _payme_perform_transaction,
+    "CancelTransaction": _payme_cancel_transaction,
+    "CheckTransaction": _payme_check_transaction,
+    "GetStatement": _payme_get_statement,
+}
+
+
+@app.post("/api/payme/webhook")
+async def payme_webhook(request: Request, db: Session = Depends(get_db)):
+    """Payme Merchant API — kredit uchun to'lov hodisalari shu yerga keladi."""
+
+    body = await request.json()
+    request_id = body.get("id")
+    method = body.get("method")
+    params = body.get("params", {})
+
+    if not _payme_check_auth(request):
+        return _payme_error(request_id, -32504, "Ruxsat yo'q")
+
+    handler = PAYME_METHOD_HANDLERS.get(method)
+    if not handler:
+        return _payme_error(request_id, -32601, "Metod topilmadi")
+
+    return handler(request_id, params, db)
+
+
+# ========== 8) Admin endpointlari ==========
 
 
 @app.get("/api/admin/stats")

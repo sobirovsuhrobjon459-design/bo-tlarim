@@ -26,14 +26,16 @@ DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
 # Shu Telegram ID'ga ega foydalanuvchi "ADMIN" bo'limini ko'radi va boshqara oladi.
 ADMIN_ID = int(os.getenv("ADMIN_ID") or 0)
 
-# Bepul test yaratganda o'qituvchi balansidan bir martalik yechiladigan summa (so'm).
-FREE_TEST_FEE = int(os.getenv("FREE_TEST_FEE") or 2000)
-
 # Pullik testda o'quvchi to'laganda, platforma ushlab qoladigan foiz (qolgani o'qituvchiga boradi).
 PLATFORM_COMMISSION_PERCENT = int(os.getenv("PLATFORM_COMMISSION_PERCENT") or 30)
 
-# O'qituvchilarga balans to'ldirish uchun ko'rsatiladigan karta raqami.
+# O'qituvchilarga pul balansini to'ldirish uchun ko'rsatiladigan karta raqami.
 ADMIN_CARD_NUMBER = os.getenv("ADMIN_CARD_NUMBER", "")
+
+# Payme Merchant API ma'lumotlari (kredit sotib olish uchun). Payme Business
+# kabinetidan olinadi: https://business.payme.uz
+PAYME_MERCHANT_ID = os.getenv("PAYME_MERCHANT_ID", "")
+PAYME_SECRET_KEY = os.getenv("PAYME_SECRET_KEY", "")
 
 
 # ========== 2) Bazaga ulanish ==========
@@ -78,8 +80,11 @@ class Teacher(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
 
-    # Bepul testlar uchun shu yerdan yechiladi, pullik testlardan tushgan ulush shu yerga qo'shiladi.
+    # Pul balansi: pullik testlardan tushgan ulush shu yerga qo'shiladi (pul, so'mda).
     balance: Mapped[int] = mapped_column(default=0)
+
+    # Kredit balansi: bepul testda har bir o'quvchi natijasi uchun 1 dona sarflanadi.
+    credits: Mapped[int] = mapped_column(default=0)
 
     user: Mapped["User"] = relationship()
     tests: Mapped[list["Test"]] = relationship(back_populates="teacher")
@@ -225,6 +230,29 @@ class TopUpRequest(Base):
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
 
+class CreditPurchase(Base):
+    """
+    O'qituvchining kredit sotib olish buyurtmasi — Payme orqali to'lanadi.
+
+    Payme'ning Merchant API'si (webhook) shu yozuvni "pending" -> "paid"
+    holatiga o'tkazadi va shunda teacher.credits oshiriladi.
+    """
+
+    __tablename__ = "credit_purchases"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    teacher_id: Mapped[int] = mapped_column(ForeignKey("teachers.id"), index=True)
+    credits: Mapped[int]
+    amount: Mapped[int]  # so'm
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | paid | cancelled
+    payme_transaction_id: Mapped[str | None] = mapped_column(String(50), default=None, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    performed_at: Mapped[datetime | None] = mapped_column(default=None)
+    cancelled_at: Mapped[datetime | None] = mapped_column(default=None)
+
+    teacher: Mapped["Teacher"] = relationship()
+
+
 # ========== 4) API so'rov sxemalari (Pydantic) ==========
 
 
@@ -289,3 +317,9 @@ class TopUpRequestIn(BaseModel):
     """O'qituvchi balansni to'ldirish so'rovi yuborganda ishlatiladi."""
 
     amount: int = Field(gt=0, le=50_000_000)
+
+
+class CreditPurchaseIn(BaseModel):
+    """O'qituvchi kredit sotib olmoqchi bo'lganda yuboriladi."""
+
+    credits: int = Field(ge=1, le=100_000)
