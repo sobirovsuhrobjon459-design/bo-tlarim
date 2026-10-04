@@ -2,17 +2,24 @@
 Backend (FastAPI) — barcha API endpointlari shu bitta faylda.
 
 Bo'limlar:
-1) Ilova sozlash (app, baza jadvallarini yaratish)
+1) Ilova sozlash (app, baza jadvallarini yaratish, botni ham shu jarayon ichida ishga tushirish)
 2) Statistika va PDF yordamchi funksiyalari
 3) Umumiy endpointlar (ping, me)
 4) O'qituvchi autentifikatsiyasi (register, login)
 5) O'qituvchi endpointlari (testlar, statistika, PDF)
 6) O'quvchi endpointlari (qidirish, to'lov, test ishlash, natija, reyting)
+
+MUHIM: Telegram bot ham aynan shu jarayon ichida, fon vazifasi (background task)
+sifatida ishga tushadi (pastda "lifespan" qismida) — alohida deploy qilish shart
+emas. Sabab: Render'ning bepul tarifida alohida "Background Worker" pullik,
+lekin "Web Service" bepul — shuning uchun ikkalasini bitta xizmatga birlashtiramiz.
 """
 
+import asyncio
 import io
 import random
 import string
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -51,12 +58,22 @@ from .database import (
     User,
     engine,
 )
+from bot.bot import run_bot
 
 # ========== 1) Ilova sozlash ==========
 
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="Test Platformasi API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Server ishga tushganda botni fon vazifasi sifatida ham ishga tushiradi."""
+    bot_task = asyncio.create_task(run_bot())
+    yield
+    bot_task.cancel()
+
+
+app = FastAPI(title="Test Platformasi API", lifespan=lifespan)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 

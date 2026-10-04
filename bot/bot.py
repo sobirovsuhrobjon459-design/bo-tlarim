@@ -3,6 +3,12 @@ Telegram bot.
 
 Vazifasi: foydalanuvchi /start bosganda salomlashish, Mini App'ni PLAY
 tugmasi va chat menyusi orqali ochish, tushunarsiz xabarlarga ham javob berish.
+
+MUHIM: bu fayl backend bilan BIRGA, bitta jarayon ichida ishga tushadi
+(backend/main.py shuni qiladi) — chunki Render'ning bepul tarifida alohida
+"Background Worker" pullik. Shuning uchun standalone ishga tushirish kerak
+bo'lsa ham ".config" nisbiy import orqali, paket sifatida ishga tushiriladi:
+    python -m bot.bot
 """
 
 import asyncio
@@ -18,7 +24,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
-from config import BOT_TOKEN, WEBAPP_URL
+from .config import BOT_TOKEN, WEBAPP_URL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("bot")
@@ -91,7 +97,8 @@ async def _setup_menu_button() -> None:
         )
 
 
-async def main() -> None:
+async def run_bot() -> None:
+    """Botni ishga tushiradi. backend/main.py ham, standalone ishga tushirish ham shuni chaqiradi."""
     logger.info("Bot ishga tushmoqda...")
     await _setup_menu_button()
     try:
@@ -101,4 +108,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run_bot())
