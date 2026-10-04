@@ -33,20 +33,19 @@ applyTheme();
 // Telegram'siz (oddiy brauzerda) sinash uchun shartli foydalanuvchi ID
 const DEV_USER_ID = "1";
 
-// localStorage ishlatiladi (sessionStorage emas) — shunda Mini App yopib qayta
-// ochilganda ham o'qituvchi login/parolni qayta kiritmaydi (YouTube'dagidek).
-let teacherToken = localStorage.getItem("teacherToken") || "";
-let teacherUsername = localStorage.getItem("teacherUsername") || "";
 let isAdmin = false;
+let isTeacher = false;
 let quizState = null;
 let quizTimerId = null;
 
 /* ---------- 1) Yordamchi funksiyalar ---------- */
 
 async function api(path, { method = "GET", body } = {}) {
+  // Alohida o'qituvchi tokeni yo'q — Telegram initData o'zi kifoya,
+  // "o'qituvchi" ekanligi backend'da shu odamga tegishli Teacher yozuvi
+  // borligi orqali aniqlanadi.
   const headers = {
     "X-Init-Data": telegram?.initData || "",
-    "X-Teacher-Token": teacherToken,
   };
   if (!telegram?.initData) {
     headers["X-Dev-User"] = DEV_USER_ID;
@@ -192,9 +191,11 @@ async function loadHome() {
   try {
     const me = await api("/api/me");
     isAdmin = Boolean(me.is_admin);
+    isTeacher = Boolean(me.is_teacher);
     renderHome(me.full_name || null, true);
   } catch (error) {
     isAdmin = false;
+    isTeacher = false;
     renderHome(null, false);
   }
 }
@@ -562,67 +563,36 @@ async function renderRating(code) {
 /* ---------- 4) O'qituvchi oqimi ---------- */
 
 async function enterTeacherArea() {
-  if (teacherToken && teacherUsername) {
-    renderTeacherWelcomeBack();
+  if (isTeacher) {
+    await renderTeacherDashboard();
   } else {
-    renderTeacherAuth();
+    renderTeacherRegister();
   }
 }
 
-function renderTeacherWelcomeBack() {
+function renderTeacherRegister() {
   showPage(`
     <button class="back-button" data-action="home">←</button>
-    <h2>O'qituvchi</h2>
-    <div class="card" style="cursor:default">
-      <div class="card-icon">👤</div>
-      <div class="card-body">
-        <h3>${escapeHtml(teacherUsername)}</h3>
-        <p>Oldin shu akkaunt bilan kirgansiz</p>
-      </div>
-    </div>
-    <button class="btn" id="continue-button">Davom etish →</button>
-    <button class="btn btn-ghost" id="switch-account-button">Boshqa akkaunt bilan kirish</button>
+    <h2>O'qituvchi sifatida ro'yxatdan o'tish</h2>
+    <p class="subtitle">
+      Alohida login/parol kerak emas — Telegram orqali kim ekaningiz allaqachon aniq.
+      Faqat ism-familiyangizni kiriting (natijalar va hisobotlarda shu ko'rinadi).
+    </p>
+    <input class="input" id="first-name-input" placeholder="Ism" />
+    <input class="input" id="last-name-input" placeholder="Familiya" />
+    <button class="btn" id="submit-register-button">✅ Ro'yxatdan o'tish</button>
   `);
 
   document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
-  document.getElementById("continue-button").addEventListener("click", guarded(renderTeacherDashboard));
-  document.getElementById("switch-account-button").addEventListener("click", () => {
-    clearRememberedTeacher();
-    renderTeacherAuth();
-  });
+  document.getElementById("submit-register-button").addEventListener("click", guarded(submitTeacherRegister));
 }
 
-function clearRememberedTeacher() {
-  teacherToken = "";
-  teacherUsername = "";
-  localStorage.removeItem("teacherToken");
-  localStorage.removeItem("teacherUsername");
-}
+async function submitTeacherRegister() {
+  const firstName = document.getElementById("first-name-input").value.trim();
+  const lastName = document.getElementById("last-name-input").value.trim();
 
-function renderTeacherAuth() {
-  showPage(`
-    <button class="back-button" data-action="home">←</button>
-    <h2>O'qituvchi kirishi</h2>
-    <input class="input" id="username-input" placeholder="Login (lotin harf/raqam)" />
-    <input class="input" id="password-input" type="password" placeholder="Parol (kamida 6 belgi)" />
-    <button class="btn" id="login-button">Kirish</button>
-    <button class="btn btn-ghost" id="register-button">Ro'yxatdan o'tish</button>
-  `);
-
-  document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
-  document.getElementById("login-button").addEventListener("click", guarded(() => submitTeacherAuth("login")));
-  document.getElementById("register-button").addEventListener("click", guarded(() => submitTeacherAuth("register")));
-}
-
-async function submitTeacherAuth(mode) {
-  const username = document.getElementById("username-input").value.trim();
-  const password = document.getElementById("password-input").value;
-
-  const result = await api(`/api/auth/${mode}`, { method: "POST", body: { username, password } });
-  teacherToken = result.token;
-  teacherUsername = username;
-  localStorage.setItem("teacherToken", teacherToken);
-  localStorage.setItem("teacherUsername", teacherUsername);
+  await api("/api/teacher/register", { method: "POST", body: { first_name: firstName, last_name: lastName } });
+  isTeacher = true;
   await renderTeacherDashboard();
 }
 
@@ -633,7 +603,7 @@ async function renderTeacherDashboard() {
   try {
     [stats, tests] = await Promise.all([api("/api/teacher/stats"), api("/api/teacher/tests")]);
   } catch (error) {
-    clearRememberedTeacher();
+    isTeacher = false;
     throw error;
   }
 
@@ -1013,7 +983,7 @@ async function downloadOrSendPdf(testId) {
   }
 
   const response = await fetch(`/api/teacher/tests/${testId}/pdf`, {
-    headers: { "X-Teacher-Token": teacherToken, "X-Dev-User": DEV_USER_ID },
+    headers: { "X-Dev-User": DEV_USER_ID },
   });
   if (!response.ok) throw new Error("PDF yuklab bo'lmadi");
 

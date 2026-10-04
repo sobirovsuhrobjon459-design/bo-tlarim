@@ -20,9 +20,6 @@ load_dotenv(BASE_DIR / ".env")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./backend/app.db")
 
-# O'qituvchi tokenlarini imzolash uchun maxfiy kalit. Productionda uzun, tasodifiy qiymat qo'ying.
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")
-
 # 1 bo'lsa, Telegram'siz (oddiy brauzerda) ham sinash mumkin bo'ladi. Productionda 0 bo'lsin.
 DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
 
@@ -68,18 +65,23 @@ class User(Base):
 
 
 class Teacher(Base):
-    """Foydalanuvchi o'qituvchi sifatida ro'yxatdan o'tganda shu jadvalga yozuv qo'shiladi."""
+    """
+    Foydalanuvchi o'qituvchi sifatida ro'yxatdan o'tganda shu jadvalga yozuv qo'shiladi.
+
+    Alohida login/parol yo'q — Telegram orqali kim ekani allaqachon aniq (tg_id).
+    Ro'yxatdan o'tishda faqat ism-familiya so'raladi (Telegram ismi ishonchli
+    bo'lmasligi mumkin, masalan taxallus yoki emoji bo'lishi mumkin).
+    """
 
     __tablename__ = "teachers"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
-    username: Mapped[str] = mapped_column(String(50), unique=True)
-    password_hash: Mapped[str] = mapped_column(String(300))
 
     # Bepul testlar uchun shu yerdan yechiladi, pullik testlardan tushgan ulush shu yerga qo'shiladi.
     balance: Mapped[int] = mapped_column(default=0)
 
+    user: Mapped["User"] = relationship()
     tests: Mapped[list["Test"]] = relationship(back_populates="teacher")
 
 
@@ -226,11 +228,11 @@ class TopUpRequest(Base):
 # ========== 4) API so'rov sxemalari (Pydantic) ==========
 
 
-class Credentials(BaseModel):
-    """O'qituvchi ro'yxatdan o'tishi / kirishi uchun."""
+class TeacherRegisterIn(BaseModel):
+    """O'qituvchi sifatida ro'yxatdan o'tishda yuboriladi — parol kerak emas."""
 
-    username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_]+$")
-    password: str = Field(min_length=6, max_length=100)
+    first_name: str = Field(min_length=2, max_length=100)
+    last_name: str = Field(min_length=2, max_length=100)
 
 
 class QuestionIn(BaseModel):

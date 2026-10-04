@@ -36,13 +36,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .auth import (
-    create_teacher_token,
     get_current_admin,
     get_current_teacher,
     get_current_user,
     get_db,
-    hash_password,
-    verify_password,
 )
 from .database import (
     ADMIN_CARD_NUMBER,
@@ -52,7 +49,6 @@ from .database import (
     PLATFORM_COMMISSION_PERCENT,
     Attempt,
     Base,
-    Credentials,
     FinishIn,
     KeyQuestion,
     Payment,
@@ -60,6 +56,7 @@ from .database import (
     Question,
     StudentAnswer,
     Teacher,
+    TeacherRegisterIn,
     Test,
     TestIn,
     TopUpRequest,
@@ -149,7 +146,7 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes
     elements = [
         Paragraph(f"Test hisoboti: {test.title}", styles["Title"]),
         Paragraph(f"Fan: {test.subject} | Mavzu: {test.topic or '-'}", styles["Normal"]),
-        Paragraph(f"O'qituvchi: {teacher.username} | Sana: {datetime.now():%d.%m.%Y}", styles["Normal"]),
+        Paragraph(f"O'qituvchi: {teacher.user.full_name} | Sana: {datetime.now():%d.%m.%Y}", styles["Normal"]),
         Paragraph(f"Qatnashchilar: {stats['total']} | O'rtacha natija: {stats['avg']}%", styles["Normal"]),
         Spacer(1, 14),
     ]
@@ -231,7 +228,7 @@ def _notify_admin_about_topup(request: TopUpRequest, teacher: Teacher) -> None:
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
             json={
                 "chat_id": ADMIN_ID,
-                "text": f"💳 Balans to'ldirish so'rovi\n\nO'qituvchi: {teacher.username}\nSumma: {request.amount} so'm",
+                "text": f"💳 Balans to'ldirish so'rovi\n\nO'qituvchi: {teacher.user.full_name}\nSumma: {request.amount} so'm",
                 "reply_markup": {
                     "inline_keyboard": [
                         [
@@ -276,40 +273,42 @@ def ping() -> dict:
 
 
 @app.get("/api/me")
-def get_me(user: User = Depends(get_current_user)) -> dict:
+def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
     """Mini App ochilganda chaqiriladi — Telegram orqali aniqlangan foydalanuvchini qaytaradi."""
-    return {"id": user.id, "full_name": user.full_name, "is_admin": bool(ADMIN_ID) and user.tg_id == ADMIN_ID}
+
+    is_teacher = db.scalar(select(Teacher.id).where(Teacher.user_id == user.id)) is not None
+
+    return {
+        "id": user.id,
+        "full_name": user.full_name,
+        "is_admin": bool(ADMIN_ID) and user.tg_id == ADMIN_ID,
+        "is_teacher": is_teacher,
+    }
 
 
-# ========== 4) O'qituvchi autentifikatsiyasi ==========
+# ========== 4) O'qituvchi ro'yxatdan o'tishi ==========
 
 
-@app.post("/api/auth/register")
-def register_teacher(data: Credentials, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Joriy Telegram foydalanuvchisini o'qituvchi sifatida ro'yxatdan o'tkazadi."""
+@app.post("/api/teacher/register")
+def register_teacher(
+    body: TeacherRegisterIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """
+    Joriy Telegram foydalanuvchisini o'qituvchi sifatida ro'yxatdan o'tkazadi.
 
-    already_taken = db.scalar(
-        select(Teacher).where((Teacher.username == data.username) | (Teacher.user_id == user.id))
-    )
-    if already_taken:
-        raise HTTPException(status_code=400, detail="Bu login band yoki siz allaqachon ro'yxatdan o'tgansiz")
+    Login/parol yo'q — faqat ism-familiya so'raladi va shu User'ning
+    full_name maydoniga yoziladi (Telegram ismi ishonchli bo'lmasligi mumkin).
+    """
 
-    teacher = Teacher(user_id=user.id, username=data.username, password_hash=hash_password(data.password))
-    db.add(teacher)
+    already_registered = db.scalar(select(Teacher.id).where(Teacher.user_id == user.id))
+    if already_registered:
+        raise HTTPException(status_code=400, detail="Siz allaqachon o'qituvchi sifatida ro'yxatdan o'tgansiz")
+
+    user.full_name = f"{body.first_name.strip()} {body.last_name.strip()}".strip()
+    db.add(Teacher(user_id=user.id))
     db.commit()
 
-    return {"token": create_teacher_token(user.id)}
-
-
-@app.post("/api/auth/login")
-def login_teacher(data: Credentials, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Avval ro'yxatdan o'tgan o'qituvchini login/parol orqali kirgizadi."""
-
-    teacher = db.scalar(select(Teacher).where(Teacher.username == data.username))
-    if not teacher or teacher.user_id != user.id or not verify_password(data.password, teacher.password_hash):
-        raise HTTPException(status_code=401, detail="Login yoki parol xato")
-
-    return {"token": create_teacher_token(user.id)}
+    return {"ok": True, "full_name": user.full_name}
 
 
 # ========== 5) O'qituvchi endpointlari ==========
@@ -753,7 +752,7 @@ def admin_list_topup_requests(admin: User = Depends(get_current_admin), db: Sess
     )
 
     return [
-        {"id": request.id, "teacher": teacher.username, "amount": request.amount}
+        {"id": request.id, "teacher": teacher.user.full_name, "amount": request.amount}
         for request, teacher in db.execute(query).all()
     ]
 

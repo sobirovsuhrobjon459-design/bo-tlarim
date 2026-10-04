@@ -2,14 +2,16 @@
 Autentifikatsiya fayli:
 
 1) Telegram initData tekshiruvi (validate_init_data)
-2) O'qituvchi parol/token funksiyalari (hash_password, create_teacher_token, ...)
-3) FastAPI Depends() orqali ishlatiladigan umumiy funksiyalar (get_db, get_current_user, ...)
+2) FastAPI Depends() orqali ishlatiladigan umumiy funksiyalar (get_db, get_current_user, ...)
+
+MUHIM: o'qituvchi uchun alohida login/parol yo'q. Telegram orqali kim ekani
+allaqachon aniq (tg_id) — "o'qituvchi" bo'lish shunchaki shu foydalanuvchiga
+tegishli Teacher yozuvi borligini bildiradi (qarang: get_current_teacher).
 """
 
 import hashlib
 import hmac
 import json
-import os
 import time
 from urllib.parse import parse_qsl
 
@@ -17,11 +19,9 @@ from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .database import ADMIN_ID, BOT_TOKEN, DEV_MODE, SECRET_KEY, SessionLocal, Teacher, User
+from .database import ADMIN_ID, BOT_TOKEN, DEV_MODE, SessionLocal, Teacher, User
 
 INIT_DATA_MAX_AGE_SECONDS = 24 * 60 * 60  # 1 kun
-TEACHER_TOKEN_LIFETIME_SECONDS = 7 * 24 * 60 * 60  # 7 kun
-PASSWORD_HASH_ITERATIONS = 200_000
 
 
 class InitDataError(Exception):
@@ -66,48 +66,7 @@ def validate_init_data(init_data: str) -> dict:
     return json.loads(user_json)
 
 
-# ========== 2) O'qituvchi parol va token funksiyalari ==========
-
-
-def hash_password(password: str) -> str:
-    """Parolni "tuz (salt) + hash" ko'rinishida qaytaradi, bazada shu saqlanadi."""
-    salt = os.urandom(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PASSWORD_HASH_ITERATIONS)
-    return salt.hex() + "$" + digest.hex()
-
-
-def verify_password(password: str, stored_hash: str) -> bool:
-    """Kiritilgan parolni bazadagi hash bilan solishtiradi."""
-    salt_hex, digest_hex = stored_hash.split("$")
-    salt = bytes.fromhex(salt_hex)
-    expected_digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PASSWORD_HASH_ITERATIONS).hex()
-    return hmac.compare_digest(expected_digest, digest_hex)
-
-
-def create_teacher_token(user_id: int) -> str:
-    """O'qituvchi login qilgandan keyin frontendga beriladigan, 7 kun amal qiladigan token."""
-    expires_at = int(time.time()) + TEACHER_TOKEN_LIFETIME_SECONDS
-    payload = f"{user_id}:{expires_at}"
-    signature = hmac.new(SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{payload}:{signature}"
-
-
-def verify_teacher_token(token: str, user_id: int) -> bool:
-    """Frontend yuborgan tokenni tekshiradi: imzosi to'g'rimi, muddati o'tmaganmi, shu userga tegishlimi."""
-    try:
-        user_id_str, expires_str, signature = token.split(":")
-        payload = f"{user_id_str}:{expires_str}"
-        expected_signature = hmac.new(SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
-
-        if not hmac.compare_digest(expected_signature, signature):
-            return False
-
-        return int(user_id_str) == user_id and int(expires_str) > time.time()
-    except (ValueError, AttributeError):
-        return False
-
-
-# ========== 3) FastAPI Depends() funksiyalari ==========
+# ========== 2) FastAPI Depends() funksiyalari ==========
 
 
 def get_db():
@@ -155,19 +114,12 @@ def get_current_user(
     return user
 
 
-def get_current_teacher(
-    x_teacher_token: str = Header(default=""),
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> Teacher:
-    """Joriy foydalanuvchining o'qituvchi sifatida kirganini tekshiradi."""
-
-    if not verify_teacher_token(x_teacher_token, user.id):
-        raise HTTPException(status_code=401, detail="Qayta kiring")
+def get_current_teacher(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> Teacher:
+    """Joriy foydalanuvchiga tegishli Teacher yozuvi borligini tekshiradi (login/parolsiz)."""
 
     teacher = db.scalar(select(Teacher).where(Teacher.user_id == user.id))
     if not teacher:
-        raise HTTPException(status_code=403, detail="Siz o'qituvchi sifatida ro'yxatdan o'tmagansiz")
+        raise HTTPException(status_code=403, detail="Siz hali o'qituvchi sifatida ro'yxatdan o'tmagansiz")
 
     return teacher
 
