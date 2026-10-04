@@ -1,0 +1,189 @@
+"""
+Ma'lumotlar bazasi fayli: .env sozlamalari, bazaga ulanish, barcha jadvallar
+(modellar) va API so'rov sxemalari (Pydantic) shu bitta faylda.
+"""
+
+import os
+from datetime import datetime
+from pathlib import Path
+
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+from sqlalchemy import BigInteger, ForeignKey, String, Text, create_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
+
+# ========== 1) Sozlamalar (.env) ==========
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./backend/app.db")
+
+# O'qituvchi tokenlarini imzolash uchun maxfiy kalit. Productionda uzun, tasodifiy qiymat qo'ying.
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")
+
+# 1 bo'lsa, Telegram'siz (oddiy brauzerda) ham sinash mumkin bo'ladi. Productionda 0 bo'lsin.
+DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
+
+
+# ========== 2) Bazaga ulanish ==========
+
+# SQLite bitta threadda ishlashni talab qiladi, FastAPI esa turli threadlardan
+# murojaat qilishi mumkin — shuning uchun buni o'chiramiz.
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
+SessionLocal = sessionmaker(bind=engine)
+
+
+class Base(DeclarativeBase):
+    """Barcha jadval (model) klasslari shundan meros oladi."""
+
+
+# ========== 3) Jadvallar (modellar) ==========
+
+
+class User(Base):
+    """Har bir Telegram foydalanuvchisi (o'quvchi ham, o'qituvchi ham) shu jadvalda saqlanadi."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    full_name: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
+class Teacher(Base):
+    """Foydalanuvchi o'qituvchi sifatida ro'yxatdan o'tganda shu jadvalga yozuv qo'shiladi."""
+
+    __tablename__ = "teachers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+    username: Mapped[str] = mapped_column(String(50), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(300))
+
+    tests: Mapped[list["Test"]] = relationship(back_populates="teacher")
+
+
+class Test(Base):
+    """O'qituvchi yaratgan test (bir nechta savoldan iborat)."""
+
+    __tablename__ = "tests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    teacher_id: Mapped[int] = mapped_column(ForeignKey("teachers.id"), index=True)
+    code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    subject: Mapped[str] = mapped_column(String(100))
+    topic: Mapped[str] = mapped_column(String(200), default="")
+    price: Mapped[int] = mapped_column(default=0)
+    duration: Mapped[int] = mapped_column(default=30)  # daqiqalarda
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+    teacher: Mapped["Teacher"] = relationship(back_populates="tests")
+    questions: Mapped[list["Question"]] = relationship(
+        back_populates="test", cascade="all, delete-orphan", order_by="Question.id"
+    )
+
+
+class Question(Base):
+    """Testning bitta savoli (4 ta variant: A, B, C, D)."""
+
+    __tablename__ = "questions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    test_id: Mapped[int] = mapped_column(ForeignKey("tests.id"), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    a: Mapped[str] = mapped_column(Text)
+    b: Mapped[str] = mapped_column(Text)
+    c: Mapped[str] = mapped_column(Text)
+    d: Mapped[str] = mapped_column(Text)
+    correct: Mapped[str] = mapped_column(String(1))  # "A" | "B" | "C" | "D"
+
+    test: Mapped["Test"] = relationship(back_populates="questions")
+
+
+class Attempt(Base):
+    """O'quvchining bitta testni ishlash urinishi (va natijasi)."""
+
+    __tablename__ = "test_attempts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    test_id: Mapped[int] = mapped_column(ForeignKey("tests.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    started_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(default=None)
+    status: Mapped[str] = mapped_column(String(20), default="in_progress")  # in_progress | done | expired
+    correct: Mapped[int] = mapped_column(default=0)
+    wrong: Mapped[int] = mapped_column(default=0)
+    percent: Mapped[float] = mapped_column(default=0)
+    seconds: Mapped[int] = mapped_column(default=0)
+
+
+class StudentAnswer(Base):
+    """O'quvchining har bir savolga bergan aniq javobi."""
+
+    __tablename__ = "student_answers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    attempt_id: Mapped[int] = mapped_column(ForeignKey("test_attempts.id"), index=True)
+    question_id: Mapped[int] = mapped_column(ForeignKey("questions.id"), index=True)
+    chosen: Mapped[str | None] = mapped_column(String(1), default=None)
+    is_correct: Mapped[bool] = mapped_column(default=False)
+
+
+class Payment(Base):
+    """To'lov yozuvi. Hozircha provider har doim 'mock'."""
+
+    __tablename__ = "payments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    test_id: Mapped[int] = mapped_column(ForeignKey("tests.id"), index=True)
+    amount: Mapped[int] = mapped_column(default=0)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | paid | failed
+    provider: Mapped[str] = mapped_column(String(20), default="mock")
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
+# ========== 4) API so'rov sxemalari (Pydantic) ==========
+
+
+class Credentials(BaseModel):
+    """O'qituvchi ro'yxatdan o'tishi / kirishi uchun."""
+
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_]+$")
+    password: str = Field(min_length=6, max_length=100)
+
+
+class QuestionIn(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+    a: str = Field(min_length=1, max_length=500)
+    b: str = Field(min_length=1, max_length=500)
+    c: str = Field(min_length=1, max_length=500)
+    d: str = Field(min_length=1, max_length=500)
+    correct: str = Field(pattern="^[ABCD]$")
+
+
+class TestIn(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    subject: str = Field(min_length=2, max_length=100)
+    topic: str = Field("", max_length=200)
+    price: int = Field(0, ge=0, le=10_000_000)
+    duration: int = Field(30, ge=1, le=300)
+    questions: list[QuestionIn] = Field(min_length=1, max_length=300)
+
+
+class FinishIn(BaseModel):
+    """O'quvchi testni yakunlaganda yuboradigan javoblar: {savol_id: "A"}."""
+
+    answers: dict[str, str] = {}
+
+
+class PriceUpdate(BaseModel):
+    """O'qituvchi testni yaratgandan keyin narxini o'zgartirganda yuboriladi."""
+
+    price: int = Field(ge=0, le=10_000_000)

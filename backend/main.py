@@ -1,0 +1,493 @@
+"""
+Backend (FastAPI) — barcha API endpointlari shu bitta faylda.
+
+Bo'limlar:
+1) Ilova sozlash (app, baza jadvallarini yaratish)
+2) Statistika va PDF yordamchi funksiyalari
+3) Umumiy endpointlar (ping, me)
+4) O'qituvchi autentifikatsiyasi (register, login)
+5) O'qituvchi endpointlari (testlar, statistika, PDF)
+6) O'quvchi endpointlari (qidirish, to'lov, test ishlash, natija, reyting)
+"""
+
+import io
+import random
+import string
+from datetime import datetime
+from pathlib import Path
+
+import httpx
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from .auth import (
+    create_teacher_token,
+    get_current_teacher,
+    get_current_user,
+    get_db,
+    hash_password,
+    verify_password,
+)
+from .database import (
+    BOT_TOKEN,
+    Attempt,
+    Base,
+    Credentials,
+    FinishIn,
+    Payment,
+    PriceUpdate,
+    Question,
+    StudentAnswer,
+    Teacher,
+    Test,
+    TestIn,
+    User,
+    engine,
+)
+
+# ========== 1) Ilova sozlash ==========
+
+Base.metadata.create_all(engine)
+
+app = FastAPI(title="Test Platformasi API")
+
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+
+
+# ========== 2) Statistika va PDF yordamchilari ==========
+
+
+def best_attempts(db: Session, test: Test) -> list[tuple[Attempt, User]]:
+    """Har bir o'quvchining shu testdagi ENG YAXSHI (eng yuqori foiz) urinishini qaytaradi."""
+
+    query = (
+        select(Attempt, User)
+        .join(User, User.id == Attempt.user_id)
+        .where(Attempt.test_id == test.id, Attempt.status == "done")
+        .order_by(Attempt.percent.desc(), Attempt.seconds)
+    )
+
+    best_by_user: dict[int, tuple[Attempt, User]] = {}
+    for attempt, user in db.execute(query).all():
+        best_by_user.setdefault(user.id, (attempt, user))
+
+    return list(best_by_user.values())
+
+
+def build_test_stats(db: Session, test: Test) -> dict:
+    """O'qituvchi dashboard'ida ko'rsatiladigan umumiy statistika."""
+
+    results = best_attempts(db, test)
+    percents = [attempt.percent for attempt, _ in results]
+
+    question_stats = []
+    for question in test.questions:
+        base_query = (
+            select(func.count())
+            .select_from(StudentAnswer)
+            .join(Attempt, Attempt.id == StudentAnswer.attempt_id)
+            .where(StudentAnswer.question_id == question.id, Attempt.status == "done")
+        )
+        total_answers = db.scalar(base_query)
+        wrong_answers = db.scalar(base_query.where(StudentAnswer.is_correct.is_(False)))
+        question_stats.append({"text": question.text, "total": total_answers, "wrong": wrong_answers})
+
+    return {
+        "total": len(results),
+        "avg": round(sum(percents) / len(percents), 1) if percents else 0,
+        "max": max(percents, default=0),
+        "min": min(percents, default=0),
+        "avg_seconds": int(sum(a.seconds for a, _ in results) / len(results)) if results else 0,
+        "questions": question_stats,
+    }
+
+
+def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes:
+    """Berilgan test bo'yicha to'liq PDF hisobotni bayt ko'rinishida qaytaradi."""
+
+    stats = build_test_stats(db, test)
+    styles = getSampleStyleSheet()
+    buffer = io.BytesIO()
+
+    elements = [
+        Paragraph(f"Test hisoboti: {test.title}", styles["Title"]),
+        Paragraph(f"Fan: {test.subject} | Mavzu: {test.topic or '-'}", styles["Normal"]),
+        Paragraph(f"O'qituvchi: {teacher.username} | Sana: {datetime.now():%d.%m.%Y}", styles["Normal"]),
+        Paragraph(f"Qatnashchilar: {stats['total']} | O'rtacha natija: {stats['avg']}%", styles["Normal"]),
+        Spacer(1, 14),
+    ]
+
+    table_data = [["#", "O'quvchi", "To'g'ri", "Noto'g'ri", "Natija"]]
+    for index, (attempt, user) in enumerate(best_attempts(db, test), start=1):
+        table_data.append([index, user.full_name, attempt.correct, attempt.wrong, f"{attempt.percent}%"])
+
+    table = Table(table_data, repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4f46e5")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+            ]
+        )
+    )
+    elements.append(table)
+
+    SimpleDocTemplate(buffer, pagesize=A4).build(elements)
+    return buffer.getvalue()
+
+
+def _get_own_test(db: Session, teacher: Teacher, test_id: int) -> Test:
+    """Test shu o'qituvchiga tegishli ekanini tekshiradi, bo'lmasa 404 qaytaradi."""
+    test = db.get(Test, test_id)
+    if not test or test.teacher_id != teacher.id:
+        raise HTTPException(status_code=404, detail="Test topilmadi")
+    return test
+
+
+def _get_test_by_code(db: Session, code: str) -> Test:
+    test = db.scalar(select(Test).where(Test.code == code.strip().upper()))
+    if not test:
+        raise HTTPException(status_code=404, detail="Test topilmadi")
+    return test
+
+
+def _is_paid(db: Session, user: User, test: Test) -> bool:
+    if test.price == 0:
+        return True
+    payment = db.scalar(
+        select(Payment.id).where(Payment.user_id == user.id, Payment.test_id == test.id, Payment.status == "paid")
+    )
+    return payment is not None
+
+
+# ========== 3) Umumiy endpointlar ==========
+
+
+@app.get("/api/ping")
+def ping() -> dict:
+    """Autentifikatsiyasiz oddiy tekshiruv — backend ishlayotganini ko'rsatadi."""
+    return {"status": "ok", "message": "Backend ishlayapti ✅"}
+
+
+@app.get("/api/me")
+def get_me(user: User = Depends(get_current_user)) -> dict:
+    """Mini App ochilganda chaqiriladi — Telegram orqali aniqlangan foydalanuvchini qaytaradi."""
+    return {"id": user.id, "full_name": user.full_name}
+
+
+# ========== 4) O'qituvchi autentifikatsiyasi ==========
+
+
+@app.post("/api/auth/register")
+def register_teacher(data: Credentials, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Joriy Telegram foydalanuvchisini o'qituvchi sifatida ro'yxatdan o'tkazadi."""
+
+    already_taken = db.scalar(
+        select(Teacher).where((Teacher.username == data.username) | (Teacher.user_id == user.id))
+    )
+    if already_taken:
+        raise HTTPException(status_code=400, detail="Bu login band yoki siz allaqachon ro'yxatdan o'tgansiz")
+
+    teacher = Teacher(user_id=user.id, username=data.username, password_hash=hash_password(data.password))
+    db.add(teacher)
+    db.commit()
+
+    return {"token": create_teacher_token(user.id)}
+
+
+@app.post("/api/auth/login")
+def login_teacher(data: Credentials, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Avval ro'yxatdan o'tgan o'qituvchini login/parol orqali kirgizadi."""
+
+    teacher = db.scalar(select(Teacher).where(Teacher.username == data.username))
+    if not teacher or teacher.user_id != user.id or not verify_password(data.password, teacher.password_hash):
+        raise HTTPException(status_code=401, detail="Login yoki parol xato")
+
+    return {"token": create_teacher_token(user.id)}
+
+
+# ========== 5) O'qituvchi endpointlari ==========
+
+
+@app.get("/api/teacher/stats")
+def teacher_overview(teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """Dashboard'dagi umumiy statistika kartalari uchun."""
+
+    test_ids = [test.id for test in teacher.tests]
+    attempts = (
+        db.scalars(select(Attempt).where(Attempt.test_id.in_(test_ids), Attempt.status == "done")).all()
+        if test_ids
+        else []
+    )
+
+    return {
+        "tests": len(test_ids),
+        "students": len({attempt.user_id for attempt in attempts}),
+        "avg": round(sum(a.percent for a in attempts) / len(attempts), 1) if attempts else 0,
+        "max": max((a.percent for a in attempts), default=0),
+    }
+
+
+@app.get("/api/teacher/tests")
+def list_tests(teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """O'qituvchining barcha testlari ro'yxati (eng yangisi birinchi), qatnashchilar soni bilan."""
+
+    result = []
+    for test in reversed(teacher.tests):
+        participant_count = db.scalar(
+            select(func.count(func.distinct(Attempt.user_id))).where(
+                Attempt.test_id == test.id, Attempt.status == "done"
+            )
+        )
+        result.append(
+            {
+                "id": test.id,
+                "code": test.code,
+                "title": test.title,
+                "subject": test.subject,
+                "count": len(test.questions),
+                "price": test.price,
+                "students": participant_count,
+            }
+        )
+
+    return result
+
+
+@app.post("/api/teacher/tests")
+def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """Yangi test (va uning savollarini) yaratadi, tasodifiy noyob kod beradi."""
+
+    prefix = "".join(ch for ch in body.subject.upper() if ch in string.ascii_uppercase)[:4] or "TEST"
+
+    while True:
+        code = f"{prefix}-{''.join(random.choices(string.ascii_uppercase + string.digits, k=4))}"
+        if not db.scalar(select(Test.id).where(Test.code == code)):
+            break
+
+    test = Test(
+        teacher_id=teacher.id,
+        code=code,
+        title=body.title,
+        subject=body.subject,
+        topic=body.topic,
+        price=body.price,
+        duration=body.duration,
+        questions=[Question(**question.model_dump()) for question in body.questions],
+    )
+    db.add(test)
+    db.commit()
+
+    return {"id": test.id, "code": test.code}
+
+
+@app.get("/api/teacher/tests/{test_id}/results")
+def test_results(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """Shu testni ishlagan o'quvchilarning natijalar jadvali."""
+
+    test = _get_own_test(db, teacher, test_id)
+    return {
+        "id": test.id,
+        "title": test.title,
+        "price": test.price,
+        "rows": [
+            {
+                "name": user.full_name,
+                "correct": attempt.correct,
+                "wrong": attempt.wrong,
+                "percent": attempt.percent,
+                "seconds": attempt.seconds,
+            }
+            for attempt, user in best_attempts(db, test)
+        ],
+    }
+
+
+@app.get("/api/teacher/tests/{test_id}/stats")
+def test_stats(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """Shu testning umumiy statistikasi va savollar bo'yicha xatolar foizi."""
+    return build_test_stats(db, _get_own_test(db, teacher, test_id))
+
+
+@app.patch("/api/teacher/tests/{test_id}/price")
+def update_test_price(
+    test_id: int, body: PriceUpdate, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
+):
+    """O'qituvchi testni yaratgandan keyin ham narxini o'zgartirishi uchun. Avvalgi to'lovlarga ta'sir qilmaydi."""
+
+    test = _get_own_test(db, teacher, test_id)
+    test.price = body.price
+    db.commit()
+    return {"id": test.id, "price": test.price}
+
+
+@app.get("/api/teacher/tests/{test_id}/pdf")
+def download_pdf(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """PDF hisobotni to'g'ridan-to'g'ri brauzerga yuklab beradi (lokal sinov uchun)."""
+
+    test = _get_own_test(db, teacher, test_id)
+    pdf_bytes = generate_test_report_pdf(db, test, teacher)
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{test.code}.pdf"'},
+    )
+
+
+@app.post("/api/teacher/tests/{test_id}/pdf/send")
+def send_pdf_to_telegram(
+    test_id: int,
+    teacher: Teacher = Depends(get_current_teacher),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """PDF hisobotni Telegram bot orqali o'qituvchining shaxsiy chatiga yuboradi."""
+
+    test = _get_own_test(db, teacher, test_id)
+    pdf_bytes = generate_test_report_pdf(db, test, teacher)
+
+    response = httpx.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
+        data={"chat_id": user.tg_id},
+        files={"document": (f"{test.code}.pdf", pdf_bytes, "application/pdf")},
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="PDF yuborilmadi (botga /start bosganmisiz?)")
+
+    return {"ok": True}
+
+
+# ========== 6) O'quvchi endpointlari ==========
+
+
+@app.get("/api/tests/{code}")
+def get_test(code: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """O'quvchi test kodini kiritganda, testning umumiy ma'lumotini qaytaradi."""
+
+    test = _get_test_by_code(db, code)
+    return {
+        "code": test.code,
+        "title": test.title,
+        "subject": test.subject,
+        "count": len(test.questions),
+        "duration": test.duration,
+        "price": test.price,
+        "paid": _is_paid(db, user, test),
+    }
+
+
+@app.post("/api/tests/{code}/pay")
+def pay_for_test(code: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    HOZIRCHA MOCK: to'lov darhol "paid" deb belgilanadi.
+
+    Haqiqiy Click/Payme ulanganda: bu yerda to'lov "pending" holatda yaratiladi va
+    foydalanuvchi to'lov sahifasiga yo'naltiriladi; to'lov tizimining webhook'i kelganda
+    shu yozuv "paid"ga o'zgartiriladi.
+    """
+
+    test = _get_test_by_code(db, code)
+    if _is_paid(db, user, test):
+        return {"ok": True}
+
+    db.add(Payment(user_id=user.id, test_id=test.id, amount=test.price, status="paid", provider="mock"))
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/tests/{code}/start")
+def start_test(code: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Testni boshlaydi (yoki tugamagan urinishni davom ettiradi). To'g'ri javoblar yuborilmaydi."""
+
+    test = _get_test_by_code(db, code)
+    if not _is_paid(db, user, test):
+        raise HTTPException(status_code=402, detail="Avval to'lov qiling")
+
+    attempt = db.scalar(
+        select(Attempt)
+        .where(Attempt.test_id == test.id, Attempt.user_id == user.id, Attempt.status == "in_progress")
+        .order_by(Attempt.id.desc())
+    )
+
+    if attempt and (datetime.utcnow() - attempt.started_at).total_seconds() >= test.duration * 60:
+        attempt.status = "expired"
+        attempt = None
+
+    if not attempt:
+        attempt = Attempt(test_id=test.id, user_id=user.id)
+        db.add(attempt)
+        db.commit()
+
+    remaining_seconds = int(test.duration * 60 - (datetime.utcnow() - attempt.started_at).total_seconds())
+
+    return {
+        "attempt_id": attempt.id,
+        "duration": test.duration,
+        "remaining": remaining_seconds,
+        "questions": [
+            {"id": q.id, "text": q.text, "a": q.a, "b": q.b, "c": q.c, "d": q.d} for q in test.questions
+        ],
+    }
+
+
+@app.post("/api/attempts/{attempt_id}/finish")
+def finish_attempt(
+    attempt_id: int, body: FinishIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """O'quvchi javoblarini qabul qiladi, avtomatik tekshiradi va natijani qaytaradi."""
+
+    attempt = db.get(Attempt, attempt_id)
+    if not attempt or attempt.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Urinish topilmadi")
+    if attempt.status != "in_progress":
+        raise HTTPException(status_code=400, detail="Test allaqachon yakunlangan")
+
+    test = db.get(Test, attempt.test_id)
+    correct_count = 0
+
+    for question in test.questions:
+        chosen = (body.answers.get(str(question.id)) or "").upper()
+        chosen = chosen if chosen in "ABCD" and len(chosen) == 1 else None
+        is_correct = chosen == question.correct
+        correct_count += is_correct
+        db.add(StudentAnswer(attempt_id=attempt.id, question_id=question.id, chosen=chosen, is_correct=is_correct))
+
+    total_questions = len(test.questions)
+    attempt.correct = correct_count
+    attempt.wrong = total_questions - correct_count
+    attempt.percent = round(correct_count / total_questions * 100, 1)
+    attempt.finished_at = datetime.utcnow()
+    attempt.status = "done"
+    attempt.seconds = int(min((attempt.finished_at - attempt.started_at).total_seconds(), test.duration * 60))
+    db.commit()
+
+    return {
+        "correct": attempt.correct,
+        "wrong": attempt.wrong,
+        "total": total_questions,
+        "percent": attempt.percent,
+        "seconds": attempt.seconds,
+        "name": user.full_name,
+    }
+
+
+@app.get("/api/tests/{code}/rating")
+def test_rating(code: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Shu testning top-50 reytingi (eng yaxshi natijalar)."""
+
+    test = _get_test_by_code(db, code)
+    return [{"name": u.full_name, "percent": a.percent} for a, u in best_attempts(db, test)[:50]]
+
+
+# Barcha boshqa manzillarni frontend papkasidan beradi (index.html, css, js)
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

@@ -1,0 +1,410 @@
+/*
+  Test Platformasi — yagona stil fayli.
+
+  Bo'limlar:
+  1) Dizayn tizimi (ranglar, shadow, radius — light va dark rejim)
+  2) Reset va umumiy tipografika
+  3) Qayta ishlatiladigan UI bloklari (card, button, input, jadval va h.k.)
+  4) Animatsiyalar
+*/
+
+/* ========== 1) Dizayn tizimi ========== */
+
+:root {
+  --color-bg: #f4f5fb;
+  --color-surface: #ffffff;
+  --color-primary: #6366f1;
+  --color-primary-dark: #4f46e5;
+  --color-accent: #22d3ee;
+  --color-text: #111827;
+  --color-text-muted: #6b7280;
+  --color-border: #e5e7eb;
+
+  --shadow-sm: 0 2px 10px rgba(17, 24, 39, 0.06);
+  --shadow-md: 0 10px 28px rgba(17, 24, 39, 0.10);
+
+  --radius-sm: 12px;
+  --radius-md: 18px;
+  --radius-lg: 24px;
+
+  --font-main: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Telegramning qorong'i rejimida theme.js shu attributni belgilaydi */
+[data-theme="dark"] {
+  --color-bg: #0f1115;
+  --color-surface: #1a1d24;
+  --color-primary: #818cf8;
+  --color-primary-dark: #6366f1;
+  --color-accent: #22d3ee;
+  --color-text: #f3f4f6;
+  --color-text-muted: #9ca3af;
+  --color-border: #2a2d36;
+
+  --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+/* ========== 2) Reset va tipografika ========== */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-main);
+  background: var(--color-bg);
+  color: var(--color-text);
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+#app {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 20px 16px 32px;
+  min-height: 100vh;
+}
+
+h1 {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 4px 0 6px;
+}
+
+h2 {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 4px 0 14px;
+}
+
+h3 {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0 0 2px;
+}
+
+p {
+  margin: 0 0 8px;
+}
+
+.subtitle {
+  color: var(--color-text-muted);
+  font-size: 15px;
+  margin: 0 0 24px;
+}
+
+.status {
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  margin-top: 28px;
+}
+
+/* ========== 3) UI bloklari ========== */
+
+.card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: 18px;
+  margin-bottom: 14px;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.card:active {
+  transform: scale(0.98);
+  box-shadow: var(--shadow-md);
+}
+
+.card-icon {
+  font-size: 32px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.card:active .card-icon {
+  transform: scale(1.12);
+}
+
+.card-body p {
+  margin: 2px 0 0;
+  color: var(--color-text-muted);
+  font-size: 14px;
+}
+
+.btn {
+  display: inline-block;
+  width: 100%;
+  padding: 14px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dark));
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  transition: transform 0.12s ease, opacity 0.12s ease;
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+
+.back-button {
+  background: none;
+  border: 0;
+  font-size: 22px;
+  color: var(--color-text);
+  cursor: pointer;
+  padding: 4px 8px 4px 0;
+  margin-bottom: 4px;
+}
+
+.input,
+textarea,
+select {
+  width: 100%;
+  padding: 13px 14px;
+  margin: 6px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 15px;
+  font-family: var(--font-main);
+}
+
+textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+
+.input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.row-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.stat-tile {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.stat-tile .stat-value {
+  display: block;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-text);
+  margin-top: 4px;
+}
+
+.progress-track {
+  height: 10px;
+  background: var(--color-border);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 10px 0;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-primary), var(--color-accent));
+  transition: width 0.4s ease;
+}
+
+.option {
+  background: var(--color-surface);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin: 10px 0;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.option.selected {
+  border-color: var(--color-accent);
+  background: rgba(34, 211, 238, 0.12);
+  transform: scale(1.01);
+}
+
+.question-block {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  margin: 12px 0;
+}
+
+.result-number {
+  font-size: 60px;
+  font-weight: 800;
+  text-align: center;
+  margin: 8px 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  margin-top: 8px;
+}
+
+table th,
+table td {
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+}
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-text);
+  color: var(--color-bg);
+  padding: 12px 18px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  z-index: 50;
+  box-shadow: var(--shadow-md);
+  animation: fade-up 0.25s ease;
+}
+
+/* ========== 4) Animatsiyalar ========== */
+
+.page {
+  animation: fade-in 0.3s ease;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.card-entrance {
+  animation: card-in 0.35s ease both;
+}
+
+/* nth-of-type: faqat "div" turidagi birodarlar orasida sanaydi,
+   shu sabab h1/p matnlariga ta'sir qilmay, aynan 2-kartani kechiktiradi. */
+.card-entrance:nth-of-type(2) {
+  animation-delay: 0.08s;
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.fade-up {
+  animation: fade-up 0.4s ease both;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Skeleton (yuklanish) animatsiyasi */
+.skeleton {
+  background: linear-gradient(90deg, var(--color-border) 25%, var(--color-surface) 37%, var(--color-border) 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.4s ease infinite;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 100% 50%;
+  }
+  to {
+    background-position: 0 50%;
+  }
+}
+
+.skeleton-line {
+  height: 14px;
+  margin-bottom: 10px;
+}
+
+.skeleton-card {
+  height: 78px;
+  border-radius: var(--radius-md);
+  margin-bottom: 14px;
+}
+
+/* Test yakunlanganda chiqadigan 🎉 uchun */
+.pop {
+  animation: pop 0.6s ease;
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
