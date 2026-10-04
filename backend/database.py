@@ -89,6 +89,12 @@ class Test(Base):
     # "key"   — faqat javoblar kaliti kiritiladi (savollar tashqarida, masalan kanalda)
     mode: Mapped[str] = mapped_column(String(10), default="full")
 
+    # Telegram guruhga bog'lash (ixtiyoriy)
+    telegram_group_id: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    enrollment_type: Mapped[str] = mapped_column(String(10), default="open")  # "open" | "closed"
+    start_time: Mapped[datetime | None] = mapped_column(default=None)
+    end_time: Mapped[datetime | None] = mapped_column(default=None)
+
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
     teacher: Mapped["Teacher"] = relationship(back_populates="tests")
@@ -225,6 +231,13 @@ class TestIn(BaseModel):
     price: int = Field(0, ge=0, le=10_000_000)
     duration: int = Field(30, ge=1, le=300)
     mode: str = Field("full", pattern="^(full|key)$")
+
+    # Telegram guruhga bog'lash (ixtiyoriy)
+    telegram_group_id: int | None = None
+    enrollment_type: str = Field("open", pattern="^(open|closed)$")
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+
     questions: list[QuestionIn] = Field(default_factory=list, max_length=300)
     key_questions: list[KeyQuestionIn] = Field(default_factory=list, max_length=300)
 

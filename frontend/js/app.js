@@ -95,6 +95,12 @@ function formatMinutesSeconds(totalSeconds) {
   return `${minutes}:${seconds}`;
 }
 
+function formatDateTime(isoString) {
+  const date = new Date(isoString);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function showPage(html) {
   appElement.innerHTML = `<div class="page">${html}</div>`;
   window.scrollTo(0, 0);
@@ -258,7 +264,21 @@ function renderStudentSearch() {
 
 function renderTestFound(test) {
   const priceLabel = test.price ? `${formatNumber(test.price)} so'm` : "Bepul";
-  const actionButton = test.paid
+
+  const now = new Date();
+  let blockedMessage = "";
+
+  if (test.enrollment_type === "closed" && test.is_member === false) {
+    blockedMessage = "🔒 Bu test yopiq — faqat tegishli Telegram guruh a'zolari kira oladi.";
+  } else if (test.start_time && now < new Date(test.start_time)) {
+    blockedMessage = `⏳ Test hali boshlanmagan. Boshlanish vaqti: ${formatDateTime(test.start_time)}`;
+  } else if (test.end_time && now > new Date(test.end_time)) {
+    blockedMessage = "⌛ Test vaqti tugagan.";
+  }
+
+  const actionButton = blockedMessage
+    ? `<button class="btn" disabled>▶️ TESTNI BOSHLASH</button>`
+    : test.paid
     ? `<button class="btn" id="start-test-button">▶️ TESTNI BOSHLASH</button>`
     : `<button class="btn" id="pay-button">💳 ${formatNumber(test.price)} so'm to'lash</button>
        <button class="btn" disabled>▶️ TESTNI BOSHLASH</button>`;
@@ -270,6 +290,7 @@ function renderTestFound(test) {
         <p>📝 ${test.count} ta savol</p>
         <p>⏱️ ${test.duration} daqiqa</p>
         <p>💰 ${priceLabel}</p>
+        ${blockedMessage ? `<p style="color:var(--color-primary);font-weight:600">${blockedMessage}</p>` : ""}
         ${actionButton}
         <button class="btn btn-ghost" id="rating-button">🏆 Reyting</button>
       </div>
@@ -622,6 +643,28 @@ function renderNewTestForm(mode) {
     <input class="input" id="field-duration" type="number" placeholder="Davomiyligi (daqiqa)" value="30" />
   `;
 
+  const groupFields = `
+    <h3>Guruhga bog'lash (ixtiyoriy)</h3>
+    <input class="input" id="field-group-id" type="number" placeholder="Telegram guruh ID si (masalan -1001234567890)" />
+    <div class="card" style="cursor:default;border-color:var(--color-primary)">
+      <div class="card-body">
+        <h3>⚠️ Muhim eslatma</h3>
+        <p>1. Guruh supergruh bo'lishi kerak (ID -100 dan boshlanadi)</p>
+        <p>2. Botni guruhga <b>admin</b> sifatida qo'shing</p>
+        <p>3. Guruh ID olish uchun: @userinfobot'ga /start bosing, "My Group" tugmasini bosib guruhni tanlang</p>
+      </div>
+    </div>
+    <p class="subtitle" style="margin-top:14px">Testga qo'shilish turi</p>
+    <div class="row-between" id="enrollment-toggle" data-value="open" style="gap:8px;margin-bottom:6px">
+      <button type="button" class="btn" id="enrollment-open-button" style="flex:1">Ochiq test</button>
+      <button type="button" class="btn btn-ghost" id="enrollment-closed-button" style="flex:1">Yopiq test</button>
+    </div>
+    <p class="subtitle">Pullik testlar faqat ochiq test sifatida yaratiladi. Yopiq testga faqat yuqoridagi guruh a'zolari kira oladi.</p>
+    <p class="subtitle" style="margin-top:14px">Boshlash va tugash vaqti (ixtiyoriy)</p>
+    <input class="input" id="field-start-time" type="datetime-local" />
+    <input class="input" id="field-end-time" type="datetime-local" />
+  `;
+
   if (mode === "key") {
     showPage(`
       <button class="back-button" data-action="dashboard">←</button>
@@ -635,6 +678,7 @@ function renderNewTestForm(mode) {
       </p>
       <div id="key-questions-container"></div>
       <button class="btn btn-ghost" id="add-key-question-button">➕ Savol qo'shish</button>
+      ${groupFields}
       <button class="btn" id="save-test-button">💾 Testni saqlash</button>
     `);
   } else {
@@ -646,6 +690,7 @@ function renderNewTestForm(mode) {
       <h3>Savollar</h3>
       <div id="questions-container"></div>
       <button class="btn btn-ghost" id="add-question-button">➕ Savol qo'shish</button>
+      ${groupFields}
       <button class="btn" id="save-test-button">💾 Testni saqlash</button>
     `);
   }
@@ -653,6 +698,20 @@ function renderNewTestForm(mode) {
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
   document.getElementById("mode-full-button").addEventListener("click", () => renderNewTestForm("full"));
   document.getElementById("mode-key-button").addEventListener("click", () => renderNewTestForm("key"));
+
+  const enrollmentToggle = document.getElementById("enrollment-toggle");
+  const enrollmentOpenButton = document.getElementById("enrollment-open-button");
+  const enrollmentClosedButton = document.getElementById("enrollment-closed-button");
+  enrollmentOpenButton.addEventListener("click", () => {
+    enrollmentToggle.dataset.value = "open";
+    enrollmentOpenButton.classList.remove("btn-ghost");
+    enrollmentClosedButton.classList.add("btn-ghost");
+  });
+  enrollmentClosedButton.addEventListener("click", () => {
+    enrollmentToggle.dataset.value = "closed";
+    enrollmentClosedButton.classList.remove("btn-ghost");
+    enrollmentOpenButton.classList.add("btn-ghost");
+  });
 
   if (mode === "key") {
     document.getElementById("add-key-question-button").addEventListener("click", addKeyQuestionBlock);
@@ -714,6 +773,10 @@ function addKeyQuestionBlock() {
 }
 
 async function saveNewTest(mode) {
+  const groupIdValue = document.getElementById("field-group-id").value.trim();
+  const startTimeValue = document.getElementById("field-start-time").value;
+  const endTimeValue = document.getElementById("field-end-time").value;
+
   const body = {
     title: document.getElementById("field-title").value.trim(),
     subject: document.getElementById("field-subject").value.trim(),
@@ -721,6 +784,10 @@ async function saveNewTest(mode) {
     price: Number(document.getElementById("field-price").value) || 0,
     duration: Number(document.getElementById("field-duration").value) || 30,
     mode,
+    telegram_group_id: groupIdValue ? Number(groupIdValue) : null,
+    enrollment_type: document.getElementById("enrollment-toggle").dataset.value,
+    start_time: startTimeValue || null,
+    end_time: endTimeValue || null,
     questions: [],
     key_questions: [],
   };

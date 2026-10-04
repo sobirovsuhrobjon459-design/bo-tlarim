@@ -197,6 +197,40 @@ def _is_paid(db: Session, user: User, test: Test) -> bool:
     return payment is not None
 
 
+def _is_group_member(group_id: int, user_tg_id: int) -> bool:
+    """Telegram'dan so'rab, foydalanuvchi shu guruhning a'zosi ekanini tekshiradi."""
+
+    try:
+        response = httpx.get(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember",
+            params={"chat_id": group_id, "user_id": user_tg_id},
+            timeout=10,
+        )
+        data = response.json()
+        if not data.get("ok"):
+            return False
+        return data["result"]["status"] in ("member", "administrator", "creator")
+    except Exception:
+        return False
+
+
+def _check_enrollment(test: Test, user: User) -> None:
+    """Yopiq test uchun guruh a'zoligini, va boshlanish/tugash vaqtini tekshiradi."""
+
+    now = datetime.utcnow()
+
+    if test.start_time and now < test.start_time:
+        raise HTTPException(
+            status_code=403, detail=f"Test hali boshlanmagan. Boshlanish vaqti: {test.start_time:%d.%m.%Y %H:%M}"
+        )
+    if test.end_time and now > test.end_time:
+        raise HTTPException(status_code=403, detail="Test vaqti tugagan")
+
+    if test.enrollment_type == "closed" and test.telegram_group_id:
+        if not _is_group_member(test.telegram_group_id, user.tg_id):
+            raise HTTPException(status_code=403, detail="Bu test yopiq — faqat tegishli guruh a'zolari kira oladi")
+
+
 # ========== 3) Umumiy endpointlar ==========
 
 
@@ -300,6 +334,8 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         raise HTTPException(status_code=422, detail="Kamida bitta savol kiriting")
     if body.mode == "full" and not body.questions:
         raise HTTPException(status_code=422, detail="Kamida bitta savol kiriting")
+    if body.price > 0 and body.enrollment_type == "closed":
+        raise HTTPException(status_code=422, detail="Pullik testlar faqat ochiq test sifatida yaratiladi")
 
     prefix = "".join(ch for ch in body.subject.upper() if ch in string.ascii_uppercase)[:4] or "TEST"
 
@@ -317,6 +353,10 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         price=body.price,
         duration=body.duration,
         mode=body.mode,
+        telegram_group_id=body.telegram_group_id,
+        enrollment_type=body.enrollment_type,
+        start_time=body.start_time,
+        end_time=body.end_time,
         questions=[Question(**question.model_dump()) for question in body.questions] if body.mode == "full" else [],
         key_questions=(
             [KeyQuestion(**key_question.model_dump()) for key_question in body.key_questions]
@@ -416,6 +456,11 @@ def get_test(code: str, user: User = Depends(get_current_user), db: Session = De
     """O'quvchi test kodini kiritganda, testning umumiy ma'lumotini qaytaradi."""
 
     test = _get_test_by_code(db, code)
+
+    is_member = None
+    if test.enrollment_type == "closed" and test.telegram_group_id:
+        is_member = _is_group_member(test.telegram_group_id, user.tg_id)
+
     return {
         "code": test.code,
         "title": test.title,
@@ -424,6 +469,10 @@ def get_test(code: str, user: User = Depends(get_current_user), db: Session = De
         "duration": test.duration,
         "price": test.price,
         "paid": _is_paid(db, user, test),
+        "enrollment_type": test.enrollment_type,
+        "start_time": test.start_time,
+        "end_time": test.end_time,
+        "is_member": is_member,
     }
 
 
@@ -453,6 +502,7 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
     test = _get_test_by_code(db, code)
     if not _is_paid(db, user, test):
         raise HTTPException(status_code=402, detail="Avval to'lov qiling")
+    _check_enrollment(test, user)
 
     attempt = db.scalar(
         select(Attempt)
