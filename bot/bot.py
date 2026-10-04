@@ -1,8 +1,9 @@
 """
 Telegram bot.
 
-Vazifasi: foydalanuvchi /start bosganda salomlashish, Mini App'ni PLAY
-tugmasi va chat menyusi orqali ochish, tushunarsiz xabarlarga ham javob berish.
+Vazifasi: foydalanuvchi /start bosganda salomlashish va Mini App'ni ochish
+uchun bitta ▶️ PLAY tugmasi (chat menyusida, xabar yozish maydoni yonida)
+ko'rsatish, tushunarsiz xabarlarga ham javob berish.
 
 MUHIM: bu fayl backend bilan BIRGA, bitta jarayon ichida ishga tushadi
 (backend/main.py shuni qiladi) — chunki Render'ning bepul tarifida alohida
@@ -16,13 +17,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command, CommandStart
-from aiogram.types import (
-    KeyboardButton,
-    MenuButtonWebApp,
-    Message,
-    ReplyKeyboardMarkup,
-    WebAppInfo,
-)
+from aiogram.types import MenuButtonWebApp, Message, ReplyKeyboardRemove, WebAppInfo
 
 from .config import BOT_TOKEN, WEBAPP_URL
 
@@ -46,11 +41,6 @@ bot = Bot(token=BOT_TOKEN)
 dispatcher = Dispatcher()
 
 
-def _play_keyboard() -> ReplyKeyboardMarkup:
-    play_button = KeyboardButton(text="▶️ PLAY", web_app=WebAppInfo(url=WEBAPP_URL))
-    return ReplyKeyboardMarkup(keyboard=[[play_button]], resize_keyboard=True)
-
-
 @dispatcher.message(CommandStart())
 async def handle_start(message: Message) -> None:
     """Foydalanuvchi botga /start yuborganda ishlaydi."""
@@ -59,10 +49,12 @@ async def handle_start(message: Message) -> None:
         f"Assalomu alaykum, {message.from_user.first_name}! 👋\n\n"
         "🎓 <b>Test Platformasiga xush kelibsiz!</b>\n\n"
         "Bilimingizni sinang, natijangizni kuzating va rivojlaning.\n\n"
-        "Boshlash uchun pastdagi <b>▶️ PLAY</b> tugmasini bosing."
+        "Boshlash uchun pastda, xabar yozish maydoni yonidagi <b>▶️ PLAY</b> tugmasini bosing."
     )
 
-    await message.answer(welcome_text, parse_mode="HTML", reply_markup=_play_keyboard())
+    # Eski reply-keyboard PLAY tugmasi qolib ketgan bo'lsa, uni tozalaydi —
+    # endi Mini App faqat yagona, chat menyusidagi PLAY tugmasi orqali ochiladi.
+    await message.answer(welcome_text, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
     logger.info("Yangi /start: %s (tg_id=%s)", message.from_user.full_name, message.from_user.id)
 
 
@@ -72,9 +64,8 @@ async def handle_help(message: Message) -> None:
 
     await message.answer(
         "ℹ️ Bu bot Test Platformasi Mini App'ini ochadi.\n\n"
-        "▶️ PLAY tugmasini bosib Mini App'ni oching — u yerda test ishlashingiz "
-        "yoki o'qituvchi sifatida test yaratishingiz mumkin.",
-        reply_markup=_play_keyboard(),
+        "Pastdagi ▶️ PLAY tugmasini bosib Mini App'ni oching — u yerda test ishlashingiz "
+        "yoki o'qituvchi sifatida test yaratishingiz mumkin."
     )
 
 
@@ -84,16 +75,15 @@ async def handle_unknown(message: Message) -> None:
 
     await message.answer(
         "Buyruqni tushunmadim 🤔\nBoshlash uchun /start yuboring yoki pastdagi "
-        "▶️ PLAY tugmasini bosing.",
-        reply_markup=_play_keyboard(),
+        "▶️ PLAY tugmasini bosing."
     )
 
 
 async def _setup_menu_button() -> None:
-    """Chat ichidagi doimiy menyu tugmasini ham Mini App'ga ulaydi (PLAY'siz ham ochish mumkin bo'ladi)."""
+    """Chat ichidagi doimiy ▶️ PLAY tugmasini Mini App'ga ulaydi — Mini App'ni ochishning yagona yo'li shu."""
     if WEBAPP_URL.startswith("https://"):
         await bot.set_chat_menu_button(
-            menu_button=MenuButtonWebApp(text="Test Platformasi", web_app=WebAppInfo(url=WEBAPP_URL))
+            menu_button=MenuButtonWebApp(text="▶️ PLAY", web_app=WebAppInfo(url=WEBAPP_URL))
         )
 
 
