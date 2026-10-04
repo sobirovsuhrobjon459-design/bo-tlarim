@@ -44,8 +44,11 @@ from .auth import (
     verify_password,
 )
 from .database import (
+    ADMIN_CARD_NUMBER,
     ADMIN_ID,
     BOT_TOKEN,
+    FREE_TEST_FEE,
+    PLATFORM_COMMISSION_PERCENT,
     Attempt,
     Base,
     Credentials,
@@ -58,6 +61,8 @@ from .database import (
     Teacher,
     Test,
     TestIn,
+    TopUpRequest,
+    TopUpRequestIn,
     User,
     engine,
 )
@@ -296,7 +301,41 @@ def teacher_overview(teacher: Teacher = Depends(get_current_teacher), db: Sessio
         "students": len({attempt.user_id for attempt in attempts}),
         "avg": round(sum(a.percent for a in attempts) / len(attempts), 1) if attempts else 0,
         "max": max((a.percent for a in attempts), default=0),
+        "balance": teacher.balance,
     }
+
+
+@app.get("/api/teacher/balance")
+def teacher_balance(teacher: Teacher = Depends(get_current_teacher)):
+    """O'qituvchining joriy balansi va balans to'ldirish uchun kerakli ma'lumotlar."""
+
+    return {
+        "balance": teacher.balance,
+        "free_test_fee": FREE_TEST_FEE,
+        "admin_card": ADMIN_CARD_NUMBER,
+    }
+
+
+@app.post("/api/teacher/topup-requests")
+def create_topup_request(
+    body: TopUpRequestIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
+):
+    """O'qituvchi 'shuncha pul tashladim' deb so'rov qoldiradi — admin tasdiqlashi kutiladi."""
+
+    request = TopUpRequest(teacher_id=teacher.id, amount=body.amount)
+    db.add(request)
+    db.commit()
+    return {"id": request.id, "status": request.status}
+
+
+@app.get("/api/teacher/topup-requests")
+def list_own_topup_requests(teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """O'qituvchining o'zi yuborgan balans to'ldirish so'rovlari tarixi."""
+
+    requests = db.scalars(
+        select(TopUpRequest).where(TopUpRequest.teacher_id == teacher.id).order_by(TopUpRequest.id.desc())
+    ).all()
+    return [{"id": r.id, "amount": r.amount, "status": r.status} for r in requests]
 
 
 @app.get("/api/teacher/tests")
@@ -337,6 +376,14 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
     if body.price > 0 and body.enrollment_type == "closed":
         raise HTTPException(status_code=422, detail="Pullik testlar faqat ochiq test sifatida yaratiladi")
 
+    # Bepul testlar uchun bir martalik to'lov o'qituvchi balansidan yechiladi
+    # (chunki tekshirish xizmati — bizning serverimiz — bepul emas).
+    if body.price == 0 and teacher.balance < FREE_TEST_FEE:
+        raise HTTPException(
+            status_code=402,
+            detail=f"Balansingizda yetarli mablag' yo'q (kerak: {FREE_TEST_FEE} so'm). Avval balansni to'ldiring.",
+        )
+
     prefix = "".join(ch for ch in body.subject.upper() if ch in string.ascii_uppercase)[:4] or "TEST"
 
     while True:
@@ -364,6 +411,9 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
             else []
         ),
     )
+    if body.price == 0:
+        teacher.balance -= FREE_TEST_FEE
+
     db.add(test)
     db.commit()
 
@@ -491,6 +541,11 @@ def pay_for_test(code: str, user: User = Depends(get_current_user), db: Session 
         return {"ok": True}
 
     db.add(Payment(user_id=user.id, test_id=test.id, amount=test.price, status="paid", provider="mock"))
+
+    # To'lovning bir qismi darhol o'qituvchi balansiga qo'shiladi, qolgani platformada qoladi.
+    teacher_share = round(test.price * (100 - PLATFORM_COMMISSION_PERCENT) / 100)
+    test.teacher.balance += teacher_share
+
     db.commit()
     return {"ok": True}
 
@@ -653,6 +708,51 @@ def admin_top_students(admin: User = Depends(get_current_admin), db: Session = D
         {"name": name, "avg_percent": round(avg_percent, 1), "attempts": attempts_count}
         for name, avg_percent, attempts_count in db.execute(query).all()
     ]
+
+
+@app.get("/api/admin/topup-requests")
+def admin_list_topup_requests(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Barcha kutilayotgan ('pending') balans to'ldirish so'rovlari."""
+
+    query = (
+        select(TopUpRequest, Teacher)
+        .join(Teacher, Teacher.id == TopUpRequest.teacher_id)
+        .where(TopUpRequest.status == "pending")
+        .order_by(TopUpRequest.id)
+    )
+
+    return [
+        {"id": request.id, "teacher": teacher.username, "amount": request.amount}
+        for request, teacher in db.execute(query).all()
+    ]
+
+
+@app.post("/api/admin/topup-requests/{request_id}/approve")
+def admin_approve_topup(request_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """So'rovni tasdiqlaydi va o'qituvchi balansini oshiradi."""
+
+    request = db.get(TopUpRequest, request_id)
+    if not request or request.status != "pending":
+        raise HTTPException(status_code=404, detail="So'rov topilmadi yoki allaqachon ko'rib chiqilgan")
+
+    teacher = db.get(Teacher, request.teacher_id)
+    teacher.balance += request.amount
+    request.status = "approved"
+    db.commit()
+    return {"ok": True, "balance": teacher.balance}
+
+
+@app.post("/api/admin/topup-requests/{request_id}/reject")
+def admin_reject_topup(request_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """So'rovni rad etadi, balansga tegmaydi."""
+
+    request = db.get(TopUpRequest, request_id)
+    if not request or request.status != "pending":
+        raise HTTPException(status_code=404, detail="So'rov topilmadi yoki allaqachon ko'rib chiqilgan")
+
+    request.status = "rejected"
+    db.commit()
+    return {"ok": True}
 
 
 # Barcha boshqa manzillarni frontend papkasidan beradi (index.html, css, js)

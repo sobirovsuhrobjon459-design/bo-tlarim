@@ -29,6 +29,15 @@ DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
 # Shu Telegram ID'ga ega foydalanuvchi "ADMIN" bo'limini ko'radi va boshqara oladi.
 ADMIN_ID = int(os.getenv("ADMIN_ID") or 0)
 
+# Bepul test yaratganda o'qituvchi balansidan bir martalik yechiladigan summa (so'm).
+FREE_TEST_FEE = int(os.getenv("FREE_TEST_FEE") or 2000)
+
+# Pullik testda o'quvchi to'laganda, platforma ushlab qoladigan foiz (qolgani o'qituvchiga boradi).
+PLATFORM_COMMISSION_PERCENT = int(os.getenv("PLATFORM_COMMISSION_PERCENT") or 30)
+
+# O'qituvchilarga balans to'ldirish uchun ko'rsatiladigan karta raqami.
+ADMIN_CARD_NUMBER = os.getenv("ADMIN_CARD_NUMBER", "")
+
 
 # ========== 2) Bazaga ulanish ==========
 
@@ -67,6 +76,9 @@ class Teacher(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
     username: Mapped[str] = mapped_column(String(50), unique=True)
     password_hash: Mapped[str] = mapped_column(String(300))
+
+    # Bepul testlar uchun shu yerdan yechiladi, pullik testlardan tushgan ulush shu yerga qo'shiladi.
+    balance: Mapped[int] = mapped_column(default=0)
 
     tests: Mapped[list["Test"]] = relationship(back_populates="teacher")
 
@@ -194,6 +206,23 @@ class Payment(Base):
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
 
+class TopUpRequest(Base):
+    """
+    O'qituvchi balansni to'ldirish uchun yuborgan so'rov.
+
+    O'qituvchi admin ko'rsatgan kartaga pul tashlaydi, so'ngra shu yerda
+    "shuncha pul tashladim" deb so'rov qoldiradi. Admin tasdiqlasa, balans ortadi.
+    """
+
+    __tablename__ = "topup_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    teacher_id: Mapped[int] = mapped_column(ForeignKey("teachers.id"), index=True)
+    amount: Mapped[int]
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | approved | rejected
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
 # ========== 4) API so'rov sxemalari (Pydantic) ==========
 
 
@@ -252,3 +281,9 @@ class PriceUpdate(BaseModel):
     """O'qituvchi testni yaratgandan keyin narxini o'zgartirganda yuboriladi."""
 
     price: int = Field(ge=0, le=10_000_000)
+
+
+class TopUpRequestIn(BaseModel):
+    """O'qituvchi balansni to'ldirish so'rovi yuborganda ishlatiladi."""
+
+    amount: int = Field(gt=0, le=50_000_000)

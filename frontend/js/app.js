@@ -200,7 +200,11 @@ async function loadHome() {
 }
 
 async function renderAdminDashboard() {
-  const [stats, topStudents] = await Promise.all([api("/api/admin/stats"), api("/api/admin/top-students")]);
+  const [stats, topStudents, topupRequests] = await Promise.all([
+    api("/api/admin/stats"),
+    api("/api/admin/top-students"),
+    api("/api/admin/topup-requests"),
+  ]);
 
   const topRows =
     topStudents
@@ -212,6 +216,25 @@ async function renderAdminDashboard() {
           </div>`
       )
       .join("") || "<p>Hali ma'lumot yo'q</p>";
+
+  const topupRows =
+    topupRequests
+      .map(
+        (request) => `
+          <div class="card" style="cursor:default" data-topup-id="${request.id}">
+            <div class="card-body">
+              <div class="row-between">
+                <span>${escapeHtml(request.teacher)}</span>
+                <b>${formatNumber(request.amount)} so'm</b>
+              </div>
+              <div class="row-between" style="margin-top:8px;gap:8px">
+                <button class="btn" data-action="approve" style="padding:8px">✅ Tasdiqlash</button>
+                <button class="btn btn-ghost" data-action="reject" style="padding:8px">❌ Rad etish</button>
+              </div>
+            </div>
+          </div>`
+      )
+      .join("") || "<p>Kutilayotgan so'rovlar yo'q</p>";
 
   showPage(`
     <button class="back-button" data-action="home">←</button>
@@ -228,11 +251,33 @@ async function renderAdminDashboard() {
         <p>${formatNumber(stats.revenue)} so'm (hozircha mock to'lovlar)</p>
       </div>
     </div>
+    <h3>💳 Balans to'ldirish so'rovlari</h3>
+    ${topupRows}
     <h3>🏆 Eng yaxshi o'quvchilar (barcha testlar bo'yicha)</h3>
     ${topRows}
   `);
 
   document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
+
+  document.querySelectorAll("[data-topup-id]").forEach((card) => {
+    const requestId = card.dataset.topupId;
+    card.querySelector('[data-action="approve"]').addEventListener(
+      "click",
+      guarded(async () => {
+        await api(`/api/admin/topup-requests/${requestId}/approve`, { method: "POST", body: {} });
+        showToast("✅ Tasdiqlandi");
+        await renderAdminDashboard();
+      })
+    );
+    card.querySelector('[data-action="reject"]').addEventListener(
+      "click",
+      guarded(async () => {
+        await api(`/api/admin/topup-requests/${requestId}/reject`, { method: "POST", body: {} });
+        showToast("❌ Rad etildi");
+        await renderAdminDashboard();
+      })
+    );
+  });
 }
 
 /* ---------- 3) O'quvchi oqimi ---------- */
@@ -615,16 +660,79 @@ async function renderTeacherDashboard() {
       <div class="stat-tile">📊<span class="stat-value">${stats.avg}%</span>O'rtacha natija</div>
       <div class="stat-tile">🏆<span class="stat-value">${stats.max}%</span>Eng yuqori</div>
     </div>
+    <div class="card row-between" style="cursor:default">
+      <span>💰 Balansingiz: <b>${formatNumber(stats.balance)} so'm</b></span>
+      <button class="btn btn-ghost" id="topup-button" style="width:auto;padding:8px 16px">➕ To'ldirish</button>
+    </div>
     <button class="btn" id="new-test-button">➕ YANGI TEST YARATISH</button>
     ${testCards}
     <p class="status">Backend ishlayapti ✅</p>
   `);
 
   document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
+  document.getElementById("topup-button").addEventListener("click", guarded(renderTopUpForm));
   document.getElementById("new-test-button").addEventListener("click", () => renderNewTestForm("full"));
   document.querySelectorAll("[data-test-id]").forEach((card) => {
     card.addEventListener("click", guarded(() => renderTestResults(Number(card.dataset.testId))));
   });
+}
+
+async function renderTopUpForm() {
+  const [balanceInfo, history] = await Promise.all([
+    api("/api/teacher/balance"),
+    api("/api/teacher/topup-requests"),
+  ]);
+
+  const statusLabels = { pending: "⏳ Kutilmoqda", approved: "✅ Tasdiqlandi", rejected: "❌ Rad etildi" };
+  const historyRows =
+    history
+      .map(
+        (request) => `
+          <div class="card row-between" style="cursor:default">
+            <span>${formatNumber(request.amount)} so'm</span>
+            <b>${statusLabels[request.status]}</b>
+          </div>`
+      )
+      .join("") || "<p>Hali so'rovlar yo'q</p>";
+
+  showPage(`
+    <button class="back-button" data-action="dashboard">←</button>
+    <h2>Balansni to'ldirish</h2>
+    <div class="card" style="cursor:default">
+      <div class="card-body">
+        <h3>💳 Qanday to'ldiriladi</h3>
+        <p>1. Quyidagi kartaga kerakli summani o'tkazing:</p>
+        <p style="font-size:20px;font-weight:700;letter-spacing:1px">
+          ${escapeHtml(balanceInfo.admin_card || "Karta raqami hali kiritilmagan, admin bilan bog'laning")}
+        </p>
+        <p>2. Pastga qancha pul tashlaganingizni kiriting va yuboring.</p>
+        <p>3. Admin tasdiqlagach, balansingiz avtomatik oshadi.</p>
+      </div>
+    </div>
+    <p class="subtitle">
+      Joriy balans: <b>${formatNumber(balanceInfo.balance)} so'm</b>
+      (bepul test yaratish narxi: ${formatNumber(balanceInfo.free_test_fee)} so'm)
+    </p>
+    <input class="input" id="topup-amount-input" type="number" min="1000" step="1000" placeholder="Tashlagan summangiz (so'm)" />
+    <button class="btn" id="submit-topup-button">📨 So'rov yuborish</button>
+    <h3>So'rovlar tarixi</h3>
+    ${historyRows}
+  `);
+
+  document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
+  document.getElementById("submit-topup-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const amount = Number(document.getElementById("topup-amount-input").value) || 0;
+      if (amount <= 0) {
+        showToast("To'g'ri summa kiriting");
+        return;
+      }
+      await api("/api/teacher/topup-requests", { method: "POST", body: { amount } });
+      showToast("✅ So'rov yuborildi, admin tasdiqlashini kuting");
+      await renderTopUpForm();
+    })
+  );
 }
 
 function renderNewTestForm(mode) {
