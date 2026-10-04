@@ -54,9 +54,40 @@
 body {
   margin: 0;
   font-family: var(--font-main);
-  background: var(--color-bg);
   color: var(--color-text);
   transition: background-color 0.25s ease, color 0.25s ease;
+
+  /* Yengil, sekin suzuvchi gradient fon — faqat CSS, og'ir kutubxonasiz */
+  background-color: var(--color-bg);
+  background-image:
+    radial-gradient(circle at 15% 20%, rgba(99, 102, 241, 0.16), transparent 40%),
+    radial-gradient(circle at 85% 15%, rgba(34, 211, 238, 0.14), transparent 40%),
+    radial-gradient(circle at 50% 95%, rgba(99, 102, 241, 0.12), transparent 45%);
+  background-size: 200% 200%;
+  background-attachment: fixed;
+  animation: drift-bg 18s ease-in-out infinite alternate;
+}
+
+[data-theme="dark"] body {
+  background-image:
+    radial-gradient(circle at 15% 20%, rgba(129, 140, 248, 0.22), transparent 40%),
+    radial-gradient(circle at 85% 15%, rgba(34, 211, 238, 0.18), transparent 40%),
+    radial-gradient(circle at 50% 95%, rgba(129, 140, 248, 0.16), transparent 45%);
+}
+
+@keyframes drift-bg {
+  0% {
+    background-position: 0% 0%, 100% 0%, 50% 100%;
+  }
+  100% {
+    background-position: 12% 15%, 88% 12%, 55% 90%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body {
+    animation: none;
+  }
 }
 
 #app {
