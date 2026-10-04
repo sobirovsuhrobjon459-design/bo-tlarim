@@ -148,7 +148,14 @@ class KeyQuestion(Base):
 
     Savol matni saqlanmaydi (chunki haqiqiy savollar tashqarida, masalan
     o'qituvchining Telegram kanalida joylashtirilgan bo'ladi). Bu yerda faqat:
-    savol raqami, turi (single/multi) va to'g'ri javob(lar) saqlanadi.
+    savol raqami, turi va to'g'ri javob(lar) saqlanadi.
+
+    question_type:
+      "single" — bitta to'g'ri javob (A/B/C/D...), correct="B"
+      "multi"  — bir nechta to'g'ri javob, correct="A,C"
+      "text"   — yozma javob (masalan Milliy sertifikatdagi kabi), o'quvchi
+                 matn kiritadi; correct bir nechta qabul qilinadigan variantni
+                 "|" bilan ajratib saqlaydi, masalan "15|fifteen|o'n besh"
     """
 
     __tablename__ = "key_questions"
@@ -156,9 +163,9 @@ class KeyQuestion(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     test_id: Mapped[int] = mapped_column(ForeignKey("tests.id"), index=True)
     number: Mapped[int]
-    question_type: Mapped[str] = mapped_column(String(10), default="single")  # "single" | "multi"
-    option_count: Mapped[int] = mapped_column(default=4)  # variantlar soni (A, B, C... shu sonigacha)
-    correct: Mapped[str] = mapped_column(String(50))  # "B" yoki ko'p tanlovda "A,C"
+    question_type: Mapped[str] = mapped_column(String(10), default="single")  # "single" | "multi" | "text"
+    option_count: Mapped[int] = mapped_column(default=4)  # "text" turida ishlatilmaydi
+    correct: Mapped[str] = mapped_column(String(300))  # "B" | "A,C" | "15|fifteen"
 
     test: Mapped["Test"] = relationship(back_populates="key_questions")
 
@@ -195,7 +202,7 @@ class StudentAnswer(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     attempt_id: Mapped[int] = mapped_column(ForeignKey("test_attempts.id"), index=True)
     question_ref: Mapped[int] = mapped_column(index=True)
-    chosen: Mapped[str | None] = mapped_column(String(50), default=None)
+    chosen: Mapped[str | None] = mapped_column(String(300), default=None)
     is_correct: Mapped[bool] = mapped_column(default=False)
 
 
@@ -278,9 +285,9 @@ class KeyQuestionIn(BaseModel):
     """'key' rejimidagi bitta savol: faqat raqami, turi, variantlar soni va to'g'ri javob."""
 
     number: int = Field(ge=1, le=300)
-    question_type: str = Field(pattern="^(single|multi)$")
-    option_count: int = Field(ge=2, le=8)
-    correct: str = Field(min_length=1, max_length=50)
+    question_type: str = Field(pattern="^(single|multi|text)$")
+    option_count: int = Field(4, ge=2, le=8)  # "text" turida ishlatilmaydi
+    correct: str = Field(min_length=1, max_length=300)
 
 
 class TestIn(BaseModel):

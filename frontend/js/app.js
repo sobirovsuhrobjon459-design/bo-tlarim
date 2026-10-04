@@ -435,15 +435,22 @@ function renderKeyQuizQuestion() {
   const isLast = quizState.index === total - 1;
   const progressPercent = Math.round(((quizState.index + 1) / total) * 100);
   const isMulti = question.question_type === "multi";
+  const isText = question.question_type === "text";
 
   const selectedAnswer = quizState.answers[question.number] || "";
   const selectedLetters = new Set(selectedAnswer ? selectedAnswer.split(",") : []);
 
-  const optionsHtml = Array.from({ length: question.option_count }, (_, index) => {
-    const letter = String.fromCharCode(65 + index);
-    const selected = selectedLetters.has(letter) ? "selected" : "";
-    return `<div class="option ${selected}" data-letter="${letter}" style="text-align:center"><b>${letter}</b></div>`;
-  }).join("");
+  const answerAreaHtml = isText
+    ? `<input class="input" id="text-answer-input" placeholder="Javobingizni yozing" value="${escapeHtml(selectedAnswer)}" />`
+    : `<div id="options-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(60px,1fr));gap:10px">
+         ${Array.from({ length: question.option_count }, (_, index) => {
+           const letter = String.fromCharCode(65 + index);
+           const selected = selectedLetters.has(letter) ? "selected" : "";
+           return `<div class="option ${selected}" data-letter="${letter}" style="text-align:center"><b>${letter}</b></div>`;
+         }).join("")}
+       </div>`;
+
+  const hintText = isText ? "Javobingizni yozib kiriting" : isMulti ? "Bir nechta to'g'ri javobni tanlang" : "To'g'ri javobni tanlang";
 
   showPage(`
     <div class="row-between">
@@ -451,30 +458,36 @@ function renderKeyQuizQuestion() {
       <b id="quiz-timer"></b>
     </div>
     <div class="progress-track"><div class="progress-fill" style="width:${progressPercent}%"></div></div>
-    <p class="subtitle">${isMulti ? "Bir nechta to'g'ri javobni tanlang" : "To'g'ri javobni tanlang"}</p>
-    <div id="options-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(60px,1fr));gap:10px">${optionsHtml}</div>
+    <p class="subtitle">${hintText}</p>
+    ${answerAreaHtml}
     <button class="btn" id="next-button" style="margin-top:16px">${isLast ? "🏁 TESTNI YAKUNLASH" : "Keyingi →"}</button>
   `);
 
-  document.querySelectorAll("#options-container .option").forEach((optionEl) => {
-    optionEl.addEventListener("click", () => {
-      const letter = optionEl.dataset.letter;
-
-      if (isMulti) {
-        if (selectedLetters.has(letter)) {
-          selectedLetters.delete(letter);
-        } else {
-          selectedLetters.add(letter);
-        }
-        quizState.answers[question.number] = [...selectedLetters].sort().join(",");
-        optionEl.classList.toggle("selected");
-      } else {
-        quizState.answers[question.number] = letter;
-        document.querySelectorAll("#options-container .option").forEach((el) => el.classList.remove("selected"));
-        optionEl.classList.add("selected");
-      }
+  if (isText) {
+    document.getElementById("text-answer-input").addEventListener("input", (event) => {
+      quizState.answers[question.number] = event.target.value;
     });
-  });
+  } else {
+    document.querySelectorAll("#options-container .option").forEach((optionEl) => {
+      optionEl.addEventListener("click", () => {
+        const letter = optionEl.dataset.letter;
+
+        if (isMulti) {
+          if (selectedLetters.has(letter)) {
+            selectedLetters.delete(letter);
+          } else {
+            selectedLetters.add(letter);
+          }
+          quizState.answers[question.number] = [...selectedLetters].sort().join(",");
+          optionEl.classList.toggle("selected");
+        } else {
+          quizState.answers[question.number] = letter;
+          document.querySelectorAll("#options-container .option").forEach((el) => el.classList.remove("selected"));
+          optionEl.classList.add("selected");
+        }
+      });
+    });
+  }
 
   document.getElementById("next-button").addEventListener(
     "click",
@@ -915,6 +928,7 @@ function addKeyQuestionBlock() {
 
   const block = document.createElement("div");
   block.className = "question-block";
+  block.dataset.correctAnswer = "";
   block.innerHTML = `
     <div class="row-between">
       <b class="question-number">${number}-savol</b>
@@ -923,10 +937,77 @@ function addKeyQuestionBlock() {
     <select class="input" data-field="question_type">
       <option value="single">Bitta to'g'ri javob</option>
       <option value="multi">Bir nechta to'g'ri javob</option>
+      <option value="text">Yozma javob</option>
     </select>
-    <input class="input" data-field="option_count" type="number" min="2" max="8" value="4" placeholder="Variantlar soni" />
-    <input class="input" data-field="correct" placeholder="To'g'ri javob (masalan B yoki A,C)" style="text-transform:uppercase" />
+    <input class="input key-option-count" data-field="option_count" type="number" min="2" max="8" value="4" placeholder="Variantlar soni" />
+    <p class="subtitle key-answer-label" style="margin:10px 0 4px">To'g'ri javobni tanlang:</p>
+    <div class="key-answer-options" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(50px,1fr));gap:8px"></div>
+    <input
+      class="input key-text-answer"
+      placeholder="Qabul qilinadigan javob(lar), | bilan ajrating (masalan: 15|fifteen|o'n besh)"
+      style="display:none"
+    />
   `;
+
+  const optionsContainer = block.querySelector(".key-answer-options");
+  const optionCountInput = block.querySelector('[data-field="option_count"]');
+  const answerLabel = block.querySelector(".key-answer-label");
+  const textAnswerInput = block.querySelector(".key-text-answer");
+  const typeSelect = block.querySelector('[data-field="question_type"]');
+
+  function renderAnswerOptions() {
+    const count = Number(optionCountInput.value) || 4;
+    const selectedLetters = new Set(block.dataset.correctAnswer.split(",").filter(Boolean));
+
+    optionsContainer.innerHTML = Array.from({ length: count }, (_, index) => {
+      const letter = String.fromCharCode(65 + index);
+      const selected = selectedLetters.has(letter) ? "selected" : "";
+      return `<div class="option ${selected}" data-letter="${letter}" style="text-align:center;margin:0;padding:12px"><b>${letter}</b></div>`;
+    }).join("");
+
+    optionsContainer.querySelectorAll(".option").forEach((optionEl) => {
+      optionEl.addEventListener("click", () => {
+        const letter = optionEl.dataset.letter;
+        const isMulti = typeSelect.value === "multi";
+        const currentSelected = new Set(block.dataset.correctAnswer.split(",").filter(Boolean));
+
+        if (isMulti) {
+          if (currentSelected.has(letter)) {
+            currentSelected.delete(letter);
+          } else {
+            currentSelected.add(letter);
+          }
+          block.dataset.correctAnswer = [...currentSelected].sort().join(",");
+        } else {
+          block.dataset.correctAnswer = letter;
+        }
+        renderAnswerOptions();
+      });
+    });
+  }
+
+  function syncVisibility() {
+    const isText = typeSelect.value === "text";
+    optionCountInput.style.display = isText ? "none" : "";
+    answerLabel.style.display = isText ? "none" : "";
+    optionsContainer.style.display = isText ? "none" : "grid";
+    textAnswerInput.style.display = isText ? "" : "none";
+  }
+
+  optionCountInput.addEventListener("input", renderAnswerOptions);
+  textAnswerInput.addEventListener("input", () => {
+    block.dataset.correctAnswer = textAnswerInput.value.trim();
+  });
+  typeSelect.addEventListener("change", () => {
+    block.dataset.correctAnswer = "";
+    textAnswerInput.value = "";
+    syncVisibility();
+    renderAnswerOptions();
+  });
+
+  syncVisibility();
+  renderAnswerOptions();
+
   block.querySelector('[data-action="remove-question"]').addEventListener("click", () => {
     block.remove();
     container.querySelectorAll(".question-block").forEach((item, index) => {
@@ -957,14 +1038,18 @@ async function saveNewTest(mode) {
   };
 
   if (mode === "key") {
-    body.key_questions = [...document.querySelectorAll("#key-questions-container .question-block")].map(
-      (block, index) => ({
-        number: index + 1,
-        question_type: block.querySelector('[data-field="question_type"]').value,
-        option_count: Number(block.querySelector('[data-field="option_count"]').value) || 4,
-        correct: block.querySelector('[data-field="correct"]').value.trim().toUpperCase(),
-      })
-    );
+    const keyBlocks = [...document.querySelectorAll("#key-questions-container .question-block")];
+    const missingAnswer = keyBlocks.find((block) => !block.dataset.correctAnswer);
+    if (missingAnswer) {
+      throw new Error("Har bir savol uchun to'g'ri javobni tanlang");
+    }
+
+    body.key_questions = keyBlocks.map((block, index) => ({
+      number: index + 1,
+      question_type: block.querySelector('[data-field="question_type"]').value,
+      option_count: Number(block.querySelector('[data-field="option_count"]').value) || 4,
+      correct: block.dataset.correctAnswer,
+    }));
   } else {
     body.questions = [...document.querySelectorAll("#questions-container .question-block")].map((block) => {
       const data = {};

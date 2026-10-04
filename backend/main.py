@@ -719,14 +719,25 @@ def finish_attempt(
     if test.mode == "key":
         total_questions = len(test.key_questions)
         for key_question in test.key_questions:
-            raw_answer = (body.answers.get(str(key_question.number)) or "").upper().replace(" ", "")
+            student_answer = body.answers.get(str(key_question.number)) or ""
 
             if key_question.question_type == "multi":
+                raw_answer = student_answer.upper().replace(" ", "")
                 chosen_letters = {letter for letter in raw_answer.split(",") if letter}
                 correct_letters = set(key_question.correct.split(","))
                 is_correct = bool(chosen_letters) and chosen_letters == correct_letters
                 chosen_value = ",".join(sorted(chosen_letters)) if chosen_letters else None
+            elif key_question.question_type == "text":
+                # Yozma javob: katta-kichik harf va bosh/oxiridagi probel farqi hisobga olinmaydi,
+                # o'qituvchi kiritgan bir nechta qabul qilinadigan variantdan biriga mos kelsa yetarli.
+                normalized_answer = student_answer.strip().lower()
+                accepted_variants = {
+                    variant.strip().lower() for variant in key_question.correct.split("|") if variant.strip()
+                }
+                is_correct = bool(normalized_answer) and normalized_answer in accepted_variants
+                chosen_value = student_answer.strip()[:300] or None
             else:
+                raw_answer = student_answer.upper().replace(" ", "")
                 is_correct = raw_answer == key_question.correct
                 chosen_value = raw_answer or None
 
