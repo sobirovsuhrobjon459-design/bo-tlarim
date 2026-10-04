@@ -15,9 +15,9 @@ bo'lsa ham ".config" nisbiy import orqali, paket sifatida ishga tushiriladi:
 import asyncio
 import logging
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import MenuButtonWebApp, Message, ReplyKeyboardRemove, WebAppInfo
+from aiogram.types import CallbackQuery, MenuButtonWebApp, Message, ReplyKeyboardRemove, WebAppInfo
 
 from .config import BOT_TOKEN, WEBAPP_URL
 
@@ -77,6 +77,48 @@ async def handle_unknown(message: Message) -> None:
         "Buyruqni tushunmadim 🤔\nBoshlash uchun /start yuboring yoki pastdagi "
         "PLAY tugmasini bosing."
     )
+
+
+@dispatcher.callback_query(F.data.startswith("topup_"))
+async def handle_topup_decision(callback: CallbackQuery) -> None:
+    """Admin balans to'ldirish xabaridagi ✅/❌ tugmasini bosganda ishlaydi."""
+
+    # Importlar shu yerda, funksiya ichida — chunki backend hali to'liq ishga tushmagan
+    # bosqichda (masalan standalone "python -m bot.bot" bilan) bu modulga ehtiyoj yo'q.
+    from backend.database import ADMIN_ID, SessionLocal, Teacher, TopUpRequest
+
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("Bu tugma faqat admin uchun", show_alert=True)
+        return
+
+    action, request_id_str = callback.data.split(":")
+    request_id = int(request_id_str)
+
+    session = SessionLocal()
+    try:
+        request = session.get(TopUpRequest, request_id)
+        if not request or request.status != "pending":
+            await callback.answer("So'rov allaqachon ko'rib chiqilgan", show_alert=True)
+            return
+
+        teacher = session.get(Teacher, request.teacher_id)
+
+        if action == "topup_approve":
+            teacher.balance += request.amount
+            request.status = "approved"
+            session.commit()
+            await callback.message.edit_text(
+                f"✅ Tasdiqlandi: {teacher.username} — {request.amount} so'm\n"
+                f"Yangi balans: {teacher.balance} so'm"
+            )
+        else:
+            request.status = "rejected"
+            session.commit()
+            await callback.message.edit_text(f"❌ Rad etildi: {teacher.username} — {request.amount} so'm")
+    finally:
+        session.close()
+
+    await callback.answer()
 
 
 async def _setup_menu_button() -> None:

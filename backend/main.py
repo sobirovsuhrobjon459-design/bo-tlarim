@@ -17,6 +17,7 @@ lekin "Web Service" bepul — shuning uchun ikkalasini bitta xizmatga birlashtir
 
 import asyncio
 import io
+import logging
 import random
 import string
 from contextlib import asynccontextmanager
@@ -219,6 +220,35 @@ def _is_group_member(group_id: int, user_tg_id: int) -> bool:
         return False
 
 
+def _notify_admin_about_topup(request: TopUpRequest, teacher: Teacher) -> None:
+    """Admin'ga Telegram orqali, tugmali xabar yuboradi — shu yerdan to'g'ridan-to'g'ri tasdiqlash/rad etish mumkin."""
+
+    if not ADMIN_ID:
+        return
+
+    try:
+        httpx.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": ADMIN_ID,
+                "text": f"💳 Balans to'ldirish so'rovi\n\nO'qituvchi: {teacher.username}\nSumma: {request.amount} so'm",
+                "reply_markup": {
+                    "inline_keyboard": [
+                        [
+                            {"text": "✅ Tasdiqlash", "callback_data": f"topup_approve:{request.id}"},
+                            {"text": "❌ Rad etish", "callback_data": f"topup_reject:{request.id}"},
+                        ]
+                    ]
+                },
+            },
+            timeout=10,
+        )
+    except Exception:
+        # Bildirishnoma yuborilmasa ham so'rov bazada saqlanib qoladi —
+        # admin uni Mini App'dagi admin panelidan ham ko'rib, tasdiqlashi mumkin.
+        logging.getLogger("backend").warning("Admin'ga topup bildirishnomasi yuborilmadi", exc_info=True)
+
+
 def _check_enrollment(test: Test, user: User) -> None:
     """Yopiq test uchun guruh a'zoligini, va boshlanish/tugash vaqtini tekshiradi."""
 
@@ -325,6 +355,7 @@ def create_topup_request(
     request = TopUpRequest(teacher_id=teacher.id, amount=body.amount)
     db.add(request)
     db.commit()
+    _notify_admin_about_topup(request, teacher)
     return {"id": request.id, "status": request.status}
 
 
