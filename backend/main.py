@@ -65,9 +65,9 @@ from .database import (
     TeacherRegisterIn,
     Test,
     TestIn,
-    TopUpRequest,
-    TopUpRequestIn,
     User,
+    WithdrawalRequest,
+    WithdrawalRequestIn,
     engine,
 )
 from bot.bot import run_bot
@@ -252,7 +252,7 @@ def _is_group_member(group_id: int, user_tg_id: int) -> bool:
         return False
 
 
-def _notify_admin_about_topup(request: TopUpRequest, teacher: Teacher) -> None:
+def _notify_admin_about_withdrawal(request: WithdrawalRequest, teacher: Teacher) -> None:
     """Admin'ga Telegram orqali, tugmali xabar yuboradi — shu yerdan to'g'ridan-to'g'ri tasdiqlash/rad etish mumkin."""
 
     if not ADMIN_ID:
@@ -263,12 +263,17 @@ def _notify_admin_about_topup(request: TopUpRequest, teacher: Teacher) -> None:
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
             json={
                 "chat_id": ADMIN_ID,
-                "text": f"💳 Balans to'ldirish so'rovi\n\nO'qituvchi: {teacher.user.full_name}\nSumma: {request.amount} so'm",
+                "text": (
+                    f"💸 Pul yechish so'rovi\n\n"
+                    f"O'qituvchi: {teacher.user.full_name}\n"
+                    f"Summa: {request.amount} so'm\n"
+                    f"Karta: {request.card_number}"
+                ),
                 "reply_markup": {
                     "inline_keyboard": [
                         [
-                            {"text": "✅ Tasdiqlash", "callback_data": f"topup_approve:{request.id}"},
-                            {"text": "❌ Rad etish", "callback_data": f"topup_reject:{request.id}"},
+                            {"text": "✅ To'landi", "callback_data": f"withdrawal_approve:{request.id}"},
+                            {"text": "❌ Rad etish", "callback_data": f"withdrawal_reject:{request.id}"},
                         ]
                     ]
                 },
@@ -278,7 +283,7 @@ def _notify_admin_about_topup(request: TopUpRequest, teacher: Teacher) -> None:
     except Exception:
         # Bildirishnoma yuborilmasa ham so'rov bazada saqlanib qoladi —
         # admin uni Mini App'dagi admin panelidan ham ko'rib, tasdiqlashi mumkin.
-        logging.getLogger("backend").warning("Admin'ga topup bildirishnomasi yuborilmadi", exc_info=True)
+        logging.getLogger("backend").warning("Admin'ga pul yechish bildirishnomasi yuborilmadi", exc_info=True)
 
 
 def _check_enrollment(test: Test, user: User) -> None:
@@ -296,6 +301,18 @@ def _check_enrollment(test: Test, user: User) -> None:
     if test.enrollment_type == "closed" and test.telegram_group_id:
         if not _is_group_member(test.telegram_group_id, user.tg_id):
             raise HTTPException(status_code=403, detail="Bu test yopiq — faqat tegishli guruh a'zolari kira oladi")
+
+
+def _calculate_attempt_score(db: Session, attempt: Attempt) -> None:
+    """Saqlangan javoblardan attempt.correct/wrong/percent'ni hisoblaydi."""
+
+    answers = db.scalars(select(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id)).all()
+    correct_count = sum(1 for answer in answers if answer.is_correct)
+    total = len(answers)
+
+    attempt.correct = correct_count
+    attempt.wrong = total - correct_count
+    attempt.percent = round(correct_count / total * 100, 1) if total else 0
 
 
 # ========== 3) Umumiy endpointlar ==========
@@ -423,25 +440,33 @@ def teacher_balance(teacher: Teacher = Depends(get_current_teacher)):
     }
 
 
-@app.post("/api/teacher/topup-requests")
-def create_topup_request(
-    body: TopUpRequestIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
+@app.post("/api/teacher/withdrawal-requests")
+def create_withdrawal_request(
+    body: WithdrawalRequestIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
 ):
-    """O'qituvchi 'shuncha pul tashladim' deb so'rov qoldiradi — admin tasdiqlashi kutiladi."""
+    """O'qituvchi pullik testlardan tushgan pulni yechib olish uchun so'rov qoldiradi."""
 
-    request = TopUpRequest(teacher_id=teacher.id, amount=body.amount)
+    if body.amount > teacher.balance:
+        raise HTTPException(
+            status_code=402,
+            detail=f"Balansingizda yetarli mablag' yo'q (mavjud: {teacher.balance} so'm)",
+        )
+
+    request = WithdrawalRequest(teacher_id=teacher.id, amount=body.amount, card_number=body.card_number.strip())
     db.add(request)
     db.commit()
-    _notify_admin_about_topup(request, teacher)
+    _notify_admin_about_withdrawal(request, teacher)
     return {"id": request.id, "status": request.status}
 
 
-@app.get("/api/teacher/topup-requests")
-def list_own_topup_requests(teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
-    """O'qituvchining o'zi yuborgan balans to'ldirish so'rovlari tarixi."""
+@app.get("/api/teacher/withdrawal-requests")
+def list_own_withdrawal_requests(teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """O'qituvchining o'zi yuborgan pul yechish so'rovlari tarixi."""
 
     requests = db.scalars(
-        select(TopUpRequest).where(TopUpRequest.teacher_id == teacher.id).order_by(TopUpRequest.id.desc())
+        select(WithdrawalRequest)
+        .where(WithdrawalRequest.teacher_id == teacher.id)
+        .order_by(WithdrawalRequest.id.desc())
     ).all()
     return [{"id": r.id, "amount": r.amount, "status": r.status} for r in requests]
 
@@ -712,7 +737,7 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
         # balansi borligi tekshiriladi (har bir natija uchun 1 kredit sarflanadi).
         if test.price == 0 and test.teacher.credits <= 0:
             raise HTTPException(
-                status_code=402,
+                status_code=450,
                 detail="O'qituvchining krediti tugagan, hozircha bu bepul testni boshlab bo'lmaydi",
             )
 
@@ -756,7 +781,6 @@ def finish_attempt(
         raise HTTPException(status_code=400, detail="Test allaqachon yakunlangan")
 
     test = db.get(Test, attempt.test_id)
-    correct_count = 0
 
     if test.mode == "key":
         total_questions = len(test.key_questions)
@@ -783,7 +807,6 @@ def finish_attempt(
                 is_correct = raw_answer == key_question.correct
                 chosen_value = raw_answer or None
 
-            correct_count += is_correct
             db.add(
                 StudentAnswer(
                     attempt_id=attempt.id,
@@ -798,11 +821,8 @@ def finish_attempt(
             chosen = (body.answers.get(str(question.id)) or "").upper()
             chosen = chosen if chosen in "ABCD" and len(chosen) == 1 else None
             is_correct = chosen == question.correct
-            correct_count += is_correct
             db.add(StudentAnswer(attempt_id=attempt.id, question_ref=question.id, chosen=chosen, is_correct=is_correct))
-    attempt.correct = correct_count
-    attempt.wrong = total_questions - correct_count
-    attempt.percent = round(correct_count / total_questions * 100, 1)
+    _calculate_attempt_score(db, attempt)
     attempt.finished_at = datetime.utcnow()
     attempt.status = "done"
     attempt.seconds = int(min((attempt.finished_at - attempt.started_at).total_seconds(), test.duration * 60))
@@ -1058,43 +1078,51 @@ def admin_top_students(admin: User = Depends(get_current_admin), db: Session = D
     ]
 
 
-@app.get("/api/admin/topup-requests")
-def admin_list_topup_requests(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
-    """Barcha kutilayotgan ('pending') balans to'ldirish so'rovlari."""
+@app.get("/api/admin/withdrawal-requests")
+def admin_list_withdrawal_requests(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Barcha kutilayotgan ('pending') pul yechish so'rovlari."""
 
     query = (
-        select(TopUpRequest, Teacher)
-        .join(Teacher, Teacher.id == TopUpRequest.teacher_id)
-        .where(TopUpRequest.status == "pending")
-        .order_by(TopUpRequest.id)
+        select(WithdrawalRequest, Teacher)
+        .join(Teacher, Teacher.id == WithdrawalRequest.teacher_id)
+        .where(WithdrawalRequest.status == "pending")
+        .order_by(WithdrawalRequest.id)
     )
 
     return [
-        {"id": request.id, "teacher": teacher.user.full_name, "amount": request.amount}
+        {
+            "id": request.id,
+            "teacher": teacher.user.full_name,
+            "amount": request.amount,
+            "card_number": request.card_number,
+        }
         for request, teacher in db.execute(query).all()
     ]
 
 
-@app.post("/api/admin/topup-requests/{request_id}/approve")
-def admin_approve_topup(request_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
-    """So'rovni tasdiqlaydi va o'qituvchi balansini oshiradi."""
+@app.post("/api/admin/withdrawal-requests/{request_id}/approve")
+def admin_approve_withdrawal(request_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Pul o'tkazilgach tasdiqlanadi — o'qituvchi balansidan shuncha summa yechiladi."""
 
-    request = db.get(TopUpRequest, request_id)
+    request = db.get(WithdrawalRequest, request_id)
     if not request or request.status != "pending":
         raise HTTPException(status_code=404, detail="So'rov topilmadi yoki allaqachon ko'rib chiqilgan")
 
     teacher = db.get(Teacher, request.teacher_id)
-    teacher.balance += request.amount
+    if teacher.balance < request.amount:
+        raise HTTPException(status_code=402, detail="O'qituvchi balansi yetarli emas, so'rovni rad eting")
+
+    teacher.balance -= request.amount
     request.status = "approved"
     db.commit()
     return {"ok": True, "balance": teacher.balance}
 
 
-@app.post("/api/admin/topup-requests/{request_id}/reject")
-def admin_reject_topup(request_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+@app.post("/api/admin/withdrawal-requests/{request_id}/reject")
+def admin_reject_withdrawal(request_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
     """So'rovni rad etadi, balansga tegmaydi."""
 
-    request = db.get(TopUpRequest, request_id)
+    request = db.get(WithdrawalRequest, request_id)
     if not request or request.status != "pending":
         raise HTTPException(status_code=404, detail="So'rov topilmadi yoki allaqachon ko'rib chiqilgan")
 

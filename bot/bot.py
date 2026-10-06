@@ -79,13 +79,13 @@ async def handle_unknown(message: Message) -> None:
     )
 
 
-@dispatcher.callback_query(F.data.startswith("topup_"))
-async def handle_topup_decision(callback: CallbackQuery) -> None:
-    """Admin balans to'ldirish xabaridagi ✅/❌ tugmasini bosganda ishlaydi."""
+@dispatcher.callback_query(F.data.startswith("withdrawal_"))
+async def handle_withdrawal_decision(callback: CallbackQuery) -> None:
+    """Admin pul yechish xabaridagi ✅/❌ tugmasini bosganda ishlaydi."""
 
     # Importlar shu yerda, funksiya ichida — chunki backend hali to'liq ishga tushmagan
     # bosqichda (masalan standalone "python -m bot.bot" bilan) bu modulga ehtiyoj yo'q.
-    from backend.database import ADMIN_ID, SessionLocal, Teacher, TopUpRequest
+    from backend.database import ADMIN_ID, SessionLocal, Teacher, WithdrawalRequest
 
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("Bu tugma faqat admin uchun", show_alert=True)
@@ -96,25 +96,31 @@ async def handle_topup_decision(callback: CallbackQuery) -> None:
 
     session = SessionLocal()
     try:
-        request = session.get(TopUpRequest, request_id)
+        request = session.get(WithdrawalRequest, request_id)
         if not request or request.status != "pending":
             await callback.answer("So'rov allaqachon ko'rib chiqilgan", show_alert=True)
             return
 
         teacher = session.get(Teacher, request.teacher_id)
+        teacher_name = teacher.user.full_name
 
-        if action == "topup_approve":
-            teacher.balance += request.amount
+        if action == "withdrawal_approve":
+            if teacher.balance < request.amount:
+                await callback.answer("O'qituvchi balansi yetarli emas", show_alert=True)
+                return
+
+            teacher.balance -= request.amount
             request.status = "approved"
             session.commit()
             await callback.message.edit_text(
-                f"✅ Tasdiqlandi: {teacher.username} — {request.amount} so'm\n"
-                f"Yangi balans: {teacher.balance} so'm"
+                f"✅ To'landi: {teacher_name} — {request.amount} so'm\n"
+                f"Karta: {request.card_number}\n"
+                f"Qolgan balans: {teacher.balance} so'm"
             )
         else:
             request.status = "rejected"
             session.commit()
-            await callback.message.edit_text(f"❌ Rad etildi: {teacher.username} — {request.amount} so'm")
+            await callback.message.edit_text(f"❌ Rad etildi: {teacher_name} — {request.amount} so'm")
     finally:
         session.close()
 

@@ -201,10 +201,10 @@ async function loadHome() {
 }
 
 async function renderAdminDashboard() {
-  const [stats, topStudents, topupRequests] = await Promise.all([
+  const [stats, topStudents, withdrawalRequests] = await Promise.all([
     api("/api/admin/stats"),
     api("/api/admin/top-students"),
-    api("/api/admin/topup-requests"),
+    api("/api/admin/withdrawal-requests"),
   ]);
 
   const topRows =
@@ -218,18 +218,19 @@ async function renderAdminDashboard() {
       )
       .join("") || "<p>Hali ma'lumot yo'q</p>";
 
-  const topupRows =
-    topupRequests
+  const withdrawalRows =
+    withdrawalRequests
       .map(
         (request) => `
-          <div class="card" style="cursor:default" data-topup-id="${request.id}">
+          <div class="card" style="cursor:default" data-withdrawal-id="${request.id}">
             <div class="card-body">
               <div class="row-between">
                 <span>${escapeHtml(request.teacher)}</span>
                 <b>${formatNumber(request.amount)} so'm</b>
               </div>
+              <p>Karta: <b>${escapeHtml(request.card_number)}</b></p>
               <div class="row-between" style="margin-top:8px;gap:8px">
-                <button class="btn" data-action="approve" style="padding:8px">✅ Tasdiqlash</button>
+                <button class="btn" data-action="approve" style="padding:8px">✅ To'landi</button>
                 <button class="btn btn-ghost" data-action="reject" style="padding:8px">❌ Rad etish</button>
               </div>
             </div>
@@ -252,28 +253,28 @@ async function renderAdminDashboard() {
         <p>${formatNumber(stats.revenue)} so'm (hozircha mock to'lovlar)</p>
       </div>
     </div>
-    <h3>💳 Balans to'ldirish so'rovlari</h3>
-    ${topupRows}
+    <h3>💸 Pul yechish so'rovlari</h3>
+    ${withdrawalRows}
     <h3>🏆 Eng yaxshi o'quvchilar (barcha testlar bo'yicha)</h3>
     ${topRows}
   `);
 
   document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
 
-  document.querySelectorAll("[data-topup-id]").forEach((card) => {
-    const requestId = card.dataset.topupId;
+  document.querySelectorAll("[data-withdrawal-id]").forEach((card) => {
+    const requestId = card.dataset.withdrawalId;
     card.querySelector('[data-action="approve"]').addEventListener(
       "click",
       guarded(async () => {
-        await api(`/api/admin/topup-requests/${requestId}/approve`, { method: "POST", body: {} });
-        showToast("✅ Tasdiqlandi");
+        await api(`/api/admin/withdrawal-requests/${requestId}/approve`, { method: "POST", body: {} });
+        showToast("✅ To'landi deb belgilandi");
         await renderAdminDashboard();
       })
     );
     card.querySelector('[data-action="reject"]').addEventListener(
       "click",
       guarded(async () => {
-        await api(`/api/admin/topup-requests/${requestId}/reject`, { method: "POST", body: {} });
+        await api(`/api/admin/withdrawal-requests/${requestId}/reject`, { method: "POST", body: {} });
         showToast("❌ Rad etildi");
         await renderAdminDashboard();
       })
@@ -659,6 +660,12 @@ async function renderRating(code) {
 /* ---------- 4) O'qituvchi oqimi ---------- */
 
 async function enterTeacherArea() {
+  // Serverdan qayta so'raymiz: agar internet uzilgan bo'lsa, "ro'yxatdan o'ting"
+  // degan ekranni ko'rsatib yubormaslik uchun. Ro'yxatdan o'tgan o'qituvchidan
+  // hech qachon qayta ism-familiya so'ralmaydi.
+  const me = await api("/api/me");
+  isTeacher = Boolean(me.is_teacher);
+
   if (isTeacher) {
     await renderTeacherDashboard();
   } else {
@@ -740,7 +747,7 @@ async function renderTeacherDashboard() {
       <div class="card-body">
         <div class="row-between"><span>💰 Balansingiz</span><b>${formatNumber(stats.balance)} so'm</b></div>
         <p>Pullik testlardan tushgan daromad</p>
-        <button class="btn btn-ghost" id="topup-button">➕ Balansni to'ldirish</button>
+        <button class="btn btn-ghost" id="withdraw-button">💸 Pul yechish</button>
       </div>
     </div>
     <div class="card" style="cursor:default">
@@ -760,7 +767,7 @@ async function renderTeacherDashboard() {
     "click",
     guarded(() => renderEditName(me, renderTeacherDashboard))
   );
-  document.getElementById("topup-button").addEventListener("click", guarded(renderTopUpForm));
+  document.getElementById("withdraw-button").addEventListener("click", guarded(renderWithdrawalForm));
   document.getElementById("buy-credit-button").addEventListener("click", guarded(renderCreditPurchaseForm));
   document.getElementById("new-test-button").addEventListener("click", () => renderNewTestForm("full"));
   document.querySelectorAll("[data-test-id]").forEach((card) => {
@@ -768,13 +775,13 @@ async function renderTeacherDashboard() {
   });
 }
 
-async function renderTopUpForm() {
+async function renderWithdrawalForm() {
   const [balanceInfo, history] = await Promise.all([
     api("/api/teacher/balance"),
-    api("/api/teacher/topup-requests"),
+    api("/api/teacher/withdrawal-requests"),
   ]);
 
-  const statusLabels = { pending: "⏳ Kutilmoqda", approved: "✅ Tasdiqlandi", rejected: "❌ Rad etildi" };
+  const statusLabels = { pending: "⏳ Kutilmoqda", approved: "✅ To'landi", rejected: "❌ Rad etildi" };
   const historyRows =
     history
       .map(
@@ -788,37 +795,42 @@ async function renderTopUpForm() {
 
   showPage(`
     <button class="back-button" data-action="dashboard">←</button>
-    <h2>Balansni to'ldirish</h2>
+    <h2>Pul yechish</h2>
     <div class="card" style="cursor:default">
       <div class="card-body">
-        <h3>💳 Qanday to'ldiriladi</h3>
-        <p>1. Quyidagi kartaga kerakli summani o'tkazing:</p>
-        <p style="font-size:20px;font-weight:700;letter-spacing:1px">
-          ${escapeHtml(balanceInfo.admin_card || "Karta raqami hali kiritilmagan, admin bilan bog'laning")}
-        </p>
-        <p>2. Pastga qancha pul tashlaganingizni kiriting va yuboring.</p>
-        <p>3. Admin tasdiqlagach, balansingiz avtomatik oshadi.</p>
+        <h3>💸 Qanday ishlaydi</h3>
+        <p>1. Qancha pul yechmoqchi ekaningizni va kartangiz raqamini kiriting.</p>
+        <p>2. So'rov adminga yuboriladi.</p>
+        <p>3. Admin pulni kartangizga o'tkazib, tasdiqlaydi — shunda balansingizdan yechiladi.</p>
       </div>
     </div>
-    <p class="subtitle">Joriy balans: <b>${formatNumber(balanceInfo.balance)} so'm</b></p>
-    <input class="input" id="topup-amount-input" type="number" min="1000" step="1000" placeholder="Tashlagan summangiz (so'm)" />
-    <button class="btn" id="submit-topup-button">📨 So'rov yuborish</button>
+    <p class="subtitle">Yechish mumkin bo'lgan balans: <b>${formatNumber(balanceInfo.balance)} so'm</b></p>
+    <input class="input" id="withdrawal-amount-input" type="number" min="1000" step="1000" placeholder="Summa (so'm)" />
+    <input class="input" id="withdrawal-card-input" placeholder="Karta raqamingiz (masalan 8600 1234 5678 9012)" />
+    <button class="btn" id="submit-withdrawal-button">📨 So'rov yuborish</button>
     <h3>So'rovlar tarixi</h3>
     ${historyRows}
   `);
 
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
-  document.getElementById("submit-topup-button").addEventListener(
+  document.getElementById("submit-withdrawal-button").addEventListener(
     "click",
     guarded(async () => {
-      const amount = Number(document.getElementById("topup-amount-input").value) || 0;
+      const amount = Number(document.getElementById("withdrawal-amount-input").value) || 0;
+      const cardNumber = document.getElementById("withdrawal-card-input").value.trim();
+
       if (amount <= 0) {
         showToast("To'g'ri summa kiriting");
         return;
       }
-      await api("/api/teacher/topup-requests", { method: "POST", body: { amount } });
+      if (cardNumber.length < 8) {
+        showToast("Karta raqamini to'liq kiriting");
+        return;
+      }
+
+      await api("/api/teacher/withdrawal-requests", { method: "POST", body: { amount, card_number: cardNumber } });
       showToast("✅ So'rov yuborildi, admin tasdiqlashini kuting");
-      await renderTopUpForm();
+      await renderWithdrawalForm();
     })
   );
 }

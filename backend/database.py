@@ -220,19 +220,21 @@ class Payment(Base):
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
 
-class TopUpRequest(Base):
+class WithdrawalRequest(Base):
     """
-    O'qituvchi balansni to'ldirish uchun yuborgan so'rov.
+    O'qituvchining pul balansini yechib olish so'rovi.
 
-    O'qituvchi admin ko'rsatgan kartaga pul tashlaydi, so'ngra shu yerda
-    "shuncha pul tashladim" deb so'rov qoldiradi. Admin tasdiqlasa, balans ortadi.
+    Pul balansi — pullik testlardan tushgan daromad. O'qituvchi shu puldan
+    qancha yechmoqchi ekanini va qaysi kartaga o'tkazilishini yuboradi, admin
+    tasdiqlagach (haqiqiy pulni qo'lda o'tkazgach), balansdan shuncha yechiladi.
     """
 
-    __tablename__ = "topup_requests"
+    __tablename__ = "withdrawal_requests"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     teacher_id: Mapped[int] = mapped_column(ForeignKey("teachers.id"), index=True)
     amount: Mapped[int]
+    card_number: Mapped[str] = mapped_column(String(50))
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | approved | rejected
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
@@ -327,10 +329,11 @@ class PriceUpdate(BaseModel):
     price: int = Field(ge=0, le=10_000_000)
 
 
-class TopUpRequestIn(BaseModel):
-    """O'qituvchi balansni to'ldirish so'rovi yuborganda ishlatiladi."""
+class WithdrawalRequestIn(BaseModel):
+    """O'qituvchi pul yechish so'rovi yuborganda ishlatiladi."""
 
     amount: int = Field(gt=0, le=50_000_000)
+    card_number: str = Field(min_length=8, max_length=50)
 
 
 class CreditPurchaseIn(BaseModel):
