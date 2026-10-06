@@ -19,6 +19,7 @@ import asyncio
 import base64
 import hmac
 import io
+import json
 import logging
 import random
 import string
@@ -61,6 +62,7 @@ from .database import (
     Payment,
     PriceUpdate,
     Question,
+    SessionLocal,
     StudentAnswer,
     StudentAnswersIn,
     StudentNamesIn,
@@ -116,15 +118,82 @@ _add_missing_columns()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Server ishga tushganda botni fon vazifasi sifatida ham ishga tushiradi."""
+    """Server ishga tushganda botni va kunlik zaxira nusxa vazifasini ishga tushiradi."""
     bot_task = asyncio.create_task(run_bot())
+    backup_task = asyncio.create_task(_daily_backup_loop())
     yield
     bot_task.cancel()
+    backup_task.cancel()
 
 
 app = FastAPI(title="Test Platformasi API", lifespan=lifespan)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+
+
+# ========== 1.1) Zaxira nusxa (backup) ==========
+#
+# Ma'lumotlar PostgreSQL'da saqlanadi va deploy qilinganda yo'qolmaydi.
+# Lekin bazaning o'zi bilan nimadir bo'lib qolsa (xizmat o'chirilsa, adashib
+# o'chirib yuborilsa) deb, butun bazaning nusxasi JSON fayl ko'rinishida
+# admin'ning Telegram chatiga yuboriladi: har kuni avtomatik va istalgan
+# paytda admin panelidagi tugma orqali.
+
+
+def export_database(db: Session) -> bytes:
+    """Butun bazani bitta JSON faylga aylantiradi."""
+
+    export: dict[str, list[dict]] = {
+        "exported_at": datetime.utcnow().isoformat(),
+        "tables": {},
+    }
+
+    for table in Base.metadata.sorted_tables:
+        rows = db.execute(select(table)).mappings().all()
+        export["tables"][table.name] = [dict(row) for row in rows]
+
+    # default=str — sana/vaqt qiymatlarini matnga aylantiradi
+    return json.dumps(export, ensure_ascii=False, indent=1, default=str).encode("utf-8")
+
+
+def send_backup_to_admin(db: Session) -> bool:
+    """Zaxira nusxani admin'ning Telegram chatiga yuboradi. Xato bo'lsa, ilovani to'xtatmaydi."""
+
+    if not ADMIN_ID:
+        return False
+
+    try:
+        backup_bytes = export_database(db)
+        row_count = sum(len(rows) for rows in json.loads(backup_bytes)["tables"].values())
+
+        _send_pdf_to_telegram(
+            ADMIN_ID,
+            f"backup_{datetime.now():%Y-%m-%d_%H-%M}.json",
+            backup_bytes,
+            caption=(
+                "💾 Zaxira nusxa\n\n"
+                f"Sana: {datetime.now():%d.%m.%Y %H:%M}\n"
+                f"Jami yozuvlar: {row_count} ta\n\n"
+                "Bu faylni saqlab qo'ying — baza bilan nimadir bo'lsa, hammasi shundan tiklanadi."
+            ),
+        )
+        return True
+    except Exception:
+        logging.getLogger("backend").warning("Zaxira nusxa yuborilmadi", exc_info=True)
+        return False
+
+
+async def _daily_backup_loop() -> None:
+    """Har 24 soatda zaxira nusxani admin'ga yuboradi."""
+
+    while True:
+        await asyncio.sleep(24 * 60 * 60)
+
+        session = SessionLocal()
+        try:
+            send_backup_to_admin(session)
+        finally:
+            session.close()
 
 
 # ========== 2) Statistika va PDF yordamchilari ==========
@@ -1654,6 +1723,26 @@ def admin_overview(admin: User = Depends(get_current_admin), db: Session = Depen
         "attempts": db.scalar(select(func.count()).select_from(Attempt).where(Attempt.status == "done")),
         "revenue": total_revenue,
     }
+
+
+@app.post("/api/admin/backup")
+def admin_send_backup(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Butun bazaning zaxira nusxasini JSON fayl ko'rinishida admin'ning Telegram chatiga yuboradi."""
+
+    if not send_backup_to_admin(db):
+        raise HTTPException(status_code=502, detail="Zaxira nusxa yuborilmadi (botga /start bosganmisiz?)")
+    return {"ok": True}
+
+
+@app.get("/api/admin/backup")
+def admin_download_backup(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Zaxira nusxani to'g'ridan-to'g'ri yuklab beradi (brauzerda sinash uchun)."""
+
+    return StreamingResponse(
+        io.BytesIO(export_database(db)),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="backup_{datetime.now():%Y-%m-%d}.json"'},
+    )
 
 
 @app.get("/api/admin/top-students")

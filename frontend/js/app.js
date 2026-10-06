@@ -291,6 +291,16 @@ async function renderAdminDashboard() {
         <p>${formatNumber(stats.revenue)} so'm (hozircha mock to'lovlar)</p>
       </div>
     </div>
+    <div class="card" style="cursor:default">
+      <div class="card-body">
+        <h3>💾 Zaxira nusxa</h3>
+        <p>
+          Butun baza JSON fayl bo'lib Telegram chatingizga keladi.
+          Har kuni avtomatik yuboriladi — bu tugma esa hoziroq olish uchun.
+        </p>
+        <button class="btn btn-ghost" id="backup-button">💾 Hozir zaxira olish</button>
+      </div>
+    </div>
     <h3>💸 Pul yechish so'rovlari</h3>
     ${withdrawalRows}
     <h3>🏆 Eng yaxshi o'quvchilar (barcha testlar bo'yicha)</h3>
@@ -298,6 +308,18 @@ async function renderAdminDashboard() {
   `);
 
   document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
+
+  document.getElementById("backup-button").addEventListener(
+    "click",
+    guarded(async () => {
+      if (telegram?.initData) {
+        await api("/api/admin/backup", { method: "POST", body: {} });
+        showToast("💾 Zaxira nusxa Telegramga yuborildi");
+      } else {
+        window.open("/api/admin/backup", "_blank");
+      }
+    })
+  );
 
   document.querySelectorAll("[data-withdrawal-id]").forEach((card) => {
     const requestId = card.dataset.withdrawalId;
