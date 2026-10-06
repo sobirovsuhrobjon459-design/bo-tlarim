@@ -127,6 +127,47 @@ function showToast(message) {
   setTimeout(() => toast.remove(), 2600);
 }
 
+// Yozma javoblarda kerak bo'ladigan matematik belgilar. Telefon klaviaturasida
+// bu belgilar yo'q, shuning uchun javob yoziladigan maydon tagida chiqadi.
+const MATH_SYMBOLS = ["√", "∛", "π", "²", "³", "°", "±", "×", "÷", "≤", "≥", "≠", "∞", "!"];
+
+function attachMathKeyboard(container) {
+  const keyboard = document.createElement("div");
+  keyboard.className = "math-keyboard";
+  keyboard.innerHTML = MATH_SYMBOLS.map(
+    (symbol) => `<button type="button" data-symbol="${symbol}">${symbol}</button>`
+  ).join("");
+
+  let activeInput = null;
+
+  // Klaviatura faqat hozir yozilayotgan maydon tagida ko'rinadi
+  container.addEventListener("focusin", (event) => {
+    if (!event.target.classList.contains("math-input")) return;
+    activeInput = event.target;
+    event.target.insertAdjacentElement("afterend", keyboard);
+  });
+
+  // Tugma bosilganda maydondan fokus ketib qolmasligi uchun
+  ["mousedown", "touchstart"].forEach((eventName) => {
+    keyboard.addEventListener(eventName, (event) => event.preventDefault());
+  });
+
+  keyboard.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-symbol]");
+    if (!button || !activeInput) return;
+
+    const start = activeInput.selectionStart ?? activeInput.value.length;
+    const end = activeInput.selectionEnd ?? activeInput.value.length;
+
+    activeInput.value = activeInput.value.slice(0, start) + button.dataset.symbol + activeInput.value.slice(end);
+    activeInput.selectionStart = activeInput.selectionEnd = start + button.dataset.symbol.length;
+
+    // "input" hodisasi javobni saqlab qo'yadigan kodni ishga tushiradi
+    activeInput.dispatchEvent(new Event("input", { bubbles: true }));
+    activeInput.focus();
+  });
+}
+
 function askConfirm(message) {
   // Telegram ichida chiroyli dialog ko'rsatadi, oddiy brauzerda esa odatdagi confirm.
   return new Promise((resolve) => {
@@ -599,7 +640,7 @@ function renderKeyQuizQuestion() {
   const selectedLetters = new Set(selectedAnswer ? selectedAnswer.split(",") : []);
 
   const answerAreaHtml = isText
-    ? `<input class="input" id="text-answer-input" placeholder="Javobingizni yozing" value="${escapeHtml(selectedAnswer)}" />`
+    ? `<input class="input math-input" id="text-answer-input" placeholder="Javobingizni yozing" value="${escapeHtml(selectedAnswer)}" />`
     : `<div id="options-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(60px,1fr));gap:10px">
          ${Array.from({ length: question.option_count }, (_, index) => {
       const letter = String.fromCharCode(65 + index);
@@ -625,6 +666,7 @@ function renderKeyQuizQuestion() {
     document.getElementById("text-answer-input").addEventListener("input", (event) => {
       quizState.answers[question.number] = event.target.value;
     });
+    attachMathKeyboard(appElement);
   } else {
     document.querySelectorAll("#options-container .option").forEach((optionEl) => {
       optionEl.addEventListener("click", () => {
@@ -1447,7 +1489,7 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
       return `
         <div class="key-row key-part-row" data-label="${label}" data-kind="text" data-answer="${answer}">
           <b class="part-letter">${parts > 1 ? `${String.fromCharCode(97 + partIndex)})` : ""}</b>
-          <input class="input key-text-input" value="${answer}" style="margin:0"
+          <input class="input key-text-input math-input" value="${answer}" style="margin:0"
                  placeholder="Qabul qilinadigan javob(lar), | bilan ajrating" />
         </div>`;
     }).join("");
@@ -1508,6 +1550,8 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
       input.closest(".key-row").dataset.answer = input.value.trim();
     });
   });
+
+  attachMathKeyboard(container);
 }
 
 function drawLetterGrid(row) {
@@ -1801,7 +1845,7 @@ async function renderStudentAnswersForm(testId, attemptId) {
 
       const answerArea =
         question.question_type === "text"
-          ? `<input class="input" data-text-ref="${question.ref}" value="${escapeHtml(current)}" placeholder="Javobini yozing" />`
+          ? `<input class="input math-input" data-text-ref="${question.ref}" value="${escapeHtml(current)}" placeholder="Javobini yozing" />`
           : `<div class="answer-options" data-ref="${question.ref}"
                   style="display:grid;grid-template-columns:repeat(auto-fill,minmax(50px,1fr));gap:8px">
                ${Array.from({ length: question.option_count }, (_, index) => {
@@ -1861,6 +1905,8 @@ async function renderStudentAnswersForm(testId, attemptId) {
       answers[input.dataset.textRef] = input.value;
     });
   });
+
+  attachMathKeyboard(appElement);
 
   document.getElementById("save-answers-button").addEventListener(
     "click",

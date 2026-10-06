@@ -465,6 +465,34 @@ select:focus {
   border-bottom: 1px solid var(--color-border);
 }
 
+/* Yozma javoblar uchun matematik belgilar klaviaturasi */
+.math-keyboard {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+  width: 100%;
+}
+
+.math-keyboard button {
+  flex: 1;
+  min-width: 40px;
+  padding: 10px 0;
+  font-size: 17px;
+  font-family: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: transform 0.1s ease, border-color 0.15s ease;
+}
+
+.math-keyboard button:active {
+  transform: scale(0.9);
+  border-color: var(--color-primary);
+}
+
 /* Yozma savol bloki: sarlavha + a/b qatorlari */
 .key-question {
   padding: 10px 0;

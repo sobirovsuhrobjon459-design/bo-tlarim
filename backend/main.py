@@ -708,6 +708,33 @@ def _check_enrollment(test: Test) -> None:
         raise HTTPException(status_code=403, detail="Test vaqti tugagan")
 
 
+# Matematik belgilarni turlicha yozish mumkin — tekshirishdan oldin hammasini
+# bitta ko'rinishga keltiramiz. Masalan "2 sqrt 3", "2√3" va "2 ildiz 3" bir xil.
+TEXT_ANSWER_REPLACEMENTS = [
+    (" ", ""),
+    (",", "."),
+    ("sqrt", "√"),
+    ("ildiz", "√"),
+    ("pi", "π"),
+    # Daraja belgilari ko'paytirishdan OLDIN almashtiriladi, aks holda
+    # "x**2" dagi yulduzchalar avval "×" ga aylanib ketadi.
+    ("**2", "²"),
+    ("**3", "³"),
+    ("^2", "²"),
+    ("^3", "³"),
+    ("*", "×"),
+]
+
+
+def _normalize_text_answer(value: str) -> str:
+    """Yozma javobni solishtirishga tayyorlaydi: probel, katta-kichik harf va yozilish farqlarini yo'qotadi."""
+
+    text = (value or "").strip().lower()
+    for source, target in TEXT_ANSWER_REPLACEMENTS:
+        text = text.replace(source, target)
+    return text
+
+
 def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str, str]) -> int:
     """
     Javoblarni tekshirib, har biri uchun StudentAnswer yozuvini yaratadi.
@@ -728,11 +755,11 @@ def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str,
                 is_correct = bool(chosen_letters) and chosen_letters == correct_letters
                 chosen_value = ",".join(sorted(chosen_letters)) if chosen_letters else None
             elif key_question.question_type == "text":
-                # Yozma javob: katta-kichik harf va bosh/oxiridagi probel farqi hisobga olinmaydi,
-                # o'qituvchi kiritgan bir nechta qabul qilinadigan variantdan biriga mos kelsa yetarli.
-                normalized_answer = student_answer.strip().lower()
+                # Yozma javob: yozilish farqlari hisobga olinmaydi (qarang: _normalize_text_answer),
+                # o'qituvchi kiritgan variantlardan biriga mos kelsa yetarli.
+                normalized_answer = _normalize_text_answer(student_answer)
                 accepted_variants = {
-                    variant.strip().lower() for variant in key_question.correct.split("|") if variant.strip()
+                    _normalize_text_answer(variant) for variant in key_question.correct.split("|") if variant.strip()
                 }
                 is_correct = bool(normalized_answer) and normalized_answer in accepted_variants
                 chosen_value = student_answer.strip()[:300] or None
