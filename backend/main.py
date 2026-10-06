@@ -35,7 +35,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, inspect, select, text
 from sqlalchemy.orm import Session
 
 from .auth import (
@@ -82,12 +82,12 @@ Base.metadata.create_all(engine)
 
 def _add_missing_columns() -> None:
     """
-    Eski baza faylida yangi ustunlarni qo'shadi.
+    Mavjud bazaga keyinchalik qo'shilgan ustunlarni qo'shadi.
 
     SQLAlchemy'ning create_all() funksiyasi faqat YANGI jadval yarata oladi —
-    mavjud jadvalga yangi ustun qo'shmaydi. Shuning uchun keyinchalik qo'shilgan
-    ustunlarni shu yerda qo'lda tekshiramiz (aks holda eski app.db bilan ishga
-    tushirganda "no such column" xatosi chiqadi).
+    mavjud jadvalga yangi ustun qo'shmaydi. Shuning uchun yangi ustunlarni shu
+    yerda qo'lda tekshiramiz (aks holda "no such column" / "column does not
+    exist" xatosi chiqadi). SQLite'da ham, PostgreSQL'da ham bir xil ishlaydi.
     """
 
     new_columns = {
@@ -95,18 +95,23 @@ def _add_missing_columns() -> None:
         "test_attempts": {"offline_name": "VARCHAR(200)"},
     }
 
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    logger = logging.getLogger("backend")
+
     with engine.begin() as connection:
         for table_name, columns in new_columns.items():
-            existing = {row[1] for row in connection.execute(text(f"PRAGMA table_info({table_name})"))}
-            if not existing:
+            if table_name not in existing_tables:
                 continue  # jadval hali yo'q — create_all uni allaqachon to'g'ri yaratadi
+
+            existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
             for column_name, column_type in columns.items():
-                if column_name not in existing:
+                if column_name not in existing_columns:
                     connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
+                    logger.info("Bazaga yangi ustun qo'shildi: %s.%s", table_name, column_name)
 
 
-if engine.dialect.name == "sqlite":
-    _add_missing_columns()
+_add_missing_columns()
 
 
 @asynccontextmanager
