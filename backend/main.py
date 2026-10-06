@@ -534,6 +534,19 @@ def _send_pdf_to_telegram(chat_id: int, file_name: str, pdf_bytes: bytes, captio
         raise HTTPException(status_code=502, detail="PDF yuborilmadi (botga /start bosganmisiz?)")
 
 
+def _answer_sheet_caption(test: Test) -> str:
+    """Javoblar varaqasi bilan birga yuboriladigan izoh."""
+
+    return (
+        "📄 Javoblar Varaqasi\n\n"
+        f"📝 Test: {test.title}\n"
+        f"🔑 Kod: {test.code}\n"
+        f"📚 Fan: {test.subject}\n\n"
+        "Bu varaqani o'quvchilarga tarqating. Ular javoblarini belgilab beradi, "
+        "siz esa javoblarni botdagi \"O'quvchilar\" bo'limiga kiritasiz."
+    )
+
+
 def _normalize_channel(raw_channel: str | None) -> str | None:
     """O'qituvchi kanal nomini turlicha yozishi mumkin — hammasini "@nom" ko'rinishiga keltiradi."""
 
@@ -1275,14 +1288,7 @@ def send_answer_sheet_to_telegram(
             "Diqqat: bu varaqda to'g'ri javoblar belgilangan — o'quvchilarga tarqatmang!"
         )
     else:
-        caption = (
-            "📄 Javoblar Varaqasi\n\n"
-            f"📝 Test: {test.title}\n"
-            f"🔑 Kod: {test.code}\n"
-            f"📚 Fan: {test.subject}\n\n"
-            "Bu varaqani o'quvchilarga tarqating. Ular javoblarini belgilab beradi, "
-            "siz esa javoblarni botdagi \"O'quvchilar\" bo'limiga kiritasiz."
-        )
+        caption = _answer_sheet_caption(test)
 
     _send_pdf_to_telegram(
         user.tg_id,
