@@ -1107,6 +1107,28 @@ function renderNewTestForm(testType, draft = {}) {
       ${subjectOptions}
     </select>
 
+    <p class="field-label" style="margin-top:14px">Test bepulmi yoki pullikmi?</p>
+    <div class="row-between" id="price-toggle" data-value="${draft.paid ? "paid" : "free"}" style="gap:8px;margin-bottom:6px">
+      <button type="button" class="btn ${draft.paid ? "btn-ghost" : ""}" id="price-free-button" style="flex:1">Bepul test</button>
+      <button type="button" class="btn ${draft.paid ? "" : "btn-ghost"}" id="price-paid-button" style="flex:1">Pullik test</button>
+    </div>
+    <p class="subtitle" id="price-hint" style="margin-bottom:6px">
+      ${
+        draft.paid
+          ? "O'quvchi to'lov qilgandan keyin testni ishlaydi"
+          : "Hamma bepul ishlaydi. Har bir natija uchun sizdan 1 kredit yechiladi."
+      }
+    </p>
+    <div id="price-wrapper" style="display:${draft.paid ? "block" : "none"};margin-bottom:16px">
+      <input class="input" id="field-price" type="number" min="0" step="1000"
+             value="${draft.price ?? 0}" placeholder="Narxi (so'm)" style="margin:0" />
+      <div class="notice" style="margin-top:8px">
+        ⚠️ O'quvchi to'lovi hali to'lov tizimiga ulanmagan — hozircha o'quvchi pul
+        to'lamasdan testni ocha oladi, balansingizga esa haqiqiy bo'lmagan pul yoziladi.
+        Pullik testni ishlatishdan oldin menga ayting, Payme'ni ulab beraman.
+      </div>
+    </div>
+
     <p class="field-label" style="margin-top:14px">Testga qo'shilish turi</p>
     <div class="row-between" id="enrollment-toggle" data-value="${draft.enrollment || "open"}" style="gap:8px;margin-bottom:6px">
       <button type="button" class="btn ${draft.enrollment === "closed" ? "btn-ghost" : ""}" id="enrollment-open-button" style="flex:1">Ochiq test</button>
@@ -1126,16 +1148,8 @@ function renderNewTestForm(testType, draft = {}) {
     <label class="field-label" for="field-end-time">Tugash vaqti (ixtiyoriy)</label>
     <input class="input" id="field-end-time" type="datetime-local" value="${draft.endTime || ""}" />
 
-    <div class="row-between" style="gap:8px">
-      <div style="flex:1">
-        <label class="field-label" for="field-price">Narxi (so'm)</label>
-        <input class="input" id="field-price" type="number" min="0" value="${draft.price ?? 0}" style="margin:0" />
-      </div>
-      <div style="flex:1">
-        <label class="field-label" for="field-duration">Davomiyligi (daqiqa)</label>
-        <input class="input" id="field-duration" type="number" min="1" value="${draft.duration ?? preset.duration}" style="margin:0" />
-      </div>
-    </div>
+    <label class="field-label" for="field-duration">Davomiyligi (daqiqa)</label>
+    <input class="input" id="field-duration" type="number" min="1" value="${draft.duration ?? preset.duration}" />
   `;
 
   const channelSettings = `
@@ -1220,18 +1234,48 @@ function renderNewTestForm(testType, draft = {}) {
     renderNewTestForm(event.target.value, carried);
   });
 
+  const priceToggle = document.getElementById("price-toggle");
+  const priceFreeButton = document.getElementById("price-free-button");
+  const pricePaidButton = document.getElementById("price-paid-button");
+  const priceHint = document.getElementById("price-hint");
+  const priceWrapper = document.getElementById("price-wrapper");
+
+  priceFreeButton.addEventListener("click", () => {
+    priceToggle.dataset.value = "free";
+    priceFreeButton.classList.remove("btn-ghost");
+    pricePaidButton.classList.add("btn-ghost");
+    priceWrapper.style.display = "none";
+    priceHint.textContent = "Hamma bepul ishlaydi. Har bir natija uchun sizdan 1 kredit yechiladi.";
+  });
+
+  pricePaidButton.addEventListener("click", () => {
+    priceToggle.dataset.value = "paid";
+    pricePaidButton.classList.remove("btn-ghost");
+    priceFreeButton.classList.add("btn-ghost");
+    priceWrapper.style.display = "block";
+    priceHint.textContent = "O'quvchi to'lov qilgandan keyin testni ishlaydi";
+    selectOpenEnrollment(); // pullik test faqat ochiq bo'ladi
+  });
+
   const enrollmentToggle = document.getElementById("enrollment-toggle");
   const enrollmentOpenButton = document.getElementById("enrollment-open-button");
   const enrollmentClosedButton = document.getElementById("enrollment-closed-button");
   const enrollmentHint = document.getElementById("enrollment-hint");
 
-  enrollmentOpenButton.addEventListener("click", () => {
+  function selectOpenEnrollment() {
     enrollmentToggle.dataset.value = "open";
     enrollmentOpenButton.classList.remove("btn-ghost");
     enrollmentClosedButton.classList.add("btn-ghost");
     enrollmentHint.textContent = "O'quvchilar test kodini kiritib o'zlari qo'shiladi";
-  });
+  }
+
+  enrollmentOpenButton.addEventListener("click", selectOpenEnrollment);
   enrollmentClosedButton.addEventListener("click", () => {
+    // Pullik test faqat ochiq bo'ladi — o'quvchi o'zi to'lab, o'zi ishlaydi.
+    if (priceToggle.dataset.value === "paid") {
+      showToast("Pullik test faqat ochiq bo'ladi");
+      return;
+    }
     enrollmentToggle.dataset.value = "closed";
     enrollmentClosedButton.classList.remove("btn-ghost");
     enrollmentOpenButton.classList.add("btn-ghost");
@@ -1274,6 +1318,7 @@ function collectTestFormDraft() {
     enrollment: document.getElementById("enrollment-toggle").dataset.value,
     startTime: document.getElementById("field-start-time").value,
     endTime: document.getElementById("field-end-time").value,
+    paid: document.getElementById("price-toggle").dataset.value === "paid",
     price: document.getElementById("field-price").value,
     duration: document.getElementById("field-duration").value,
     channel: document.getElementById("field-require-channel").checked
@@ -1449,11 +1494,18 @@ async function saveNewTest() {
     throw new Error("Kanal nomini kiriting (masalan @kanalingiz)");
   }
 
+  const isPaid = document.getElementById("price-toggle").dataset.value === "paid";
+  const price = isPaid ? Number(document.getElementById("field-price").value) || 0 : 0;
+
+  if (isPaid && price <= 0) {
+    throw new Error("Pullik test uchun narxini kiriting");
+  }
+
   const body = {
     title: titleValue,
     subject: document.getElementById("field-subject").value,
     topic: "",
-    price: Number(document.getElementById("field-price").value) || 0,
+    price,
     duration: Number(document.getElementById("field-duration").value) || 30,
     // Ikkala test turi ham javoblar kaliti usulida ishlaydi — savol matni
     // o'qituvchining kanalida bo'ladi, botga faqat javoblar kiritiladi.
