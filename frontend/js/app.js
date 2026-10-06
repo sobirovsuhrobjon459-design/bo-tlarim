@@ -1054,10 +1054,25 @@ function renderNewTestForm(mode) {
       <h3>Javoblar kaliti</h3>
       <p class="subtitle">
         Savol matni kerak emas — u tashqarida (masalan, kanalingizda) joylashtirilgan bo'ladi.
-        Har bir savol uchun faqat turini, variantlar sonini va to'g'ri javobni kiriting.
+        Savollar sonini yozing, hammasi birdan chiqadi — siz faqat to'g'ri javoblarni bosib chiqasiz.
+      </p>
+      <div class="row-between" style="gap:8px">
+        <input class="input" id="field-test-count" type="number" min="0" max="300" value="30"
+               placeholder="Test savollari" style="margin:0" />
+        <input class="input" id="field-option-count" type="number" min="2" max="8" value="4"
+               placeholder="Variantlar" style="margin:0" />
+        <input class="input" id="field-text-count" type="number" min="0" max="300" value="0"
+               placeholder="Yozma savollar" style="margin:0" />
+      </div>
+      <p class="subtitle" style="margin:6px 0 10px">
+        Chapdan o'ngga: test savollari soni • har birida nechta variant • yozma savollar soni.
+      </p>
+      <button class="btn btn-ghost" id="build-key-rows-button">🔄 Savollarni yangilash</button>
+      <p class="subtitle" style="margin:14px 0 6px">
+        Bitta harf tanlasangiz — bitta to'g'ri javob. Bir nechta harf tanlasangiz —
+        bir nechta to'g'ri javobli savol bo'ladi.
       </p>
       <div id="key-questions-container"></div>
-      <button class="btn btn-ghost" id="add-key-question-button">➕ Savol qo'shish</button>
       ${groupFields}
       <button class="btn" id="save-test-button">💾 Testni saqlash</button>
     `);
@@ -1094,9 +1109,9 @@ function renderNewTestForm(mode) {
   });
 
   if (mode === "key") {
-    document.getElementById("add-key-question-button").addEventListener("click", addKeyQuestionBlock);
+    document.getElementById("build-key-rows-button").addEventListener("click", buildKeyQuestionRows);
     document.getElementById("save-test-button").addEventListener("click", guarded(() => saveNewTest("key")));
-    addKeyQuestionBlock();
+    buildKeyQuestionRows();
   } else {
     document.getElementById("add-question-button").addEventListener("click", addQuestionBlock);
     document.getElementById("save-test-button").addEventListener("click", guarded(() => saveNewTest("full")));
@@ -1125,99 +1140,78 @@ function addQuestionBlock() {
   document.getElementById("questions-container").appendChild(block);
 }
 
-function addKeyQuestionBlock() {
+function buildKeyQuestionRows() {
   const container = document.getElementById("key-questions-container");
-  const number = container.querySelectorAll(".question-block").length + 1;
+  const testCount = Math.max(0, Number(document.getElementById("field-test-count").value) || 0);
+  const optionCount = Math.min(8, Math.max(2, Number(document.getElementById("field-option-count").value) || 4));
+  const textCount = Math.max(0, Number(document.getElementById("field-text-count").value) || 0);
 
-  const block = document.createElement("div");
-  block.className = "question-block";
-  block.dataset.correctAnswer = "";
-  block.innerHTML = `
-    <div class="row-between">
-      <b class="question-number">${number}-savol</b>
-      <button class="btn btn-ghost" type="button" data-action="remove-question" style="width:auto;padding:6px 12px">🗑</button>
-    </div>
-    <select class="input" data-field="question_type">
-      <option value="single">Bitta to'g'ri javob</option>
-      <option value="multi">Bir nechta to'g'ri javob</option>
-      <option value="text">Yozma javob</option>
-    </select>
-    <input class="input key-option-count" data-field="option_count" type="number" min="2" max="8" value="4" placeholder="Variantlar soni" />
-    <p class="subtitle key-answer-label" style="margin:10px 0 4px">To'g'ri javobni tanlang:</p>
-    <div class="key-answer-options" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(50px,1fr));gap:8px"></div>
-    <input
-      class="input key-text-answer"
-      placeholder="Qabul qilinadigan javob(lar), | bilan ajrating (masalan: 15|fifteen|o'n besh)"
-      style="display:none"
-    />
-  `;
+  if (testCount + textCount === 0) {
+    showToast("Kamida bitta savol bo'lsin");
+    return;
+  }
 
-  const optionsContainer = block.querySelector(".key-answer-options");
-  const optionCountInput = block.querySelector('[data-field="option_count"]');
-  const answerLabel = block.querySelector(".key-answer-label");
-  const textAnswerInput = block.querySelector(".key-text-answer");
-  const typeSelect = block.querySelector('[data-field="question_type"]');
+  // Savollar soni o'zgartirilganda, allaqachon belgilangan javoblar yo'qolmasin.
+  const previousAnswers = {};
+  container.querySelectorAll(".key-row").forEach((row) => {
+    previousAnswers[row.dataset.number] = row.dataset.answer || "";
+  });
 
-  function renderAnswerOptions() {
-    const count = Number(optionCountInput.value) || 4;
-    const selectedLetters = new Set(block.dataset.correctAnswer.split(",").filter(Boolean));
+  const rows = [];
 
-    optionsContainer.innerHTML = Array.from({ length: count }, (_, index) => {
+  for (let number = 1; number <= testCount; number += 1) {
+    const saved = previousAnswers[number] || "";
+    const letters = Array.from({ length: optionCount }, (_, index) => {
       const letter = String.fromCharCode(65 + index);
-      const selected = selectedLetters.has(letter) ? "selected" : "";
-      return `<div class="option ${selected}" data-letter="${letter}" style="text-align:center;margin:0;padding:12px"><b>${letter}</b></div>`;
+      const selected = saved.split(",").includes(letter) ? "selected" : "";
+      return `<div class="letter-option ${selected}" data-letter="${letter}">${letter}</div>`;
     }).join("");
 
-    optionsContainer.querySelectorAll(".option").forEach((optionEl) => {
-      optionEl.addEventListener("click", () => {
-        const letter = optionEl.dataset.letter;
-        const isMulti = typeSelect.value === "multi";
-        const currentSelected = new Set(block.dataset.correctAnswer.split(",").filter(Boolean));
+    rows.push(`
+      <div class="key-row" data-number="${number}" data-kind="letters" data-options="${optionCount}" data-answer="${saved}">
+        <b class="key-row-number">${number}.</b>
+        <div class="letter-grid">${letters}</div>
+      </div>`);
+  }
 
-        if (isMulti) {
-          if (currentSelected.has(letter)) {
-            currentSelected.delete(letter);
-          } else {
-            currentSelected.add(letter);
-          }
-          block.dataset.correctAnswer = [...currentSelected].sort().join(",");
+  for (let index = 0; index < textCount; index += 1) {
+    const number = testCount + index + 1;
+    const saved = previousAnswers[number] || "";
+    rows.push(`
+      <div class="key-row" data-number="${number}" data-kind="text" data-answer="${escapeHtml(saved)}">
+        <b class="key-row-number">${number}.</b>
+        <input class="input key-text-input" value="${escapeHtml(saved)}" style="margin:0"
+               placeholder="Yozma javob (bir nechtasini | bilan)" />
+      </div>`);
+  }
+
+  container.innerHTML = rows.join("");
+
+  container.querySelectorAll('.key-row[data-kind="letters"]').forEach((row) => {
+    row.querySelectorAll(".letter-option").forEach((letterEl) => {
+      letterEl.addEventListener("click", () => {
+        // Bitta harf — bitta to'g'ri javob. Yana bosilsa qo'shiladi va savol
+        // "bir nechta to'g'ri javobli" bo'lib qoladi; qayta bosilsa olib tashlanadi.
+        const selected = new Set((row.dataset.answer || "").split(",").filter(Boolean));
+        const letter = letterEl.dataset.letter;
+
+        if (selected.has(letter)) {
+          selected.delete(letter);
         } else {
-          block.dataset.correctAnswer = letter;
+          selected.add(letter);
         }
-        renderAnswerOptions();
+
+        row.dataset.answer = [...selected].sort().join(",");
+        letterEl.classList.toggle("selected");
       });
     });
-  }
-
-  function syncVisibility() {
-    const isText = typeSelect.value === "text";
-    optionCountInput.style.display = isText ? "none" : "";
-    answerLabel.style.display = isText ? "none" : "";
-    optionsContainer.style.display = isText ? "none" : "grid";
-    textAnswerInput.style.display = isText ? "" : "none";
-  }
-
-  optionCountInput.addEventListener("input", renderAnswerOptions);
-  textAnswerInput.addEventListener("input", () => {
-    block.dataset.correctAnswer = textAnswerInput.value.trim();
-  });
-  typeSelect.addEventListener("change", () => {
-    block.dataset.correctAnswer = "";
-    textAnswerInput.value = "";
-    syncVisibility();
-    renderAnswerOptions();
   });
 
-  syncVisibility();
-  renderAnswerOptions();
-
-  block.querySelector('[data-action="remove-question"]').addEventListener("click", () => {
-    block.remove();
-    container.querySelectorAll(".question-block").forEach((item, index) => {
-      item.querySelector(".question-number").textContent = `${index + 1}-savol`;
+  container.querySelectorAll(".key-text-input").forEach((input) => {
+    input.addEventListener("input", () => {
+      input.closest(".key-row").dataset.answer = input.value.trim();
     });
   });
-  container.appendChild(block);
 }
 
 async function saveNewTest(mode) {
@@ -1241,18 +1235,29 @@ async function saveNewTest(mode) {
   };
 
   if (mode === "key") {
-    const keyBlocks = [...document.querySelectorAll("#key-questions-container .question-block")];
-    const missingAnswer = keyBlocks.find((block) => !block.dataset.correctAnswer);
-    if (missingAnswer) {
-      throw new Error("Har bir savol uchun to'g'ri javobni tanlang");
+    const keyRows = [...document.querySelectorAll("#key-questions-container .key-row")];
+    if (!keyRows.length) {
+      throw new Error("Avval savollar sonini kiriting");
     }
 
-    body.key_questions = keyBlocks.map((block, index) => ({
-      number: index + 1,
-      question_type: block.querySelector('[data-field="question_type"]').value,
-      option_count: Number(block.querySelector('[data-field="option_count"]').value) || 4,
-      correct: block.dataset.correctAnswer,
-    }));
+    const emptyRow = keyRows.find((row) => !row.dataset.answer);
+    if (emptyRow) {
+      throw new Error(`${emptyRow.dataset.number}-savolning to'g'ri javobi belgilanmagan`);
+    }
+
+    body.key_questions = keyRows.map((row, index) => {
+      const answer = row.dataset.answer;
+      const isText = row.dataset.kind === "text";
+
+      return {
+        number: index + 1,
+        // Savol turi javobning o'zidan aniqlanadi: bitta harf — "single",
+        // vergul bilan bir nechta harf — "multi", yozma katak — "text".
+        question_type: isText ? "text" : answer.includes(",") ? "multi" : "single",
+        option_count: isText ? 4 : Number(row.dataset.options) || 4,
+        correct: answer,
+      };
+    });
   } else {
     body.questions = [...document.querySelectorAll("#questions-container .question-block")].map((block) => {
       const data = {};
