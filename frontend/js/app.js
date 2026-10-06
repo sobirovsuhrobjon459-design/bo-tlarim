@@ -1474,6 +1474,7 @@ async function renderTestDetail(testId) {
     }
 
     <button class="btn btn-ghost" id="answer-sheet-button">📄 Javoblar varaqasini olish</button>
+    <button class="btn btn-ghost" id="answer-key-button">🔑 To'g'ri javoblar (kalit)</button>
     ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
     <button class="btn btn-ghost" id="results-button">📊 Natijalarni ko'rish</button>
     ${isFinished
@@ -1505,6 +1506,17 @@ async function renderTestDetail(testId) {
         `/api/teacher/tests/${testId}/answer-sheet`,
         `${test.code}_javoblar_varaqasi.pdf`,
         "📄 Javoblar varaqasi Telegramga yuborildi"
+      )
+    )
+  );
+
+  document.getElementById("answer-key-button").addEventListener(
+    "click",
+    guarded(() =>
+      deliverPdf(
+        `/api/teacher/tests/${testId}/answer-sheet?answers=true`,
+        `${test.code}_kalit.pdf`,
+        "🔑 Javoblar kaliti Telegramga yuborildi"
       )
     )
   );
@@ -1773,10 +1785,15 @@ async function downloadOrSendPdf(testId) {
 }
 
 async function deliverPdf(basePath, fileName, sentMessage) {
+  // "/.../answer-sheet?answers=true" ko'rinishida bo'lsa, "/send" manzil
+  // qismidan keyin, savol belgisidan oldin turishi kerak.
+  const [path, query] = basePath.split("?");
+  const querySuffix = query ? `?${query}` : "";
+
   // Telegram ichida fayl yuklab olish cheklangan — shuning uchun PDF bot
   // orqali chatga yuboriladi. Oddiy brauzerda esa odatdagidek yuklab olinadi.
   if (telegram?.initData) {
-    await api(`${basePath}/send`, { method: "POST", body: {} });
+    await api(`${path}/send${querySuffix}`, { method: "POST", body: {} });
     showToast(sentMessage);
     return;
   }

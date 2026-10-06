@@ -247,20 +247,64 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes
     return buffer.getvalue()
 
 
-def _answer_sheet_items(test: Test) -> list[tuple[int, str, int]]:
-    """Javoblar varaqasi uchun: har bir savolning (raqami, turi, variantlar soni)."""
+# Javoblar varaqasining o'lchamlari (punktlarda)
+SHEET_MARGIN = 56
+SHEET_ROW_HEIGHT = 24
+SHEET_BUBBLE_GAP = 26
+SHEET_ROWS_PER_COLUMN = 16
+SHEET_BOTTOM_LIMIT = 70
+
+
+def _answer_sheet_items(test: Test) -> list[tuple[int, str, int, str]]:
+    """Javoblar varaqasi uchun: har bir savolning (raqami, turi, variantlar soni, to'g'ri javobi)."""
 
     if test.mode == "key":
-        return [(kq.number, kq.question_type, kq.option_count) for kq in test.key_questions]
-    return [(index, "single", 4) for index, _ in enumerate(test.questions, start=1)]
+        return [(kq.number, kq.question_type, kq.option_count, kq.correct) for kq in test.key_questions]
+    return [(index, "single", 4, question.correct) for index, question in enumerate(test.questions, start=1)]
 
 
-def _draw_answer_sheet_page(sheet, test: Test, items, rows_per_column: int, width: float, height: float) -> None:
-    """Javoblar varaqasining bitta sahifasini chizadi."""
+def _group_similar_questions(items) -> list[list]:
+    """
+    Ketma-ket kelgan bir xil turdagi savollarni guruhlaydi.
 
-    # Burchaklardagi qora nuqtalar — varaqni rasmga olganda chetlarini aniqlash uchun.
+    Masalan 1-32 to'rt variantli, 33-35 olti variantli, 36-45 yozma bo'lsa —
+    uchta guruh chiqadi va har biri varaqada alohida bo'lim bo'lib ko'rinadi.
+    """
+
+    groups: list[list] = []
+    for item in items:
+        kind_and_count = (item[1] if item[1] == "text" else "letters", item[2])
+        if groups and (groups[-1][0][1] if groups[-1][0][1] == "text" else "letters", groups[-1][0][2]) == kind_and_count:
+            groups[-1].append(item)
+        else:
+            groups.append([item])
+    return groups
+
+
+def _group_label(band) -> str:
+    """Bo'lim sarlavhasi, masalan "33-35 savollar (6 variantli)"."""
+
+    first, last = band[0][0], band[-1][0]
+    span = f"{first}-{last} savollar" if first != last else f"{first}-savol"
+
+    kind, option_count = band[0][1], band[0][2]
+    if kind == "text":
+        return f"{span} (yozma)"
+    if option_count != 4:
+        return f"{span} ({option_count} variantli)"
+    return span
+
+
+def _draw_corner_marks(sheet, width: float, height: float) -> None:
+    """Burchaklardagi qora nuqtalar — varaqni rasmga olganda chetlarini aniqlash uchun."""
     for x, y in [(32, height - 32), (width - 32, height - 32), (32, 32), (width - 32, 32)]:
         sheet.circle(x, y, 7, stroke=0, fill=1)
+
+
+def _draw_sheet_header(sheet, test: Test, width: float, height: float, with_answers: bool) -> float:
+    """Varaq sarlavhasini chizadi va savollar boshlanadigan y koordinatasini qaytaradi."""
+
+    _draw_corner_marks(sheet, width, height)
 
     sheet.setFont("Helvetica-Bold", 17)
     sheet.drawCentredString(width / 2, height - 78, test.title)
@@ -271,10 +315,16 @@ def _draw_answer_sheet_page(sheet, test: Test, items, rows_per_column: int, widt
         sheet.drawCentredString(width / 2, line_y, line)
         line_y -= 14
 
-    # O'quvchi o'z ismini yozadigan maydon
+    if with_answers:
+        # Kalit varaqasi faqat o'qituvchi uchun — ism yozadigan katak kerak emas.
+        line_y -= 18
+        sheet.setFont("Helvetica-Bold", 13)
+        sheet.drawCentredString(width / 2, line_y, "JAVOBLAR KALITI")
+        return line_y - 28
+
     line_y -= 16
     sheet.setFont("Helvetica-Bold", 11)
-    sheet.drawString(56, line_y, "O'quvchi ma'lumotlari:")
+    sheet.drawString(SHEET_MARGIN, line_y, "O'quvchi ma'lumotlari:")
     line_y -= 26
     sheet.setFont("Helvetica", 10)
     sheet.drawString(68, line_y + 7, "Ism va familiya:")
@@ -283,66 +333,97 @@ def _draw_answer_sheet_page(sheet, test: Test, items, rows_per_column: int, widt
     line_y -= 34
     sheet.setFont("Helvetica-Bold", 13)
     sheet.drawCentredString(width / 2, line_y, "JAVOBLAR")
+    return line_y - 28
 
-    # Savollar ustunlarga bo'linadi: masalan 1-16 chapda, 17-32 o'ngda.
-    top_y = line_y - 28
-    margin = 56
-    column_width = (width - margin * 2) / 2
 
-    for column_index, start in enumerate(range(0, len(items), rows_per_column)):
-        column_items = items[start : start + rows_per_column]
-        column_x = margin + column_index * column_width
-        center_x = column_x + column_width / 2
+def _draw_question_column(sheet, column_items, column_x: float, top_y: float, with_answers: bool) -> None:
+    """Bitta ustundagi savollarni (harflar sarlavhasi bilan) chizadi."""
 
-        sheet.setFont("Helvetica-Bold", 10)
-        sheet.drawCentredString(center_x, top_y, f"{column_items[0][0]}-{column_items[-1][0]} savollar")
+    bubble_x = column_x + 52
+    kind, option_count = column_items[0][1], column_items[0][2]
 
-        bubble_x = column_x + 52
-        bubble_gap = 26
-        option_counts = [count for _, question_type, count in column_items if question_type != "text"]
-        max_options = max(option_counts) if option_counts else 4
-
+    if kind != "text":
         sheet.setFont("Helvetica-Bold", 9)
-        for option_index in range(max_options):
-            sheet.drawCentredString(bubble_x + option_index * bubble_gap, top_y - 18, chr(65 + option_index))
+        for option_index in range(option_count):
+            sheet.drawCentredString(bubble_x + option_index * SHEET_BUBBLE_GAP, top_y - 18, chr(65 + option_index))
 
-        row_y = top_y - 36
-        for number, question_type, option_count in column_items:
-            sheet.setFont("Helvetica", 9)
-            sheet.drawRightString(bubble_x - 16, row_y - 3, f"{number}.")
+    row_y = top_y - 36
+    for number, question_type, options, correct in column_items:
+        sheet.setFont("Helvetica", 9)
+        sheet.drawRightString(bubble_x - 16, row_y - 3, f"{number}.")
 
-            if question_type == "text":
-                # Yozma javob uchun belgilanadigan doira emas, yoziladigan katak.
-                sheet.rect(bubble_x - 8, row_y - 8, bubble_gap * 4, 16)
-            else:
-                for option_index in range(option_count):
-                    sheet.circle(bubble_x + option_index * bubble_gap, row_y, 6.5)
+        if question_type == "text":
+            # Yozma javob uchun doiracha emas, yoziladigan katak.
+            sheet.rect(bubble_x - 8, row_y - 8, SHEET_BUBBLE_GAP * 5, 16)
+            if with_answers:
+                sheet.setFont("Helvetica-Bold", 9)
+                sheet.drawString(bubble_x - 2, row_y - 3, correct.replace("|", " / ")[:40])
+        else:
+            correct_letters = set(correct.split(","))
+            for option_index in range(options):
+                letter = chr(65 + option_index)
+                filled = with_answers and letter in correct_letters
+                sheet.circle(bubble_x + option_index * SHEET_BUBBLE_GAP, row_y, 6.5, stroke=1, fill=1 if filled else 0)
 
-            row_y -= 24
-
-    sheet.setFont("Helvetica", 8)
-    sheet.drawCentredString(width / 2, 50, "To'g'ri javob doirachasini to'liq bo'yang.")
+        row_y -= SHEET_ROW_HEIGHT
 
 
-def generate_answer_sheet_pdf(test: Test) -> bytes:
+def generate_answer_sheet_pdf(test: Test, with_answers: bool = False) -> bytes:
     """
     "Javoblar varaqasi" — o'quvchilarga tarqatiladigan bo'sh blank.
 
     O'quvchi javoblarini shu varaqada belgilaydi, o'qituvchi esa ularni
     Mini App'dagi "O'quvchilar" bo'limiga kiritadi va bot avtomatik tekshiradi.
+
+    with_answers=True bo'lsa, to'g'ri javoblar bo'yalgan "kalit" varaqasi
+    chiqadi — o'qituvchi qo'lda tekshirishi uchun.
     """
 
     buffer = io.BytesIO()
     sheet = pdf_canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
+    column_width = (width - SHEET_MARGIN * 2) / 2
 
-    items = _answer_sheet_items(test)
-    rows_per_column = 16
-    per_page = rows_per_column * 2
+    y = _draw_sheet_header(sheet, test, width, height, with_answers)
 
-    for page_start in range(0, max(len(items), 1), per_page):
-        _draw_answer_sheet_page(sheet, test, items[page_start : page_start + per_page], rows_per_column, width, height)
-        sheet.showPage()
+    for group in _group_similar_questions(_answer_sheet_items(test)):
+        start = 0
+        while start < len(group):
+            # Sahifada necha qator qolganini hisoblaymiz (sarlavha + harflar qatori ham joy oladi).
+            available_rows = int((y - 36 - SHEET_BOTTOM_LIMIT) // SHEET_ROW_HEIGHT)
+            remaining = len(group) - start
+
+            # Bo'lim sahifa oxirida siqilib qolmasin: bitta ustunga ham joy
+            # yetmasa, yangi sahifadan boshlaymiz.
+            if available_rows < min(remaining, SHEET_ROWS_PER_COLUMN):
+                sheet.showPage()
+                _draw_corner_marks(sheet, width, height)
+                y = height - 70
+                available_rows = int((y - 36 - SHEET_BOTTOM_LIMIT) // SHEET_ROW_HEIGHT)
+
+            rows_per_column = min(SHEET_ROWS_PER_COLUMN, available_rows)
+            # Bitta ustunga sig'sa, ikkiga bo'lib o'tirmaymiz.
+            band = group[start:] if remaining <= rows_per_column else group[start : start + rows_per_column * 2]
+            columns = [band[:rows_per_column]] + ([band[rows_per_column:]] if len(band) > rows_per_column else [])
+
+            sheet.setFont("Helvetica-Bold", 10)
+            for column_index, column_items in enumerate(columns):
+                column_x = SHEET_MARGIN + column_index * column_width
+                # Yolg'iz ustun bo'lsa, sarlavha sahifa o'rtasida turadi.
+                label_x = width / 2 if len(columns) == 1 else column_x + column_width / 2
+                sheet.drawCentredString(label_x, y, _group_label(column_items))
+
+            for column_index, column_items in enumerate(columns):
+                _draw_question_column(
+                    sheet, column_items, SHEET_MARGIN + column_index * column_width, y, with_answers
+                )
+
+            y -= 36 + max(len(column) for column in columns) * SHEET_ROW_HEIGHT + 10
+            start += len(band)
+
+    if not with_answers:
+        sheet.setFont("Helvetica", 8)
+        sheet.drawCentredString(width / 2, 50, "To'g'ri javob doirachasini to'liq bo'yang.")
 
     sheet.save()
     return buffer.getvalue()
@@ -1154,40 +1235,60 @@ def send_pdf_to_telegram(
 
 
 @app.get("/api/teacher/tests/{test_id}/answer-sheet")
-def download_answer_sheet(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
-    """Javoblar varaqasini (bo'sh blank) brauzerga yuklab beradi."""
+def download_answer_sheet(
+    test_id: int,
+    answers: bool = False,
+    teacher: Teacher = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Javoblar varaqasini brauzerga yuklab beradi (answers=true bo'lsa — to'g'ri javobli kalit)."""
 
     test = _get_own_test(db, teacher, test_id)
-    pdf_bytes = generate_answer_sheet_pdf(test)
+    pdf_bytes = generate_answer_sheet_pdf(test, with_answers=answers)
+    file_name = f"{test.code}_{'kalit' if answers else 'javoblar_varaqasi'}.pdf"
 
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{test.code}_javoblar_varaqasi.pdf"'},
+        headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
     )
 
 
 @app.post("/api/teacher/tests/{test_id}/answer-sheet/send")
 def send_answer_sheet_to_telegram(
     test_id: int,
+    answers: bool = False,
     teacher: Teacher = Depends(get_current_teacher),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Javoblar varaqasini o'qituvchining Telegram chatiga yuboradi — u yerdan o'quvchilarga tarqatiladi."""
+    """Javoblar varaqasini (yoki to'g'ri javobli kalitni) o'qituvchining Telegram chatiga yuboradi."""
 
     test = _get_own_test(db, teacher, test_id)
-    caption = (
-        "📄 Javoblar Varaqasi\n\n"
-        f"📝 Test: {test.title}\n"
-        f"🔑 Kod: {test.code}\n"
-        f"📚 Fan: {test.subject}\n\n"
-        "Bu varaqani o'quvchilarga tarqating. Ular javoblarini belgilab beradi, "
-        "siz esa javoblarni botdagi \"O'quvchilar\" bo'limiga kiritasiz."
-    )
+
+    if answers:
+        caption = (
+            "🔑 Javoblar Kaliti\n\n"
+            f"📝 Test: {test.title}\n"
+            f"🔑 Kod: {test.code}\n"
+            f"📚 Fan: {test.subject}\n\n"
+            "Diqqat: bu varaqda to'g'ri javoblar belgilangan — o'quvchilarga tarqatmang!"
+        )
+    else:
+        caption = (
+            "📄 Javoblar Varaqasi\n\n"
+            f"📝 Test: {test.title}\n"
+            f"🔑 Kod: {test.code}\n"
+            f"📚 Fan: {test.subject}\n\n"
+            "Bu varaqani o'quvchilarga tarqating. Ular javoblarini belgilab beradi, "
+            "siz esa javoblarni botdagi \"O'quvchilar\" bo'limiga kiritasiz."
+        )
 
     _send_pdf_to_telegram(
-        user.tg_id, f"{test.code}_javoblar_varaqasi.pdf", generate_answer_sheet_pdf(test), caption=caption
+        user.tg_id,
+        f"{test.code}_{'kalit' if answers else 'javoblar_varaqasi'}.pdf",
+        generate_answer_sheet_pdf(test, with_answers=answers),
+        caption=caption,
     )
     return {"ok": True}
 
