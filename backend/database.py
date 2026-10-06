@@ -189,6 +189,10 @@ class KeyQuestion(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     test_id: Mapped[int] = mapped_column(ForeignKey("tests.id"), index=True)
     number: Mapped[int]
+
+    # Ko'rinadigan nom. Odatda bo'sh (u holda "12-savol" deb ko'rsatiladi), lekin
+    # Milliy sertifikatdagi kabi yozma savol a/b qismlarga bo'linsa — "36a", "36b".
+    label: Mapped[str | None] = mapped_column(String(20), default=None)
     question_type: Mapped[str] = mapped_column(String(10), default="single")  # "single" | "multi" | "text"
     option_count: Mapped[int] = mapped_column(default=4)  # "text" turida ishlatilmaydi
     correct: Mapped[str] = mapped_column(String(300))  # "B" | "A,C" | "15|fifteen"
@@ -328,6 +332,7 @@ class KeyQuestionIn(BaseModel):
     """'key' rejimidagi bitta savol: faqat raqami, turi, variantlar soni va to'g'ri javob."""
 
     number: int = Field(ge=1, le=300)
+    label: str | None = Field(None, max_length=20)  # masalan "36a"; bo'sh bo'lsa "36-savol"
     question_type: str = Field(pattern="^(single|multi|text)$")
     option_count: int = Field(4, ge=2, le=8)  # "text" turida ishlatilmaydi
     correct: str = Field(min_length=1, max_length=300)

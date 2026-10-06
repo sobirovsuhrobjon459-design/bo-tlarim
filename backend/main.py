@@ -95,6 +95,7 @@ def _add_missing_columns() -> None:
     new_columns = {
         "tests": {"status": "VARCHAR(10) DEFAULT 'active'", "required_channel": "VARCHAR(100)"},
         "test_attempts": {"offline_name": "VARCHAR(200)"},
+        "key_questions": {"label": "VARCHAR(20)"},
     }
 
     inspector = inspect(engine)
@@ -254,6 +255,11 @@ def _get_offline_attempt(db: Session, test: Test, attempt_id: int) -> Attempt:
     return attempt
 
 
+def _key_question_label(key_question: KeyQuestion) -> str:
+    """Savolning ko'rinadigan nomi: odatda "12-savol", a/b qismli bo'lsa — "36a"."""
+    return key_question.label or f"{key_question.number}-savol"
+
+
 def build_test_stats(db: Session, test: Test) -> dict:
     """O'qituvchi dashboard'ida ko'rsatiladigan umumiy statistika."""
 
@@ -272,7 +278,7 @@ def build_test_stats(db: Session, test: Test) -> dict:
         return {"text": label, "total": total_answers, "wrong": wrong_answers}
 
     if test.mode == "key":
-        question_stats = [question_wrong_stats(kq.number, f"{kq.number}-savol") for kq in test.key_questions]
+        question_stats = [question_wrong_stats(kq.number, _key_question_label(kq)) for kq in test.key_questions]
     else:
         question_stats = [question_wrong_stats(q.id, q.text) for q in test.questions]
 
@@ -329,12 +335,14 @@ SHEET_ROWS_PER_COLUMN = 16
 SHEET_BOTTOM_LIMIT = 70
 
 
-def _answer_sheet_items(test: Test) -> list[tuple[int, str, int, str]]:
-    """Javoblar varaqasi uchun: har bir savolning (raqami, turi, variantlar soni, to'g'ri javobi)."""
+def _answer_sheet_items(test: Test) -> list[tuple[str, str, int, str]]:
+    """Javoblar varaqasi uchun: har bir savolning (nomi, turi, variantlar soni, to'g'ri javobi)."""
 
     if test.mode == "key":
-        return [(kq.number, kq.question_type, kq.option_count, kq.correct) for kq in test.key_questions]
-    return [(index, "single", 4, question.correct) for index, question in enumerate(test.questions, start=1)]
+        return [
+            (kq.label or str(kq.number), kq.question_type, kq.option_count, kq.correct) for kq in test.key_questions
+        ]
+    return [(str(index), "single", 4, question.correct) for index, question in enumerate(test.questions, start=1)]
 
 
 def _group_similar_questions(items) -> list[list]:
@@ -422,9 +430,9 @@ def _draw_question_column(sheet, column_items, column_x: float, top_y: float, wi
             sheet.drawCentredString(bubble_x + option_index * SHEET_BUBBLE_GAP, top_y - 18, chr(65 + option_index))
 
     row_y = top_y - 36
-    for number, question_type, options, correct in column_items:
+    for label, question_type, options, correct in column_items:
         sheet.setFont("Helvetica", 9)
-        sheet.drawRightString(bubble_x - 16, row_y - 3, f"{number}.")
+        sheet.drawRightString(bubble_x - 16, row_y - 3, f"{label}.")
 
         if question_type == "text":
             # Yozma javob uchun doiracha emas, yoziladigan katak.
@@ -1268,7 +1276,7 @@ def teacher_test_questions(test_id: int, teacher: Teacher = Depends(get_current_
 
     if test.mode == "key":
         questions = [
-            {"ref": str(kq.number), "label": f"{kq.number}-savol", "question_type": kq.question_type,
+            {"ref": str(kq.number), "label": _key_question_label(kq), "question_type": kq.question_type,
              "option_count": kq.option_count}
             for kq in test.key_questions
         ]

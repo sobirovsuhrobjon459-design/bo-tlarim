@@ -465,6 +465,29 @@ select:focus {
   border-bottom: 1px solid var(--color-border);
 }
 
+/* Yozma savol bloki: sarlavha + a/b qatorlari */
+.key-question {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.key-question .key-row {
+  border-bottom: none;
+  padding: 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.key-question .part-letter {
+  min-width: 18px;
+  color: var(--color-text-muted);
+}
+
+.key-question .key-text-input {
+  flex: 1;
+}
+
 .key-row-head {
   display: flex;
   justify-content: space-between;
