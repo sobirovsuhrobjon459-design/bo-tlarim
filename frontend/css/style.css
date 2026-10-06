@@ -465,32 +465,37 @@ select:focus {
   border-bottom: 1px solid var(--color-border);
 }
 
-/* Yozma javoblar uchun matematik belgilar klaviaturasi */
-.math-keyboard {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 8px 0;
-  width: 100%;
-}
-
-.math-keyboard button {
+/* Yozma javob maydoni (MathLive) — oddiy input bilan bir xil ko'rinishda */
+.math-field {
+  display: block;
   flex: 1;
-  min-width: 40px;
-  padding: 10px 0;
-  font-size: 17px;
-  font-family: inherit;
-  color: var(--color-text);
+  width: 100%;
+  padding: 12px 14px;
+  margin: 10px 0;
+  font-size: 16px;
   background: var(--color-surface);
+  color: var(--color-text);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: transform 0.1s ease, border-color 0.15s ease;
+
+  /* MathLive ichki ranglari */
+  --caret-color: var(--color-primary);
+  --selection-background-color: rgba(99, 102, 241, 0.25);
+  --smart-fence-color: var(--color-primary);
 }
 
-.math-keyboard button:active {
-  transform: scale(0.9);
+.math-field:focus-within {
   border-color: var(--color-primary);
+  outline: none;
+}
+
+.math-field::part(virtual-keyboard-toggle) {
+  color: var(--color-primary);
+}
+
+/* Klaviatura ochilganda sahifa tagida joy qolsin */
+body:has(.ML__keyboard--visible) #app {
+  padding-bottom: 320px;
 }
 
 /* Yozma savol bloki: sarlavha + a/b qatorlari */
@@ -512,8 +517,13 @@ select:focus {
   color: var(--color-text-muted);
 }
 
-.key-question .key-text-input {
+.key-question .variant-list {
   flex: 1;
+  min-width: 0;
+}
+
+.key-question .variant-list .math-field {
+  margin: 4px 0;
 }
 
 .key-row-head {

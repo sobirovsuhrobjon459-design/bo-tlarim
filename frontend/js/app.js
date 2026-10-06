@@ -127,44 +127,30 @@ function showToast(message) {
   setTimeout(() => toast.remove(), 2600);
 }
 
-// Yozma javoblarda kerak bo'ladigan matematik belgilar. Telefon klaviaturasida
-// bu belgilar yo'q, shuning uchun javob yoziladigan maydon tagida chiqadi.
-const MATH_SYMBOLS = ["√", "∛", "π", "²", "³", "°", "±", "×", "÷", "≤", "≥", "≠", "∞", "!"];
+/*
+  Yozma javoblar MathLive kutubxonasi orqali kiritiladi (index.html'da ulangan).
+  <math-field> oddiy input kabi ishlaydi, lekin ildiz, kasr, daraja, pi kabi
+  belgilarni to'g'ri ko'rinishda yozish imkonini beradi va o'zining matematik
+  klaviaturasini chiqaradi. Qiymati LaTeX ko'rinishida saqlanadi: "2\sqrt{3}".
+*/
 
-function attachMathKeyboard(container) {
-  const keyboard = document.createElement("div");
-  keyboard.className = "math-keyboard";
-  keyboard.innerHTML = MATH_SYMBOLS.map(
-    (symbol) => `<button type="button" data-symbol="${symbol}">${symbol}</button>`
-  ).join("");
+function mathFieldHtml(initialValue, extraAttributes = "") {
+  return `<math-field class="math-field" ${extraAttributes}>${escapeHtml(initialValue || "")}</math-field>`;
+}
 
-  let activeInput = null;
+function readMathValue(field) {
+  // MathLive hali yuklanmagan bo'lsa, element oddiy matn sifatida o'qiladi
+  return (typeof field.value === "string" ? field.value : field.textContent || "").trim();
+}
 
-  // Klaviatura faqat hozir yozilayotgan maydon tagida ko'rinadi
-  container.addEventListener("focusin", (event) => {
-    if (!event.target.classList.contains("math-input")) return;
-    activeInput = event.target;
-    event.target.insertAdjacentElement("afterend", keyboard);
-  });
+function setupMathFields(container, onChange) {
+  container.querySelectorAll("math-field").forEach((field) => {
+    field.addEventListener("input", () => onChange(field, readMathValue(field)));
 
-  // Tugma bosilganda maydondan fokus ketib qolmasligi uchun
-  ["mousedown", "touchstart"].forEach((eventName) => {
-    keyboard.addEventListener(eventName, (event) => event.preventDefault());
-  });
-
-  keyboard.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-symbol]");
-    if (!button || !activeInput) return;
-
-    const start = activeInput.selectionStart ?? activeInput.value.length;
-    const end = activeInput.selectionEnd ?? activeInput.value.length;
-
-    activeInput.value = activeInput.value.slice(0, start) + button.dataset.symbol + activeInput.value.slice(end);
-    activeInput.selectionStart = activeInput.selectionEnd = start + button.dataset.symbol.length;
-
-    // "input" hodisasi javobni saqlab qo'yadigan kodni ishga tushiradi
-    activeInput.dispatchEvent(new Event("input", { bubbles: true }));
-    activeInput.focus();
+    // Matematik klaviatura faqat maydonga bosilganda chiqadi
+    field.addEventListener("focusin", () => {
+      window.mathVirtualKeyboard?.show?.();
+    });
   });
 }
 
@@ -640,7 +626,7 @@ function renderKeyQuizQuestion() {
   const selectedLetters = new Set(selectedAnswer ? selectedAnswer.split(",") : []);
 
   const answerAreaHtml = isText
-    ? `<input class="input math-input" id="text-answer-input" placeholder="Javobingizni yozing" value="${escapeHtml(selectedAnswer)}" />`
+    ? mathFieldHtml(selectedAnswer, 'id="text-answer-input" placeholder="Javobingizni yozing"')
     : `<div id="options-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(60px,1fr));gap:10px">
          ${Array.from({ length: question.option_count }, (_, index) => {
       const letter = String.fromCharCode(65 + index);
@@ -663,10 +649,9 @@ function renderKeyQuizQuestion() {
   `);
 
   if (isText) {
-    document.getElementById("text-answer-input").addEventListener("input", (event) => {
-      quizState.answers[question.number] = event.target.value;
+    setupMathFields(appElement, (field, value) => {
+      quizState.answers[question.number] = value;
     });
-    attachMathKeyboard(appElement);
   } else {
     document.querySelectorAll("#options-container .option").forEach((optionEl) => {
       optionEl.addEventListener("click", () => {
@@ -1443,8 +1428,11 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
   // allaqachon belgilangan javoblar yo'qolmasin. Kalit — savolning nomi.
   const previous = { ...(savedAnswers || {}) };
   container.querySelectorAll(".key-row").forEach((row) => {
+    const variants = [...row.querySelectorAll("math-field")].map(readMathValue);
+
     previous[row.dataset.label] = {
       answer: row.dataset.answer || "",
+      variants: variants.length ? variants : undefined,
       // Fan almashtirilganda variantlar soni yangi tuzilishdan olinadi
       options: resetOptions ? undefined : row.dataset.options,
     };
@@ -1484,13 +1472,16 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
 
     const partRows = Array.from({ length: parts }, (_, partIndex) => {
       const label = parts > 1 ? `${questionNumber}${String.fromCharCode(97 + partIndex)}` : String(questionNumber);
-      const answer = escapeHtml((previous[label] || {}).answer || "");
+      const variants = (previous[label] || {}).variants || [""];
 
       return `
-        <div class="key-row key-part-row" data-label="${label}" data-kind="text" data-answer="${answer}">
+        <div class="key-row key-part-row" style="align-items:flex-start" data-label="${label}" data-kind="text"
+             data-answer="${escapeHtml(variants.filter(Boolean).join("|"))}">
           <b class="part-letter">${parts > 1 ? `${String.fromCharCode(97 + partIndex)})` : ""}</b>
-          <input class="input key-text-input math-input" value="${answer}" style="margin:0"
-                 placeholder="Qabul qilinadigan javob(lar), | bilan ajrating" />
+          <div class="variant-list">
+            ${variants.map((variant) => mathFieldHtml(variant, 'placeholder="To\'g\'ri javob"')).join("")}
+          </div>
+          <button class="icon-button" type="button" data-add-variant title="Yana bir to'g'ri javob">➕</button>
         </div>`;
     }).join("");
 
@@ -1545,13 +1536,25 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
     });
   });
 
-  container.querySelectorAll(".key-text-input").forEach((input) => {
-    input.addEventListener("input", () => {
-      input.closest(".key-row").dataset.answer = input.value.trim();
+  // Bitta savolga bir nechta to'g'ri javob bo'lishi mumkin (masalan "120" va "5!").
+  // Ularning hammasi bitta qatorda yig'iladi va "|" bilan saqlanadi.
+  function syncVariants(row) {
+    const values = [...row.querySelectorAll("math-field")].map(readMathValue).filter(Boolean);
+    row.dataset.answer = values.join("|");
+  }
+
+  setupMathFields(container, (field) => syncVariants(field.closest(".key-row")));
+
+  container.querySelectorAll("[data-add-variant]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const row = button.closest(".key-row");
+      const list = row.querySelector(".variant-list");
+
+      list.insertAdjacentHTML("beforeend", mathFieldHtml("", 'placeholder="Yana bir to\'g\'ri javob"'));
+      setupMathFields(list, (field) => syncVariants(row));
+      list.lastElementChild.focus();
     });
   });
-
-  attachMathKeyboard(container);
 }
 
 function drawLetterGrid(row) {
@@ -1845,7 +1848,7 @@ async function renderStudentAnswersForm(testId, attemptId) {
 
       const answerArea =
         question.question_type === "text"
-          ? `<input class="input math-input" data-text-ref="${question.ref}" value="${escapeHtml(current)}" placeholder="Javobini yozing" />`
+          ? mathFieldHtml(current, `data-text-ref="${question.ref}" placeholder="Javobini yozing"`)
           : `<div class="answer-options" data-ref="${question.ref}"
                   style="display:grid;grid-template-columns:repeat(auto-fill,minmax(50px,1fr));gap:8px">
                ${Array.from({ length: question.option_count }, (_, index) => {
@@ -1900,13 +1903,9 @@ async function renderStudentAnswersForm(testId, attemptId) {
     });
   });
 
-  document.querySelectorAll("[data-text-ref]").forEach((input) => {
-    input.addEventListener("input", () => {
-      answers[input.dataset.textRef] = input.value;
-    });
+  setupMathFields(appElement, (field, value) => {
+    answers[field.dataset.textRef] = value;
   });
-
-  attachMathKeyboard(appElement);
 
   document.getElementById("save-answers-button").addEventListener(
     "click",

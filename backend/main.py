@@ -22,6 +22,7 @@ import io
 import json
 import logging
 import random
+import re
 import string
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -708,10 +709,25 @@ def _check_enrollment(test: Test) -> None:
         raise HTTPException(status_code=403, detail="Test vaqti tugagan")
 
 
-# Matematik belgilarni turlicha yozish mumkin — tekshirishdan oldin hammasini
-# bitta ko'rinishga keltiramiz. Masalan "2 sqrt 3", "2√3" va "2 ildiz 3" bir xil.
+# Yozma javoblar MathLive orqali kiritiladi va LaTeX ko'rinishida saqlanadi
+# ("2\sqrt{3}", "\frac{\pi}{5}"). Bir xil javob turlicha yozilishi mumkin,
+# shuning uchun solishtirishdan oldin hammasini bitta ko'rinishga keltiramiz.
+
+# 1-qadam: LaTeX'ning bir xil ma'noli yozilishlarini birlashtirish
+LATEX_REPLACEMENTS = [
+    ("\\left", ""),
+    ("\\right", ""),
+    ("\\!", ""),
+    ("\\,", ""),
+    ("\\;", ""),
+    ("\\dfrac", "\\frac"),
+    ("\\tfrac", "\\frac"),
+    ("\\cdot", "\\times"),
+    ("$", ""),
+]
+
+# 2-qadam: oddiy matn ko'rinishidagi yozilishlar ("sqrt", "pi", "^2")
 TEXT_ANSWER_REPLACEMENTS = [
-    (" ", ""),
     (",", "."),
     ("sqrt", "√"),
     ("ildiz", "√"),
@@ -725,14 +741,53 @@ TEXT_ANSWER_REPLACEMENTS = [
     ("*", "×"),
 ]
 
+_FRACTION_PATTERN = re.compile(r"\\frac\{([^{}]*)\}\{([^{}]*)\}")
+
+
+def _split_accepted_variants(correct: str) -> list[str]:
+    """
+    Qabul qilinadigan javoblarni ajratadi. Ular "|" bilan saqlanadi, lekin
+    LaTeX'da "|" modul belgisi ham bo'lishi mumkin ("\\left|x\\right|") —
+    shuning uchun ularni vaqtincha yashirib turamiz.
+    """
+
+    protected_text = correct.replace("\\left|", "\x00L").replace("\\right|", "\x00R").replace("\\|", "\x00N")
+    parts = protected_text.split("|")
+
+    return [
+        part.replace("\x00L", "\\left|").replace("\x00R", "\\right|").replace("\x00N", "\\|")
+        for part in parts
+        if part.strip()
+    ]
+
 
 def _normalize_text_answer(value: str) -> str:
-    """Yozma javobni solishtirishga tayyorlaydi: probel, katta-kichik harf va yozilish farqlarini yo'qotadi."""
+    """
+    Yozma javobni solishtirishga tayyorlaydi.
 
-    text = (value or "").strip().lower()
+    Probel, katta-kichik harf, LaTeX buyruqlari va yozilish farqlari yo'qoladi:
+    "2\\sqrt{3}", "2 sqrt 3" va "2 ildiz 3" — hammasi bir xil natija beradi.
+    """
+
+    text = "".join((value or "").split()).lower()
+
+    for source, target in LATEX_REPLACEMENTS:
+        text = text.replace(source, target)
+
+    # Kasrlar: \frac{a}{b} -> (a)/(b). Ichma-ich kasrlar uchun bir necha marta.
+    for _ in range(5):
+        new_text = _FRACTION_PATTERN.sub(r"(\1)/(\2)", text)
+        if new_text == text:
+            break
+        text = new_text
+
+    text = text.replace("{", "").replace("}", "")
+
     for source, target in TEXT_ANSWER_REPLACEMENTS:
         text = text.replace(source, target)
-    return text
+
+    # Qolgan LaTeX teskari chiziqlari: "\π" -> "π", "\times" -> "times"
+    return text.replace("\\", "")
 
 
 def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str, str]) -> int:
@@ -759,7 +814,7 @@ def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str,
                 # o'qituvchi kiritgan variantlardan biriga mos kelsa yetarli.
                 normalized_answer = _normalize_text_answer(student_answer)
                 accepted_variants = {
-                    _normalize_text_answer(variant) for variant in key_question.correct.split("|") if variant.strip()
+                    _normalize_text_answer(variant) for variant in _split_accepted_variants(key_question.correct)
                 }
                 is_correct = bool(normalized_answer) and normalized_answer in accepted_variants
                 chosen_value = student_answer.strip()[:300] or None
