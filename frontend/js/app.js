@@ -1343,7 +1343,7 @@ function buildKeyQuestionRows(savedAnswers) {
 
       return `
         <div class="key-row key-part-row" data-label="${label}" data-kind="text" data-answer="${answer}">
-          <b class="part-letter">${parts > 1 ? String.fromCharCode(97 + partIndex) : ""}</b>
+          <b class="part-letter">${parts > 1 ? `${String.fromCharCode(97 + partIndex)})` : ""}</b>
           <input class="input key-text-input" value="${answer}" style="margin:0"
                  placeholder="Qabul qilinadigan javob(lar), | bilan ajrating" />
         </div>`;
