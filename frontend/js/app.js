@@ -1228,8 +1228,8 @@ function renderNewTestForm(testType, draft = {}) {
     <p class="subtitle" style="margin:6px 0 0" id="total-questions-hint"></p>
     <button class="btn btn-ghost" id="build-key-rows-button" style="margin-top:10px">🔄 Savollarni yangilash</button>
     <p class="subtitle" style="margin:14px 0 6px">
-      To'g'ri javobni bosing. Bir nechta harf tanlasangiz, savol bir nechta to'g'ri javobli bo'ladi.
-      Har bir savolda variantlar sonini − va + bilan o'zgartirish mumkin.
+      Har bir savolning to'g'ri javobini bosing — bitta variant tanlanadi.
+      Variantlar sonini − va + bilan o'zgartirish mumkin.
     </p>
     <div id="key-questions-container" data-default-parts="${structure.textParts}"
          data-option-overrides='${JSON.stringify(structure.options)}'></div>`;
@@ -1522,19 +1522,11 @@ function drawLetterGrid(row) {
 
   grid.querySelectorAll(".letter-option").forEach((letterEl) => {
     letterEl.addEventListener("click", () => {
-      // Bitta harf — bitta to'g'ri javob. Ikkinchisi ham bosilsa, savol
-      // "bir nechta to'g'ri javobli" bo'ladi; qayta bosilsa olib tashlanadi.
-      const chosen = new Set((row.dataset.answer || "").split(",").filter(Boolean));
-      const letter = letterEl.dataset.letter;
-
-      if (chosen.has(letter)) {
-        chosen.delete(letter);
-      } else {
-        chosen.add(letter);
-      }
-
-      row.dataset.answer = [...chosen].sort().join(",");
-      letterEl.classList.toggle("selected");
+      // Har bir savolda faqat bitta to'g'ri javob bo'ladi — boshqasini
+      // bosganda avvalgisi bekor qilinadi.
+      row.dataset.answer = letterEl.dataset.letter;
+      grid.querySelectorAll(".letter-option").forEach((item) => item.classList.remove("selected"));
+      letterEl.classList.add("selected");
     });
   });
 }
