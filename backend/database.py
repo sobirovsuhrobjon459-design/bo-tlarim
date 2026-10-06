@@ -136,6 +136,10 @@ class Test(Base):
     # "closed" — o'qituvchi yakunlagan, natijalar olingan
     status: Mapped[str] = mapped_column(String(10), default="active")
 
+    # Majburiy obuna: shu kanalga obuna bo'lmagan o'quvchi testni boshlay olmaydi.
+    # "@kanal_nomi" ko'rinishida saqlanadi; bo'sh bo'lsa, tekshiruv yo'q.
+    required_channel: Mapped[str | None] = mapped_column(String(100), default=None)
+
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
     teacher: Mapped["Teacher"] = relationship(back_populates="tests")
@@ -339,6 +343,7 @@ class TestIn(BaseModel):
 
     # Telegram guruhga bog'lash (ixtiyoriy)
     telegram_group_id: int | None = None
+    required_channel: str | None = Field(None, max_length=100)
     enrollment_type: str = Field("open", pattern="^(open|closed)$")
     start_time: datetime | None = None
     end_time: datetime | None = None

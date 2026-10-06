@@ -91,7 +91,7 @@ def _add_missing_columns() -> None:
     """
 
     new_columns = {
-        "tests": {"status": "VARCHAR(10) DEFAULT 'active'"},
+        "tests": {"status": "VARCHAR(10) DEFAULT 'active'", "required_channel": "VARCHAR(100)"},
         "test_attempts": {"offline_name": "VARCHAR(200)"},
     }
 
@@ -453,6 +453,65 @@ def _send_pdf_to_telegram(chat_id: int, file_name: str, pdf_bytes: bytes, captio
         raise HTTPException(status_code=502, detail="PDF yuborilmadi (botga /start bosganmisiz?)")
 
 
+def _normalize_channel(raw_channel: str | None) -> str | None:
+    """O'qituvchi kanal nomini turlicha yozishi mumkin — hammasini "@nom" ko'rinishiga keltiradi."""
+
+    if not raw_channel:
+        return None
+
+    channel = raw_channel.strip()
+    for prefix in ("https://t.me/", "http://t.me/", "t.me/", "@"):
+        if channel.startswith(prefix):
+            channel = channel[len(prefix) :]
+            break
+
+    channel = channel.strip("/")
+    return f"@{channel}" if channel else None
+
+
+def _check_channel_subscription(test: Test, user: User) -> None:
+    """
+    Majburiy obuna yoqilgan bo'lsa, o'quvchi kanalga obuna ekanini tekshiradi.
+
+    Agar bot o'sha kanalda administrator bo'lmasa, Telegram javob bera olmaydi —
+    bunday holatda o'quvchini to'smaymiz (aks holda o'qituvchining sozlamasidagi
+    xato tufayli hech kim test ishlay olmay qoladi), faqat logga yozib qo'yamiz.
+    """
+
+    if not test.required_channel:
+        return
+
+    try:
+        response = httpx.get(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember",
+            params={"chat_id": test.required_channel, "user_id": user.tg_id},
+            timeout=10,
+        )
+        data = response.json()
+    except Exception:
+        logging.getLogger("backend").warning("Kanal obunasini tekshirib bo'lmadi", exc_info=True)
+        return
+
+    if not data.get("ok"):
+        logging.getLogger("backend").warning(
+            "Kanal obunasi tekshirilmadi (%s): %s — bot kanalda admin emas bo'lishi mumkin",
+            test.required_channel,
+            data.get("description"),
+        )
+        return
+
+    status = data.get("result", {}).get("status")
+    is_subscribed = status in ("creator", "administrator", "member") or (
+        status == "restricted" and data["result"].get("is_member")
+    )
+
+    if not is_subscribed:
+        raise HTTPException(
+            status_code=451,  # frontend shu kodni ko'rib, "Obuna bo'lish" tugmasini chiqaradi
+            detail=f"Testni boshlash uchun avval {test.required_channel} kanaliga obuna bo'ling",
+        )
+
+
 def _check_enrollment(test: Test) -> None:
     """O'quvchi testni boshlay olishini tekshiradi: yopiq emasligini va vaqt oynasini."""
 
@@ -787,6 +846,7 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         duration=body.duration,
         mode=body.mode,
         telegram_group_id=body.telegram_group_id,
+        required_channel=_normalize_channel(body.required_channel),
         enrollment_type=body.enrollment_type,
         start_time=body.start_time,
         end_time=body.end_time,
@@ -840,6 +900,7 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
         "mode": test.mode,
         "price": test.price,
         "enrollment_type": test.enrollment_type,
+        "required_channel": test.required_channel,
         "status": test.status,
         "created_at": test.created_at,
         "count": _question_count(test),
@@ -1149,6 +1210,7 @@ def get_test(code: str, user: User = Depends(get_current_user), db: Session = De
         "price": test.price,
         "paid": _is_paid(db, user, test),
         "enrollment_type": test.enrollment_type,
+        "required_channel": test.required_channel,
         "start_time": test.start_time,
         "end_time": test.end_time,
     }
@@ -1186,6 +1248,7 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
     if not _is_paid(db, user, test):
         raise HTTPException(status_code=402, detail="Avval to'lov qiling")
     _check_enrollment(test)
+    _check_channel_subscription(test, user)
 
     attempt = db.scalar(
         select(Attempt)

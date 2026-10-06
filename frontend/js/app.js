@@ -436,8 +436,8 @@ function renderTestFound(test) {
   const now = new Date();
   let blockedMessage = "";
 
-  if (test.enrollment_type === "closed" && test.is_member === false) {
-    blockedMessage = "🔒 Bu test yopiq — faqat tegishli Telegram guruh a'zolari kira oladi.";
+  if (test.enrollment_type === "closed") {
+    blockedMessage = "🔒 Bu yopiq test — javoblarni o'qituvchining o'zi kiritadi.";
   } else if (test.start_time && now < new Date(test.start_time)) {
     blockedMessage = `⏳ Test hali boshlanmagan. Boshlanish vaqti: ${formatDateTime(test.start_time)}`;
   } else if (test.end_time && now > new Date(test.end_time)) {
@@ -458,6 +458,12 @@ function renderTestFound(test) {
         <p>📝 ${test.count} ta savol</p>
         <p>⏱️ ${test.duration} daqiqa</p>
         <p>💰 ${priceLabel}</p>
+        ${
+          test.required_channel
+            ? `<p>📢 Kanalga obuna shart: <b>${escapeHtml(test.required_channel)}</b></p>
+               <button class="btn btn-ghost" id="subscribe-button">Kanalga obuna bo'lish</button>`
+            : ""
+        }
         ${blockedMessage ? `<p style="color:var(--color-primary);font-weight:600">${blockedMessage}</p>` : ""}
         ${actionButton}
         <button class="btn btn-ghost" id="rating-button">🏆 Reyting</button>
@@ -474,6 +480,14 @@ function renderTestFound(test) {
       renderTestFound(await api(`/api/tests/${test.code}`));
     })
   );
+  document.getElementById("subscribe-button")?.addEventListener("click", () => {
+    const link = `https://t.me/${test.required_channel.replace("@", "")}`;
+    if (telegram?.openTelegramLink) {
+      telegram.openTelegramLink(link);
+    } else {
+      window.open(link, "_blank");
+    }
+  });
   document.getElementById("rating-button").addEventListener("click", guarded(() => renderRating(test.code)));
 }
 
@@ -829,7 +843,7 @@ async function renderTeacherDashboard() {
   );
   document.getElementById("withdraw-button").addEventListener("click", guarded(renderWithdrawalForm));
   document.getElementById("buy-credit-button").addEventListener("click", guarded(renderCreditPurchaseForm));
-  document.getElementById("new-test-button").addEventListener("click", () => renderNewTestForm("full"));
+  document.getElementById("new-test-button").addEventListener("click", () => renderNewTestForm("key"));
 
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.addEventListener(
@@ -1003,120 +1017,209 @@ async function renderCreditPurchaseForm() {
   );
 }
 
-function renderNewTestForm(mode) {
-  const modeTabs = `
-    <div class="row-between" style="gap:8px;margin-bottom:10px">
-      <button class="btn ${mode === "full" ? "" : "btn-ghost"}" id="mode-full-button" style="flex:1">📝 To'liq savol</button>
-      <button class="btn ${mode === "key" ? "" : "btn-ghost"}" id="mode-key-button" style="flex:1">🔑 Javoblar kaliti</button>
-    </div>
-  `;
+const SUBJECTS = [
+  "Matematika",
+  "Fizika",
+  "Kimyo",
+  "Biologiya",
+  "Ona tili va adabiyot",
+  "Ingliz tili",
+  "Rus tili",
+  "Tarix",
+  "Geografiya",
+  "Informatika",
+  "Huquq",
+  "Boshqa fan",
+];
 
-  const commonFields = `
-    <input class="input" id="field-title" placeholder="Test nomi" />
-    <input class="input" id="field-subject" placeholder="Fan" />
-    <input class="input" id="field-topic" placeholder="Mavzu" />
-    <input class="input" id="field-price" type="number" placeholder="Narxi (so'm, 0 = bepul)" value="0" />
-    <input class="input" id="field-duration" type="number" placeholder="Davomiyligi (daqiqa)" value="30" />
-  `;
+function renderNewTestForm(mode, draft = {}) {
+  const selectOption = (value, label, selected) =>
+    `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`;
 
-  const groupFields = `
-    <h3>Guruhga bog'lash (ixtiyoriy)</h3>
-    <input class="input" id="field-group-id" type="number" placeholder="Telegram guruh ID si (masalan -1001234567890)" />
-    <div class="card" style="cursor:default;border-color:var(--color-primary)">
-      <div class="card-body">
-        <h3>⚠️ Muhim eslatma</h3>
-        <p>1. Guruh supergruh bo'lishi kerak (ID -100 dan boshlanadi)</p>
-        <p>2. Botni guruhga <b>admin</b> sifatida qo'shing</p>
-        <p>3. Guruh ID olish uchun: @userinfobot'ga /start bosing, "My Group" tugmasini bosib guruhni tanlang</p>
-      </div>
+  const subjectOptions = SUBJECTS.map((subject) => selectOption(subject, subject, draft.subject)).join("");
+
+  const header = `
+    <button class="back-button" data-action="dashboard">←</button>
+    <h2>Test qo'shish</h2>
+
+    <input class="input" id="field-title" placeholder="Test nomini kiriting" value="${escapeHtml(draft.title || "")}" />
+
+    <label class="field-label" for="field-mode">Test turi</label>
+    <select class="input" id="field-mode">
+      ${selectOption("key", "Rash test (javoblar kaliti)", mode)}
+      ${selectOption("full", "To'liq savolli test", mode)}
+    </select>
+
+    <label class="field-label" for="field-subject">Fanni tanlang</label>
+    <select class="input" id="field-subject">
+      ${subjectOptions}
+    </select>
+
+    <p class="field-label" style="margin-top:14px">Testga qo'shilish turi</p>
+    <div class="row-between" id="enrollment-toggle" data-value="${draft.enrollment || "open"}" style="gap:8px;margin-bottom:6px">
+      <button type="button" class="btn ${draft.enrollment === "closed" ? "btn-ghost" : ""}" id="enrollment-open-button" style="flex:1">Ochiq test</button>
+      <button type="button" class="btn ${draft.enrollment === "closed" ? "" : "btn-ghost"}" id="enrollment-closed-button" style="flex:1">Yopiq test</button>
     </div>
-    <p class="subtitle" style="margin-top:14px">Testga qo'shilish turi</p>
-    <div class="row-between" id="enrollment-toggle" data-value="open" style="gap:8px;margin-bottom:6px">
-      <button type="button" class="btn" id="enrollment-open-button" style="flex:1">Ochiq test</button>
-      <button type="button" class="btn btn-ghost" id="enrollment-closed-button" style="flex:1">Yopiq test</button>
-    </div>
-    <p class="subtitle" id="enrollment-hint">
-      Ochiq test: o'quvchilar kodni kiritib, javoblarini o'zlari yuboradi.
-      Yopiq test: o'qituvchi o'quvchilarni o'zi qo'shib, javoblarni kiritadi.
-      Pullik testlar faqat ochiq test sifatida yaratiladi.
+    <p class="subtitle" id="enrollment-hint" style="margin-bottom:16px">
+      ${
+        draft.enrollment === "closed"
+          ? "O'qituvchi o'quvchilarni o'zi qo'shib, javoblarini kiritadi"
+          : "O'quvchilar test kodini kiritib o'zlari qo'shiladi"
+      }
     </p>
-    <p class="subtitle" style="margin-top:14px">Boshlash va tugash vaqti (ixtiyoriy)</p>
-    <input class="input" id="field-start-time" type="datetime-local" />
-    <input class="input" id="field-end-time" type="datetime-local" />
+
+    <label class="field-label" for="field-start-time">Boshlanish vaqti (ixtiyoriy)</label>
+    <input class="input" id="field-start-time" type="datetime-local" value="${draft.startTime || ""}" />
+
+    <label class="field-label" for="field-end-time">Tugash vaqti (ixtiyoriy)</label>
+    <input class="input" id="field-end-time" type="datetime-local" value="${draft.endTime || ""}" />
+
+    <div class="row-between" style="gap:8px">
+      <div style="flex:1">
+        <label class="field-label" for="field-price">Narxi (so'm)</label>
+        <input class="input" id="field-price" type="number" min="0" value="${draft.price ?? 0}" style="margin:0" />
+      </div>
+      <div style="flex:1">
+        <label class="field-label" for="field-duration">Davomiyligi (daqiqa)</label>
+        <input class="input" id="field-duration" type="number" min="1" value="${draft.duration ?? 30}" style="margin:0" />
+      </div>
+    </div>
   `;
 
-  if (mode === "key") {
-    showPage(`
-      <button class="back-button" data-action="dashboard">←</button>
-      <h2>Yangi test</h2>
-      ${modeTabs}
-      ${commonFields}
-      <h3>Javoblar kaliti</h3>
-      <p class="subtitle">
-        Savol matni kerak emas — u tashqarida (masalan, kanalingizda) joylashtirilgan bo'ladi.
-        Savollar sonini yozing, hammasi birdan chiqadi — siz faqat to'g'ri javoblarni bosib chiqasiz.
-      </p>
-      <div class="row-between" style="gap:8px">
-        <input class="input" id="field-test-count" type="number" min="0" max="300" value="30"
-               placeholder="Test savollari" style="margin:0" />
-        <input class="input" id="field-option-count" type="number" min="2" max="8" value="4"
-               placeholder="Variantlar" style="margin:0" />
-        <input class="input" id="field-text-count" type="number" min="0" max="300" value="0"
-               placeholder="Yozma savollar" style="margin:0" />
+  const channelSettings = `
+    <h3 style="margin-top:22px">Qo'shimcha sozlamalar</h3>
+    <div class="setting-card">
+      <label class="setting-row">
+        <input type="checkbox" id="field-require-channel" ${draft.channel ? "checked" : ""} />
+        <span>
+          <b>Telegram kanalga majburiy obuna</b>
+          <p class="subtitle" style="margin:4px 0 0">
+            Yoqilgan bo'lsa, o'quvchilar testni boshlashdan oldin kanalingizga obuna bo'lishi shart.
+          </p>
+        </span>
+      </label>
+      <div id="channel-input-wrapper" style="display:${draft.channel ? "block" : "none"};margin-top:10px">
+        <input class="input" id="field-channel" placeholder="@kanalingiz" value="${escapeHtml(draft.channel || "")}" style="margin:0" />
+        <p class="subtitle" style="margin:6px 0 0;color:var(--color-primary)">
+          Eslatma: bot kanalingizda administrator bo'lishi kerak!
+        </p>
       </div>
-      <p class="subtitle" style="margin:6px 0 10px">
-        Chapdan o'ngga: test savollari soni • har birida nechta variant • yozma savollar soni.
-      </p>
-      <button class="btn btn-ghost" id="build-key-rows-button">🔄 Savollarni yangilash</button>
-      <p class="subtitle" style="margin:14px 0 6px">
-        Bitta harf tanlasangiz — bitta to'g'ri javob. Bir nechta harf tanlasangiz —
-        bir nechta to'g'ri javobli savol bo'ladi.
-      </p>
-      <div id="key-questions-container"></div>
-      ${groupFields}
-      <button class="btn" id="save-test-button">💾 Testni saqlash</button>
-    `);
-  } else {
-    showPage(`
-      <button class="back-button" data-action="dashboard">←</button>
-      <h2>Yangi test</h2>
-      ${modeTabs}
-      ${commonFields}
-      <h3>Savollar</h3>
-      <div id="questions-container"></div>
-      <button class="btn btn-ghost" id="add-question-button">➕ Savol qo'shish</button>
-      ${groupFields}
-      <button class="btn" id="save-test-button">💾 Testni saqlash</button>
-    `);
+    </div>
+  `;
+
+  const questionsSection =
+    mode === "key"
+      ? `
+        <h3 style="margin-top:22px">Savollar</h3>
+        <p class="subtitle">
+          Savol matni kerak emas — u kanalingizda joylashtirilgan bo'ladi.
+          Sonini yozing, hamma savol birdan chiqadi.
+        </p>
+        <div class="row-between" style="gap:8px">
+          <div style="flex:1">
+            <label class="field-label" for="field-test-count">Test savollari</label>
+            <input class="input" id="field-test-count" type="number" min="0" max="300" value="${draft.testCount ?? 30}" style="margin:0" />
+          </div>
+          <div style="flex:1">
+            <label class="field-label" for="field-option-count">Variantlar</label>
+            <input class="input" id="field-option-count" type="number" min="2" max="8" value="${draft.optionCount ?? 4}" style="margin:0" />
+          </div>
+          <div style="flex:1">
+            <label class="field-label" for="field-text-count">Yozma</label>
+            <input class="input" id="field-text-count" type="number" min="0" max="300" value="${draft.textCount ?? 0}" style="margin:0" />
+          </div>
+        </div>
+        <button class="btn btn-ghost" id="build-key-rows-button" style="margin-top:10px">🔄 Savollarni yangilash</button>
+        <p class="subtitle" style="margin:14px 0 6px">
+          To'g'ri javobni bosing. Bir nechta harf tanlasangiz, savol bir nechta to'g'ri javobli bo'ladi.
+          Har bir savolda variantlar sonini − va + bilan o'zgartirish mumkin.
+        </p>
+        <div id="key-questions-container"></div>`
+      : `
+        <h3 style="margin-top:22px">Savollar</h3>
+        <p class="subtitle">Har bir savolning matni va variantlarini kiriting.</p>
+        <div id="questions-container"></div>
+        <button class="btn btn-ghost" id="add-question-button">➕ Savol qo'shish</button>`;
+
+  showPage(`
+    ${header}
+    ${questionsSection}
+    ${channelSettings}
+    <div class="sticky-footer">
+      <button class="btn" id="save-test-button" style="margin:0">Test yaratish</button>
+    </div>
+  `);
+
+  // "Boshqa fan" tanlanmagan bo'lsa ham, avvalgi qiymat ro'yxatda bo'lmasligi mumkin
+  const subjectSelect = document.getElementById("field-subject");
+  if (draft.subject && !SUBJECTS.includes(draft.subject)) {
+    subjectSelect.value = SUBJECTS[0];
   }
 
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
-  document.getElementById("mode-full-button").addEventListener("click", () => renderNewTestForm("full"));
-  document.getElementById("mode-key-button").addEventListener("click", () => renderNewTestForm("key"));
+
+  // Test turi o'zgartirilganda forma qaytadan chiziladi — lekin kiritilgan
+  // ma'lumotlar yo'qolmasligi uchun ularni "draft" sifatida olib o'tamiz.
+  document.getElementById("field-mode").addEventListener("change", (event) => {
+    renderNewTestForm(event.target.value, collectTestFormDraft(mode));
+  });
 
   const enrollmentToggle = document.getElementById("enrollment-toggle");
   const enrollmentOpenButton = document.getElementById("enrollment-open-button");
   const enrollmentClosedButton = document.getElementById("enrollment-closed-button");
+  const enrollmentHint = document.getElementById("enrollment-hint");
+
   enrollmentOpenButton.addEventListener("click", () => {
     enrollmentToggle.dataset.value = "open";
     enrollmentOpenButton.classList.remove("btn-ghost");
     enrollmentClosedButton.classList.add("btn-ghost");
+    enrollmentHint.textContent = "O'quvchilar test kodini kiritib o'zlari qo'shiladi";
   });
   enrollmentClosedButton.addEventListener("click", () => {
     enrollmentToggle.dataset.value = "closed";
     enrollmentClosedButton.classList.remove("btn-ghost");
     enrollmentOpenButton.classList.add("btn-ghost");
+    enrollmentHint.textContent = "O'qituvchi o'quvchilarni o'zi qo'shib, javoblarini kiritadi";
   });
+
+  const channelCheckbox = document.getElementById("field-require-channel");
+  channelCheckbox.addEventListener("change", () => {
+    document.getElementById("channel-input-wrapper").style.display = channelCheckbox.checked ? "block" : "none";
+  });
+
+  document.getElementById("save-test-button").addEventListener("click", guarded(() => saveNewTest(mode)));
 
   if (mode === "key") {
     document.getElementById("build-key-rows-button").addEventListener("click", buildKeyQuestionRows);
-    document.getElementById("save-test-button").addEventListener("click", guarded(() => saveNewTest("key")));
-    buildKeyQuestionRows();
+    buildKeyQuestionRows(draft.answers);
   } else {
     document.getElementById("add-question-button").addEventListener("click", addQuestionBlock);
-    document.getElementById("save-test-button").addEventListener("click", guarded(() => saveNewTest("full")));
     addQuestionBlock();
   }
+}
+
+function collectTestFormDraft(mode) {
+  const answers = {};
+  document.querySelectorAll("#key-questions-container .key-row").forEach((row) => {
+    answers[row.dataset.number] = { answer: row.dataset.answer || "", options: row.dataset.options };
+  });
+
+  return {
+    title: document.getElementById("field-title").value,
+    subject: document.getElementById("field-subject").value,
+    enrollment: document.getElementById("enrollment-toggle").dataset.value,
+    startTime: document.getElementById("field-start-time").value,
+    endTime: document.getElementById("field-end-time").value,
+    price: document.getElementById("field-price").value,
+    duration: document.getElementById("field-duration").value,
+    channel: document.getElementById("field-require-channel").checked
+      ? document.getElementById("field-channel").value
+      : "",
+    testCount: mode === "key" ? document.getElementById("field-test-count").value : undefined,
+    optionCount: mode === "key" ? document.getElementById("field-option-count").value : undefined,
+    textCount: mode === "key" ? document.getElementById("field-text-count").value : undefined,
+    answers: mode === "key" ? answers : undefined,
+  };
 }
 
 function addQuestionBlock() {
@@ -1140,10 +1243,10 @@ function addQuestionBlock() {
   document.getElementById("questions-container").appendChild(block);
 }
 
-function buildKeyQuestionRows() {
+function buildKeyQuestionRows(savedAnswers) {
   const container = document.getElementById("key-questions-container");
   const testCount = Math.max(0, Number(document.getElementById("field-test-count").value) || 0);
-  const optionCount = Math.min(8, Math.max(2, Number(document.getElementById("field-option-count").value) || 4));
+  const defaultOptions = Math.min(8, Math.max(2, Number(document.getElementById("field-option-count").value) || 4));
   const textCount = Math.max(0, Number(document.getElementById("field-text-count").value) || 0);
 
   if (testCount + textCount === 0) {
@@ -1151,58 +1254,68 @@ function buildKeyQuestionRows() {
     return;
   }
 
-  // Savollar soni o'zgartirilganda, allaqachon belgilangan javoblar yo'qolmasin.
-  const previousAnswers = {};
+  // Savollar soni o'zgartirilganda (yoki test turi almashtirilganda),
+  // allaqachon belgilangan javoblar yo'qolmasin.
+  const previous = { ...(savedAnswers || {}) };
   container.querySelectorAll(".key-row").forEach((row) => {
-    previousAnswers[row.dataset.number] = row.dataset.answer || "";
+    previous[row.dataset.number] = { answer: row.dataset.answer || "", options: row.dataset.options };
   });
 
   const rows = [];
 
   for (let number = 1; number <= testCount; number += 1) {
-    const saved = previousAnswers[number] || "";
-    const letters = Array.from({ length: optionCount }, (_, index) => {
-      const letter = String.fromCharCode(65 + index);
-      const selected = saved.split(",").includes(letter) ? "selected" : "";
-      return `<div class="letter-option ${selected}" data-letter="${letter}">${letter}</div>`;
-    }).join("");
+    const saved = previous[number] || {};
+    const options = Number(saved.options) || defaultOptions;
 
     rows.push(`
-      <div class="key-row" data-number="${number}" data-kind="letters" data-options="${optionCount}" data-answer="${saved}">
-        <b class="key-row-number">${number}.</b>
-        <div class="letter-grid">${letters}</div>
+      <div class="key-row" data-number="${number}" data-kind="letters" data-options="${options}"
+           data-answer="${saved.answer || ""}">
+        <div class="key-row-head">
+          <b>${number}-savol</b>
+          <div class="option-stepper">
+            <button type="button" data-step="-1">−</button>
+            <span class="option-count">${options}</span>
+            <button type="button" data-step="1">+</button>
+          </div>
+        </div>
+        <div class="letter-grid"></div>
       </div>`);
   }
 
   for (let index = 0; index < textCount; index += 1) {
     const number = testCount + index + 1;
-    const saved = previousAnswers[number] || "";
+    const saved = previous[number] || {};
+    const answer = escapeHtml(saved.answer || "");
+
     rows.push(`
-      <div class="key-row" data-number="${number}" data-kind="text" data-answer="${escapeHtml(saved)}">
-        <b class="key-row-number">${number}.</b>
-        <input class="input key-text-input" value="${escapeHtml(saved)}" style="margin:0"
-               placeholder="Yozma javob (bir nechtasini | bilan)" />
+      <div class="key-row" data-number="${number}" data-kind="text" data-answer="${answer}">
+        <div class="key-row-head"><b>${number}-savol</b><span class="subtitle" style="margin:0">yozma</span></div>
+        <input class="input key-text-input" value="${answer}" style="margin:0"
+               placeholder="Qabul qilinadigan javob(lar), | bilan ajrating" />
       </div>`);
   }
 
   container.innerHTML = rows.join("");
 
   container.querySelectorAll('.key-row[data-kind="letters"]').forEach((row) => {
-    row.querySelectorAll(".letter-option").forEach((letterEl) => {
-      letterEl.addEventListener("click", () => {
-        // Bitta harf — bitta to'g'ri javob. Yana bosilsa qo'shiladi va savol
-        // "bir nechta to'g'ri javobli" bo'lib qoladi; qayta bosilsa olib tashlanadi.
-        const selected = new Set((row.dataset.answer || "").split(",").filter(Boolean));
-        const letter = letterEl.dataset.letter;
+    drawLetterGrid(row);
 
-        if (selected.has(letter)) {
-          selected.delete(letter);
-        } else {
-          selected.add(letter);
-        }
+    row.querySelectorAll("[data-step]").forEach((stepButton) => {
+      stepButton.addEventListener("click", () => {
+        const next = Number(row.dataset.options) + Number(stepButton.dataset.step);
+        if (next < 2 || next > 8) return;
 
-        row.dataset.answer = [...selected].sort().join(",");
-        letterEl.classList.toggle("selected");
+        row.dataset.options = next;
+        row.querySelector(".option-count").textContent = next;
+
+        // Variantlar kamaysa, endi mavjud bo'lmagan harflar javobdan olib tashlanadi.
+        const lastLetter = String.fromCharCode(64 + next);
+        row.dataset.answer = (row.dataset.answer || "")
+          .split(",")
+          .filter((letter) => letter && letter <= lastLetter)
+          .join(",");
+
+        drawLetterGrid(row);
       });
     });
   });
@@ -1214,22 +1327,60 @@ function buildKeyQuestionRows() {
   });
 }
 
+function drawLetterGrid(row) {
+  const grid = row.querySelector(".letter-grid");
+  const options = Number(row.dataset.options) || 4;
+  const selected = (row.dataset.answer || "").split(",").filter(Boolean);
+
+  grid.innerHTML = Array.from({ length: options }, (_, index) => {
+    const letter = String.fromCharCode(65 + index);
+    return `<div class="letter-option ${selected.includes(letter) ? "selected" : ""}" data-letter="${letter}">${letter}</div>`;
+  }).join("");
+
+  grid.querySelectorAll(".letter-option").forEach((letterEl) => {
+    letterEl.addEventListener("click", () => {
+      // Bitta harf — bitta to'g'ri javob. Ikkinchisi ham bosilsa, savol
+      // "bir nechta to'g'ri javobli" bo'ladi; qayta bosilsa olib tashlanadi.
+      const chosen = new Set((row.dataset.answer || "").split(",").filter(Boolean));
+      const letter = letterEl.dataset.letter;
+
+      if (chosen.has(letter)) {
+        chosen.delete(letter);
+      } else {
+        chosen.add(letter);
+      }
+
+      row.dataset.answer = [...chosen].sort().join(",");
+      letterEl.classList.toggle("selected");
+    });
+  });
+}
+
 async function saveNewTest(mode) {
-  const groupIdValue = document.getElementById("field-group-id").value.trim();
-  const startTimeValue = document.getElementById("field-start-time").value;
-  const endTimeValue = document.getElementById("field-end-time").value;
+  const titleValue = document.getElementById("field-title").value.trim();
+  if (titleValue.length < 2) {
+    throw new Error("Test nomini kiriting");
+  }
+
+  const requireChannel = document.getElementById("field-require-channel").checked;
+  const channelValue = document.getElementById("field-channel").value.trim();
+
+  if (requireChannel && channelValue.length < 2) {
+    throw new Error("Kanal nomini kiriting (masalan @kanalingiz)");
+  }
 
   const body = {
-    title: document.getElementById("field-title").value.trim(),
-    subject: document.getElementById("field-subject").value.trim(),
-    topic: document.getElementById("field-topic").value.trim(),
+    title: titleValue,
+    subject: document.getElementById("field-subject").value,
+    topic: "",
     price: Number(document.getElementById("field-price").value) || 0,
     duration: Number(document.getElementById("field-duration").value) || 30,
     mode,
-    telegram_group_id: groupIdValue ? Number(groupIdValue) : null,
+    telegram_group_id: null,
+    required_channel: requireChannel ? channelValue : null,
     enrollment_type: document.getElementById("enrollment-toggle").dataset.value,
-    start_time: localTimeToUtcIso(startTimeValue),
-    end_time: localTimeToUtcIso(endTimeValue),
+    start_time: localTimeToUtcIso(document.getElementById("field-start-time").value),
+    end_time: localTimeToUtcIso(document.getElementById("field-end-time").value),
     questions: [],
     key_questions: [],
   };
@@ -1316,6 +1467,11 @@ async function renderTestDetail(testId) {
       <div>${testBadges(test)}</div>
       <span class="subtitle" style="margin:0">Kod: <b>${test.code}</b></span>
     </div>
+    ${
+      test.required_channel
+        ? `<p class="subtitle">📢 Majburiy obuna: <b>${escapeHtml(test.required_channel)}</b></p>`
+        : ""
+    }
 
     <button class="btn btn-ghost" id="answer-sheet-button">📄 Javoblar varaqasini olish</button>
     ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
