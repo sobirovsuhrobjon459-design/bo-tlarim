@@ -693,11 +693,12 @@ async function submitTeacherRegister() {
 }
 
 async function renderTeacherDashboard() {
+  let me;
   let stats;
   let tests;
 
   try {
-    [stats, tests] = await Promise.all([api("/api/teacher/stats"), api("/api/teacher/tests")]);
+    [me, stats, tests] = await Promise.all([api("/api/me"), api("/api/teacher/stats"), api("/api/teacher/tests")]);
   } catch (error) {
     isTeacher = false;
     throw error;
@@ -719,6 +720,15 @@ async function renderTeacherDashboard() {
 
   showPage(`
     <button class="back-button" data-action="home">←</button>
+    <div class="card" style="cursor:default">
+      <div class="card-body" style="width:100%">
+        <div class="row-between">
+          <h3>${escapeHtml(me.full_name)} <span style="color:var(--color-primary);font-weight:400">o'qituvchi</span></h3>
+          <button class="btn btn-ghost" id="edit-name-button" style="width:auto;padding:6px 10px">✏️</button>
+        </div>
+        <p>Telegram ID: <b>${me.tg_id}</b></p>
+      </div>
+    </div>
     <h2>Dashboard</h2>
     <div class="stats-grid">
       <div class="stat-tile">📚<span class="stat-value">${stats.tests}</span>Testlar</div>
@@ -746,6 +756,10 @@ async function renderTeacherDashboard() {
   `);
 
   document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
+  document.getElementById("edit-name-button").addEventListener(
+    "click",
+    guarded(() => renderEditName(me, renderTeacherDashboard))
+  );
   document.getElementById("topup-button").addEventListener("click", guarded(renderTopUpForm));
   document.getElementById("buy-credit-button").addEventListener("click", guarded(renderCreditPurchaseForm));
   document.getElementById("new-test-button").addEventListener("click", () => renderNewTestForm("full"));
