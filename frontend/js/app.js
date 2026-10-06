@@ -38,6 +38,9 @@ let isTeacher = false;
 let quizState = null;
 let quizTimerId = null;
 
+// O'qituvchi dashboard'idagi testlar ro'yxati qaysi bo'limda turibdi: "active" | "closed"
+let teacherTestsTab = "active";
+
 /* ---------- 1) Yordamchi funksiyalar ---------- */
 
 async function api(path, { method = "GET", body } = {}) {
@@ -95,9 +98,20 @@ function formatMinutesSeconds(totalSeconds) {
 }
 
 function formatDateTime(isoString) {
-  const date = new Date(isoString);
+  // Backend vaqtni har doim UTC'da saqlaydi va mintaqasiz yuboradi
+  // ("2026-10-06T10:35:00"), shuning uchun "Z" qo'shib, foydalanuvchining
+  // mahalliy vaqtiga o'giramiz — aks holda sana 5 soat farq qilib ko'rinadi.
+  const hasTimezone = /[zZ]|[+-]\d{2}:?\d{2}$/.test(isoString);
+  const date = new Date(hasTimezone ? isoString : `${isoString}Z`);
+
   const pad = (value) => String(value).padStart(2, "0");
-  return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} - ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function localTimeToUtcIso(value) {
+  // <input type="datetime-local"> mahalliy vaqtni beradi — uni backend
+  // kutayotgan UTC ko'rinishiga o'tkazamiz.
+  return value ? new Date(value).toISOString().slice(0, 19) : null;
 }
 
 function showPage(html) {
@@ -111,6 +125,31 @@ function showToast(message) {
   toast.textContent = message;
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 2600);
+}
+
+function askConfirm(message) {
+  // Telegram ichida chiroyli dialog ko'rsatadi, oddiy brauzerda esa odatdagi confirm.
+  return new Promise((resolve) => {
+    if (telegram?.showConfirm) {
+      telegram.showConfirm(message, (confirmed) => resolve(Boolean(confirmed)));
+    } else {
+      resolve(window.confirm(message));
+    }
+  });
+}
+
+function testBadges(test) {
+  const enrollment =
+    test.enrollment_type === "closed"
+      ? `<span class="badge badge-purple">Yopiq test</span>`
+      : `<span class="badge badge-blue">Ochiq test</span>`;
+
+  const status =
+    test.status === "closed"
+      ? `<span class="badge badge-gray">Yopilgan</span>`
+      : `<span class="badge badge-green">Ochiq</span>`;
+
+  return `${enrollment}${status}`;
 }
 
 function guarded(handler) {
@@ -169,13 +208,12 @@ function renderHome(userName, backendOk) {
       <div class="card-body"><h3>O'QITUVCHI</h3><p>Test yaratish va natijalarni boshqarish</p></div>
     </div>
 
-    ${
-      isAdmin
-        ? `<div class="card card-entrance" data-action="admin">
+    ${isAdmin
+      ? `<div class="card card-entrance" data-action="admin">
              <div class="card-icon">👑</div>
              <div class="card-body"><h3>ADMIN</h3><p>Umumiy statistika va boshqaruv</p></div>
            </div>`
-        : ""
+      : ""
     }
 
     ${statusHtml}
@@ -409,8 +447,8 @@ function renderTestFound(test) {
   const actionButton = blockedMessage
     ? `<button class="btn" disabled>▶️ TESTNI BOSHLASH</button>`
     : test.paid
-    ? `<button class="btn" id="start-test-button">▶️ TESTNI BOSHLASH</button>`
-    : `<button class="btn" id="pay-button">💳 ${formatNumber(test.price)} so'm to'lash</button>
+      ? `<button class="btn" id="start-test-button">▶️ TESTNI BOSHLASH</button>`
+      : `<button class="btn" id="pay-button">💳 ${formatNumber(test.price)} so'm to'lash</button>
        <button class="btn" disabled>▶️ TESTNI BOSHLASH</button>`;
 
   document.getElementById("search-result").innerHTML = `
@@ -528,10 +566,10 @@ function renderKeyQuizQuestion() {
     ? `<input class="input" id="text-answer-input" placeholder="Javobingizni yozing" value="${escapeHtml(selectedAnswer)}" />`
     : `<div id="options-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(60px,1fr));gap:10px">
          ${Array.from({ length: question.option_count }, (_, index) => {
-           const letter = String.fromCharCode(65 + index);
-           const selected = selectedLetters.has(letter) ? "selected" : "";
-           return `<div class="option ${selected}" data-letter="${letter}" style="text-align:center"><b>${letter}</b></div>`;
-         }).join("")}
+      const letter = String.fromCharCode(65 + index);
+      const selected = selectedLetters.has(letter) ? "selected" : "";
+      return `<div class="option ${selected}" data-letter="${letter}" style="text-align:center"><b>${letter}</b></div>`;
+    }).join("")}
        </div>`;
 
   const hintText = isText ? "Javobingizni yozib kiriting" : isMulti ? "Bir nechta to'g'ri javobni tanlang" : "To'g'ri javobni tanlang";
@@ -711,19 +749,34 @@ async function renderTeacherDashboard() {
     throw error;
   }
 
+  const visibleTests = tests.filter((test) => (teacherTestsTab === "closed" ? test.status === "closed" : test.status !== "closed"));
+
   const testCards =
-    tests
+    visibleTests
       .map(
         (test) => `
           <div class="card card-entrance" data-test-id="${test.id}">
-            <div class="card-body">
-              <h3>${escapeHtml(test.title)} ${test.mode === "key" ? "🔑" : ""}</h3>
-              <p>${escapeHtml(test.subject)} • ${test.count} savol • ${test.price ? formatNumber(test.price) + " so'm" : "Bepul"}</p>
-              <p>Kod: <b>${test.code}</b> • 👥 ${test.students} qatnashchi</p>
+            <div class="card-body" style="width:100%">
+              <div class="row-between" style="align-items:flex-start">
+                <div>
+                  <h3 style="margin-bottom:6px">
+                    ${escapeHtml(test.title)}
+                    ${testBadges(test)}
+                  </h3>
+                  <p><b>${escapeHtml(test.subject)}</b></p>
+                  <p class="subtitle" style="margin:0">Test kodi: ${test.code}</p>
+                  <p class="subtitle" style="margin:0">Yaratilgan vaqti: ${formatDateTime(test.created_at)}</p>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+                  <button class="icon-button danger" data-delete-test="${test.id}" title="O'chirish">🗑</button>
+                  <span style="color:var(--color-text-muted);font-size:22px">›</span>
+                </div>
+              </div>
             </div>
           </div>`
       )
-      .join("") || "<p>Hali testlar yo'q</p>";
+      .join("") ||
+    `<p class="subtitle">${teacherTestsTab === "closed" ? "Yopilgan testlar yo'q" : "Hali testlar yo'q"}</p>`;
 
   showPage(`
     <button class="back-button" data-action="home">←</button>
@@ -757,9 +810,16 @@ async function renderTeacherDashboard() {
         <button class="btn btn-ghost" id="buy-credit-button">🛒 Kredit sotib olish</button>
       </div>
     </div>
-    <button class="btn" id="new-test-button">➕ YANGI TEST YARATISH</button>
+    <div class="row-between" style="margin:22px 0 12px">
+      <h2 style="margin:0">Testlar</h2>
+      <button class="btn" id="new-test-button" style="width:auto;padding:10px 16px">➕ Test qo'shish</button>
+    </div>
+    <div class="tabs">
+      <button class="tab ${teacherTestsTab === "active" ? "active" : ""}" data-tab="active">Jarayondagi testlar</button>
+      <button class="tab ${teacherTestsTab === "closed" ? "active" : ""}" data-tab="closed">Yopilgan testlar</button>
+    </div>
     ${testCards}
-    <p class="status">Backend ishlayapti ✅</p>
+    <p class="status">✅</p>
   `);
 
   document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
@@ -770,8 +830,38 @@ async function renderTeacherDashboard() {
   document.getElementById("withdraw-button").addEventListener("click", guarded(renderWithdrawalForm));
   document.getElementById("buy-credit-button").addEventListener("click", guarded(renderCreditPurchaseForm));
   document.getElementById("new-test-button").addEventListener("click", () => renderNewTestForm("full"));
+
+  document.querySelectorAll(".tab").forEach((tab) => {
+    tab.addEventListener(
+      "click",
+      guarded(async () => {
+        teacherTestsTab = tab.dataset.tab;
+        await renderTeacherDashboard();
+      })
+    );
+  });
+
   document.querySelectorAll("[data-test-id]").forEach((card) => {
-    card.addEventListener("click", guarded(() => renderTestResults(Number(card.dataset.testId))));
+    card.addEventListener("click", guarded(() => renderTestDetail(Number(card.dataset.testId))));
+  });
+
+  document.querySelectorAll("[data-delete-test]").forEach((button) => {
+    button.addEventListener(
+      "click",
+      guarded(async (event) => {
+        event.stopPropagation(); // kartaning o'zi ochilib ketmasin
+        const testId = Number(button.dataset.deleteTest);
+        const test = tests.find((item) => item.id === testId);
+
+        if (!(await askConfirm(`"${test.title}" testi va uning barcha natijalari o'chirilsinmi?`))) {
+          return;
+        }
+
+        await api(`/api/teacher/tests/${testId}`, { method: "DELETE" });
+        showToast("🗑 Test o'chirildi");
+        await renderTeacherDashboard();
+      })
+    );
   });
 }
 
@@ -945,7 +1035,11 @@ function renderNewTestForm(mode) {
       <button type="button" class="btn" id="enrollment-open-button" style="flex:1">Ochiq test</button>
       <button type="button" class="btn btn-ghost" id="enrollment-closed-button" style="flex:1">Yopiq test</button>
     </div>
-    <p class="subtitle">Pullik testlar faqat ochiq test sifatida yaratiladi. Yopiq testga faqat yuqoridagi guruh a'zolari kira oladi.</p>
+    <p class="subtitle" id="enrollment-hint">
+      Ochiq test: o'quvchilar kodni kiritib, javoblarini o'zlari yuboradi.
+      Yopiq test: o'qituvchi o'quvchilarni o'zi qo'shib, javoblarni kiritadi.
+      Pullik testlar faqat ochiq test sifatida yaratiladi.
+    </p>
     <p class="subtitle" style="margin-top:14px">Boshlash va tugash vaqti (ixtiyoriy)</p>
     <input class="input" id="field-start-time" type="datetime-local" />
     <input class="input" id="field-end-time" type="datetime-local" />
@@ -1140,8 +1234,8 @@ async function saveNewTest(mode) {
     mode,
     telegram_group_id: groupIdValue ? Number(groupIdValue) : null,
     enrollment_type: document.getElementById("enrollment-toggle").dataset.value,
-    start_time: startTimeValue || null,
-    end_time: endTimeValue || null,
+    start_time: localTimeToUtcIso(startTimeValue),
+    end_time: localTimeToUtcIso(endTimeValue),
     questions: [],
     key_questions: [],
   };
@@ -1171,7 +1265,265 @@ async function saveNewTest(mode) {
 
   const result = await api("/api/teacher/tests", { method: "POST", body });
   showToast(`✅ Test yaratildi! Kodi: ${result.code}`);
-  await renderTeacherDashboard();
+
+  // Test yaratilgach, darhol shu testning sahifasi ochiladi — o'quvchi qo'shish,
+  // javoblar varaqasini olish va yakunlash shu yerdan qilinadi.
+  teacherTestsTab = "active";
+  await renderTestDetail(result.id);
+}
+
+/* ---------- 4.1) Test sahifasi (yaratilgandan keyin ochiladi) ---------- */
+
+async function renderTestDetail(testId) {
+  const test = await api(`/api/teacher/tests/${testId}`);
+  const isClosedTest = test.enrollment_type === "closed";
+  const isFinished = test.status === "closed";
+
+  const studentRows =
+    test.students
+      .map(
+        (student) => `
+          <div class="list-row" data-student-id="${student.id}">
+            <div>
+              <b>${escapeHtml(student.name)}</b>
+              <p class="subtitle" style="margin:2px 0 0">
+                ${student.has_answers
+            ? `✅ ${student.correct} to'g'ri • ${student.wrong} xato • ${student.percent}%`
+            : "⏳ Javoblar kiritilmagan"
+          }
+              </p>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+              ${student.editable
+            ? `<button class="icon-button danger" data-delete-student="${student.id}" title="O'chirish">🗑</button>
+                     <button class="icon-button" data-edit-student="${student.id}" title="Javoblarni kiritish">✏️</button>`
+            : ""
+          }
+            </div>
+          </div>`
+      )
+      .join("") || `<p class="subtitle">Hali o'quvchi yo'q</p>`;
+
+  showPage(`
+    <button class="back-button" data-action="dashboard">←</button>
+    <h2 style="text-align:center">${escapeHtml(test.title)}</h2>
+    <div class="row-between" style="margin-bottom:14px">
+      <div>${testBadges(test)}</div>
+      <span class="subtitle" style="margin:0">Kod: <b>${test.code}</b></span>
+    </div>
+
+    <button class="btn btn-ghost" id="answer-sheet-button">📄 Javoblar varaqasini olish</button>
+    ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
+    <button class="btn btn-ghost" id="results-button">📊 Natijalarni ko'rish</button>
+    ${isFinished
+      ? `<button class="btn btn-ghost" id="reopen-button">🔓 Testni qayta ochish</button>`
+      : `<button class="btn" id="finish-button">🏁 Yakunlash va natijalarni olish</button>`
+    }
+
+    ${test.missing > 0 && !isFinished
+      ? `<div class="notice">Yakunlash uchun barcha o'quvchilar uchun javoblarni kiriting.
+             ${test.missing} ta o'quvchi uchun javoblar kiritilmagan.</div>`
+      : ""
+    }
+
+    <input class="input" id="student-filter-input" placeholder="🔍 O'quvchi ismi bo'yicha qidirish" />
+    <h3>O'quvchilar (${test.students.length} ta)</h3>
+    <div class="row-between subtitle" style="margin-bottom:10px">
+      <span style="color:var(--color-primary)">Javoblari kiritilgan — ${test.filled} ta</span>
+      <span style="color:#d97706">Kiritilmagan — ${test.missing} ta</span>
+    </div>
+    <div id="students-list">${studentRows}</div>
+  `);
+
+  document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
+
+  document.getElementById("answer-sheet-button").addEventListener(
+    "click",
+    guarded(() =>
+      deliverPdf(
+        `/api/teacher/tests/${testId}/answer-sheet`,
+        `${test.code}_javoblar_varaqasi.pdf`,
+        "📄 Javoblar varaqasi Telegramga yuborildi"
+      )
+    )
+  );
+
+  document
+    .getElementById("add-students-button")
+    ?.addEventListener("click", guarded(() => renderAddStudentsForm(testId, test.title)));
+
+  document.getElementById("results-button").addEventListener("click", guarded(() => renderTestResults(testId)));
+
+  document.getElementById("reopen-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      await api(`/api/teacher/tests/${testId}/reopen`, { method: "POST" });
+      showToast("🔓 Test qayta ochildi");
+      await renderTestDetail(testId);
+    })
+  );
+
+  document.getElementById("finish-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      if (!(await askConfirm("Test yakunlansinmi? Natijalar shundan keyin qotadi."))) return;
+      await api(`/api/teacher/tests/${testId}/close`, { method: "POST" });
+      showToast("🏁 Test yakunlandi");
+      await renderTestResults(testId);
+    })
+  );
+
+  document.querySelectorAll("[data-edit-student]").forEach((button) => {
+    button.addEventListener(
+      "click",
+      guarded(() => renderStudentAnswersForm(testId, Number(button.dataset.editStudent)))
+    );
+  });
+
+  document.querySelectorAll("[data-delete-student]").forEach((button) => {
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        if (!(await askConfirm("Bu o'quvchi ro'yxatdan o'chirilsinmi?"))) return;
+        await api(`/api/teacher/tests/${testId}/students/${button.dataset.deleteStudent}`, { method: "DELETE" });
+        showToast("🗑 O'quvchi o'chirildi");
+        await renderTestDetail(testId);
+      })
+    );
+  });
+
+  document.getElementById("student-filter-input").addEventListener("input", (event) => {
+    const query = event.target.value.toLowerCase();
+    document.querySelectorAll(".list-row").forEach((row) => {
+      row.style.display = row.textContent.toLowerCase().includes(query) ? "" : "none";
+    });
+  });
+}
+
+async function renderAddStudentsForm(testId, testTitle) {
+  showPage(`
+    <button class="back-button" data-action="test">←</button>
+    <h2>O'quvchilarni qo'shish</h2>
+    <p class="subtitle">
+      ${escapeHtml(testTitle)} — har bir o'quvchining ism-familiyasini alohida qatorga yozing.
+      Javoblarini keyin, ro'yxatdagi ✏️ tugmasi orqali kiritasiz.
+    </p>
+    <textarea class="input" id="student-names-input" rows="8"
+      placeholder="Ali Valiyev&#10;Zuhra Karimova&#10;Jasur Umarov"></textarea>
+    <button class="btn" id="save-students-button">✅ Ro'yxatga qo'shish</button>
+  `);
+
+  document.querySelector('[data-action="test"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
+
+  document.getElementById("save-students-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const names = document
+        .getElementById("student-names-input")
+        .value.split("\n")
+        .map((name) => name.trim())
+        .filter((name) => name.length >= 2);
+
+      if (!names.length) {
+        showToast("Kamida bitta ism kiriting");
+        return;
+      }
+
+      const result = await api(`/api/teacher/tests/${testId}/students`, { method: "POST", body: { names } });
+      showToast(`✅ ${result.added} ta o'quvchi qo'shildi`);
+      await renderTestDetail(testId);
+    })
+  );
+}
+
+async function renderStudentAnswersForm(testId, attemptId) {
+  const [structure, saved] = await Promise.all([
+    api(`/api/teacher/tests/${testId}/questions`),
+    api(`/api/teacher/tests/${testId}/students/${attemptId}/answers`),
+  ]);
+
+  // Tanlangan javoblar shu yerda yig'iladi: {savol_ref: "B"} yoki {savol_ref: "A,C"}
+  const answers = { ...saved.answers };
+
+  const questionBlocks = structure.questions
+    .map((question) => {
+      const current = answers[question.ref] || "";
+
+      const answerArea =
+        question.question_type === "text"
+          ? `<input class="input" data-text-ref="${question.ref}" value="${escapeHtml(current)}" placeholder="Javobini yozing" />`
+          : `<div class="answer-options" data-ref="${question.ref}"
+                  style="display:grid;grid-template-columns:repeat(auto-fill,minmax(50px,1fr));gap:8px">
+               ${Array.from({ length: question.option_count }, (_, index) => {
+            const letter = String.fromCharCode(65 + index);
+            const selected = current.split(",").includes(letter) ? "selected" : "";
+            return `<div class="option ${selected}" data-letter="${letter}" style="text-align:center;margin:0;padding:12px"><b>${letter}</b></div>`;
+          }).join("")}
+             </div>`;
+
+      return `
+        <div class="question-block">
+          <b>${escapeHtml(question.label)}</b>
+          ${question.question_type === "multi" ? `<p class="subtitle" style="margin:4px 0">Bir nechta javob tanlash mumkin</p>` : ""}
+          ${answerArea}
+        </div>`;
+    })
+    .join("");
+
+  showPage(`
+    <button class="back-button" data-action="test">←</button>
+    <h2>${escapeHtml(saved.name)}</h2>
+    <p class="subtitle">O'quvchi varaqasida belgilangan javoblarni kiriting — bot avtomatik tekshiradi.</p>
+    ${questionBlocks}
+    <button class="btn" id="save-answers-button">✅ Saqlash va tekshirish</button>
+  `);
+
+  document.querySelector('[data-action="test"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
+
+  document.querySelectorAll(".answer-options").forEach((container) => {
+    const ref = container.dataset.ref;
+    const isMulti = structure.questions.find((item) => item.ref === ref).question_type === "multi";
+
+    container.querySelectorAll(".option").forEach((optionEl) => {
+      optionEl.addEventListener("click", () => {
+        const letter = optionEl.dataset.letter;
+
+        if (isMulti) {
+          const selected = new Set((answers[ref] || "").split(",").filter(Boolean));
+          if (selected.has(letter)) {
+            selected.delete(letter);
+          } else {
+            selected.add(letter);
+          }
+          answers[ref] = [...selected].sort().join(",");
+          optionEl.classList.toggle("selected");
+        } else {
+          answers[ref] = letter;
+          container.querySelectorAll(".option").forEach((el) => el.classList.remove("selected"));
+          optionEl.classList.add("selected");
+        }
+      });
+    });
+  });
+
+  document.querySelectorAll("[data-text-ref]").forEach((input) => {
+    input.addEventListener("input", () => {
+      answers[input.dataset.textRef] = input.value;
+    });
+  });
+
+  document.getElementById("save-answers-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const result = await api(`/api/teacher/tests/${testId}/students/${attemptId}/answers`, {
+        method: "POST",
+        body: { answers },
+      });
+
+      showToast(`✅ ${result.name}: ${result.correct}/${result.total} = ${result.percent}%`);
+      await renderTestDetail(testId);
+    })
+  );
 }
 
 async function renderTestResults(testId) {
@@ -1203,7 +1555,7 @@ async function renderTestResults(testId) {
     .join("");
 
   showPage(`
-    <button class="back-button" data-action="dashboard">←</button>
+    <button class="back-button" data-action="test">←</button>
     <h2>${escapeHtml(results.title)}</h2>
     <div class="card row-between" style="cursor:default" id="price-card">
       <span>💰 Narxi: <b id="price-display">${results.price ? formatNumber(results.price) + " so'm" : "Bepul"}</b></span>
@@ -1229,7 +1581,7 @@ async function renderTestResults(testId) {
     ${questionBlocks}
   `);
 
-  document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
+  document.querySelector('[data-action="test"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
   document.getElementById("pdf-button").addEventListener("click", guarded(() => downloadOrSendPdf(testId)));
   document.getElementById("edit-price-button").addEventListener("click", () => showPriceEditor(testId, results.price));
   document.getElementById("filter-input").addEventListener("input", (event) => {
@@ -1256,21 +1608,25 @@ async function saveNewPrice(testId) {
 }
 
 async function downloadOrSendPdf(testId) {
+  await deliverPdf(`/api/teacher/tests/${testId}/pdf`, "hisobot.pdf", "📄 PDF Telegram chatga yuborildi");
+}
+
+async function deliverPdf(basePath, fileName, sentMessage) {
+  // Telegram ichida fayl yuklab olish cheklangan — shuning uchun PDF bot
+  // orqali chatga yuboriladi. Oddiy brauzerda esa odatdagidek yuklab olinadi.
   if (telegram?.initData) {
-    await api(`/api/teacher/tests/${testId}/pdf/send`, { method: "POST", body: {} });
-    showToast("📄 PDF Telegram chatga yuborildi");
+    await api(`${basePath}/send`, { method: "POST", body: {} });
+    showToast(sentMessage);
     return;
   }
 
-  const response = await fetch(`/api/teacher/tests/${testId}/pdf`, {
-    headers: { "X-Dev-User": DEV_USER_ID },
-  });
+  const response = await fetch(basePath, { headers: { "X-Dev-User": DEV_USER_ID } });
   if (!response.ok) throw new Error("PDF yuklab bo'lmadi");
 
   const blob = await response.blob();
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
-  link.download = "hisobot.pdf";
+  link.download = fileName;
   link.click();
 }
 

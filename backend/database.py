@@ -114,6 +114,10 @@ class Test(Base):
     start_time: Mapped[datetime | None] = mapped_column(default=None)
     end_time: Mapped[datetime | None] = mapped_column(default=None)
 
+    # "active" — test jarayonda (o'quvchi qo'shish/javob kiritish mumkin)
+    # "closed" — o'qituvchi yakunlagan, natijalar olingan
+    status: Mapped[str] = mapped_column(String(10), default="active")
+
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
     teacher: Mapped["Teacher"] = relationship(back_populates="tests")
@@ -171,13 +175,21 @@ class KeyQuestion(Base):
 
 
 class Attempt(Base):
-    """O'quvchining bitta testni ishlash urinishi (va natijasi)."""
+    """
+    O'quvchining bitta testni ishlash urinishi (va natijasi).
+
+    Ochiq testda o'quvchining o'zi ishlaydi — user_id to'ldiriladi.
+    Yopiq testda esa o'qituvchi o'quvchini o'zi qo'shadi va javoblarini kiritadi —
+    bunda o'quvchining Telegram akkaunti bo'lmasligi mumkin, shuning uchun
+    user_id bo'sh qoladi va uning o'rniga offline_name ishlatiladi.
+    """
 
     __tablename__ = "test_attempts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     test_id: Mapped[int] = mapped_column(ForeignKey("tests.id"), index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
+    offline_name: Mapped[str | None] = mapped_column(String(200), default=None)
     started_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(default=None)
     status: Mapped[str] = mapped_column(String(20), default="in_progress")  # in_progress | done | expired
@@ -340,3 +352,19 @@ class CreditPurchaseIn(BaseModel):
     """O'qituvchi kredit sotib olmoqchi bo'lganda yuboriladi."""
 
     credits: int = Field(ge=1, le=100_000)
+
+
+class StudentNamesIn(BaseModel):
+    """
+    Yopiq testda o'qituvchi o'quvchilarni ro'yxatga qo'shganda yuboriladi.
+
+    Javoblar keyin, har bir o'quvchi uchun alohida kiritiladi (StudentAnswersIn).
+    """
+
+    names: list[str] = Field(min_length=1, max_length=300)
+
+
+class StudentAnswersIn(BaseModel):
+    """O'qituvchi ro'yxatdagi o'quvchining javoblarini kiritganda yuboriladi: {savol_ref: "A"}."""
+
+    answers: dict[str, str] = {}

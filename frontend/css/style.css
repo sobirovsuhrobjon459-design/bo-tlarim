@@ -267,6 +267,125 @@ select:focus {
   margin-top: 4px;
 }
 
+/* Test kartasidagi kichik yorliqlar: "Yopiq test", "Ochiq", "Yopilgan" */
+.badge {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  margin-left: 6px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.badge-purple {
+  background: rgba(139, 92, 246, 0.16);
+  color: #7c3aed;
+}
+
+.badge-blue {
+  background: rgba(59, 130, 246, 0.16);
+  color: #2563eb;
+}
+
+.badge-green {
+  background: rgba(34, 197, 94, 0.18);
+  color: #16a34a;
+}
+
+.badge-gray {
+  background: rgba(107, 114, 128, 0.18);
+  color: var(--color-text-muted);
+}
+
+[data-theme="dark"] .badge-purple {
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .badge-blue {
+  color: #93c5fd;
+}
+
+[data-theme="dark"] .badge-green {
+  color: #86efac;
+}
+
+/* "Jarayondagi testlar" / "Yopilgan testlar" tablari */
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 14px;
+}
+
+.tab {
+  flex: 1;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 10px 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.tab.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+/* O'quvchilar ro'yxatining bitta qatori */
+.list-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+
+.icon-button {
+  background: none;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+.icon-button:active {
+  transform: scale(0.9);
+  background: var(--color-border);
+}
+
+.icon-button.danger:active {
+  background: rgba(239, 68, 68, 0.15);
+}
+
+/* Diqqat qaratuvchi ogohlantirish qutisi */
+.notice {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #dc2626;
+  border-radius: var(--radius-md);
+  padding: 14px;
+  font-size: 14px;
+  margin: 12px 0;
+}
+
+[data-theme="dark"] .notice {
+  color: #fca5a5;
+}
+
 .progress-track {
   height: 10px;
   background: var(--color-border);
