@@ -18,7 +18,21 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+
+# MUHIM: Render'ning bepul tarifida fayl tizimi vaqtinchalik — har deploydan
+# keyin (va xizmat uyqudan uyg'onganda) fayllar o'chib ketadi. Ya'ni SQLite
+# bazasi bilan ishlasa, o'qituvchi akkaunti ham, testlar ham yo'qoladi.
+# Shuning uchun productionda DATABASE_URL ga doimiy PostgreSQL manzili
+# qo'yiladi; lokal kompyuterda esa SQLite yetarli.
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./backend/app.db")
+
+# Render va Neon manzilni "postgres://..." ko'rinishida beradi. SQLAlchemy esa
+# "postgresql+psycopg://..." kutadi (qaysi drayver ishlatilishini ochiq yozib
+# qo'yamiz — shunda SQLAlchemy versiyasi o'zgarsa ham ishlayveradi).
+for prefix in ("postgres://", "postgresql://"):
+    if DATABASE_URL.startswith(prefix):
+        DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[len(prefix) :]
+        break
 
 # 1 bo'lsa, Telegram'siz (oddiy brauzerda) ham sinash mumkin bo'ladi. Productionda 0 bo'lsin.
 DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
@@ -40,11 +54,15 @@ PAYME_SECRET_KEY = os.getenv("PAYME_SECRET_KEY", "")
 
 # ========== 2) Bazaga ulanish ==========
 
+IS_SQLITE = DATABASE_URL.startswith("sqlite")
+
 # SQLite bitta threadda ishlashni talab qiladi, FastAPI esa turli threadlardan
 # murojaat qilishi mumkin — shuning uchun buni o'chiramiz.
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+connect_args = {"check_same_thread": False} if IS_SQLITE else {}
 
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+# pool_pre_ping: PostgreSQL ulanishi uzilib qolgan bo'lsa (masalan, xizmat
+# uyquga ketib qaytgandan keyin), SQLAlchemy uni avtomatik qayta ulaydi.
+engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=not IS_SQLITE)
 SessionLocal = sessionmaker(bind=engine)
 
 
