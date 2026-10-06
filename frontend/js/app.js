@@ -1054,6 +1054,30 @@ const SUBJECTS = [
   "Boshqa fan",
 ];
 
+// Milliy sertifikatda har bir fanning o'z tuzilishi bor. Bu yerda faqat
+// farq qiladigan joyi yoziladi — qolgani Rash testning standartidan olinadi.
+// "options" — qaysi savolda nechta variant bo'lishi ({savol: variantlar soni}).
+const SUBJECT_PRESETS = {
+  Matematika: {
+    testCount: 35,
+    options: { 32: 6, 33: 6, 34: 6 },
+    textCount: 10,
+    textParts: 2,
+    note: "Matematika: 35 ta test (32-34 savollar A-F), 10 ta yozma (a, b)",
+  },
+};
+
+function subjectStructure(subject, typePreset) {
+  const preset = SUBJECT_PRESETS[subject] || {};
+  return {
+    testCount: preset.testCount ?? typePreset.testCount,
+    textCount: preset.textCount ?? typePreset.textCount,
+    textParts: preset.textParts ?? typePreset.textParts,
+    options: preset.options || {},
+    note: preset.note || "",
+  };
+}
+
 // Test turlari. Ikkalasi ham "javoblar kaliti" usulida ishlaydi (savol matni
 // o'qituvchining kanalida bo'ladi), farqi — standart savollar tuzilishida.
 const TEST_TYPES = {
@@ -1088,6 +1112,9 @@ function renderNewTestForm(testType, draft = {}) {
 
   const subjectOptions = SUBJECTS.map((subject) => selectOption(subject, subject, draft.subject)).join("");
 
+  // Fan bo'yicha tuzilish faqat Rash testda (Milliy sertifikat mockida) qo'llanadi
+  const structure = type === "rash" ? subjectStructure(draft.subject || SUBJECTS[0], preset) : { ...preset, options: {}, note: "" };
+
   const header = `
     <button class="back-button" data-action="dashboard">←</button>
     <h2>Test qo'shish</h2>
@@ -1106,6 +1133,7 @@ function renderNewTestForm(testType, draft = {}) {
     <select class="input" id="field-subject">
       ${subjectOptions}
     </select>
+    <p class="subtitle" id="subject-note" style="margin:-6px 0 0">${structure.note}</p>
 
     <p class="field-label" style="margin-top:14px">Test bepulmi yoki pullikmi?</p>
     <div class="row-between" id="price-toggle" data-value="${draft.paid ? "paid" : "free"}" style="gap:8px;margin-bottom:6px">
@@ -1173,9 +1201,9 @@ function renderNewTestForm(testType, draft = {}) {
     </div>
   `;
 
-  const testCount = draft.testCount ?? preset.testCount;
+  const testCount = draft.testCount ?? structure.testCount;
   const optionCount = draft.optionCount ?? preset.optionCount;
-  const textCount = draft.textCount ?? preset.textCount;
+  const textCount = draft.textCount ?? structure.textCount;
 
   const questionsSection = `
     <h3 style="margin-top:22px">Savollar</h3>
@@ -1203,7 +1231,8 @@ function renderNewTestForm(testType, draft = {}) {
       To'g'ri javobni bosing. Bir nechta harf tanlasangiz, savol bir nechta to'g'ri javobli bo'ladi.
       Har bir savolda variantlar sonini − va + bilan o'zgartirish mumkin.
     </p>
-    <div id="key-questions-container" data-default-parts="${preset.textParts}"></div>`;
+    <div id="key-questions-container" data-default-parts="${structure.textParts}"
+         data-option-overrides='${JSON.stringify(structure.options)}'></div>`;
 
   showPage(`
     ${header}
@@ -1219,6 +1248,23 @@ function renderNewTestForm(testType, draft = {}) {
   if (draft.subject && !SUBJECTS.includes(draft.subject)) {
     subjectSelect.value = SUBJECTS[0];
   }
+
+  // Fan almashtirilganda, o'sha fandagi Milliy sertifikat tuzilishi qo'llanadi
+  subjectSelect.addEventListener("change", () => {
+    if (type !== "rash") return;
+
+    const next = subjectStructure(subjectSelect.value, preset);
+    const container = document.getElementById("key-questions-container");
+
+    document.getElementById("field-test-count").value = next.testCount;
+    document.getElementById("field-text-count").value = next.textCount;
+    container.dataset.defaultParts = next.textParts;
+    container.dataset.optionOverrides = JSON.stringify(next.options);
+    document.getElementById("subject-note").textContent = next.note;
+
+    updateTotalHint();
+    buildKeyQuestionRows(undefined, { resetOptions: true });
+  });
 
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
 
@@ -1331,12 +1377,20 @@ function collectTestFormDraft() {
   };
 }
 
-function buildKeyQuestionRows(savedAnswers) {
+function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
   const container = document.getElementById("key-questions-container");
   const testCount = Math.max(0, Number(document.getElementById("field-test-count").value) || 0);
   const defaultOptions = Math.min(8, Math.max(2, Number(document.getElementById("field-option-count").value) || 4));
   const textCount = Math.max(0, Number(document.getElementById("field-text-count").value) || 0);
   const defaultParts = Number(container.dataset.defaultParts) || 1;
+
+  // Fan bo'yicha istisnolar: masalan matematikada 32-34 savollar A-F bo'ladi
+  let optionOverrides = {};
+  try {
+    optionOverrides = JSON.parse(container.dataset.optionOverrides || "{}");
+  } catch (_) {
+    optionOverrides = {};
+  }
 
   if (testCount + textCount === 0) {
     showToast("Kamida bitta savol bo'lsin");
@@ -1347,7 +1401,11 @@ function buildKeyQuestionRows(savedAnswers) {
   // allaqachon belgilangan javoblar yo'qolmasin. Kalit — savolning nomi.
   const previous = { ...(savedAnswers || {}) };
   container.querySelectorAll(".key-row").forEach((row) => {
-    previous[row.dataset.label] = { answer: row.dataset.answer || "", options: row.dataset.options };
+    previous[row.dataset.label] = {
+      answer: row.dataset.answer || "",
+      // Fan almashtirilganda variantlar soni yangi tuzilishdan olinadi
+      options: resetOptions ? undefined : row.dataset.options,
+    };
   });
 
   const partCounts = {};
@@ -1360,7 +1418,7 @@ function buildKeyQuestionRows(savedAnswers) {
   // 1) Variantli savollar: 1-savol, 2-savol, ...
   for (let number = 1; number <= testCount; number += 1) {
     const saved = previous[number] || {};
-    const options = Number(saved.options) || defaultOptions;
+    const options = Number(saved.options) || Number(optionOverrides[number]) || defaultOptions;
 
     blocks.push(`
       <div class="key-row" data-label="${number}" data-kind="letters" data-options="${options}"
@@ -1441,7 +1499,7 @@ function buildKeyQuestionRows(savedAnswers) {
       if (next < 1 || next > 6) return;
 
       block.dataset.parts = next;
-      buildKeyQuestionRows(); // qismlar o'zgargach, nomlar qaytadan hisoblanadi
+      buildKeyQuestionRows(undefined); // qismlar o'zgargach, nomlar qaytadan hisoblanadi
     });
   });
 
