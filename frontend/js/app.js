@@ -650,7 +650,7 @@ function testBadges(test) {
   const status =
     test.status === "closed"
       ? `<span class="badge badge-gray">Yopilgan</span>`
-      : `<span class="badge badge-green">Ochiq</span>`;
+      : `<span class="badge badge-green">Faol</span>`;
 
   return `${enrollment}${status}`;
 }
