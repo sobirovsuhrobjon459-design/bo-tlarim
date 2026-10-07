@@ -41,9 +41,6 @@ let quizTimerId = null;
 // O'qituvchi dashboard'idagi testlar ro'yxati qaysi bo'limda turibdi: "active" | "closed"
 let teacherTestsTab = "active";
 
-// Hozir qaysi bo'limda turibmiz: "teacher" yoki "student"
-let currentRole = "teacher";
-
 /* ---------- 1) Yordamchi funksiyalar ---------- */
 
 async function api(path, { method = "GET", body } = {}) {
@@ -305,31 +302,18 @@ function hideBottomNav() {
   if (host) host.hidden = true;
 }
 
-function pageHeader(title, { showRole = true } = {}) {
+function pageHeader(title) {
+  // Chapdagi "←" bosh sahifaga — o'quvchi/o'qituvchi tanlash ekraniga qaytaradi
   return `
     <div class="page-header">
-      <h2 style="margin:0">${escapeHtml(title)}</h2>
-      ${showRole ? `<button class="role-button" type="button" id="role-switch">⇄ Rol</button>` : ""}
+      <button class="back-button" type="button" data-action="back" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">${escapeHtml(title)}</h2>
     </div>`;
 }
 
 function wireTeacherChrome(activeTab) {
-  document.getElementById("role-switch")?.addEventListener("click", guarded(switchRole));
+  document.querySelector('[data-action="back"]')?.addEventListener("click", loadHome);
   showBottomNav(activeTab);
-}
-
-async function switchRole() {
-  // "Rol" tugmasi bo'limlar orasida aylantiradi:
-  // o'qituvchi -> o'quvchi -> (admin bo'lsa) admin -> o'qituvchi
-  const roles = ["teacher", "student"];
-  if (isAdmin) roles.push("admin");
-
-  const next = roles[(roles.indexOf(currentRole) + 1) % roles.length];
-  currentRole = next;
-
-  if (next === "teacher") await enterTeacherArea();
-  else if (next === "student") await renderStudentHome();
-  else await renderAdminDashboard();
 }
 
 function testBadges(test) {
@@ -421,21 +405,18 @@ function renderHome(userName, backendOk) {
   document.querySelector('[data-action="student"]').addEventListener(
     "click",
     guarded(async () => {
-      currentRole = "student";
       await renderStudentHome();
     })
   );
   document.querySelector('[data-action="teacher"]').addEventListener(
     "click",
     guarded(async () => {
-      currentRole = "teacher";
       await enterTeacherArea();
     })
   );
   document.querySelector('[data-action="admin"]')?.addEventListener(
     "click",
     guarded(async () => {
-      currentRole = "admin";
       await renderAdminDashboard();
     })
   );
@@ -523,7 +504,7 @@ async function renderAdminDashboard() {
     ${topRows}
   `);
 
-  document.getElementById("role-switch")?.addEventListener("click", guarded(switchRole));
+  document.querySelector('[data-action="back"]')?.addEventListener("click", loadHome);
 
   document.getElementById("backup-button").addEventListener(
     "click",
@@ -607,7 +588,7 @@ async function renderStudentHome() {
     ${completedRows}
   `);
 
-  document.getElementById("role-switch")?.addEventListener("click", guarded(switchRole));
+  document.querySelector('[data-action="back"]')?.addEventListener("click", loadHome);
   document.getElementById("find-test-button").addEventListener("click", renderTestCodeSearch);
   document.getElementById("edit-name-button").addEventListener(
     "click",

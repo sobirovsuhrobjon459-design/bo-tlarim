@@ -872,8 +872,8 @@ table td {
 
 .page-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 10px;
   margin-bottom: 16px;
 }
 
@@ -881,25 +881,8 @@ table td {
   font-size: 22px;
 }
 
-.role-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  font-size: 14px;
-  font-weight: 600;
-  font-family: inherit;
-  color: var(--color-text);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: transform 0.1s ease, border-color 0.15s ease;
-}
-
-.role-button:active {
-  transform: scale(0.94);
-  border-color: var(--color-primary);
+.page-header .back-button {
+  flex-shrink: 0;
 }
 
 /* Ichki bloklarni ajratib turuvchi quti */
