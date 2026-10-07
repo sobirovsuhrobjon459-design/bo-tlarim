@@ -169,6 +169,45 @@ function configureMathKeyboard() {
   }
 }
 
+function keyboardCloseButton() {
+  // Matematik klaviaturaning o'z yopish tugmasi yo'q — shuning uchun uning
+  // tepasida "Yopish" tugmasi turadi.
+  let button = document.getElementById("math-keyboard-close");
+  if (button) return button;
+
+  button = document.createElement("button");
+  button.id = "math-keyboard-close";
+  button.className = "keyboard-close";
+  button.type = "button";
+  button.hidden = true;
+  button.textContent = "✕ Klaviaturani yopish";
+  document.body.appendChild(button);
+
+  // Tugmani bosganda maydondan fokus ketib, klaviatura o'zi yopilib qolmasin
+  ["mousedown", "touchstart"].forEach((eventName) => {
+    button.addEventListener(eventName, (event) => event.preventDefault());
+  });
+
+  button.addEventListener("click", () => {
+    window.mathVirtualKeyboard?.hide?.();
+    document.activeElement?.blur?.();
+    button.hidden = true;
+  });
+
+  // Klaviatura ochilib-yopilganda tugma ham ko'rinib-yo'qoladi
+  window.mathVirtualKeyboard?.addEventListener?.("virtual-keyboard-toggle", () => {
+    const keyboard = window.mathVirtualKeyboard;
+    button.hidden = !keyboard?.visible;
+
+    const top = keyboard?.boundingRect?.top;
+    if (keyboard?.visible && top) {
+      button.style.bottom = `${Math.max(8, window.innerHeight - top + 8)}px`;
+    }
+  });
+
+  return button;
+}
+
 function setupMathFields(container, onChange) {
   container.querySelectorAll("math-field").forEach((field) => {
     field.addEventListener("input", () => onChange(field, readMathValue(field)));
@@ -177,6 +216,7 @@ function setupMathFields(container, onChange) {
     field.addEventListener("focusin", () => {
       configureMathKeyboard();
       window.mathVirtualKeyboard?.show?.();
+      keyboardCloseButton().hidden = false;
     });
   });
 
@@ -283,9 +323,20 @@ function showBottomNav(activeTab) {
         const button = event.target.closest("[data-nav]");
         if (!button || button.classList.contains("active")) return;
 
+        // Avval tugma darhol belgilanadi — bosilgani shu zahoti bilinadi
         const tab = button.dataset.nav;
+        host.querySelectorAll(".nav-item").forEach((item) => {
+          item.classList.toggle("active", item === button);
+        });
+
+        if (tab === "create") {
+          renderNewTestForm("rash");
+          return;
+        }
+
+        // Ma'lumot yuklanguncha bo'sh karta ko'rinadi
+        renderSkeleton(tab);
         if (tab === "tests") await renderTeacherDashboard();
-        else if (tab === "create") renderNewTestForm("rash");
         else await renderResultsTab();
       })
     );
@@ -355,13 +406,16 @@ function animateCountUp(element, targetValue) {
 
 /* ---------- 2) Bosh sahifa ---------- */
 
-function renderSkeleton() {
+function renderSkeleton(activeTab) {
   showPage(`
     <div class="skeleton skeleton-line" style="width:65%;height:26px"></div>
     <div class="skeleton skeleton-line" style="width:45%;margin-bottom:24px"></div>
     <div class="skeleton skeleton-card"></div>
     <div class="skeleton skeleton-card"></div>
   `);
+
+  // Yuklanayotganda ham pastki menyu joyida qolsin
+  if (activeTab) showBottomNav(activeTab);
 }
 
 // Bosh sahifadagi rol ikonkalari (emoji o'rniga — har qurilmada bir xil chiqadi)
