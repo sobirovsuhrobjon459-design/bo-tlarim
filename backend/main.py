@@ -53,6 +53,7 @@ from .database import (
     PAYME_MERCHANT_ID,
     PAYME_SECRET_KEY,
     PLATFORM_COMMISSION_PERCENT,
+    WELCOME_CREDITS,
     Attempt,
     Base,
     CreditPurchase,
@@ -1052,10 +1053,12 @@ def register_teacher(
         raise HTTPException(status_code=400, detail="Siz allaqachon o'qituvchi sifatida ro'yxatdan o'tgansiz")
 
     user.full_name = f"{body.first_name.strip()} {body.last_name.strip()}".strip()
-    db.add(Teacher(user_id=user.id))
+
+    # Yangi o'qituvchi darhol ishlay boshlashi uchun sovg'a kreditlar beriladi
+    db.add(Teacher(user_id=user.id, credits=WELCOME_CREDITS))
     db.commit()
 
-    return {"ok": True, "full_name": user.full_name}
+    return {"ok": True, "full_name": user.full_name, "credits": WELCOME_CREDITS}
 
 
 # ========== 5) O'qituvchi endpointlari ==========

@@ -43,6 +43,10 @@ ADMIN_ID = int(os.getenv("ADMIN_ID") or 0)
 # Pullik testda o'quvchi to'laganda, platforma ushlab qoladigan foiz (qolgani o'qituvchiga boradi).
 PLATFORM_COMMISSION_PERCENT = int(os.getenv("PLATFORM_COMMISSION_PERCENT") or 30)
 
+# Yangi o'qituvchi ro'yxatdan o'tganda beriladigan sovg'a kreditlar.
+# Har bir bepul test natijasi uchun 1 kredit sarflanadi.
+WELCOME_CREDITS = int(os.getenv("WELCOME_CREDITS") or 50)
+
 # O'qituvchilarga pul balansini to'ldirish uchun ko'rsatiladigan karta raqami.
 ADMIN_CARD_NUMBER = os.getenv("ADMIN_CARD_NUMBER", "")
 
