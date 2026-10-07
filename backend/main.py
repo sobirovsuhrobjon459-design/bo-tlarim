@@ -23,7 +23,6 @@ import json
 import logging
 import random
 import re
-import string
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -328,6 +327,12 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes
     SimpleDocTemplate(buffer, pagesize=A4).build(elements)
     return buffer.getvalue()
 
+
+# Test kodi qisqa va yozishga oson bo'lsin: 4 ta belgi.
+# Chalkashadigan harf-raqamlar olib tashlangan (O va 0, I va 1, L va 1),
+# shuning uchun o'quvchi kodni noto'g'ri yozib yubormaydi.
+TEST_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+TEST_CODE_LENGTH = 4
 
 # Javoblar varaqasining o'lchamlari (punktlarda)
 SHEET_MARGIN = 40
@@ -1205,10 +1210,8 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
     if body.price > 0 and body.enrollment_type == "closed":
         raise HTTPException(status_code=422, detail="Pullik testlar faqat ochiq test sifatida yaratiladi")
 
-    prefix = "".join(ch for ch in body.subject.upper() if ch in string.ascii_uppercase)[:4] or "TEST"
-
     while True:
-        code = f"{prefix}-{''.join(random.choices(string.ascii_uppercase + string.digits, k=4))}"
+        code = "".join(random.choices(TEST_CODE_ALPHABET, k=TEST_CODE_LENGTH))
         if not db.scalar(select(Test.id).where(Test.code == code)):
             break
 

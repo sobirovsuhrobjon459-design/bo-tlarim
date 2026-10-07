@@ -45,7 +45,7 @@ PLATFORM_COMMISSION_PERCENT = int(os.getenv("PLATFORM_COMMISSION_PERCENT") or 30
 
 # Yangi o'qituvchi ro'yxatdan o'tganda beriladigan sovg'a kreditlar.
 # Har bir bepul test natijasi uchun 1 kredit sarflanadi.
-WELCOME_CREDITS = int(os.getenv("WELCOME_CREDITS") or 50)
+WELCOME_CREDITS = int(os.getenv("WELCOME_CREDITS") or 75)
 
 # O'qituvchilarga pul balansini to'ldirish uchun ko'rsatiladigan karta raqami.
 ADMIN_CARD_NUMBER = os.getenv("ADMIN_CARD_NUMBER", "")
