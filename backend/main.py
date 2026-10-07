@@ -29,7 +29,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -2250,4 +2250,36 @@ def admin_reject_withdrawal(request_id: int, admin: User = Depends(get_current_a
 
 
 # Barcha boshqa manzillarni frontend papkasidan beradi (index.html, css, js)
+def _asset_version() -> str:
+    """
+    Fayllar oxirgi marta o'zgargan vaqtdan qisqa "versiya" yasaydi.
+
+    Telegram Mini App eski js/css fayllarni keshlab qoladi, shuning uchun
+    index.html ichidagi havolalarga shu versiya qo'shiladi:
+    "/js/app.js?v=abc123". Fayl o'zgarsa, havola ham o'zgaradi va
+    Telegram yangisini yuklashga majbur bo'ladi.
+    """
+
+    latest = 0.0
+    for path in (FRONTEND_DIR / "js" / "app.js", FRONTEND_DIR / "css" / "style.css"):
+        if path.exists():
+            latest = max(latest, path.stat().st_mtime)
+    return format(int(latest), "x")
+
+
+@app.get("/", include_in_schema=False)
+def serve_index():
+    """Bosh sahifa: har safar yangi tekshiriladi va fayl havolalari versiyalanadi."""
+
+    html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+    version = _asset_version()
+    html = html.replace("/js/app.js", f"/js/app.js?v={version}")
+    html = html.replace("/css/style.css", f"/css/style.css?v={version}")
+
+    return HTMLResponse(
+        html,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
+    )
+
+
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
