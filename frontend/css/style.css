@@ -1262,3 +1262,105 @@ body.keyboard-open .bottom-nav {
 .keyboard-close:active {
   transform: scale(0.94);
 }
+
+/* ========== Javob varaqasi (test bitta sahifada) ========== */
+
+/* Taymer va belgilangan savollar soni varaq aylantirilganda ham ko'rinib turadi */
+.quiz-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  margin: -8px -4px 8px;
+  padding: 12px 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+
+.answer-sheet {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.sheet-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.sheet-row:last-child {
+  border-bottom: none;
+}
+
+.sheet-row-text {
+  align-items: flex-start;
+}
+
+.sheet-number {
+  min-width: 34px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  text-align: right;
+}
+
+.sheet-row-text .sheet-number {
+  padding-top: 18px;
+}
+
+.sheet-options {
+  flex: 1;
+  display: flex;
+  gap: 6px;
+}
+
+.sheet-option {
+  flex: 1;
+  max-width: 52px;
+  height: 42px;
+  padding: 0;
+  font-size: 16px;
+  font-weight: 700;
+  font-family: inherit;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 2px solid var(--color-border);
+  border-radius: 12px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+}
+
+.sheet-option:active {
+  transform: scale(0.94);
+}
+
+.sheet-option.selected {
+  color: #ffffff;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.sheet-text-parts {
+  flex: 1;
+  min-width: 0;
+}
+
+.sheet-text-part {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sheet-part {
+  min-width: 18px;
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.sheet-text-part .math-input {
+  flex: 1;
+  min-width: 0;
+}

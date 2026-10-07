@@ -1407,88 +1407,137 @@ function renderFullQuizQuestion() {
   updateQuizTimer();
 }
 
+/*
+  Kalit rejimidagi test — javob varaqasi ko'rinishida: barcha savollar bitta
+  sahifada, "Keyingi" bosish shart emas. O'quvchi istalgan savolga qaytib,
+  javobini o'zgartira oladi. Tepada taymer va nechta savol belgilangani turadi.
+*/
+function quizAnswerRefs() {
+  return quizState.questions.flatMap((question) => (question.parts || [{ ref: question.number }]).map((part) => part.ref));
+}
+
+function updateAnsweredCounter() {
+  const refs = quizAnswerRefs();
+  const answered = refs.filter((ref) => String(quizState.answers[ref] || "").trim()).length;
+
+  const counter = document.getElementById("answered-counter");
+  if (counter) counter.textContent = `${answered} / ${refs.length} belgilandi`;
+
+  const fill = document.getElementById("answered-progress");
+  if (fill) fill.style.width = `${refs.length ? Math.round((answered / refs.length) * 100) : 0}%`;
+
+  return { answered, total: refs.length };
+}
+
 function renderKeyQuizQuestion() {
-  const question = quizState.questions[quizState.index];
-  const total = quizState.questions.length;
-  const isLast = quizState.index === total - 1;
-  const progressPercent = Math.round(((quizState.index + 1) / total) * 100);
-  const isText = question.question_type === "text";
-
-  // Yozma savol a va b qismlardan iborat bo'lishi mumkin — ular bitta
-  // savol sahifasida, ketma-ket ko'rsatiladi.
-  const parts = question.parts || [{ ref: question.number, label: "" }];
-
-  const answerAreaHtml = parts
-    .map((part) => {
-      const saved = quizState.answers[part.ref] || "";
-      const partTitle = part.label ? `<b class="part-letter">${part.label})</b>` : "";
+  const rowsHtml = quizState.questions
+    .map((question) => {
+      const parts = question.parts || [{ ref: question.number, label: "" }];
+      const isText = question.question_type === "text";
+      const isMulti = question.question_type === "multi";
 
       if (isText) {
-        return `<div class="quiz-part">${partTitle}
-          ${mathFieldHtml(saved, `data-ref="${part.ref}" placeholder="Javobingizni yozing"`)}
+        const partsHtml = parts
+          .map((part) => {
+            const saved = quizState.answers[part.ref] || "";
+            const partLabel = part.label ? `<span class="sheet-part">${part.label})</span>` : "";
+            return `<div class="sheet-text-part">${partLabel}
+              ${mathFieldHtml(saved, `data-ref="${part.ref}" placeholder="Javob"`)}
+            </div>`;
+          })
+          .join("");
+
+        return `<div class="sheet-row sheet-row-text">
+          <span class="sheet-number">${question.number}</span>
+          <div class="sheet-text-parts">${partsHtml}</div>
         </div>`;
       }
 
-      return `<div class="quiz-part">${partTitle}
-        <div class="options-grid" data-ref="${part.ref}">
-          ${Array.from({ length: question.option_count }, (_, index) => {
+      return parts
+        .map((part) => {
+          const chosen = String(quizState.answers[part.ref] || "").split(",");
+          const label = part.label ? `${question.number}${part.label}` : question.number;
+          const buttons = Array.from({ length: question.option_count }, (_, index) => {
             const letter = String.fromCharCode(65 + index);
-            return `<div class="option ${saved === letter ? "selected" : ""}" data-letter="${letter}"
-                         style="text-align:center;margin:0"><b>${letter}</b></div>`;
-          }).join("")}
-        </div>
-      </div>`;
+            return `<button type="button" class="sheet-option ${chosen.includes(letter) ? "selected" : ""}"
+                            data-letter="${letter}">${letter}</button>`;
+          }).join("");
+
+          return `<div class="sheet-row">
+            <span class="sheet-number">${label}</span>
+            <div class="sheet-options" data-ref="${part.ref}" ${isMulti ? 'data-multi="1"' : ""}>${buttons}</div>
+          </div>`;
+        })
+        .join("");
     })
     .join("");
 
-  const hintText = isText
-    ? parts.length > 1
-      ? "Har bir qism uchun javobingizni yozing"
-      : "Javobingizni yozib kiriting"
-    : "To'g'ri javobni tanlang";
+  const hasText = quizState.questions.some((question) => question.question_type === "text");
+  const hasMulti = quizState.questions.some((question) => question.question_type === "multi");
 
   showPage(`
-    <div class="row-between">
-      <b>${question.number}-savol / ${total}</b>
-      <b id="quiz-timer"></b>
+    <div class="quiz-sticky">
+      <div class="row-between">
+        <b id="answered-counter"></b>
+        <b id="quiz-timer"></b>
+      </div>
+      <div class="progress-track" style="margin-bottom:0"><div class="progress-fill" id="answered-progress"></div></div>
     </div>
-    <div class="progress-track"><div class="progress-fill" style="width:${progressPercent}%"></div></div>
-    <p class="subtitle">${hintText}</p>
-    ${answerAreaHtml}
-    ${isText ? `<p class="subtitle answer-hint">${answerInputHint()}</p>` : ""}
-    <button class="btn" id="next-button" style="margin-top:16px">${isLast ? "🏁 TESTNI YAKUNLASH" : "Keyingi →"}</button>
+    <p class="subtitle">Har bir savolning to'g'ri javobini belgilang. Javobni istalgan payt o'zgartirish mumkin.</p>
+    ${hasMulti ? `<p class="subtitle" style="margin-top:0">Bir nechta javobli savollarda keraklilarining hammasini belgilang.</p>` : ""}
+    <div class="panel answer-sheet">${rowsHtml}</div>
+    ${hasText ? `<p class="subtitle answer-hint">${answerInputHint()}</p>` : ""}
+    <button class="btn" id="finish-quiz-button" style="margin-top:16px">🏁 TESTNI YAKUNLASH</button>
   `);
 
-  if (isText) {
-    setupMathFields(appElement, (field, value) => {
-      quizState.answers[field.dataset.ref] = value;
-      scheduleAnswerSave();
-    });
-  } else {
-    document.querySelectorAll(".options-grid").forEach((grid) => {
-      grid.querySelectorAll(".option").forEach((optionEl) => {
-        optionEl.addEventListener("click", () => {
-          quizState.answers[grid.dataset.ref] = optionEl.dataset.letter;
-          grid.querySelectorAll(".option").forEach((el) => el.classList.remove("selected"));
-          optionEl.classList.add("selected");
-          scheduleAnswerSave();
-        });
-      });
-    });
-  }
+  updateAnsweredCounter();
 
-  document.getElementById("next-button").addEventListener(
+  // Bitta tinglovchi butun varaq uchun — 45 ta savolda ham tez ishlaydi
+  appElement.querySelector(".answer-sheet").addEventListener("click", (event) => {
+    const button = event.target.closest(".sheet-option");
+    if (!button) return;
+
+    const group = button.closest(".sheet-options");
+    const ref = group.dataset.ref;
+    const letter = button.dataset.letter;
+
+    if (group.dataset.multi) {
+      button.classList.toggle("selected");
+      quizState.answers[ref] = [...group.querySelectorAll(".sheet-option.selected")]
+        .map((item) => item.dataset.letter)
+        .join(",");
+    } else if (button.classList.contains("selected")) {
+      // Tanlangan javobni qayta bosish — belgini olib tashlaydi
+      button.classList.remove("selected");
+      quizState.answers[ref] = "";
+    } else {
+      group.querySelectorAll(".sheet-option").forEach((item) => item.classList.toggle("selected", item === button));
+      quizState.answers[ref] = letter;
+    }
+
+    telegram?.HapticFeedback?.selectionChanged?.();
+    updateAnsweredCounter();
+    scheduleAnswerSave();
+  });
+
+  setupMathFields(appElement, (field, value) => {
+    quizState.answers[field.dataset.ref] = value;
+    updateAnsweredCounter();
+    scheduleAnswerSave();
+  });
+
+  document.getElementById("finish-quiz-button").addEventListener(
     "click",
     guarded(async () => {
-      if (isLast) {
-        await finishQuiz();
-      } else {
-        // Keyingi savolga o'tishdan oldin javoblar serverga yetib boradi —
-        // shu paytda ilova yopilib qolsa ham hech narsa yo'qolmaydi.
-        saveAnswersNow();
-        quizState.index += 1;
-        renderQuizQuestion();
+      const { answered, total } = updateAnsweredCounter();
+      if (answered < total) {
+        const confirmed = await askConfirm(
+          `${total - answered} ta savolga javob belgilanmagan. Baribir testni yakunlaysizmi?`
+        );
+        if (!confirmed) return;
       }
+      saveAnswersNow();
+      await finishQuiz();
     })
   );
 
