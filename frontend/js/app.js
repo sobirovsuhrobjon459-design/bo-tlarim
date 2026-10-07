@@ -124,6 +124,9 @@ function localTimeToUtcIso(value) {
 }
 
 function showPage(html) {
+  // Menyu avval yashiriladi — kerak bo'lsa, sahifa o'zi qaytadan ko'rsatadi.
+  // Ikkalasi bitta qadamda bo'lgani uchun ekranda miltillash sezilmaydi.
+  hideBottomNav();
   appElement.innerHTML = `<div class="page">${html}</div>`;
   window.scrollTo(0, 0);
 }
@@ -255,17 +258,51 @@ const TEACHER_TABS = [
   { id: "results", label: "Natijalar", icon: "▥" },
 ];
 
-function bottomNav(activeTab) {
-  return `
-    <div class="bottom-nav">
-      ${TEACHER_TABS.map(
-        (tab) => `
-        <button class="nav-item ${tab.id === activeTab ? "active" : ""}" type="button" data-nav="${tab.id}">
-          <span class="nav-icon">${tab.icon}</span>
-          <span>${tab.label}</span>
-        </button>`
-      ).join("")}
-    </div>`;
+function navMarkup() {
+  return TEACHER_TABS.map(
+    (tab) => `
+      <button class="nav-item" type="button" data-nav="${tab.id}">
+        <span class="nav-icon">${tab.icon}</span>
+        <span>${tab.label}</span>
+      </button>`
+  ).join("");
+}
+
+function showBottomNav(activeTab) {
+  // Menyu sahifadan TASHQARIDA turadi: bo'lim almashganda u qayta
+  // chizilmaydi, faqat belgilangan tugma o'zgaradi — shunda sakrash bo'lmaydi.
+  let host = document.getElementById("bottom-nav-host");
+
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "bottom-nav-host";
+    host.className = "bottom-nav";
+    host.innerHTML = navMarkup();
+    document.body.appendChild(host);
+
+    host.addEventListener(
+      "click",
+      guarded(async (event) => {
+        const button = event.target.closest("[data-nav]");
+        if (!button || button.classList.contains("active")) return;
+
+        const tab = button.dataset.nav;
+        if (tab === "tests") await renderTeacherDashboard();
+        else if (tab === "create") renderNewTestForm("rash");
+        else await renderResultsTab();
+      })
+    );
+  }
+
+  host.hidden = false;
+  host.querySelectorAll(".nav-item").forEach((button) => {
+    button.classList.toggle("active", button.dataset.nav === activeTab);
+  });
+}
+
+function hideBottomNav() {
+  const host = document.getElementById("bottom-nav-host");
+  if (host) host.hidden = true;
 }
 
 function pageHeader(title, { showRole = true } = {}) {
@@ -276,20 +313,9 @@ function pageHeader(title, { showRole = true } = {}) {
     </div>`;
 }
 
-function wireTeacherChrome() {
+function wireTeacherChrome(activeTab) {
   document.getElementById("role-switch")?.addEventListener("click", guarded(switchRole));
-
-  document.querySelectorAll("[data-nav]").forEach((button) => {
-    button.addEventListener(
-      "click",
-      guarded(async () => {
-        const tab = button.dataset.nav;
-        if (tab === "tests") await renderTeacherDashboard();
-        else if (tab === "create") renderNewTestForm("rash");
-        else await renderResultsTab();
-      })
-    );
-  });
+  showBottomNav(activeTab);
 }
 
 async function switchRole() {
@@ -1048,10 +1074,9 @@ async function renderTeacherDashboard() {
       <button class="tab ${teacherTestsTab === "closed" ? "active" : ""}" data-tab="closed">Yopilgan testlar</button>
     </div>
     ${testCards}
-    ${bottomNav("tests")}
   `);
 
-  wireTeacherChrome();
+  wireTeacherChrome("tests");
   document.getElementById("edit-name-button").addEventListener(
     "click",
     guarded(() => renderEditName(me, renderTeacherDashboard))
@@ -1428,10 +1453,9 @@ function renderNewTestForm(testType, draft = {}) {
     <div class="sticky-footer">
       <button class="btn" id="save-test-button" style="margin:0">Testni saqlash</button>
     </div>
-    ${bottomNav("create")}
   `);
 
-  wireTeacherChrome();
+  wireTeacherChrome("create");
 
   // "Boshqa fan" tanlanmagan bo'lsa ham, avvalgi qiymat ro'yxatda bo'lmasligi mumkin
   const subjectSelect = document.getElementById("field-subject");
@@ -1620,41 +1644,33 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
        </div>`
     : "";
 
-  // 2) Yozma savollar — a) va b) ustunli jadval
+  // 2) Yozma savollar — har bir qism alohida qatorda (36a, keyin 36b).
+  //    Yonma-yon qilsak telefon ekranida tor bo'lib qolardi.
   const writtenRows = [];
   for (let index = 0; index < textCount; index += 1) {
     const questionNumber = testCount + index + 1;
 
-    const partCells = Array.from({ length: parts }, (_, partIndex) => {
+    for (let partIndex = 0; partIndex < parts; partIndex += 1) {
       const label = parts > 1 ? `${questionNumber}${String.fromCharCode(97 + partIndex)}` : String(questionNumber);
       const variants = (previous[label] || {}).variants || [""];
+      const isFirstPart = partIndex === 0;
 
-      return `
-        <div class="written-cell key-row" data-label="${label}" data-kind="text"
-             data-answer="${escapeHtml(variants.filter(Boolean).join("|"))}">
-          ${variants.map((variant) => mathFieldHtml(variant, 'placeholder="javob"')).join("")}
-        </div>`;
-    }).join("");
-
-    writtenRows.push(`
-      <div class="written-row" style="grid-template-columns:34px repeat(${parts}, 1fr)">
-        <span class="written-number">${questionNumber}</span>
-        ${partCells}
-      </div>`);
+      writtenRows.push(`
+        <div class="written-row ${isFirstPart && index ? "written-row-gap" : ""}">
+          <span class="written-number">${label}</span>
+          <div class="written-cell key-row" data-label="${label}" data-kind="text"
+               data-answer="${escapeHtml(variants.filter(Boolean).join("|"))}">
+            ${variants.map((variant) => mathFieldHtml(variant, 'placeholder="javob"')).join("")}
+          </div>
+        </div>`);
+    }
   }
-
-  const writtenHeader = Array.from(
-    { length: parts },
-    (_, index) => `<span>${parts > 1 ? `${String.fromCharCode(97 + index)}) javob` : "javob"}</span>`
-  ).join("");
 
   const writtenSection = textCount
     ? `<p class="section-label">${testCount + 1}–${testCount + textCount}: YOZMA JAVOBLAR</p>
        <div class="panel">
-         <div class="written-row written-head" style="grid-template-columns:34px repeat(${parts}, 1fr)">
-           <span></span>${writtenHeader}
-         </div>
          ${writtenRows.join("")}
+         <p class="subtitle" style="margin:8px 0 0">Bir nechta javob bo'lsa, qatorga yana maydon qo'shiladi.</p>
        </div>`
     : "";
 
@@ -2081,9 +2097,8 @@ async function renderResultsTab(selectedId) {
     showPage(`
       ${pageHeader("Natijalar")}
       <p class="subtitle">Hali test yaratilmagan. Avval test yarating.</p>
-      ${bottomNav("results")}
-    `);
-    wireTeacherChrome();
+      `);
+    wireTeacherChrome("results");
     return;
   }
 
@@ -2153,10 +2168,9 @@ async function renderResultsTab(selectedId) {
 
     <p class="section-label">ISHTIROKCHILAR</p>
     <div class="panel" style="padding:4px 0">${rows}</div>
-    ${bottomNav("results")}
   `);
 
-  wireTeacherChrome();
+  wireTeacherChrome("results");
 
   document.getElementById("results-test-select").addEventListener(
     "change",

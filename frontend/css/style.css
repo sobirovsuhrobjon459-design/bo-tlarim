@@ -657,7 +657,7 @@ table td {
 /* ========== 4) Animatsiyalar ========== */
 
 .page {
-  animation: fade-in 0.3s ease;
+  animation: fade-in 0.18s ease;
 }
 
 @keyframes fade-in {
@@ -920,6 +920,10 @@ table td {
 }
 
 /* Pastki menyu */
+.bottom-nav[hidden] {
+  display: none;
+}
+
 .bottom-nav {
   position: fixed;
   left: 0;
@@ -1007,29 +1011,41 @@ table td {
 
 /* ========== Yozma javoblar jadvali ========== */
 
+/* Yozma javoblar: har bir qism alohida qatorda (36a, 36b, 37a ...) */
 .written-row {
   display: grid;
+  grid-template-columns: 42px 1fr;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   margin-bottom: 8px;
 }
 
-.written-row.written-head {
-  margin-bottom: 4px;
-  font-size: 12px;
-  color: var(--color-text-muted);
+.written-row-gap {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border);
 }
 
 .written-number {
   font-size: 13px;
+  font-weight: 600;
   color: var(--color-text-muted);
   text-align: right;
 }
 
 .written-cell .math-field {
-  margin: 0;
+  margin: 0 0 6px;
   padding: 8px 10px;
   background: var(--color-bg);
+}
+
+.written-cell .math-field:last-child {
+  margin-bottom: 0;
+}
+
+/* MathLive'ning "menyu" tugmasi joy egallamasin — faqat klaviatura qolsin */
+math-field::part(menu-toggle) {
+  display: none;
 }
 
 /* ========== Ball taqsimoti diagrammasi ========== */
