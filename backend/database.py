@@ -140,6 +140,10 @@ class Test(Base):
     # "closed" — o'qituvchi yakunlagan, natijalar olingan
     status: Mapped[str] = mapped_column(String(10), default="active")
 
+    # Natijalar o'qituvchiga yuborilgan vaqt (bo'sh bo'lsa — hali yuborilmagan).
+    # Test vaqti tugagach, hisobot o'zi bir marta yuboriladi.
+    results_sent_at: Mapped[datetime | None] = mapped_column(default=None)
+
     # Majburiy obuna: shu kanalga obuna bo'lmagan o'quvchi testni boshlay olmaydi.
     # "@kanal_nomi" ko'rinishida saqlanadi; bo'sh bo'lsa, tekshiruv yo'q.
     required_channel: Mapped[str | None] = mapped_column(String(100), default=None)

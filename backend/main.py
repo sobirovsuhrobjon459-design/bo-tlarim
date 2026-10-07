@@ -94,7 +94,11 @@ def _add_missing_columns() -> None:
     """
 
     new_columns = {
-        "tests": {"status": "VARCHAR(10) DEFAULT 'active'", "required_channel": "VARCHAR(100)"},
+        "tests": {
+            "status": "VARCHAR(10) DEFAULT 'active'",
+            "required_channel": "VARCHAR(100)",
+            "results_sent_at": "TIMESTAMP",
+        },
         "test_attempts": {"offline_name": "VARCHAR(200)"},
         "key_questions": {"label": "VARCHAR(20)"},
     }
@@ -123,9 +127,11 @@ async def lifespan(app: FastAPI):
     """Server ishga tushganda botni va kunlik zaxira nusxa vazifasini ishga tushiradi."""
     bot_task = asyncio.create_task(run_bot())
     backup_task = asyncio.create_task(_daily_backup_loop())
+    finish_task = asyncio.create_task(_finish_expired_tests_loop())
     yield
     bot_task.cancel()
     backup_task.cancel()
+    finish_task.cancel()
 
 
 app = FastAPI(title="Test Platformasi API", lifespan=lifespan)
@@ -183,6 +189,86 @@ def send_backup_to_admin(db: Session) -> bool:
     except Exception:
         logging.getLogger("backend").warning("Zaxira nusxa yuborilmadi", exc_info=True)
         return False
+
+
+NEWLINE = chr(10)
+
+
+def send_results_to_teacher(db: Session, test: Test) -> bool:
+    """
+    Test natijalarini PDF qilib o'qituvchining Telegram chatiga yuboradi.
+
+    Test vaqti tugaganda avtomatik, yoki o'qituvchi testni yakunlaganda chaqiriladi.
+    Bir marta yuborilgandan keyin qayta yuborilmaydi (results_sent_at).
+    """
+
+    if test.results_sent_at:
+        return False
+
+    teacher = test.teacher
+    results = best_attempts(db, test)
+    total_questions = _question_count(test)
+
+    try:
+        rows = [
+            f"{index}. {name} — {attempt.correct}/{total_questions} ({attempt.percent}%)"
+            for index, (attempt, name) in enumerate(results[:20], start=1)
+        ]
+        caption = NEWLINE.join(
+            [
+                f"📊 Test yakunlandi: {test.title}",
+                f"🔑 Kod: {test.code}",
+                f"👥 Qatnashchilar: {len(results)} ta",
+                "",
+                *rows,
+            ]
+        )
+        if len(results) > 20:
+            caption += NEWLINE + "...to'liq ro'yxat PDF faylda"
+
+        _send_pdf_to_telegram(
+            teacher.user.tg_id,
+            f"{test.code}_natijalar.pdf",
+            generate_test_report_pdf(db, test, teacher),
+            caption=caption,
+        )
+
+        test.results_sent_at = datetime.utcnow()
+        db.commit()
+        return True
+    except Exception:
+        logging.getLogger("backend").warning("Natijalar yuborilmadi (test %s)", test.code, exc_info=True)
+        return False
+
+
+async def _finish_expired_tests_loop() -> None:
+    """
+    Vaqti tugagan testlarni har 5 daqiqada tekshiradi: yakunlaydi va
+    natijalarni o'qituvchiga yuboradi. Shunda o'qituvchi hech narsa
+    bosmasdan, barcha o'quvchilar ishlab bo'lgach hisobotni oladi.
+    """
+
+    while True:
+        await asyncio.sleep(5 * 60)
+
+        session = SessionLocal()
+        try:
+            expired = session.scalars(
+                select(Test).where(
+                    Test.end_time.is_not(None),
+                    Test.end_time <= datetime.utcnow(),
+                    Test.results_sent_at.is_(None),
+                )
+            ).all()
+
+            for test in expired:
+                test.status = "closed"
+                send_results_to_teacher(session, test)
+            session.commit()
+        except Exception:
+            logging.getLogger("backend").warning("Vaqti tugagan testlarni tekshirib bo'lmadi", exc_info=True)
+        finally:
+            session.close()
 
 
 async def _daily_backup_loop() -> None:
@@ -1413,6 +1499,65 @@ def delete_student(
     return {"ok": True}
 
 
+@app.get("/api/teacher/tests/{test_id}/students/{attempt_id}/detail")
+def student_answer_detail(
+    test_id: int, attempt_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
+):
+    """
+    O'quvchining har bir savol bo'yicha javobi: nimani belgilagan, to'g'risi nima edi.
+
+    Bu yerda o'quvchi o'zi ishlagan urinish ham, o'qituvchi kiritgan javoblar
+    ham ko'rinadi — shuning uchun qaysi savolda xato qilgani aniq bo'ladi.
+    """
+
+    test = _get_own_test(db, teacher, test_id)
+
+    attempt = db.get(Attempt, attempt_id)
+    if not attempt or attempt.test_id != test.id:
+        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+
+    student = db.get(User, attempt.user_id) if attempt.user_id else None
+    answers = {
+        answer.question_ref: answer
+        for answer in db.scalars(select(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id)).all()
+    }
+
+    questions = []
+    if test.mode == "key":
+        for group in _group_key_questions(test):
+            for key_question in group:
+                answer = answers.get(key_question.number)
+                questions.append(
+                    {
+                        "label": _key_question_label(key_question),
+                        "chosen": (answer.chosen if answer else None) or "—",
+                        "correct": " / ".join(_split_accepted_variants(key_question.correct)),
+                        "is_correct": bool(answer and answer.is_correct),
+                    }
+                )
+    else:
+        for index, question in enumerate(test.questions, start=1):
+            answer = answers.get(question.id)
+            questions.append(
+                {
+                    "label": f"{index}-savol",
+                    "chosen": (answer.chosen if answer else None) or "—",
+                    "correct": question.correct,
+                    "is_correct": bool(answer and answer.is_correct),
+                }
+            )
+
+    return {
+        "name": student.full_name if student else (attempt.offline_name or "Noma'lum"),
+        "correct": attempt.correct,
+        "wrong": attempt.wrong,
+        "total": _question_count(test),
+        "percent": attempt.percent,
+        "seconds": attempt.seconds,
+        "questions": questions,
+    }
+
+
 @app.get("/api/teacher/tests/{test_id}/students/{attempt_id}/answers")
 def get_student_answers(
     test_id: int, attempt_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
@@ -1485,7 +1630,11 @@ def close_test(test_id: int, teacher: Teacher = Depends(get_current_teacher), db
 
     test.status = "closed"
     db.commit()
-    return {"ok": True}
+
+    # Natijalar hisoboti o'qituvchining Telegram chatiga ham yuboriladi
+    sent = send_results_to_teacher(db, test)
+
+    return {"ok": True, "report_sent": sent}
 
 
 @app.post("/api/teacher/tests/{test_id}/reopen")

@@ -91,10 +91,16 @@ function formatNumber(value) {
   return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 }
 
-function formatMinutesSeconds(totalSeconds) {
-  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
-  const seconds = String(totalSeconds % 60).padStart(2, "0");
-  return `${minutes}:${seconds}`;
+function formatDuration(totalSeconds) {
+  // Uzoq testlarda "147:42" tushunarsiz — "2 soat 27 min" deb yozamiz.
+  const total = Math.max(0, Math.round(totalSeconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+
+  if (hours) return `${hours} soat ${minutes} min`;
+  if (minutes) return `${minutes} min ${seconds} s`;
+  return `${seconds} s`;
 }
 
 function formatDateTime(isoString) {
@@ -773,7 +779,7 @@ function renderKeyQuizQuestion() {
 async function updateQuizTimer() {
   const timerEl = document.getElementById("quiz-timer");
   const secondsLeft = Math.max(0, Math.round((quizState.endsAt - Date.now()) / 1000));
-  if (timerEl) timerEl.textContent = "⏱️ " + formatMinutesSeconds(secondsLeft);
+  if (timerEl) timerEl.textContent = "⏱️ " + formatDuration(secondsLeft);
   if (secondsLeft <= 0 && !quizState.finished) {
     await finishQuiz();
   }
@@ -802,7 +808,7 @@ function renderQuizResult(result, code) {
       <div class="card-body">
         <p>✅ To'g'ri javoblar: <b>${result.correct}</b></p>
         <p>❌ Noto'g'ri javoblar: <b>${result.wrong}</b></p>
-        <p>⏱️ Sarflangan vaqt: <b>${formatMinutesSeconds(result.seconds)}</b></p>
+        <p>⏱️ Sarflangan vaqt: <b>${formatDuration(result.seconds)}</b></p>
       </div>
     </div>
     <button class="btn" id="view-rating-button">🏆 Reytingni ko'rish</button>
@@ -1754,11 +1760,11 @@ async function renderTestDetail(testId) {
       .map(
         (student) => `
           <div class="list-row" data-student-id="${student.id}">
-            <div>
+            <div ${student.has_answers ? `class="student-summary" data-detail="${student.id}"` : ""}>
               <b>${escapeHtml(student.name)}</b>
               <p class="subtitle" style="margin:2px 0 0">
                 ${student.has_answers
-            ? `✅ ${student.correct} to'g'ri • ${student.wrong} xato • ${student.percent}%`
+            ? `✅ ${student.correct}/${test.count} • ${student.percent}% — batafsil ›`
             : "⏳ Javoblar kiritilmagan"
           }
               </p>
@@ -1864,6 +1870,13 @@ async function renderTestDetail(testId) {
     })
   );
 
+  document.querySelectorAll("[data-detail]").forEach((element) => {
+    element.addEventListener(
+      "click",
+      guarded(() => renderStudentDetail(testId, Number(element.dataset.detail)))
+    );
+  });
+
   document.querySelectorAll("[data-edit-student]").forEach((button) => {
     button.addEventListener(
       "click",
@@ -1889,6 +1902,43 @@ async function renderTestDetail(testId) {
       row.style.display = row.textContent.toLowerCase().includes(query) ? "" : "none";
     });
   });
+}
+
+async function renderStudentDetail(testId, attemptId) {
+  const detail = await api(`/api/teacher/tests/${testId}/students/${attemptId}/detail`);
+
+  const wrongQuestions = detail.questions.filter((question) => !question.is_correct);
+
+  const rows = detail.questions
+    .map(
+      (question) => `
+        <div class="answer-row ${question.is_correct ? "" : "wrong"}">
+          <b>${escapeHtml(question.label)}</b>
+          <span>${question.is_correct ? "✅" : "❌"} ${escapeHtml(question.chosen)}</span>
+          ${question.is_correct ? "" : `<span class="right-answer">to'g'ri: ${escapeHtml(question.correct)}</span>`}
+        </div>`
+    )
+    .join("");
+
+  showPage(`
+    <button class="back-button" data-action="test">←</button>
+    <h2>${escapeHtml(detail.name)}</h2>
+    <div class="stats-grid">
+      <div class="stat-tile"><span class="stat-value">${detail.correct}/${detail.total}</span>Natija</div>
+      <div class="stat-tile"><span class="stat-value">${detail.percent}%</span>Foiz</div>
+      <div class="stat-tile"><span class="stat-value">${wrongQuestions.length}</span>Xato</div>
+      <div class="stat-tile"><span class="stat-value">${formatDuration(detail.seconds)}</span>Vaqt</div>
+    </div>
+    ${
+      wrongQuestions.length
+        ? `<p class="subtitle">Xato qilgan savollari: <b>${wrongQuestions.map((q) => escapeHtml(q.label)).join(", ")}</b></p>`
+        : `<p class="subtitle">Hamma savolga to'g'ri javob bergan 🎉</p>`
+    }
+    <h3>Barcha javoblar</h3>
+    ${rows}
+  `);
+
+  document.querySelector('[data-action="test"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
 }
 
 async function renderAddStudentsForm(testId, testTitle) {
@@ -2056,7 +2106,7 @@ async function renderTestResults(testId) {
       <div class="stat-tile"><span class="stat-value">${stats.max}%</span>Eng yuqori</div>
       <div class="stat-tile"><span class="stat-value">${stats.min}%</span>Eng past</div>
     </div>
-    <p>⏱️ O'rtacha vaqt: <b>${formatMinutesSeconds(stats.avg_seconds)}</b></p>
+    <p>⏱️ O'rtacha vaqt: <b>${formatDuration(stats.avg_seconds)}</b></p>
     <button class="btn" id="pdf-button">📄 PDF HISOBOT</button>
     <h3>Natijalar</h3>
     <input class="input" id="filter-input" placeholder="🔍 O'quvchini qidirish..." />
