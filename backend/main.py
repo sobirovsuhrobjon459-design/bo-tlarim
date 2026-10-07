@@ -329,11 +329,21 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes
 
 
 # Javoblar varaqasining o'lchamlari (punktlarda)
-SHEET_MARGIN = 56
-SHEET_ROW_HEIGHT = 24
-SHEET_BUBBLE_GAP = 26
-SHEET_ROWS_PER_COLUMN = 16
-SHEET_BOTTOM_LIMIT = 70
+SHEET_MARGIN = 40
+SHEET_BOTTOM_LIMIT = 56
+
+# Hamma savol iloji boricha BITTA varaqqa sig'ishi kerak. Shuning uchun bir
+# nechta joylashuv tayyor turadi: savollar ko'paygan sari ustunlar ko'payadi va
+# qatorlar ixchamlashadi. Birinchi mos keladigani tanlanadi.
+# (ustunlar soni, qator balandligi, doiracha radiusi, doirachalar orasi, shrift)
+SHEET_LAYOUTS = [
+    (2, 24, 6.5, 26, 9),
+    (2, 20, 6.0, 24, 9),
+    (3, 20, 5.5, 20, 8),
+    (3, 17, 5.0, 18, 8),
+    (4, 16, 4.5, 15, 7),
+    (4, 13, 4.0, 14, 7),
+]
 
 
 def _answer_sheet_items(test: Test) -> list[tuple[str, str, int, str]]:
@@ -378,6 +388,53 @@ def _group_label(band) -> str:
     return span
 
 
+# PDF'da ishlatiladigan standart shrift (Helvetica) matematik belgilarni
+# chiza olmaydi, shuning uchun LaTeX javobni oddiy harflar bilan yozamiz:
+# "2\sqrt{3}" -> "2sqrt(3)", "\frac{\pi}{5}" -> "(pi)/(5)"
+_PLAIN_REPLACEMENTS = [
+    ("\\left", ""),
+    ("\\right", ""),
+    ("\\sqrt", "sqrt"),
+    ("\\pi", "pi"),
+    ("\\times", "*"),
+    ("\\cdot", "*"),
+    ("\\div", ":"),
+    ("\\infty", "inf"),
+    ("\\pm", "+-"),
+    ("√", "sqrt"),
+    ("π", "pi"),
+    ("×", "*"),
+    ("÷", ":"),
+    ("²", "^2"),
+    ("³", "^3"),
+    ("∞", "inf"),
+    ("±", "+-"),
+]
+
+
+def _latex_to_plain(value: str) -> str:
+    """LaTeX javobni PDF'ga yozish uchun oddiy matnga aylantiradi."""
+
+    text = (value or "").strip()
+
+    for _ in range(5):
+        new_text = _FRACTION_PATTERN.sub(r"(\1)/(\2)", text)
+        if new_text == text:
+            break
+        text = new_text
+
+    # Daraja va indeks: "x^{2}" -> "x^2"
+    text = re.sub(r"([\^_])\{([^{}]*)\}", r"\1\2", text)
+
+    for source, target in _PLAIN_REPLACEMENTS:
+        text = text.replace(source, target)
+
+    text = text.replace("{", "(").replace("}", ")").replace("\\", "")
+
+    # Shrift chiza olmaydigan belgilar qolsa, ular "?" bo'lib ko'rinmasligi uchun olib tashlanadi
+    return "".join(char for char in text if ord(char) < 256)
+
+
 def _draw_corner_marks(sheet, width: float, height: float) -> None:
     """Burchaklardagi qora nuqtalar — varaqni rasmga olganda chetlarini aniqlash uchun."""
     for x, y in [(32, height - 32), (width - 32, height - 32), (32, 32), (width - 32, 32)]:
@@ -385,70 +442,132 @@ def _draw_corner_marks(sheet, width: float, height: float) -> None:
 
 
 def _draw_sheet_header(sheet, test: Test, width: float, height: float, with_answers: bool) -> float:
-    """Varaq sarlavhasini chizadi va savollar boshlanadigan y koordinatasini qaytaradi."""
+    """
+    Varaq sarlavhasini chizadi va savollar boshlanadigan y koordinatasini qaytaradi.
+
+    Sarlavha ixcham: savollarga ko'proq joy qolishi uchun (hammasi bitta
+    varaqqa sig'ishi kerak) test ma'lumotlari bitta qatorga joylashtiriladi.
+    """
 
     _draw_corner_marks(sheet, width, height)
 
-    sheet.setFont("Helvetica-Bold", 17)
-    sheet.drawCentredString(width / 2, height - 78, test.title)
+    sheet.setFont("Helvetica-Bold", 15)
+    sheet.drawCentredString(width / 2, height - 56, test.title)
 
-    sheet.setFont("Helvetica", 10)
-    line_y = height - 98
-    for line in (f"Test kodi: {test.code}", f"Fan: {test.subject}", f"Sana: {datetime.now():%d/%m/%Y}"):
-        sheet.drawCentredString(width / 2, line_y, line)
-        line_y -= 14
+    sheet.setFont("Helvetica", 9)
+    sheet.drawCentredString(
+        width / 2,
+        height - 70,
+        f"Test kodi: {test.code}   |   Fan: {test.subject}   |   Sana: {datetime.now():%d/%m/%Y}",
+    )
 
     if with_answers:
         # Kalit varaqasi faqat o'qituvchi uchun — ism yozadigan katak kerak emas.
-        line_y -= 18
-        sheet.setFont("Helvetica-Bold", 13)
-        sheet.drawCentredString(width / 2, line_y, "JAVOBLAR KALITI")
-        return line_y - 28
+        sheet.setFont("Helvetica-Bold", 11)
+        sheet.drawCentredString(width / 2, height - 88, "JAVOBLAR KALITI")
+        return height - 104
 
-    line_y -= 16
-    sheet.setFont("Helvetica-Bold", 11)
-    sheet.drawString(SHEET_MARGIN, line_y, "O'quvchi ma'lumotlari:")
-    line_y -= 26
-    sheet.setFont("Helvetica", 10)
-    sheet.drawString(68, line_y + 7, "Ism va familiya:")
-    sheet.rect(168, line_y, width - 224, 24)
+    # O'quvchi o'z ismini yozadigan maydon
+    name_y = height - 100
+    sheet.setFont("Helvetica", 9)
+    sheet.drawString(SHEET_MARGIN, name_y + 6, "Ism va familiya:")
+    sheet.rect(SHEET_MARGIN + 80, name_y, width - SHEET_MARGIN * 2 - 80, 20)
 
-    line_y -= 34
-    sheet.setFont("Helvetica-Bold", 13)
-    sheet.drawCentredString(width / 2, line_y, "JAVOBLAR")
-    return line_y - 28
+    return name_y - 16
 
 
-def _draw_question_column(sheet, column_items, column_x: float, top_y: float, with_answers: bool) -> None:
-    """Bitta ustundagi savollarni (harflar sarlavhasi bilan) chizadi."""
+def _pack_sheet_cells(cells: list[dict], row_height: float, available_height: float) -> list[list[dict]]:
+    """
+    Kataklarni ustunlarga joylaydi: ustun to'lgach, keyingisiga o'tiladi.
 
-    bubble_x = column_x + 52
-    kind, option_count = column_items[0][1], column_items[0][2]
+    Har bir guruh sarlavhasi (masalan "36a-45b savollar (yozma)") ham bitta
+    katak hisoblanadi, lekin u savol qatoridan balandroq joy oladi.
+    """
 
-    if kind != "text":
-        sheet.setFont("Helvetica-Bold", 9)
-        for option_index in range(option_count):
-            sheet.drawCentredString(bubble_x + option_index * SHEET_BUBBLE_GAP, top_y - 18, chr(65 + option_index))
+    header_height = row_height + 16
+    columns: list[list[dict]] = []
+    current: list[dict] = []
+    used = 0.0
 
-    row_y = top_y - 36
-    for label, question_type, options, correct in column_items:
-        sheet.setFont("Helvetica", 9)
-        sheet.drawRightString(bubble_x - 16, row_y - 3, f"{label}.")
+    for cell in cells:
+        cell_height = header_height if cell["kind"] == "header" else row_height
+
+        if current and used + cell_height > available_height:
+            columns.append(current)
+            current, used = [], 0.0
+
+        current.append(cell)
+        used += cell_height
+
+    if current:
+        columns.append(current)
+    return columns
+
+
+def _choose_sheet_layout(cells: list[dict], available_height: float):
+    """Hamma savol bitta sahifaga sig'adigan eng keng (eng o'qilishi oson) joylashuvni tanlaydi."""
+
+    for layout in SHEET_LAYOUTS:
+        columns = _pack_sheet_cells(cells, layout[1], available_height)
+        if len(columns) <= layout[0]:
+            return layout, columns
+
+    # Hech biriga sig'masa — eng zichini olamiz, ortig'i keyingi sahifaga o'tadi
+    densest = SHEET_LAYOUTS[-1]
+    return densest, _pack_sheet_cells(cells, densest[1], available_height)
+
+
+def _draw_sheet_column(sheet, column_cells, column_x, column_width, top_y, layout, with_answers) -> None:
+    """Bitta ustundagi sarlavha va savol qatorlarini chizadi."""
+
+    _, row_height, bubble_radius, bubble_gap, font_size = layout
+    label_width = max(24.0, font_size * 3)
+    bubble_x = column_x + label_width + bubble_radius
+
+    y = top_y
+    for cell in column_cells:
+        if cell["kind"] == "header":
+            group = cell["group"]
+            sheet.setFont("Helvetica-Bold", font_size + 1)
+            sheet.drawString(column_x, y - row_height + 4, _group_label(group))
+
+            if group[0][1] != "text":
+                sheet.setFont("Helvetica-Bold", font_size - 1)
+                for option_index in range(group[0][2]):
+                    sheet.drawCentredString(bubble_x + option_index * bubble_gap, y - row_height - 10, chr(65 + option_index))
+
+            y -= row_height + 16
+            continue
+
+        label, question_type, options, correct = cell["item"]
+        center_y = y - row_height / 2
+
+        sheet.setFont("Helvetica", font_size)
+        sheet.drawRightString(column_x + label_width - 8, center_y - 3, f"{label}.")
 
         if question_type == "text":
-            # Yozma javob uchun doiracha emas, yoziladigan katak.
-            sheet.rect(bubble_x - 8, row_y - 8, SHEET_BUBBLE_GAP * 5, 16)
+            # Yozma javob uchun doiracha emas, yoziladigan katak
+            box_width = column_width - label_width - 12
+            sheet.rect(column_x + label_width, center_y - row_height / 2 + 2, box_width, row_height - 4)
+
             if with_answers:
-                sheet.setFont("Helvetica-Bold", 9)
-                sheet.drawString(bubble_x - 2, row_y - 3, correct.replace("|", " / ")[:40])
+                sheet.setFont("Helvetica-Bold", font_size - 1)
+                answer_text = " / ".join(_latex_to_plain(variant) for variant in _split_accepted_variants(correct))
+                sheet.drawString(column_x + label_width + 4, center_y - 3, answer_text[: int(box_width / 4)])
         else:
             correct_letters = set(correct.split(","))
             for option_index in range(options):
                 letter = chr(65 + option_index)
                 filled = with_answers and letter in correct_letters
-                sheet.circle(bubble_x + option_index * SHEET_BUBBLE_GAP, row_y, 6.5, stroke=1, fill=1 if filled else 0)
+                sheet.circle(
+                    bubble_x + option_index * bubble_gap,
+                    center_y,
+                    bubble_radius,
+                    stroke=1,
+                    fill=1 if filled else 0,
+                )
 
-        row_y -= SHEET_ROW_HEIGHT
+        y -= row_height
 
 
 def generate_answer_sheet_pdf(test: Test, with_answers: bool = False) -> bytes:
@@ -458,6 +577,8 @@ def generate_answer_sheet_pdf(test: Test, with_answers: bool = False) -> bytes:
     O'quvchi javoblarini shu varaqada belgilaydi, o'qituvchi esa ularni
     Mini App'dagi "O'quvchilar" bo'limiga kiritadi va bot avtomatik tekshiradi.
 
+    Hamma savol iloji boricha bitta varaqqa joylashtiriladi (qarang: SHEET_LAYOUTS).
+
     with_answers=True bo'lsa, to'g'ri javoblar bo'yalgan "kalit" varaqasi
     chiqadi — o'qituvchi qo'lda tekshirishi uchun.
     """
@@ -465,48 +586,42 @@ def generate_answer_sheet_pdf(test: Test, with_answers: bool = False) -> bytes:
     buffer = io.BytesIO()
     sheet = pdf_canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
-    column_width = (width - SHEET_MARGIN * 2) / 2
 
-    y = _draw_sheet_header(sheet, test, width, height, with_answers)
-
+    # Har bir guruh: sarlavha katagi + savol kataklari
+    cells: list[dict] = []
     for group in _group_similar_questions(_answer_sheet_items(test)):
-        start = 0
-        while start < len(group):
-            # Sahifada necha qator qolganini hisoblaymiz (sarlavha + harflar qatori ham joy oladi).
-            available_rows = int((y - 36 - SHEET_BOTTOM_LIMIT) // SHEET_ROW_HEIGHT)
-            remaining = len(group) - start
+        cells.append({"kind": "header", "group": group})
+        cells.extend({"kind": "row", "item": item} for item in group)
 
-            # Bo'lim sahifa oxirida siqilib qolmasin: bitta ustunga ham joy
-            # yetmasa, yangi sahifadan boshlaymiz.
-            if available_rows < min(remaining, SHEET_ROWS_PER_COLUMN):
-                sheet.showPage()
-                _draw_corner_marks(sheet, width, height)
-                y = height - 70
-                available_rows = int((y - 36 - SHEET_BOTTOM_LIMIT) // SHEET_ROW_HEIGHT)
+    top_y = _draw_sheet_header(sheet, test, width, height, with_answers)
+    available_height = top_y - SHEET_BOTTOM_LIMIT
 
-            rows_per_column = min(SHEET_ROWS_PER_COLUMN, available_rows)
-            # Bitta ustunga sig'sa, ikkiga bo'lib o'tirmaymiz.
-            band = group[start:] if remaining <= rows_per_column else group[start : start + rows_per_column * 2]
-            columns = [band[:rows_per_column]] + ([band[rows_per_column:]] if len(band) > rows_per_column else [])
+    layout, columns = _choose_sheet_layout(cells, available_height)
+    columns_per_page = layout[0]
+    column_width = (width - SHEET_MARGIN * 2) / columns_per_page
 
-            sheet.setFont("Helvetica-Bold", 10)
-            for column_index, column_items in enumerate(columns):
-                column_x = SHEET_MARGIN + column_index * column_width
-                # Yolg'iz ustun bo'lsa, sarlavha sahifa o'rtasida turadi.
-                label_x = width / 2 if len(columns) == 1 else column_x + column_width / 2
-                sheet.drawCentredString(label_x, y, _group_label(column_items))
+    for index, column_cells in enumerate(columns):
+        position = index % columns_per_page
 
-            for column_index, column_items in enumerate(columns):
-                _draw_question_column(
-                    sheet, column_items, SHEET_MARGIN + column_index * column_width, y, with_answers
-                )
+        if index and position == 0:
+            # Sig'magan ustunlar keyingi sahifaga o'tadi
+            sheet.showPage()
+            _draw_corner_marks(sheet, width, height)
+            top_y = height - 70
 
-            y -= 36 + max(len(column) for column in columns) * SHEET_ROW_HEIGHT + 10
-            start += len(band)
+        _draw_sheet_column(
+            sheet,
+            column_cells,
+            SHEET_MARGIN + position * column_width,
+            column_width,
+            top_y,
+            layout,
+            with_answers,
+        )
 
     if not with_answers:
         sheet.setFont("Helvetica", 8)
-        sheet.drawCentredString(width / 2, 50, "To'g'ri javob doirachasini to'liq bo'yang.")
+        sheet.drawCentredString(width / 2, 40, "To'g'ri javob doirachasini to'liq bo'yang.")
 
     sheet.save()
     return buffer.getvalue()
