@@ -24,6 +24,7 @@ import json
 import logging
 import random
 import re
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -253,7 +254,7 @@ def send_results_to_teacher(db: Session, test: Test) -> bool:
         return False
 
 
-def _finish_expired_attempts(db: Session) -> int:
+def _finish_expired_attempts(db: Session) -> list:
     """
     Vaqti tugab, yakunlanmay qolgan urinishlarni tekshirib qo'yadi.
 
@@ -263,7 +264,7 @@ def _finish_expired_attempts(db: Session) -> int:
     bo'yicha natija o'zi hisoblanadi.
     """
 
-    finished = 0
+    notices = []
     attempts = db.scalars(select(Attempt).where(Attempt.status == "in_progress")).all()
 
     for attempt in attempts:
@@ -273,10 +274,10 @@ def _finish_expired_attempts(db: Session) -> int:
         if (utcnow() - attempt.started_at).total_seconds() < test.duration * 60:
             continue
 
-        _grade_attempt_from_saved_answers(db, attempt, test)
-        finished += 1
+        total_questions = _grade_attempt_from_saved_answers(db, attempt, test)
+        notices.append(_result_notice(db, attempt, test, total_questions))
 
-    return finished
+    return notices
 
 
 async def _finish_expired_tests_loop() -> None:
@@ -304,8 +305,11 @@ def _finish_expired_tests_once() -> None:
 
     session = SessionLocal()
     try:
-        _finish_expired_attempts(session)
+        notices = _finish_expired_attempts(session)
         session.commit()
+        # Natija bazaga yozilgandan KEYIN xabar yuboriladi
+        for notice in notices:
+            _send_result_notice(notice)
 
         expired = session.scalars(
             select(Test).where(
@@ -1469,6 +1473,60 @@ def _finalize_attempt(db: Session, attempt: Attempt, test: Test, answers: dict[s
     return total_questions
 
 
+def _result_notice(db: Session, attempt: Attempt, test: Test, total_questions: int) -> tuple[int, str] | None:
+    """
+    O'quvchi testni yakunlaganda o'qituvchiga boradigan xabar: (chat_id, matn).
+
+    Natija o'quvchining o'ziga ko'rsatilmaydi (pullik va bepul testda ham) —
+    uni faqat o'qituvchi ko'radi: shu xabarda va Mini App'dagi natijalarda.
+    Xabar sessiya yopilmasidan oldin tayyorlanadi, yuborish esa keyinroq
+    (_send_result_notice) — o'quvchi Telegram javobini kutib qolmasin.
+    """
+
+    teacher_user = test.teacher.user if test.teacher else None
+    if not teacher_user:
+        return None
+
+    student = db.get(User, attempt.user_id) if attempt.user_id else None
+    name = (student.full_name if student else attempt.offline_name) or "Noma'lum o'quvchi"
+
+    text = (
+        "📝 Yangi natija\n\n"
+        f"👤 O'quvchi: {name}\n"
+        f"📚 Test: {test.title} (kod: {test.code})\n"
+        f"✅ To'g'ri javoblar: {attempt.correct} / {total_questions}\n"
+        f"📊 Natija: {attempt.percent}%"
+    )
+    return teacher_user.tg_id, text
+
+
+def _send_result_notice(notice: tuple[int, str] | None) -> None:
+    """Natija xabarini o'qituvchiga yuboradi. Yuborilmasa ham natija bazada saqlanib qoladi."""
+
+    if not notice or not BOT_TOKEN:
+        return
+
+    chat_id, text = notice
+    try:
+        httpx.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": text},
+            timeout=10,
+        )
+    except Exception:
+        logging.getLogger("backend").warning("Natija o'qituvchiga yuborilmadi", exc_info=True)
+
+
+def _send_result_notice_in_background(notice: tuple[int, str] | None) -> None:
+    """
+    So'rov ichidan chaqiriladi: xabar alohida ipda ketadi, o'quvchi esa
+    Telegram javobini (10 soniyagacha) kutmasdan darhol javob oladi.
+    """
+
+    if notice:
+        threading.Thread(target=_send_result_notice, args=(notice,), daemon=True).start()
+
+
 def _grade_attempt_from_saved_answers(db: Session, attempt: Attempt, test: Test) -> int:
     """Vaqti tugagan urinishni, o'quvchi belgilab qo'ygan javoblari bo'yicha yakunlaydi."""
 
@@ -1538,14 +1596,13 @@ def my_attempts(user: User = Depends(get_current_user), db: Session = Depends(ge
         if attempt.status == "in_progress":
             in_progress.append({"code": test.code, "title": test.title, "subject": test.subject})
         elif attempt.status == "done":
+            # Natija (ball, foiz) o'quvchiga ko'rsatilmaydi — faqat o'qituvchiga
             completed.append(
                 {
                     "code": test.code,
                     "title": test.title,
                     "subject": test.subject,
-                    "percent": attempt.percent,
-                    "correct": attempt.correct,
-                    "wrong": attempt.wrong,
+                    "finished_at": attempt.finished_at,
                 }
             )
     return {"in_progress": in_progress, "completed": completed}
@@ -2546,13 +2603,16 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
     # darhol tekshirib, natijasini qotiramiz — mehnati yo'qolmasligi uchun.
     if attempt and attempt.status == "in_progress":
         if (utcnow() - attempt.started_at).total_seconds() >= test.duration * 60:
-            _grade_attempt_from_saved_answers(db, attempt, test)
+            total_questions = _grade_attempt_from_saved_answers(db, attempt, test)
+            notice = _result_notice(db, attempt, test, total_questions)
             db.commit()
+            _send_result_notice_in_background(notice)
 
+    # Natija (foiz) o'quvchiga aytilmaydi — uni faqat o'qituvchi ko'radi
     if attempt and attempt.status == "done":
         raise HTTPException(
             status_code=409,
-            detail=f"Siz bu testni allaqachon ishlab bo'lgansiz — natijangiz: {attempt.percent}%",
+            detail="Siz bu testni allaqachon ishlab bo'lgansiz. Natijangiz o'qituvchingizga yuborilgan.",
         )
 
     if not attempt:
@@ -2643,7 +2703,13 @@ def save_attempt_progress(
 def finish_attempt(
     attempt_id: int, body: FinishIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    """O'quvchi javoblarini qabul qiladi, avtomatik tekshiradi va natijani qaytaradi."""
+    """
+    O'quvchi javoblarini qabul qiladi va avtomatik tekshiradi.
+
+    Natija o'quvchiga QAYTARILMAYDI (pullik va bepul testda ham) — u bot
+    orqali o'qituvchiga yuboriladi va o'qituvchining natijalar bo'limida
+    test o'chirilmaguncha saqlanib turadi.
+    """
 
     attempt = _get_own_attempt(db, user, attempt_id)
     if attempt.status != "in_progress":
@@ -2657,23 +2723,29 @@ def finish_attempt(
     # yetib kelmagan bo'lsa ham, avval belgilangan javoblar yo'qolmaydi.
     answers = {**_read_saved_answers(attempt), **body.answers}
     total_questions = _finalize_attempt(db, attempt, test, answers)
+    notice = _result_notice(db, attempt, test, total_questions)
     db.commit()
 
-    return {
-        "correct": attempt.correct,
-        "wrong": attempt.wrong,
-        "total": total_questions,
-        "percent": attempt.percent,
-        "seconds": attempt.seconds,
-        "name": user.full_name,
-    }
+    _send_result_notice_in_background(notice)
+
+    return {"ok": True, "name": user.full_name, "test_title": test.title}
 
 
 @app.get("/api/tests/{code}/rating")
 def test_rating(code: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Shu testning top-50 reytingi (eng yaxshi natijalar)."""
+    """
+    Shu testning top-50 reytingi (eng yaxshi natijalar).
+
+    Faqat testning o'qituvchisi (va admin) ko'ra oladi: natijalar o'quvchilarga
+    ko'rsatilmaydi — boshqalarning foizlari ham.
+    """
 
     test = _get_test_by_code(db, code)
+    is_owner = test.teacher is not None and test.teacher.user_id == user.id
+    is_admin = bool(ADMIN_ID) and user.tg_id == ADMIN_ID
+    if not (is_owner or is_admin):
+        raise HTTPException(status_code=403, detail="Natijalarni faqat o'qituvchi ko'radi")
+
     return [{"name": name, "percent": attempt.percent} for attempt, name in best_attempts(db, test)[:50]]
 
 

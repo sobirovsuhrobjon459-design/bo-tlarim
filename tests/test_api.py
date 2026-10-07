@@ -73,6 +73,26 @@ def register_teacher(tg_id: int = 555, first: str = "Ali", last: str = "Valiyev"
     return response.json()
 
 
+def finish_and_grade(attempt_id: int, json: dict | None = None, headers: dict | None = None) -> dict:
+    """
+    O'quvchi testni yakunlaydi. Natija o'quvchiga qaytarilmaydi (faqat
+    o'qituvchiga boradi), shuning uchun tekshirish uchun uni bazadan o'qiymiz.
+    """
+    response = client.post(f"/api/attempts/{attempt_id}/finish", json=json, headers=headers)
+    assert response.status_code == 200, response.text
+    session = SessionLocal()
+    try:
+        attempt = session.get(Attempt, attempt_id)
+        return {
+            "correct": attempt.correct,
+            "wrong": attempt.wrong,
+            "total": attempt.correct + attempt.wrong,
+            "percent": attempt.percent,
+        }
+    finally:
+        session.close()
+
+
 def create_test(tg_id: int = 555, **overrides) -> dict:
     body = {
         "title": "Sinov test",
@@ -308,8 +328,8 @@ def test_javoblar_togri_tekshiriladi():
     created = create_test()
 
     started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
-    result = client.post(
-        f"/api/attempts/{started['attempt_id']}/finish",
+    result = finish_and_grade(
+        started['attempt_id'],
         json={
             "answers": {
                 "1": "B",        # to'g'ri
@@ -319,7 +339,7 @@ def test_javoblar_togri_tekshiriladi():
             }
         },
         headers=as_user(901),
-    ).json()
+    )
 
     assert result["total"] == 4, result
     assert result["correct"] == 3, result
@@ -338,11 +358,11 @@ def test_yozma_javobning_turli_yozilishlari():
         started = client.post(
             f"/api/tests/{created['code']}/start", json={}, headers=as_user(1000 + index)
         ).json()
-        result = client.post(
-            f"/api/attempts/{started['attempt_id']}/finish",
+        result = finish_and_grade(
+            started['attempt_id'],
             json={"answers": {"1": written}},
             headers=as_user(1000 + index),
-        ).json()
+        )
         assert result["correct"] == 1, f"{written!r} to'g'ri deb hisoblanmadi: {result}"
 
 
@@ -366,8 +386,8 @@ def test_oddiy_klaviaturada_yozilgan_javob_eski_latex_kalitga_mos_keladi():
     )
 
     started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
-    result = client.post(
-        f"/api/attempts/{started['attempt_id']}/finish",
+    result = finish_and_grade(
+        started['attempt_id'],
         json={
             "answers": {
                 "1": "2sqrt(3)",
@@ -379,7 +399,7 @@ def test_oddiy_klaviaturada_yozilgan_javob_eski_latex_kalitga_mos_keladi():
             }
         },
         headers=as_user(901),
-    ).json()
+    )
 
     assert result["correct"] == 6, result
 
@@ -404,8 +424,8 @@ def test_mathlive_klaviaturasi_yozuvlari_oddiy_kalitga_mos_keladi():
     )
 
     started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(902)).json()
-    result = client.post(
-        f"/api/attempts/{started['attempt_id']}/finish",
+    result = finish_and_grade(
+        started['attempt_id'],
         json={
             "answers": {
                 "1": r"\frac{\sqrt{3}}{2}",
@@ -417,7 +437,7 @@ def test_mathlive_klaviaturasi_yozuvlari_oddiy_kalitga_mos_keladi():
             }
         },
         headers=as_user(902),
-    ).json()
+    )
 
     assert result["correct"] == 6, result
 
@@ -435,8 +455,8 @@ def test_oddiy_yozuvda_manosi_farqli_javob_xato_hisoblanadi():
     )
 
     started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
-    result = client.post(
-        f"/api/attempts/{started['attempt_id']}/finish",
+    result = finish_and_grade(
+        started['attempt_id'],
         json={
             "answers": {
                 "1": "23",         # 2×3 emas
@@ -445,7 +465,7 @@ def test_oddiy_yozuvda_manosi_farqli_javob_xato_hisoblanadi():
             }
         },
         headers=as_user(901),
-    ).json()
+    )
 
     assert result["correct"] == 0, result
 
@@ -460,11 +480,11 @@ def test_yangi_kalit_oddiy_yozuvda_ham_ishlaydi():
 
     for tg_id, written in ((901, "0.5"), (902, "1/2"), (903, "(1)/(2)")):
         started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(tg_id)).json()
-        result = client.post(
-            f"/api/attempts/{started['attempt_id']}/finish",
+        result = finish_and_grade(
+            started['attempt_id'],
             json={"answers": {"1": written}},
             headers=as_user(tg_id),
-        ).json()
+        )
         assert result["correct"] == 1, f"{written!r} qabul qilinmadi"
 
 
@@ -488,11 +508,11 @@ def test_yozma_savol_ab_qismlari_bitta_savol():
     assert len(started["questions"]) == 2
 
     # 2a to'g'ri, 2b noto'g'ri -> 2-savol to'g'ri hisoblanmaydi
-    result = client.post(
-        f"/api/attempts/{started['attempt_id']}/finish",
+    result = finish_and_grade(
+        started['attempt_id'],
         json={"answers": {"1": "A", "2": "5", "3": "9"}},
         headers=as_user(901),
-    ).json()
+    )
     assert result["total"] == 2 and result["correct"] == 1, result
 
 
@@ -512,11 +532,11 @@ def test_yopiq_va_yozma_sanoq_jamiga_teng():
     )
 
     started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
-    result = client.post(
-        f"/api/attempts/{started['attempt_id']}/finish",
+    result = finish_and_grade(
+        started['attempt_id'],
         json={"answers": {"1": "B", "2": "E", "3": "c,a", "4": "2 ildiz 3", "5": "(pi)/(5)"}},
         headers=as_user(901),
-    ).json()
+    )
 
     assert result["total"] == 4 and result["correct"] == 4, result
 
@@ -543,11 +563,11 @@ def test_yozma_savolning_bir_qismi_xato_bolsa_hisoblanmaydi():
     )
 
     started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
-    result = client.post(
-        f"/api/attempts/{started['attempt_id']}/finish",
+    result = finish_and_grade(
+        started['attempt_id'],
         json={"answers": {"1": "5", "2": "9"}},
         headers=as_user(901),
-    ).json()
+    )
 
     assert result["total"] == 1 and result["correct"] == 0, result
 
@@ -556,6 +576,148 @@ def test_yozma_savolning_bir_qismi_xato_bolsa_hisoblanmaydi():
 
 
 # ========== 4) Bitta urinish qoidasi ==========
+
+
+def _capture_result_notices() -> tuple[list, callable]:
+    """O'qituvchiga ketadigan natija xabarlarini Telegram o'rniga ro'yxatga yig'adi."""
+    sent: list = []
+    original = main._send_result_notice_in_background
+    main._send_result_notice_in_background = lambda notice: sent.append(notice)
+    return sent, lambda: setattr(main, "_send_result_notice_in_background", original)
+
+
+def test_natija_oquvchiga_korsatilmaydi_oqituvchiga_boradi():
+    """
+    Bepul va pullik testda ham: o'quvchi natijasini ko'rmaydi (yakunlashda,
+    tarixida, qayta kirganda, reytingda), o'qituvchiga esa ism-familiya va
+    natija bot orqali boradi.
+    """
+    reset_database()
+    register_teacher()
+    client.post("/api/me/name", json={"first_name": "Vali", "last_name": "Karimov"}, headers=as_user(901))
+    created = create_test()
+
+    sent, restore = _capture_result_notices()
+    try:
+        started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
+        response = client.post(
+            f"/api/attempts/{started['attempt_id']}/finish", json={"answers": {"1": "B"}}, headers=as_user(901)
+        )
+    finally:
+        restore()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    for hidden in ("correct", "wrong", "percent", "total", "seconds"):
+        assert hidden not in body, f"o'quvchiga natija ko'rinib qoldi: {body}"
+
+    # O'qituvchiga bitta xabar: uning chatiga, ism-familiya va natija bilan
+    assert len(sent) == 1, sent
+    chat_id, text = sent[0]
+    assert chat_id == 555, chat_id
+    assert "Vali Karimov" in text and created["code"] in text and "%" in text, text
+
+    # Testlar tarixida ham natija yo'q
+    history = client.get("/api/me/attempts", headers=as_user(901)).json()["completed"]
+    assert history and "percent" not in history[0] and "correct" not in history[0], history
+
+    # Qayta kirganda foiz aytilmaydi
+    again = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901))
+    assert again.status_code == 409 and "%" not in again.json()["detail"], again.text
+
+    # Reytingni o'quvchi ko'ra olmaydi, o'qituvchi ko'radi
+    assert client.get(f"/api/tests/{created['code']}/rating", headers=as_user(901)).status_code == 403
+    rating = client.get(f"/api/tests/{created['code']}/rating", headers=as_user(555))
+    assert rating.status_code == 200 and len(rating.json()) == 1, rating.text
+
+
+def test_pullik_testda_ham_natija_oquvchiga_korsatilmaydi():
+    reset_database()
+    register_teacher()
+    created = create_test(price=5000)
+
+    # To'lovni bazaga to'g'ridan-to'g'ri yozamiz (Payme oqimi alohida testlarda)
+    session = SessionLocal()
+    try:
+        from backend.database import Payment, User
+
+        user = session.scalar(main.select(User).where(User.tg_id == 901))
+        if not user:
+            client.get("/api/me", headers=as_user(901))
+            user = session.scalar(main.select(User).where(User.tg_id == 901))
+        test = session.scalar(main.select(main.Test).where(main.Test.code == created["code"]))
+        session.add(Payment(user_id=user.id, test_id=test.id, amount=5000, status="paid"))
+        session.commit()
+    finally:
+        session.close()
+
+    sent, restore = _capture_result_notices()
+    try:
+        started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901))
+        assert started.status_code == 200, started.text
+        body = client.post(
+            f"/api/attempts/{started.json()['attempt_id']}/finish", json={"answers": {"1": "B"}}, headers=as_user(901)
+        ).json()
+    finally:
+        restore()
+
+    assert "percent" not in body and "correct" not in body, body
+    assert len(sent) == 1 and sent[0][0] == 555, sent
+
+
+def test_vaqti_tugagan_urinish_natijasi_ham_oqituvchiga_boradi():
+    """O'quvchi "Yakunlash"ni bosmasa ham, vaqti tugagach natija o'qituvchiga boradi."""
+    reset_database()
+    register_teacher()
+    created = create_test()
+    started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
+
+    session = SessionLocal()
+    try:
+        attempt = session.get(Attempt, started["attempt_id"])
+        attempt.started_at = utcnow() - timedelta(hours=5)
+        session.commit()
+
+        notices = main._finish_expired_attempts(session)
+        session.commit()
+    finally:
+        session.close()
+
+    assert len(notices) == 1 and notices[0][0] == 555, notices
+
+
+def test_yopilgan_test_natijalari_ochirilmaguncha_saqlanadi():
+    """Test yakunlangach ham qatnashchilar va javoblar o'qituvchi o'chirmaguncha turadi."""
+    reset_database()
+    register_teacher()
+    created = create_test()
+
+    sent, restore = _capture_result_notices()
+    try:
+        for tg_id in (901, 902):
+            started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(tg_id)).json()
+            client.post(
+                f"/api/attempts/{started['attempt_id']}/finish", json={"answers": {"1": "B"}}, headers=as_user(tg_id)
+            )
+    finally:
+        restore()
+
+    closed = client.post(f"/api/teacher/tests/{created['id']}/close", headers=as_user(555))
+    assert closed.status_code == 200, closed.text
+
+    # Fon vazifasi ham hech narsani o'chirmasligi kerak
+    main._finish_expired_tests_once()
+
+    results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
+    assert len(results["rows"]) == 2, results
+    detail = client.get(
+        f"/api/teacher/tests/{created['id']}/students/{results['rows'][0]['attempt_id']}/detail", headers=as_user(555)
+    )
+    assert detail.status_code == 200 and detail.json()["questions"], detail.text
+
+    # O'qituvchi o'chirgandagina yo'qoladi
+    assert client.delete(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).status_code == 200
+    assert client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).status_code == 404
 
 
 def test_testni_qayta_ishlab_bolmaydi():
@@ -648,11 +810,11 @@ def test_yakunlashda_saqlangan_javoblar_hisobga_olinadi():
     )
 
     # Yakunlashda faqat oxirgi savolning javobi yuborildi
-    result = client.post(
-        f"/api/attempts/{started['attempt_id']}/finish",
+    result = finish_and_grade(
+        started['attempt_id'],
         json={"answers": {"4": "2 ildiz 3"}},
         headers=as_user(901),
-    ).json()
+    )
 
     # 1, 2 (saqlangan) va 4 (yuborilgan) — uchtasi to'g'ri
     assert result["correct"] == 3, result

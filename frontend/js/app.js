@@ -1011,7 +1011,7 @@ async function renderStudentHome() {
         (item) => `
           <div class="card row-between" style="cursor:default">
             <span>${escapeHtml(item.title)}</span>
-            <b>${item.percent}%</b>
+            <span class="badge badge-green">✅ Topshirildi</span>
           </div>`
       )
       .join("") ||
@@ -1135,7 +1135,6 @@ function renderTestFound(test) {
         }
         ${blockedMessage ? `<p style="color:var(--color-primary);font-weight:600">${blockedMessage}</p>` : ""}
         ${actionButton}
-        <button class="btn btn-ghost" id="rating-button">🏆 Reyting</button>
       </div>
     </div>
   `;
@@ -1191,7 +1190,6 @@ function renderTestFound(test) {
   document.getElementById("subscribe-button")?.addEventListener("click", () => {
     openExternalLink(`https://t.me/${test.required_channel.replace("@", "")}`);
   });
-  document.getElementById("rating-button").addEventListener("click", guarded(() => renderRating(test.code)));
 }
 
 function renderSubscriptionRequired(test, message, isMisconfigured) {
@@ -1578,7 +1576,7 @@ async function finishQuiz() {
     });
 
     clearLocalAnswers(quizState.attemptId);
-    renderQuizResult(result, quizState.code);
+    renderQuizResult(result);
   } catch (error) {
     // Yakunlash o'tmasa (internet uzilgan bo'lsa), o'quvchi qaytib urinishi
     // kerak — shuning uchun "yakunlandi" belgisini orqaga qaytaramiz.
@@ -1599,51 +1597,21 @@ document.addEventListener("visibilitychange", () => {
 
 window.addEventListener("pagehide", () => saveAnswersNow({ keepalive: true }));
 
-function renderQuizResult(result, code) {
+function renderQuizResult(result) {
+  // Natija (ball, foiz) o'quvchiga ko'rsatilmaydi — u o'qituvchiga yuboriladi
   showPage(`
-    <div class="result-number pop">🎉</div>
+    <div class="result-number pop">✅</div>
     <h2 style="text-align:center">TEST YAKUNLANDI!</h2>
-    <div class="result-number" id="result-percent">0%</div>
-    <h2 style="text-align:center">${result.total} tadan ${result.correct} tasini yechdingiz</h2>
     <div class="card" style="cursor:default">
       <div class="card-body">
-        <p>✅ To'g'ri javoblar: <b>${result.correct}</b></p>
-        <p>❌ Noto'g'ri javoblar: <b>${result.wrong}</b></p>
-        <p>⏱️ Sarflangan vaqt: <b>${formatDuration(result.seconds)}</b></p>
+        <p style="margin:0">Javoblaringiz qabul qilindi va o'qituvchingizga yuborildi.</p>
+        <p class="subtitle" style="margin:8px 0 0">Natijani o'qituvchingizdan bilib olasiz.</p>
       </div>
     </div>
-    <button class="btn" id="view-rating-button">🏆 Reytingni ko'rish</button>
-    <button class="btn btn-ghost" id="home-button">🏠 Bosh sahifa</button>
+    <button class="btn" id="home-button">🏠 Bosh sahifa</button>
   `);
 
-  document.getElementById("view-rating-button").addEventListener("click", guarded(() => renderRating(code)));
   document.getElementById("home-button").addEventListener("click", loadHome);
-
-  animateCountUp(document.getElementById("result-percent"), result.percent);
-}
-
-async function renderRating(code) {
-  const rating = await api(`/api/tests/${code}/rating`);
-  const medals = ["🥇", "🥈", "🥉"];
-
-  const rows =
-    rating
-      .map(
-        (row, index) => `
-          <div class="card row-between" style="cursor:default">
-            <span>${medals[index] || index + 1 + "."} ${escapeHtml(row.name)}</span>
-            <b>${row.percent}%</b>
-          </div>`
-      )
-      .join("") || "<p>Hali natijalar yo'q</p>";
-
-  showPage(`
-    <button class="back-button" data-action="student">←</button>
-    <h2>🏆 REYTING</h2>
-    ${rows}
-  `);
-
-  document.querySelector('[data-action="student"]').addEventListener("click", guarded(renderStudentHome));
 }
 
 /* ---------- 4) O'qituvchi oqimi ---------- */
@@ -2825,7 +2793,6 @@ async function renderStudentDetail(testId, attemptId) {
           : ""
       }
       <div class="stat-tile"><span class="stat-value">${detail.percent}%</span>Foiz</div>
-      <div class="stat-tile"><span class="stat-value">${formatDuration(detail.seconds)}</span>Vaqt</div>
     </div>
     <h3>Barcha javoblar</h3>
     ${rows}
