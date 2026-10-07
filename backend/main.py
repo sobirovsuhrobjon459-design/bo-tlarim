@@ -1658,8 +1658,10 @@ def test_results(test_id: int, teacher: Teacher = Depends(get_current_teacher), 
         "price": test.price,
         "mode": test.mode,
         "enrollment_type": test.enrollment_type,
+        "total_questions": _question_count(test),
         "rows": [
             {
+                "attempt_id": attempt.id,
                 "name": name,
                 "correct": attempt.correct,
                 "wrong": attempt.wrong,

@@ -41,6 +41,9 @@ let quizTimerId = null;
 // O'qituvchi dashboard'idagi testlar ro'yxati qaysi bo'limda turibdi: "active" | "closed"
 let teacherTestsTab = "active";
 
+// Hozir qaysi bo'limda turibmiz: "teacher" yoki "student"
+let currentRole = "teacher";
+
 /* ---------- 1) Yordamchi funksiyalar ---------- */
 
 async function api(path, { method = "GET", body } = {}) {
@@ -245,6 +248,64 @@ function copyCodeChip(code) {
   return `<span class="copy-code" data-copy="${code}"><b>${code}</b>${COPY_ICON}</span>`;
 }
 
+// O'qituvchi bo'limining pastki menyusi: Testlar | Yaratish | Natijalar
+const TEACHER_TABS = [
+  { id: "tests", label: "Testlar", icon: "☰" },
+  { id: "create", label: "Yaratish", icon: "＋" },
+  { id: "results", label: "Natijalar", icon: "▥" },
+];
+
+function bottomNav(activeTab) {
+  return `
+    <div class="bottom-nav">
+      ${TEACHER_TABS.map(
+        (tab) => `
+        <button class="nav-item ${tab.id === activeTab ? "active" : ""}" type="button" data-nav="${tab.id}">
+          <span class="nav-icon">${tab.icon}</span>
+          <span>${tab.label}</span>
+        </button>`
+      ).join("")}
+    </div>`;
+}
+
+function pageHeader(title, { showRole = true } = {}) {
+  return `
+    <div class="page-header">
+      <h2 style="margin:0">${escapeHtml(title)}</h2>
+      ${showRole ? `<button class="role-button" type="button" id="role-switch">⇄ Rol</button>` : ""}
+    </div>`;
+}
+
+function wireTeacherChrome() {
+  document.getElementById("role-switch")?.addEventListener("click", guarded(switchRole));
+
+  document.querySelectorAll("[data-nav]").forEach((button) => {
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        const tab = button.dataset.nav;
+        if (tab === "tests") await renderTeacherDashboard();
+        else if (tab === "create") renderNewTestForm("rash");
+        else await renderResultsTab();
+      })
+    );
+  });
+}
+
+async function switchRole() {
+  // "Rol" tugmasi bo'limlar orasida aylantiradi:
+  // o'qituvchi -> o'quvchi -> (admin bo'lsa) admin -> o'qituvchi
+  const roles = ["teacher", "student"];
+  if (isAdmin) roles.push("admin");
+
+  const next = roles[(roles.indexOf(currentRole) + 1) % roles.length];
+  currentRole = next;
+
+  if (next === "teacher") await enterTeacherArea();
+  else if (next === "student") await renderStudentHome();
+  else await renderAdminDashboard();
+}
+
 function testBadges(test) {
   const enrollment =
     test.enrollment_type === "closed"
@@ -384,8 +445,7 @@ async function renderAdminDashboard() {
       .join("") || "<p>Kutilayotgan so'rovlar yo'q</p>";
 
   showPage(`
-    <button class="back-button" data-action="home">←</button>
-    <h2>👑 Admin</h2>
+    ${pageHeader("👑 Admin")}
     <div class="stats-grid">
       <div class="stat-tile">👥<span class="stat-value">${stats.users}</span>Foydalanuvchilar</div>
       <div class="stat-tile">🧑‍🏫<span class="stat-value">${stats.teachers}</span>O'qituvchilar</div>
@@ -414,7 +474,7 @@ async function renderAdminDashboard() {
     ${topRows}
   `);
 
-  document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
+  document.getElementById("role-switch")?.addEventListener("click", guarded(switchRole));
 
   document.getElementById("backup-button").addEventListener(
     "click",
@@ -481,7 +541,7 @@ async function renderStudentHome() {
     `<div class="card" style="cursor:default"><div class="card-body"><p>Siz hali birorta ham testni tugatmagansiz.</p></div></div>`;
 
   showPage(`
-    <button class="back-button" data-action="home">←</button>
+    ${pageHeader("Testlar")}
     <div class="card" style="cursor:default">
       <div class="card-body" style="width:100%">
         <div class="row-between">
@@ -498,7 +558,7 @@ async function renderStudentHome() {
     ${completedRows}
   `);
 
-  document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
+  document.getElementById("role-switch")?.addEventListener("click", guarded(switchRole));
   document.getElementById("find-test-button").addEventListener("click", renderTestCodeSearch);
   document.getElementById("edit-name-button").addEventListener(
     "click",
@@ -929,7 +989,7 @@ async function renderTeacherDashboard() {
     `<p class="subtitle">${teacherTestsTab === "closed" ? "Yopilgan testlar yo'q" : "Hali testlar yo'q"}</p>`;
 
   showPage(`
-    <button class="back-button" data-action="home">←</button>
+    ${pageHeader("Testlar")}
     <div class="card" style="cursor:default">
       <div class="card-body" style="width:100%">
         <div class="row-between">
@@ -939,7 +999,6 @@ async function renderTeacherDashboard() {
         <p>Telegram ID: <b>${me.tg_id}</b></p>
       </div>
     </div>
-    <h2>Dashboard</h2>
     <div class="stats-grid">
       <div class="stat-tile">📚<span class="stat-value">${stats.tests}</span>Testlar</div>
       <div class="stat-tile">👥<span class="stat-value">${stats.students}</span>O'quvchilar</div>
@@ -960,19 +1019,16 @@ async function renderTeacherDashboard() {
         <button class="btn btn-ghost" id="buy-credit-button">🛒 Kredit sotib olish</button>
       </div>
     </div>
-    <div class="row-between" style="margin:22px 0 12px">
-      <h2 style="margin:0">Testlar</h2>
-      <button class="btn" id="new-test-button" style="width:auto;padding:10px 16px">➕ Test qo'shish</button>
-    </div>
+    <button class="btn" id="new-test-button" style="margin-top:18px">➕ Yangi test yaratish</button>
     <div class="tabs">
       <button class="tab ${teacherTestsTab === "active" ? "active" : ""}" data-tab="active">Jarayondagi testlar</button>
       <button class="tab ${teacherTestsTab === "closed" ? "active" : ""}" data-tab="closed">Yopilgan testlar</button>
     </div>
     ${testCards}
-    <p class="status">✅</p>
+    ${bottomNav("tests")}
   `);
 
-  document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
+  wireTeacherChrome();
   document.getElementById("edit-name-button").addEventListener(
     "click",
     guarded(() => renderEditName(me, renderTeacherDashboard))
@@ -1230,8 +1286,7 @@ function renderNewTestForm(testType, draft = {}) {
   const structure = type === "rash" ? subjectStructure(draft.subject || SUBJECTS[0], preset) : { ...preset, options: {}, note: "" };
 
   const header = `
-    <button class="back-button" data-action="dashboard">←</button>
-    <h2>Test qo'shish</h2>
+    ${pageHeader("Yangi test")}
 
     <input class="input" id="field-title" placeholder="Test nomini kiriting" value="${escapeHtml(draft.title || "")}" />
 
@@ -1320,31 +1375,26 @@ function renderNewTestForm(testType, draft = {}) {
   const textCount = draft.textCount ?? structure.textCount;
 
   const questionsSection = `
-    <h3 style="margin-top:22px">Savollar</h3>
-    <p class="subtitle">
-      Savol matni kerak emas — u kanalingizda joylashtirilgan bo'ladi.
-      Sonini yozing, hamma savol birdan chiqadi.
-    </p>
-    <div class="row-between" style="gap:8px">
-      <div style="flex:1">
-        <label class="field-label" for="field-test-count">Test savollari</label>
-        <input class="input" id="field-test-count" type="number" min="0" max="300" value="${testCount}" style="margin:0" />
+    <div class="panel">
+      <div class="row-between" style="gap:8px;align-items:flex-end">
+        <div style="flex:1">
+          <label class="field-label" for="field-test-count">Test savollari</label>
+          <input class="input" id="field-test-count" type="number" min="0" max="300" value="${testCount}" style="margin:0" />
+        </div>
+        <div style="flex:1">
+          <label class="field-label" for="field-option-count">Variantlar</label>
+          <input class="input" id="field-option-count" type="number" min="2" max="8" value="${optionCount}" style="margin:0" />
+        </div>
+        <div style="flex:1;display:${preset.allowText ? "block" : "none"}">
+          <label class="field-label" for="field-text-count">Yozma</label>
+          <input class="input" id="field-text-count" type="number" min="0" max="300" value="${textCount}" style="margin:0" />
+        </div>
       </div>
-      <div style="flex:1">
-        <label class="field-label" for="field-option-count">Variantlar</label>
-        <input class="input" id="field-option-count" type="number" min="2" max="8" value="${optionCount}" style="margin:0" />
-      </div>
-      <div style="flex:1;display:${preset.allowText ? "block" : "none"}">
-        <label class="field-label" for="field-text-count">Yozma</label>
-        <input class="input" id="field-text-count" type="number" min="0" max="300" value="${textCount}" style="margin:0" />
+      <div class="row-between" style="margin-top:10px">
+        <span class="subtitle" style="margin:0" id="total-questions-hint"></span>
+        <button class="btn btn-ghost" id="build-key-rows-button" style="width:auto;padding:8px 14px;margin:0">🔄 Yangilash</button>
       </div>
     </div>
-    <p class="subtitle" style="margin:6px 0 0" id="total-questions-hint"></p>
-    <button class="btn btn-ghost" id="build-key-rows-button" style="margin-top:10px">🔄 Savollarni yangilash</button>
-    <p class="subtitle" style="margin:14px 0 6px">
-      Har bir savolning to'g'ri javobini bosing — bitta variant tanlanadi.
-      Variantlar sonini − va + bilan o'zgartirish mumkin.
-    </p>
     <div id="key-questions-container" data-default-parts="${structure.textParts}"
          data-option-overrides='${JSON.stringify(structure.options)}'></div>`;
 
@@ -1353,9 +1403,12 @@ function renderNewTestForm(testType, draft = {}) {
     ${questionsSection}
     ${channelSettings}
     <div class="sticky-footer">
-      <button class="btn" id="save-test-button" style="margin:0">Test yaratish</button>
+      <button class="btn" id="save-test-button" style="margin:0">Testni saqlash</button>
     </div>
+    ${bottomNav("create")}
   `);
+
+  wireTeacherChrome();
 
   // "Boshqa fan" tanlanmagan bo'lsa ham, avvalgi qiymat ro'yxatda bo'lmasligi mumkin
   const subjectSelect = document.getElementById("field-subject");
@@ -1379,8 +1432,6 @@ function renderNewTestForm(testType, draft = {}) {
     updateTotalHint();
     buildKeyQuestionRows(undefined, { resetOptions: true });
   });
-
-  document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
 
   // Test turi o'zgartirilganda forma qaytadan chiziladi va savollar soni
   // yangi turning standartiga o'tadi. Nomi, fani kabi ma'lumotlar saqlanadi.
@@ -1496,9 +1547,9 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
   const testCount = Math.max(0, Number(document.getElementById("field-test-count").value) || 0);
   const defaultOptions = Math.min(8, Math.max(2, Number(document.getElementById("field-option-count").value) || 4));
   const textCount = Math.max(0, Number(document.getElementById("field-text-count").value) || 0);
-  const defaultParts = Number(container.dataset.defaultParts) || 1;
+  const parts = Number(container.dataset.defaultParts) || 1;
 
-  // Fan bo'yicha istisnolar: masalan matematikada 32-34 savollar A-F bo'ladi
+  // Fan bo'yicha istisnolar: masalan matematikada 33-35 savollar A-F bo'ladi
   let optionOverrides = {};
   try {
     optionOverrides = JSON.parse(container.dataset.optionOverrides || "{}");
@@ -1511,167 +1562,102 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
     return;
   }
 
-  // Savollar soni o'zgartirilganda (yoki test turi almashtirilganda),
-  // allaqachon belgilangan javoblar yo'qolmasin. Kalit — savolning nomi.
+  // Savollar soni o'zgartirilganda belgilangan javoblar yo'qolmasin
   const previous = { ...(savedAnswers || {}) };
   container.querySelectorAll(".key-row").forEach((row) => {
     const variants = [...row.querySelectorAll("math-field")].map(readMathValue);
-
     previous[row.dataset.label] = {
       answer: row.dataset.answer || "",
       variants: variants.length ? variants : undefined,
-      // Fan almashtirilganda variantlar soni yangi tuzilishdan olinadi
       options: resetOptions ? undefined : row.dataset.options,
     };
   });
 
-  const partCounts = {};
-  container.querySelectorAll("[data-parts]").forEach((block) => {
-    partCounts[block.dataset.question] = Number(block.dataset.parts);
-  });
-
-  const blocks = [];
-
-  // 1) Variantli savollar: 1-savol, 2-savol, ...
+  // 1) Variantli savollar — ixcham katakchalar panjarasi.
+  //    Katakchani bosganda javob A -> B -> C -> D -> A tarzida almashadi.
+  const cells = [];
   for (let number = 1; number <= testCount; number += 1) {
     const saved = previous[number] || {};
     const options = Number(saved.options) || Number(optionOverrides[number]) || defaultOptions;
+    const answer = saved.answer || "A";
 
-    blocks.push(`
-      <div class="key-row" data-label="${number}" data-kind="letters" data-options="${options}"
-           data-answer="${saved.answer || ""}">
-        <div class="key-row-head">
-          <b>${number}-savol</b>
-          <div class="option-stepper">
-            <button type="button" data-step="-1">−</button>
-            <span class="option-count">${options}</span>
-            <button type="button" data-step="1">+</button>
-          </div>
-        </div>
-        <div class="letter-grid"></div>
-      </div>`);
+    cells.push(`
+      <button class="answer-cell key-row" type="button" data-label="${number}" data-kind="letters"
+              data-options="${options}" data-answer="${answer}">
+        <span class="cell-number">${number}</span>
+        <span class="cell-letter">${answer}</span>
+      </button>`);
   }
 
-  // 2) Yozma savollar: har biri a, b kabi qismlardan iborat bo'lishi mumkin
+  const lettersSection = testCount
+    ? `<p class="section-label">1–${testCount}: TO'G'RI JAVOBLAR</p>
+       <div class="panel">
+         <div class="answer-grid">${cells.join("")}</div>
+         <p class="subtitle" style="margin:10px 0 0">Javobni almashtirish uchun katakchani bosing.</p>
+       </div>`
+    : "";
+
+  // 2) Yozma savollar — a) va b) ustunli jadval
+  const writtenRows = [];
   for (let index = 0; index < textCount; index += 1) {
     const questionNumber = testCount + index + 1;
-    const parts = partCounts[questionNumber] || defaultParts;
 
-    const partRows = Array.from({ length: parts }, (_, partIndex) => {
+    const partCells = Array.from({ length: parts }, (_, partIndex) => {
       const label = parts > 1 ? `${questionNumber}${String.fromCharCode(97 + partIndex)}` : String(questionNumber);
       const variants = (previous[label] || {}).variants || [""];
 
       return `
-        <div class="key-row key-part-row" style="align-items:flex-start" data-label="${label}" data-kind="text"
+        <div class="written-cell key-row" data-label="${label}" data-kind="text"
              data-answer="${escapeHtml(variants.filter(Boolean).join("|"))}">
-          <b class="part-letter">${parts > 1 ? `${String.fromCharCode(97 + partIndex)})` : ""}</b>
-          <div class="variant-list">
-            ${variants.map((variant) => mathFieldHtml(variant, 'placeholder="To\'g\'ri javob"')).join("")}
-          </div>
-          <button class="icon-button" type="button" data-add-variant title="Yana bir to'g'ri javob">➕</button>
+          ${variants.map((variant) => mathFieldHtml(variant, 'placeholder="javob"')).join("")}
         </div>`;
     }).join("");
 
-    blocks.push(`
-      <div class="key-question" data-question="${questionNumber}" data-parts="${parts}">
-        <div class="key-row-head">
-          <b>${questionNumber}-savol <span class="subtitle" style="margin:0">yozma</span></b>
-          <div class="option-stepper">
-            <span>Javoblar soni:</span>
-            <button type="button" data-part-step="-1">−</button>
-            <span class="part-count">${parts}</span>
-            <button type="button" data-part-step="1">+</button>
-          </div>
-        </div>
-        ${partRows}
+    writtenRows.push(`
+      <div class="written-row" style="grid-template-columns:34px repeat(${parts}, 1fr)">
+        <span class="written-number">${questionNumber}</span>
+        ${partCells}
       </div>`);
   }
 
-  container.innerHTML = blocks.join("");
+  const writtenHeader = Array.from(
+    { length: parts },
+    (_, index) => `<span>${parts > 1 ? `${String.fromCharCode(97 + index)}) javob` : "javob"}</span>`
+  ).join("");
 
-  container.querySelectorAll('.key-row[data-kind="letters"]').forEach(drawLetterGrid);
+  const writtenSection = textCount
+    ? `<p class="section-label">${testCount + 1}–${testCount + textCount}: YOZMA JAVOBLAR</p>
+       <div class="panel">
+         <div class="written-row written-head" style="grid-template-columns:34px repeat(${parts}, 1fr)">
+           <span></span>${writtenHeader}
+         </div>
+         ${writtenRows.join("")}
+       </div>`
+    : "";
 
-  // Bitta umumiy tinglovchi: qaysi savol bosilgani har safar o'sha
-  // bosilgan harfdan aniqlanadi, shuning uchun tanlov aralashib ketmaydi.
-  container.removeEventListener("click", handleLetterClick);
-  container.removeEventListener("click", handleOptionStep);
-  container.addEventListener("click", handleLetterClick);
-  container.addEventListener("click", handleOptionStep);
+  container.innerHTML = lettersSection + writtenSection;
 
-  container.querySelectorAll("[data-part-step]").forEach((stepButton) => {
-    stepButton.addEventListener("click", () => {
-      const block = stepButton.closest(".key-question");
-      const next = Number(block.dataset.parts) + Number(stepButton.dataset.partStep);
-      if (next < 1 || next > 6) return;
+  container.removeEventListener("click", handleAnswerCellTap);
+  container.addEventListener("click", handleAnswerCellTap);
 
-      block.dataset.parts = next;
-      buildKeyQuestionRows(undefined); // qismlar o'zgargach, nomlar qaytadan hisoblanadi
-    });
-  });
-
-  // Bitta savolga bir nechta to'g'ri javob bo'lishi mumkin (masalan "120" va "5!").
-  // Ularning hammasi bitta qatorda yig'iladi va "|" bilan saqlanadi.
-  function syncVariants(row) {
-    const values = [...row.querySelectorAll("math-field")].map(readMathValue).filter(Boolean);
-    row.dataset.answer = values.join("|");
-  }
-
-  setupMathFields(container, (field) => syncVariants(field.closest(".key-row")));
-
-  container.querySelectorAll("[data-add-variant]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const row = button.closest(".key-row");
-      const list = row.querySelector(".variant-list");
-
-      list.insertAdjacentHTML("beforeend", mathFieldHtml("", 'placeholder="Yana bir to\'g\'ri javob"'));
-      setupMathFields(list, (field) => syncVariants(row));
-      list.lastElementChild.focus();
-    });
+  setupMathFields(container, (field) => {
+    const cell = field.closest(".key-row");
+    cell.dataset.answer = [...cell.querySelectorAll("math-field")].map(readMathValue).filter(Boolean).join("|");
   });
 }
 
-function drawLetterGrid(row) {
-  const grid = row.querySelector(".letter-grid");
-  const options = Number(row.dataset.options) || 4;
-  const selected = (row.dataset.answer || "").split(",").filter(Boolean);
+function handleAnswerCellTap(event) {
+  const cell = event.target.closest(".answer-cell");
+  if (!cell) return;
 
-  grid.innerHTML = Array.from({ length: options }, (_, index) => {
-    const letter = String.fromCharCode(65 + index);
-    return `<div class="letter-option ${selected.includes(letter) ? "selected" : ""}" data-letter="${letter}">${letter}</div>`;
-  }).join("");
-}
+  // Keyingi harfga o'tadi: A -> B -> C -> D -> A (variantlar soniga qarab)
+  const options = Number(cell.dataset.options) || 4;
+  const current = (cell.dataset.answer || "A").charCodeAt(0) - 65;
+  const next = String.fromCharCode(65 + ((current + 1) % options));
 
-function handleLetterClick(event) {
-  const letterEl = event.target.closest(".letter-option");
-  if (!letterEl) return;
-
-  // Tanlov faqat SHU savolning qatorida o'zgaradi — boshqa savollarga tegmaydi.
-  const row = letterEl.closest(".key-row");
-  if (!row) return;
-
-  row.dataset.answer = letterEl.dataset.letter;
-  row.querySelectorAll(".letter-option").forEach((item) => item.classList.remove("selected"));
-  letterEl.classList.add("selected");
-}
-
-function handleOptionStep(event) {
-  const stepButton = event.target.closest("[data-step]");
-  if (!stepButton) return;
-
-  const row = stepButton.closest(".key-row");
-  const next = Number(row.dataset.options) + Number(stepButton.dataset.step);
-  if (next < 2 || next > 8) return;
-
-  row.dataset.options = next;
-  row.querySelector(".option-count").textContent = next;
-
-  // Variantlar kamaysa, endi mavjud bo'lmagan harf javobdan olib tashlanadi.
-  const lastLetter = String.fromCharCode(64 + next);
-  if ((row.dataset.answer || "") > lastLetter) {
-    row.dataset.answer = "";
-  }
-
-  drawLetterGrid(row);
+  cell.dataset.answer = next;
+  cell.querySelector(".cell-letter").textContent = next;
+  telegram?.HapticFeedback?.selectionChanged?.();
 }
 
 async function saveNewTest() {
@@ -2063,6 +2049,103 @@ async function renderStudentAnswersForm(testId, attemptId) {
       await renderTestDetail(testId);
     })
   );
+}
+
+async function renderResultsTab(selectedId) {
+  const tests = await api("/api/teacher/tests");
+
+  if (!tests.length) {
+    showPage(`
+      ${pageHeader("Natijalar")}
+      <p class="subtitle">Hali test yaratilmagan. Avval test yarating.</p>
+      ${bottomNav("results")}
+    `);
+    wireTeacherChrome();
+    return;
+  }
+
+  const testId = selectedId || tests[0].id;
+  const [results, stats] = await Promise.all([
+    api(`/api/teacher/tests/${testId}/results`),
+    api(`/api/teacher/tests/${testId}/stats`),
+  ]);
+
+  // Ball taqsimoti: nechta o'quvchi qaysi oraliqda
+  const buckets = [
+    { label: "<30", from: 0, to: 30 },
+    { label: "30-45", from: 30, to: 45 },
+    { label: "45-60", from: 45, to: 60 },
+    { label: "60-75", from: 60, to: 75 },
+    { label: "75+", from: 75, to: 101 },
+  ].map((bucket) => ({
+    ...bucket,
+    count: results.rows.filter((row) => row.percent >= bucket.from && row.percent < bucket.to).length,
+  }));
+
+  const maxCount = Math.max(1, ...buckets.map((bucket) => bucket.count));
+
+  const chart = buckets
+    .map(
+      (bucket) => `
+      <div class="chart-column">
+        <span class="chart-value">${bucket.count}</span>
+        <div class="chart-bar" style="height:${Math.max(4, (bucket.count / maxCount) * 96)}px"></div>
+        <span class="chart-label">${bucket.label}</span>
+      </div>`
+    )
+    .join("");
+
+  const rows = results.rows
+    .map(
+      (row, index) => `
+      <div class="result-line" data-detail-id="${row.attempt_id}">
+        <span class="result-rank">${index + 1}</span>
+        <span class="result-name">${escapeHtml(row.name)}</span>
+        <span class="result-score">${row.correct}/${results.total_questions}</span>
+        <span class="result-percent">${row.percent}%</span>
+      </div>`
+    )
+    .join("") || `<p class="subtitle" style="padding:14px">Hali natija yo'q</p>`;
+
+  showPage(`
+    ${pageHeader("Natijalar")}
+    <label class="field-label" for="results-test-select">Test</label>
+    <select class="input" id="results-test-select">
+      ${tests
+        .map(
+          (test) =>
+            `<option value="${test.id}" ${test.id === testId ? "selected" : ""}>${escapeHtml(test.title)}</option>`
+        )
+        .join("")}
+    </select>
+
+    <div class="panel">
+      <div class="stats-grid" style="margin:0 0 16px">
+        <div class="stat-tile"><span class="stat-value">${stats.total}</span>Ishtirokchi</div>
+        <div class="stat-tile"><span class="stat-value">${stats.avg}</span>O'rtacha foiz</div>
+      </div>
+      <p class="section-label" style="margin:0 0 10px">BALL TAQSIMOTI</p>
+      <div class="chart">${chart}</div>
+    </div>
+
+    <p class="section-label">ISHTIROKCHILAR</p>
+    <div class="panel" style="padding:4px 0">${rows}</div>
+    ${bottomNav("results")}
+  `);
+
+  wireTeacherChrome();
+
+  document.getElementById("results-test-select").addEventListener(
+    "change",
+    guarded((event) => renderResultsTab(Number(event.target.value)))
+  );
+
+  document.querySelectorAll("[data-detail-id]").forEach((line) => {
+    line.addEventListener(
+      "click",
+      guarded(() => renderStudentDetail(testId, Number(line.dataset.detailId)))
+    );
+  });
 }
 
 async function renderTestResults(testId) {
