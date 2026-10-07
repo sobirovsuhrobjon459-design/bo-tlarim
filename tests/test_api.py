@@ -384,6 +384,44 @@ def test_oddiy_klaviaturada_yozilgan_javob_eski_latex_kalitga_mos_keladi():
     assert result["correct"] == 6, result
 
 
+def test_mathlive_klaviaturasi_yozuvlari_oddiy_kalitga_mos_keladi():
+    """
+    MathLive klaviaturasi javobni o'ziga xos LaTeX'da beradi: ichma-ich kasr,
+    "\\frac12" (qavssiz), gradus "^{\\circ}", "\\exponentialE", bo'sh joy
+    "\\placeholder{}". Kalit oddiy yozuvda bo'lsa ham to'g'ri tekshirilsin.
+    """
+    reset_database()
+    register_teacher()
+    created = create_test(
+        key_questions=[
+            {"number": 1, "question_type": "text", "correct": "sqrt3/2"},
+            {"number": 2, "question_type": "text", "correct": "1/2"},
+            {"number": 3, "question_type": "text", "correct": "30°"},
+            {"number": 4, "question_type": "text", "correct": "e^x"},
+            {"number": 5, "question_type": "text", "correct": "(1/2)/3"},
+            {"number": 6, "question_type": "text", "correct": "5"},
+        ]
+    )
+
+    started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(902)).json()
+    result = client.post(
+        f"/api/attempts/{started['attempt_id']}/finish",
+        json={
+            "answers": {
+                "1": r"\frac{\sqrt{3}}{2}",
+                "2": r"\frac12",
+                "3": r"30^{\circ}",
+                "4": r"\exponentialE^{x}",
+                "5": r"\frac{\frac{1}{2}}{3}",
+                "6": r"5\placeholder{}",
+            }
+        },
+        headers=as_user(902),
+    ).json()
+
+    assert result["correct"] == 6, result
+
+
 def test_oddiy_yozuvda_manosi_farqli_javob_xato_hisoblanadi():
     """Yozilishni soddalashtirish ma'noni o'zgartirib yubormasligi kerak."""
     reset_database()

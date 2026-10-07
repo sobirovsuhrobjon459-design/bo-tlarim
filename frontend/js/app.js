@@ -142,6 +142,8 @@ function showPage(html) {
   // Menyu avval yashiriladi — kerak bo'lsa, sahifa o'zi qaytadan ko'rsatadi.
   // Ikkalasi bitta qadamda bo'lgani uchun ekranda miltillash sezilmaydi.
   hideBottomNav();
+  // Ochiq matematik klaviatura yangi sahifa ustida qolib ketmasin
+  if (activeMathField || window.mathVirtualKeyboard?.visible) closeMathKeyboard();
   appElement.innerHTML = `<div class="page">${html}</div>`;
   window.scrollTo(0, 0);
 }
@@ -167,34 +169,49 @@ function showToast(message) {
 }
 
 /*
-  Yozma javoblar — oddiy matn maydoni, telefonning o'z klaviaturasi bilan.
+  Yozma javoblar — MathLive maydoni (<math-field>) va uning standart
+  matematik klaviaturasi (raqamlar, √, kasr, daraja, π, sin/cos/log, harflar).
 
-  Ilgari bu yerda MathLive matematik klaviaturasi bor edi, lekin u Telegram
-  ichida barqaror ishlamadi (yopilmay qolardi, sahifalar ustida turib qolardi).
-  Endi o'quvchi javobni oddiy yozadi:
+  Klaviaturani ochish va yopishni MathLive'ning o'ziga emas, shu yerdagi kodga
+  topshiramiz (math-virtual-keyboard-policy="manual"). Sabab: Telegram ichida
+  bo'sh joyga bosish maydondan fokusni olmaydi, shuning uchun MathLive'ning
+  "fokus ketsa yopilsin" mantig'i ishlamay, klaviatura ochiq qolib ketardi.
+  Endi klaviatura quyidagi hollarda albatta yopiladi:
+    • maydon va klaviaturadan tashqariga bosilganda;
+    • "✕ Yopish" tugmasi yoki klaviaturadagi "Enter" bosilganda;
+    • boshqa sahifaga o'tilganda (showPage);
+    • ilova yashirilganda (Telegram yopilsa yoki fonga o'tsa).
 
-      2sqrt3    pi/5    1/2    x^2    2*pi    0,5
-
-  Server bu yozuvlarni o'qituvchi kiritgan javob bilan "ma'nosi bo'yicha"
-  solishtiradi (qarang: backend _normalize_text_answer) — ya'ni "2sqrt(3)",
-  "2 ildiz 3" va eski testlardagi "2\sqrt{3}" hammasi bir xil hisoblanadi.
+  MathLive CDN'dan yuklanmay qolsa, maydon oddiy matn maydoniga aylanadi va
+  o'quvchi "2sqrt3", "pi/5" kabi yozadi — server ikkalasini ham tushunadi
+  (qarang: backend _normalize_text_answer).
 */
 
-const ANSWER_INPUT_HINT = "Yozish namunalari: 2sqrt3 · pi/5 · 1/2 · x^2 · 0,5";
+function isMathLiveReady() {
+  return Boolean(window.customElements?.get("math-field") && window.mathVirtualKeyboard);
+}
+
+function answerInputHint() {
+  return isMathLiveReady()
+    ? "Maydonga bosing — matematik klaviatura ochiladi (√, kasr, daraja, π)"
+    : "Yozish namunalari: 2sqrt3 · pi/5 · 1/2 · x^2 · 0,5";
+}
 
 function latexToPlain(value) {
   /*
-    Eski testlardagi javoblar LaTeX'da saqlangan ("2\sqrt{3}", "\frac{\pi}{5}").
-    Ular oddiy matn maydonida tushunarli ko'rinishi uchun soddalashtiriladi:
-    "2√(3)", "(π)/(5)". Server buni asl LaTeX bilan baribir teng deb biladi.
+    LaTeX javobni oddiy matnga aylantiradi ("2\sqrt{3}" -> "2√(3)",
+    "\frac{\pi}{5}" -> "(π)/(5)"). Natijalar ro'yxatida va MathLive
+    yuklanmagan holatda oddiy maydonda ko'rsatish uchun.
   */
   let text = String(value ?? "").trim();
   if (!text.includes("\\")) return text; // allaqachon oddiy matn
 
   text = text
     .replace(/\\left|\\right/g, "")
+    .replace(/\\placeholder\{\}/g, "")
     .replace(/\\[,;!]/g, "")
-    .replace(/\\[dt]frac/g, "\\frac");
+    .replace(/\\[dt]frac/g, "\\frac")
+    .replace(/\^\{?\\circ\}?|\\degree/g, "°");
 
   for (let step = 0; step < 5; step += 1) {
     const next = text.replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, "($1)/($2)");
@@ -205,39 +222,263 @@ function latexToPlain(value) {
   return text
     .replace(/\\sqrt/g, "√")
     .replace(/\\pi/g, "π")
-    .replace(/\\(cdot|times)/g, "*")
+    .replace(/\\(cdot|times)/g, "×")
     .replace(/\\exponentialE/g, "e")
-    .replace(/\\(degree|circ)/g, "°")
     .replace(/\\([a-zA-Z]+)/g, "$1") // qolgan buyruqlar: "\sin" -> "sin"
     .replace(/\{/g, "(")
     .replace(/\}/g, ")");
 }
 
 function mathFieldHtml(initialValue, extraAttributes = "") {
-  // autocapitalize/autocorrect o'chiriladi: telefon "sqrt" ni "Sqrt" yoki
-  // boshqa so'zga "tuzatib" yubormasligi uchun.
+  if (isMathLiveReady()) {
+    return `<math-field class="math-input" math-virtual-keyboard-policy="manual" ${extraAttributes}>${escapeHtml(
+      initialValue || ""
+    )}</math-field>`;
+  }
+
+  // Zaxira: oddiy matn maydoni. autocapitalize/autocorrect o'chiriladi —
+  // telefon "sqrt" ni boshqa so'zga "tuzatib" yubormasligi uchun.
   return `<input class="input math-input" type="text" autocomplete="off" autocorrect="off"
                  autocapitalize="off" spellcheck="false" enterkeyhint="done"
                  value="${escapeHtml(latexToPlain(initialValue))}" ${extraAttributes} />`;
 }
 
 function readMathValue(field) {
-  return (field.value || "").trim();
+  return String(field.value || "").trim();
 }
 
-function setupMathFields(container, onChange) {
-  container.querySelectorAll(".math-input").forEach((field) => {
-    field.addEventListener("input", () => onChange(field, readMathValue(field)));
+/* ---------- Klaviaturani boshqarish ---------- */
 
-    // "Tayyor" (Enter) bosilganda telefon klaviaturasi yopiladi
+let activeMathField = null;
+let keyboardPaddingTimer = null;
+
+function isTouchScreen() {
+  return window.matchMedia?.("(pointer: coarse)").matches || "ontouchstart" in window;
+}
+
+function keyboardCloseButton() {
+  let button = document.getElementById("math-keyboard-close");
+  if (button) return button;
+
+  button = document.createElement("button");
+  button.id = "math-keyboard-close";
+  button.className = "keyboard-close";
+  button.type = "button";
+  button.hidden = true;
+  button.textContent = "✕ Yopish";
+  // pointerdown'da yopamiz: "click" kutilsa, ba'zi telefonlarda tugma
+  // bosilishi bilan fokus o'zgarib, bosish boshqa joyga tushib qolardi.
+  button.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeMathKeyboard();
+  });
+  document.body.appendChild(button);
+  return button;
+}
+
+function syncKeyboardLayout() {
+  const keyboard = window.mathVirtualKeyboard;
+  const isVisible = Boolean(keyboard?.visible);
+
+  keyboardCloseButton().hidden = !isVisible;
+  clearTimeout(keyboardPaddingTimer);
+
+  if (isVisible) {
+    const height = Math.round(keyboard.boundingRect?.height || 0) || 280;
+    document.documentElement.style.setProperty("--keyboard-height", `${height}px`);
+    document.body.classList.add("keyboard-open");
+  } else {
+    // Sahifa tagidagi bo'sh joy biroz kechikib olinadi: aks holda sahifa
+    // sakrab, o'quvchi bosgan tugma barmog'i ostidan qochib ketardi.
+    document.body.classList.remove("keyboard-open");
+    keyboardPaddingTimer = setTimeout(() => {
+      document.documentElement.style.setProperty("--keyboard-height", "0px");
+    }, 400);
+  }
+}
+
+function scrollFieldIntoView(field) {
+  // Klaviatura chiqib bo'lgach maydon uning ustida ko'rinsin
+  [80, 350].forEach((delay) =>
+    setTimeout(() => {
+      if (activeMathField !== field || !field.isConnected) return;
+      const keyboardHeight = Math.round(window.mathVirtualKeyboard?.boundingRect?.height || 0);
+      const visibleBottom = window.innerHeight - keyboardHeight - 56; // 56 — "Yopish" tugmasi uchun joy
+      const rect = field.getBoundingClientRect();
+      if (rect.bottom > visibleBottom || rect.top < 0) {
+        window.scrollBy({ top: rect.bottom - visibleBottom + 12, behavior: "smooth" });
+      }
+    }, delay)
+  );
+}
+
+function openMathKeyboard(field) {
+  activeMathField = field;
+  if (document.activeElement !== field) field.focus();
+
+  // Kompyuterda (Telegram Desktop) jismoniy klaviatura bor — ekrandagisi
+  // o'zi ochilmaydi, kerak bo'lsa maydondagi klaviatura belgisi bilan ochiladi.
+  if (!isTouchScreen()) return;
+
+  window.mathVirtualKeyboard.show({ animate: true });
+  syncKeyboardLayout();
+  scrollFieldIntoView(field);
+}
+
+function closeMathKeyboard() {
+  const field = activeMathField;
+  activeMathField = null;
+
+  window.mathVirtualKeyboard?.hide?.({ animate: true });
+  // Fokus ham olinadi — aks holda maydonga qayta bosilganda "focus" hodisasi
+  // bo'lmaydi va ba'zi telefonlarda klaviatura qayta ochilmay qolardi.
+  if (field?.isConnected) field.blur();
+  if (document.activeElement?.tagName === "MATH-FIELD") document.activeElement.blur();
+
+  if (document.getElementById("math-keyboard-close")) syncKeyboardLayout();
+}
+
+let mathKeyboardWatchersReady = false;
+
+function setupMathKeyboardWatchers() {
+  if (mathKeyboardWatchersReady || !isMathLiveReady()) return;
+  mathKeyboardWatchersReady = true;
+
+  // Ovoz fayllari yuklanmasin (Telegram ichida keraksiz va sekinlashtiradi)
+  try {
+    window.MathfieldElement.soundsDirectory = null;
+  } catch (error) {
+    /* eski versiyada bu xossa bo'lmasligi mumkin */
+  }
+
+  const keyboard = window.mathVirtualKeyboard;
+  // Klaviatura qaysi yo'l bilan ochilmasin/yopilmasin (maydondagi klaviatura
+  // belgisi, klaviaturaning o'z tugmasi) — "Yopish" tugmasi va pastki bo'sh
+  // joy har doim uning haqiqiy holatiga moslanadi.
+  ["virtual-keyboard-toggle", "geometrychange"].forEach((eventName) =>
+    keyboard.addEventListener(eventName, syncKeyboardLayout)
+  );
+
+  // Maydon va klaviaturadan tashqariga bosilsa — yopiladi
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (!keyboard.visible && !activeMathField) return;
+      const target = event.target;
+      if (target.closest?.("math-field, .ML__keyboard, #math-keyboard-close")) return;
+      closeMathKeyboard();
+    },
+    true
+  );
+
+  // Har qanday maydon fokus olganda (kim qo'shgan bo'lmasin) — "manual".
+  // MathLive fokusdan 300 ms keyin aynan shu xossani tekshiradi.
+  document.addEventListener(
+    "focusin",
+    (event) => {
+      const field = event.target.closest?.("math-field");
+      if (field && field.mathVirtualKeyboardPolicy !== "manual") field.mathVirtualKeyboardPolicy = "manual";
+    },
+    true
+  );
+
+  // Telegram fonga o'tsa yoki yopilsa — klaviatura ochiq qolib ketmasin
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) closeMathKeyboard();
+  });
+}
+
+
+// Har bir maydonning "o'zgardi" funksiyasi — MathLive kech yuklanib, oddiy
+// maydon almashtirilganda yangisiga ham ulash uchun kerak.
+const mathFieldHandlers = new WeakMap();
+
+function setupMathField(field, onChange) {
+  if (mathFieldHandlers.has(field)) return; // ikki marta ulanib qolmasin
+  mathFieldHandlers.set(field, onChange);
+
+  field.addEventListener("input", () => onChange(field, readMathValue(field)));
+
+  if (field.tagName !== "MATH-FIELD") {
+    // Oddiy maydon: "Tayyor" (Enter) bosilganda telefon klaviaturasi yopiladi
     field.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
         field.blur();
       }
     });
+    return;
+  }
+
+  // Atributning o'zi yetmaydi: MathLive ba'zan yangi maydonga "auto" ni
+  // qo'yib yuboradi va keyin har fokusda klaviaturani o'zi ochardi.
+  field.mathVirtualKeyboardPolicy = "manual";
+
+  // MathLive menyusi ("≡" tugmasi) Telegram ichida chalkashtiradi — o'chiriladi
+  field.menuItems = [];
+
+  // Klaviatura maydonga BOSILGANDA ochiladi ("focus"da emas): shunda Telegram
+  // qayta ochilib, fokus o'z-o'zidan qaytganda klaviatura kutilmaganda chiqmaydi.
+  field.addEventListener("pointerup", () => openMathKeyboard(field));
+
+  // Kompyuterda Tab bilan kelinganda ham shu maydon "faol" hisoblansin
+  field.addEventListener("focus", () => {
+    activeMathField = field;
+  });
+
+  // Klaviaturadagi Enter (⏎) — javob tayyor, klaviatura yopiladi
+  field.addEventListener("change", () => {
+    if (window.mathVirtualKeyboard?.visible) closeMathKeyboard();
   });
 }
+
+function setupMathFields(container, onChange) {
+  setupMathKeyboardWatchers();
+  container.querySelectorAll(".math-input").forEach((field) => setupMathField(field, onChange));
+}
+
+/*
+  MathLive sahifa ochilgandan keyin yuklanadi ("defer"). Agar shu orada yozma
+  maydonli sahifa (masalan, test) ochilib bo'lgan bo'lsa, undagi oddiy
+  maydonlar MathLive maydoniga almashtiriladi — kiritilgan qiymat saqlanadi.
+*/
+// MathLive shriftlar manzilini o'zi noto'g'ri topadi (".../mathlive.min.js/fonts/"
+// — 404), shunda formulalar va klaviatura belgilari buzuq chiqardi. Shuning
+// uchun aniq ko'rsatamiz; versiya index.html'dagi bilan bir xil bo'lsin.
+const MATHLIVE_FONTS_URL = "https://cdn.jsdelivr.net/npm/mathlive@0.111.0/fonts";
+
+window.customElements?.whenDefined?.("math-field").then(() => {
+  try {
+    window.MathfieldElement.fontsDirectory = MATHLIVE_FONTS_URL;
+  } catch (error) {
+    /* shriftsiz ham ishlaydi, faqat ko'rinishi oddiyroq bo'ladi */
+  }
+
+  // mathVirtualKeyboard element ro'yxatdan o'tgan zahoti tayyor bo'lmasligi mumkin
+  setTimeout(() => {
+    if (!isMathLiveReady()) return;
+    setupMathKeyboardWatchers();
+
+    document.querySelectorAll("input.math-input").forEach((input) => {
+      const holder = document.createElement("div");
+      holder.innerHTML = mathFieldHtml(input.value);
+      const replacement = holder.firstElementChild;
+
+      ["placeholder", "data-ref", "data-text-ref"].forEach((name) => {
+        if (input.hasAttribute(name)) replacement.setAttribute(name, input.getAttribute(name));
+      });
+
+      const onChange = mathFieldHandlers.get(input);
+      input.replaceWith(replacement);
+      if (onChange) setupMathField(replacement, onChange);
+    });
+
+    document.querySelectorAll(".answer-hint").forEach((hint) => {
+      hint.textContent = answerInputHint();
+    });
+  }, 0);
+});
 
 async function copyToClipboard(text) {
   try {
@@ -1214,7 +1455,7 @@ function renderKeyQuizQuestion() {
     <div class="progress-track"><div class="progress-fill" style="width:${progressPercent}%"></div></div>
     <p class="subtitle">${hintText}</p>
     ${answerAreaHtml}
-    ${isText ? `<p class="subtitle answer-hint">${ANSWER_INPUT_HINT}</p>` : ""}
+    ${isText ? `<p class="subtitle answer-hint">${answerInputHint()}</p>` : ""}
     <button class="btn" id="next-button" style="margin-top:16px">${isLast ? "🏁 TESTNI YAKUNLASH" : "Keyingi →"}</button>
   `);
 
@@ -2198,7 +2439,9 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
 
     for (let partIndex = 0; partIndex < parts; partIndex += 1) {
       const label = parts > 1 ? `${questionNumber}${String.fromCharCode(97 + partIndex)}` : String(questionNumber);
-      const variants = (previous[label] || {}).variants || [""];
+      const savedRow = previous[label] || {};
+      // Qoralamadan tiklanganda faqat "answer" ("0,5|1/2") bo'ladi — variantlarga ajratamiz
+      const variants = savedRow.variants || (savedRow.answer ? String(savedRow.answer).split("|") : [""]);
       const isFirstPart = partIndex === 0;
 
       writtenRows.push(`
@@ -2216,7 +2459,7 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
     ? `<p class="section-label">${testCount + 1}–${testCount + textCount}: YOZMA JAVOBLAR</p>
        <div class="panel">
          ${writtenRows.join("")}
-         <p class="subtitle answer-hint">${ANSWER_INPUT_HINT}</p>
+         <p class="subtitle answer-hint">${answerInputHint()}</p>
          <p class="subtitle" style="margin:4px 0 0">
            Bir nechta to'g'ri javob bo'lsa, | belgisi bilan ajrating: <b>0,5|1/2</b>
          </p>
@@ -2591,7 +2834,7 @@ async function renderStudentAnswersForm(testId, attemptId) {
     <h2>${escapeHtml(saved.name)}</h2>
     <p class="subtitle">O'quvchi varaqasida belgilangan javoblarni kiriting — bot avtomatik tekshiradi.</p>
     ${structure.questions.some((question) => question.question_type === "text")
-      ? `<p class="subtitle answer-hint">${ANSWER_INPUT_HINT}</p>`
+      ? `<p class="subtitle answer-hint">${answerInputHint()}</p>`
       : ""}
     ${questionBlocks}
     <button class="btn" id="save-answers-button">✅ Saqlash va tekshirish</button>

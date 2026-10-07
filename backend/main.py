@@ -658,6 +658,12 @@ def _group_label(band) -> str:
 _PLAIN_REPLACEMENTS = [
     ("\\left", ""),
     ("\\right", ""),
+    ("\\placeholder{}", ""),
+    ("\\exponentialE", "e"),
+    ("\\imaginaryI", "i"),
+    ("^{\\circ}", "°"),
+    ("^\\circ", "°"),
+    ("\\degree", "°"),
     ("\\sqrt", "sqrt"),
     ("\\pi", "pi"),
     ("\\times", "*"),
@@ -681,11 +687,7 @@ def _latex_to_plain(value: str) -> str:
 
     text = (value or "").strip()
 
-    for _ in range(5):
-        new_text = _FRACTION_PATTERN.sub(r"(\1)/(\2)", text)
-        if new_text == text:
-            break
-        text = new_text
+    text = _expand_fractions(text)
 
     # Daraja va indeks: "x^{2}" -> "x^2"
     text = re.sub(r"([\^_])\{([^{}]*)\}", r"\1\2", text)
@@ -1169,8 +1171,9 @@ def _check_enrollment(test: Test) -> None:
         raise HTTPException(status_code=403, detail="Test vaqti tugagan")
 
 
-# Yozma javoblar MathLive orqali kiritiladi va LaTeX ko'rinishida saqlanadi
-# ("2\sqrt{3}", "\frac{\pi}{5}"). Bir xil javob turlicha yozilishi mumkin,
+# Yozma javoblar MathLive klaviaturasi orqali LaTeX'da ("2\sqrt{3}",
+# "\frac{\pi}{5}"), yoki oddiy matnda ("2sqrt3", "pi/5") keladi. Bir xil
+# javob turlicha yozilishi mumkin,
 # shuning uchun solishtirishdan oldin hammasini bitta ko'rinishga keltiramiz.
 
 # 1-qadam: LaTeX'ning bir xil ma'noli yozilishlarini birlashtirish
@@ -1189,6 +1192,18 @@ LATEX_REPLACEMENTS = [
     ("\\times", "×"),
     ("\\div", "/"),
     ("$", ""),
+    # MathLive klaviaturasi qo'yadigan maxsus buyruqlar. Matn bu yerga
+    # kelguncha kichik harfga o'tkazilgan: "\exponentialE" -> "\exponentiale".
+    ("\\placeholder{}", ""),
+    ("\\exponentiale", "e"),
+    ("\\imaginaryi", "i"),
+    ("\\operatorname", ""),
+    ("\\mathrm", ""),
+    # Gradus: "30^{\circ}", "30^\circ", "30\degree" -> "30°"
+    ("^{\\circ}", "°"),
+    ("^\\circ", "°"),
+    ("\\degree", "°"),
+    ("\\circ", "°"),
 ]
 
 # 2-qadam: oddiy matn ko'rinishidagi yozilishlar. O'quvchi javobni telefonning
@@ -1209,7 +1224,53 @@ TEXT_ANSWER_REPLACEMENTS = [
     ("–", "-"),
 ]
 
-_FRACTION_PATTERN = re.compile(r"\\frac\{([^{}]*)\}\{([^{}]*)\}")
+
+def _read_latex_argument(text: str, start: int) -> tuple[str, int]:
+    r"""
+    LaTeX buyrug'ining bitta argumentini o'qiydi: "{...}" (ichida boshqa
+    qavslar bo'lsa ham), bitta belgi ("\frac12" dagi "1") yoki bitta buyruq
+    ("\frac\pi2" dagi "\pi"). (argument, keyingi_pozitsiya) qaytaradi.
+    """
+
+    if start >= len(text):
+        return "", start
+
+    if text[start] == "{":
+        depth = 0
+        for index in range(start, len(text)):
+            if text[index] == "{":
+                depth += 1
+            elif text[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start + 1 : index], index + 1
+        return text[start + 1 :], len(text)  # qavs yopilmagan
+
+    if text[start] == "\\":
+        end = start + 1
+        while end < len(text) and text[end].isalpha():
+            end += 1
+        end = max(end, start + 2)
+        return text[start:end], end
+
+    return text[start], start + 1
+
+
+def _expand_fractions(text: str) -> str:
+    r"""
+    \frac{a}{b} -> (a)/(b). Qavslar sanab o'qiladi, shuning uchun ichida
+    ildiz yoki boshqa kasr bo'lsa ham ishlaydi: "\frac{\sqrt{3}}{2}" -> "(\sqrt{3})/(2)".
+    """
+
+    for _ in range(50):
+        position = text.find("\\frac")
+        if position < 0:
+            break
+        numerator, after_numerator = _read_latex_argument(text, position + len("\\frac"))
+        denominator, after_denominator = _read_latex_argument(text, after_numerator)
+        text = f"{text[:position]}({numerator})/({denominator}){text[after_denominator:]}"
+    return text
+
 
 # Qavs ichida faqat bitta "bo'lak" bo'lsa (son, harf, π, ildiz) — qavs
 # ortiqcha: "(3)" -> "3", "√(3)" -> "√3", "(π)/(5)" -> "π/5".
@@ -1268,12 +1329,8 @@ def _normalize_text_answer(value: str) -> str:
     for source, target in LATEX_REPLACEMENTS:
         text = text.replace(source, target)
 
-    # Kasrlar: \frac{a}{b} -> (a)/(b). Ichma-ich kasrlar uchun bir necha marta.
-    for _ in range(5):
-        new_text = _FRACTION_PATTERN.sub(r"(\1)/(\2)", text)
-        if new_text == text:
-            break
-        text = new_text
+    # Kasrlar: \frac{a}{b} -> (a)/(b)
+    text = _expand_fractions(text)
 
     # Qolgan jingalak qavslar oddiy qavsga aylanadi: "\sqrt{x+1}" -> "√(x+1)".
     # Ilgari ular shunchaki o'chirilardi va "√x+1" qolib, ma'no buzilardi.

@@ -568,6 +568,40 @@ select:focus {
   letter-spacing: 0.3px;
 }
 
+/* MathLive maydoni — oddiy .input bilan bir xil ko'rinishda */
+math-field.math-input {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 12px;
+  margin: 6px 0;
+  font-size: 19px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+
+  /* MathLive ichki ranglari */
+  --caret-color: var(--color-primary);
+  --selection-background-color: rgba(99, 102, 241, 0.25);
+  --smart-fence-color: var(--color-primary);
+  --placeholder-color: var(--color-text-muted);
+}
+
+math-field.math-input:focus-within {
+  border-color: var(--color-primary);
+  outline: none;
+}
+
+math-field.math-input::part(virtual-keyboard-toggle) {
+  color: var(--color-primary);
+}
+
+/* Menyu tugmasi ("≡") Telegram ichida kerak emas */
+math-field.math-input::part(menu-toggle) {
+  display: none;
+}
+
 /* Yozma javob qanday yozilishini ko'rsatuvchi namuna */
 .answer-hint {
   margin: 6px 0 0;
@@ -1040,9 +1074,18 @@ table td {
   background: rgba(99, 102, 241, 0.12);
 }
 
-/* Pastki menyu sahifa tagini yopib qo'ymasligi uchun */
+/*
+  Pastki menyu sahifa tagini yopib qo'ymasligi uchun. Matematik klaviatura
+  ochiq bo'lsa, uning balandligi ham qo'shiladi (--keyboard-height'ni app.js
+  o'lchab beradi) — shunda eng pastdagi maydon ham klaviatura ustiga chiqadi.
+*/
 #app {
-  padding-bottom: 96px;
+  padding-bottom: calc(96px + var(--keyboard-height, 0px));
+}
+
+/* Klaviatura ochiq paytda pastki menyu uning ostida chalkashtirmasin */
+body.keyboard-open .bottom-nav {
+  visibility: hidden;
 }
 
 /* ========== Javoblar panjarasi ========== */
@@ -1183,4 +1226,31 @@ table td {
   font-weight: 700;
   min-width: 48px;
   text-align: right;
+}
+
+/* Matematik klaviaturani yopish tugmasi — har doim klaviatura ustida turadi */
+.keyboard-close {
+  position: fixed;
+  right: 12px;
+  bottom: calc(var(--keyboard-height, 280px) + 8px);
+  z-index: 10050;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  color: #ffffff;
+  background: var(--color-primary-dark, #4f46e5);
+  border: none;
+  border-radius: 999px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.keyboard-close[hidden] {
+  display: none;
+}
+
+.keyboard-close:active {
+  transform: scale(0.94);
 }
