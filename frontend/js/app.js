@@ -174,6 +174,41 @@ function setupMathFields(container, onChange) {
   configureMathKeyboard();
 }
 
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (_) {
+    // Ba'zi webview'larda clipboard API yopiq — zaxira yo'l
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+
+  telegram?.HapticFeedback?.notificationOccurred?.("success");
+  showToast(`📋 Nusxalandi: ${text}`);
+}
+
+// Kod yozilgan joyni bir bosish bilan nusxalash. Tinglovchi "capture"
+// bosqichida ishlaydi — shunda test kartasining ichidagi kodni bosganda
+// karta ochilib ketmaydi.
+appElement.addEventListener(
+  "click",
+  (event) => {
+    const target = event.target.closest("[data-copy]");
+    if (!target) return;
+
+    event.stopPropagation();
+    event.preventDefault();
+    copyToClipboard(target.dataset.copy);
+  },
+  true
+);
+
 function askConfirm(message) {
   // Telegram ichida chiroyli dialog ko'rsatadi, oddiy brauzerda esa odatdagi confirm.
   return new Promise((resolve) => {
@@ -847,7 +882,7 @@ async function renderTeacherDashboard() {
                     ${testBadges(test)}
                   </h3>
                   <p><b>${escapeHtml(test.subject)}</b></p>
-                  <p class="subtitle" style="margin:0">Test kodi: ${test.code}</p>
+                  <p class="subtitle" style="margin:0">Test kodi: <span class="copy-code" data-copy="${test.code}">${test.code} 📋</span></p>
                   <p class="subtitle" style="margin:0">Yaratilgan vaqti: ${formatDateTime(test.created_at)}</p>
                 </div>
                 <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
@@ -1718,7 +1753,7 @@ async function renderTestDetail(testId) {
     <h2 style="text-align:center">${escapeHtml(test.title)}</h2>
     <div class="row-between" style="margin-bottom:14px">
       <div>${testBadges(test)}</div>
-      <span class="subtitle" style="margin:0">Kod: <b>${test.code}</b></span>
+      <span class="subtitle" style="margin:0">Kod: <b class="copy-code" data-copy="${test.code}">${test.code} 📋</b></span>
     </div>
     ${
       test.required_channel
