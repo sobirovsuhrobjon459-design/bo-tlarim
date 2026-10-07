@@ -1651,35 +1651,6 @@ async function renderTeacherDashboard() {
     throw error;
   }
 
-  const visibleTests = tests.filter((test) => (teacherTestsTab === "closed" ? test.status === "closed" : test.status !== "closed"));
-
-  const testCards =
-    visibleTests
-      .map(
-        (test) => `
-          <div class="card card-entrance" data-test-id="${test.id}">
-            <div class="card-body" style="width:100%">
-              <div class="row-between" style="align-items:flex-start">
-                <div>
-                  <h3 style="margin-bottom:6px">
-                    ${escapeHtml(test.title)}
-                    ${testBadges(test)}
-                  </h3>
-                  <p><b>${escapeHtml(test.subject)}</b></p>
-                  <p class="subtitle" style="margin:0">Test kodi: ${copyCodeChip(test.code)}</p>
-                  <p class="subtitle" style="margin:0">Yaratilgan vaqti: ${formatDateTime(test.created_at)}</p>
-                </div>
-                <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
-                  ${deleteButton("data-delete-test", test.id)}
-                  <span style="color:var(--color-text-muted);font-size:22px">›</span>
-                </div>
-              </div>
-            </div>
-          </div>`
-      )
-      .join("") ||
-    `<p class="subtitle">${teacherTestsTab === "closed" ? "Yopilgan testlar yo'q" : "Hali testlar yo'q"}</p>`;
-
   showPage(`
     ${pageHeader("Testlar")}
     <div class="card" style="cursor:default">
@@ -1716,7 +1687,7 @@ async function renderTeacherDashboard() {
       <button class="tab ${teacherTestsTab === "active" ? "active" : ""}" data-tab="active">Jarayondagi testlar</button>
       <button class="tab ${teacherTestsTab === "closed" ? "active" : ""}" data-tab="closed">Yopilgan testlar</button>
     </div>
-    ${testCards}
+    <div id="teacher-test-list"></div>
   `);
 
   wireTeacherChrome("tests");
@@ -1728,21 +1699,59 @@ async function renderTeacherDashboard() {
   document.getElementById("buy-credit-button").addEventListener("click", guarded(renderCreditPurchaseForm));
   document.getElementById("new-test-button").addEventListener("click", () => renderNewTestForm("rash"));
 
+  // Tab almashganda faqat ro'yxat qayta chiziladi — testlar allaqachon
+  // yuklangan. Ilgari butun sahifa serverdan qayta olinib, 1–2 soniya
+  // "yangilanib" turardi va sahifa tepaga sakrardi.
   document.querySelectorAll(".tab").forEach((tab) => {
-    tab.addEventListener(
-      "click",
-      guarded(async () => {
-        teacherTestsTab = tab.dataset.tab;
-        await renderTeacherDashboard();
-      })
-    );
+    tab.addEventListener("click", () => {
+      if (teacherTestsTab === tab.dataset.tab) return;
+      teacherTestsTab = tab.dataset.tab;
+      document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item === tab));
+      renderTeacherTestList(tests);
+    });
   });
 
-  document.querySelectorAll("[data-test-id]").forEach((card) => {
+  renderTeacherTestList(tests);
+}
+
+function renderTeacherTestList(tests) {
+  const container = document.getElementById("teacher-test-list");
+  if (!container) return;
+
+  const visibleTests = tests.filter((test) => (teacherTestsTab === "closed" ? test.status === "closed" : test.status !== "closed"));
+
+  container.innerHTML =
+    visibleTests
+      .map(
+        (test) => `
+          <div class="card card-entrance" data-test-id="${test.id}">
+            <div class="card-body" style="width:100%">
+              <div class="row-between" style="align-items:flex-start">
+                <div>
+                  <h3 style="margin-bottom:6px">
+                    ${escapeHtml(test.title)}
+                    ${testBadges(test)}
+                  </h3>
+                  <p><b>${escapeHtml(test.subject)}</b></p>
+                  <p class="subtitle" style="margin:0">Test kodi: ${copyCodeChip(test.code)}</p>
+                  <p class="subtitle" style="margin:0">Yaratilgan vaqti: ${formatDateTime(test.created_at)}</p>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+                  ${deleteButton("data-delete-test", test.id)}
+                  <span style="color:var(--color-text-muted);font-size:22px">›</span>
+                </div>
+              </div>
+            </div>
+          </div>`
+      )
+      .join("") ||
+    `<p class="subtitle">${teacherTestsTab === "closed" ? "Yopilgan testlar yo'q" : "Hali testlar yo'q"}</p>`;
+
+  container.querySelectorAll("[data-test-id]").forEach((card) => {
     card.addEventListener("click", guarded(() => renderTestDetail(Number(card.dataset.testId))));
   });
 
-  document.querySelectorAll("[data-delete-test]").forEach((button) => {
+  container.querySelectorAll("[data-delete-test]").forEach((button) => {
     button.addEventListener(
       "click",
       guarded(async (event) => {
