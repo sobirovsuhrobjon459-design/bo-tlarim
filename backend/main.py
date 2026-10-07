@@ -17,6 +17,7 @@ lekin "Web Service" bepul — shuning uchun ikkalasini bitta xizmatga birlashtir
 
 import asyncio
 import base64
+import binascii
 import hmac
 import io
 import json
@@ -56,6 +57,7 @@ from .database import (
     Attempt,
     Base,
     CreditPurchase,
+    CardTopUpIn,
     CreditPurchaseIn,
     FinishIn,
     KeyQuestion,
@@ -106,6 +108,10 @@ def _add_missing_columns() -> None:
             "payme_transaction_id": "VARCHAR(50)",
             "performed_at": "TIMESTAMP",
             "cancelled_at": "TIMESTAMP",
+        },
+        "credit_purchases": {
+            "method": "VARCHAR(10) DEFAULT 'payme'",
+            "receipt_file_id": "VARCHAR(200)",
         },
     }
 
@@ -1176,26 +1182,47 @@ LATEX_REPLACEMENTS = [
     ("\\;", ""),
     ("\\dfrac", "\\frac"),
     ("\\tfrac", "\\frac"),
-    ("\\cdot", "\\times"),
+    # Ko'paytirish belgisi har doim "×" bo'ladi — o'quvchi "*" yozadi,
+    # eski LaTeX kalitda esa "\cdot" yoki "\times" turishi mumkin. Ilgari
+    # "\times" teskari chiziq olib tashlangach "times" so'ziga aylanib qolardi.
+    ("\\cdot", "×"),
+    ("\\times", "×"),
+    ("\\div", "/"),
     ("$", ""),
 ]
 
-# 2-qadam: oddiy matn ko'rinishidagi yozilishlar ("sqrt", "pi", "^2")
+# 2-qadam: oddiy matn ko'rinishidagi yozilishlar. O'quvchi javobni telefonning
+# oddiy klaviaturasida yozadi: "2sqrt3", "pi/5", "x^2", "2*pi".
 TEXT_ANSWER_REPLACEMENTS = [
     (",", "."),
     ("sqrt", "√"),
     ("ildiz", "√"),
     ("pi", "π"),
-    # Daraja belgilari ko'paytirishdan OLDIN almashtiriladi, aks holda
-    # "x**2" dagi yulduzchalar avval "×" ga aylanib ketadi.
-    ("**2", "²"),
-    ("**3", "³"),
-    ("^2", "²"),
-    ("^3", "³"),
+    # "**" — daraja (Python uslubi). Ko'paytirishdan OLDIN almashtiriladi,
+    # aks holda yulduzchalar avval "×" ga aylanib ketadi.
+    ("**", "^"),
     ("*", "×"),
+    # Telefon klaviaturalaridagi o'xshash belgilar
+    ("·", "×"),
+    ("÷", "/"),
+    ("−", "-"),
+    ("–", "-"),
 ]
 
 _FRACTION_PATTERN = re.compile(r"\\frac\{([^{}]*)\}\{([^{}]*)\}")
+
+# Qavs ichida faqat bitta "bo'lak" bo'lsa (son, harf, π, ildiz) — qavs
+# ortiqcha: "(3)" -> "3", "√(3)" -> "√3", "(π)/(5)" -> "π/5".
+# Amal bor bo'lsa ("(x+1)") qavs saqlanadi, aks holda ma'no o'zgaradi.
+_SIMPLE_PARENS_PATTERN = re.compile(r"\((-?[0-9a-zπ.√²³]+)\)")
+
+# "^2" -> "²", lekin "^23" ni "²3" qilib yubormaslik uchun keyingi belgi raqam bo'lmasin
+_SQUARE_PATTERN = re.compile(r"\^2(?![0-9.])")
+_CUBE_PATTERN = re.compile(r"\^3(?![0-9.])")
+
+# Yashirin ko'paytirish: "2×π" va "2π" — bir xil. Lekin "2×3" ni "23" qilib
+# bo'lmaydi, shuning uchun "×" faqat harf, π, ildiz yoki qavs oldida olib tashlanadi.
+_IMPLICIT_MULTIPLY_PATTERN = re.compile(r"×(?=[a-zπ√(])")
 
 
 def _split_accepted_variants(correct: str) -> list[str]:
@@ -1215,12 +1242,25 @@ def _split_accepted_variants(correct: str) -> list[str]:
     ]
 
 
+def _strip_simple_parens(text: str) -> str:
+    """Ortiqcha qavslarni olib tashlaydi (ichma-ich bo'lsa ham)."""
+    for _ in range(10):
+        new_text = _SIMPLE_PARENS_PATTERN.sub(r"\1", text)
+        if new_text == text:
+            break
+        text = new_text
+    return text
+
+
 def _normalize_text_answer(value: str) -> str:
     """
     Yozma javobni solishtirishga tayyorlaydi.
 
-    Probel, katta-kichik harf, LaTeX buyruqlari va yozilish farqlari yo'qoladi:
-    "2\\sqrt{3}", "2 sqrt 3" va "2 ildiz 3" — hammasi bir xil natija beradi.
+    Bir xil javobning turli yozilishlari bitta ko'rinishga keladi. Bu ikki
+    tomonlama ishlaydi: o'quvchi oddiy klaviaturada yozadi ("2sqrt(3)",
+    "pi/5", "1/2"), eski testlarning kaliti esa LaTeX'da saqlangan bo'lishi
+    mumkin ("2\\sqrt{3}", "\\frac{\\pi}{5}", "\\frac{1}{2}") — ikkalasi ham
+    bir xil natija beradi.
     """
 
     text = "".join((value or "").split()).lower()
@@ -1235,13 +1275,22 @@ def _normalize_text_answer(value: str) -> str:
             break
         text = new_text
 
-    text = text.replace("{", "").replace("}", "")
+    # Qolgan jingalak qavslar oddiy qavsga aylanadi: "\sqrt{x+1}" -> "√(x+1)".
+    # Ilgari ular shunchaki o'chirilardi va "√x+1" qolib, ma'no buzilardi.
+    text = text.replace("{", "(").replace("}", ")")
 
     for source, target in TEXT_ANSWER_REPLACEMENTS:
         text = text.replace(source, target)
 
-    # Qolgan LaTeX teskari chiziqlari: "\π" -> "π", "\times" -> "times"
-    return text.replace("\\", "")
+    # Qolgan LaTeX teskari chiziqlari: "\π" -> "π", "\sin" -> "sin"
+    text = text.replace("\\", "")
+
+    text = _strip_simple_parens(text)
+
+    text = _SQUARE_PATTERN.sub("²", text)
+    text = _CUBE_PATTERN.sub("³", text)
+
+    return _IMPLICIT_MULTIPLY_PATTERN.sub("", text)
 
 
 def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str, str]) -> int:
@@ -1499,6 +1548,9 @@ def teacher_balance(teacher: Teacher = Depends(get_current_teacher)):
         "credits": teacher.credits,
         "admin_card": ADMIN_CARD_NUMBER,
         "credit_price_tiers": CREDIT_PRICE_TIERS_DISPLAY,
+        # Qaysi to'lov usullari ishlayapti — frontend faqat shularni ko'rsatadi
+        "payme_enabled": bool(PAYME_MERCHANT_ID),
+        "card_enabled": _card_topup_enabled(),
     }
 
 
@@ -1571,7 +1623,220 @@ def list_own_credit_purchases(teacher: Teacher = Depends(get_current_teacher), d
     purchases = db.scalars(
         select(CreditPurchase).where(CreditPurchase.teacher_id == teacher.id).order_by(CreditPurchase.id.desc())
     ).all()
-    return [{"id": p.id, "credits": p.credits, "amount": p.amount, "status": p.status} for p in purchases]
+    return [
+        {"id": p.id, "credits": p.credits, "amount": p.amount, "status": p.status, "method": p.method}
+        for p in purchases
+    ]
+
+
+# ========== 5.1) Karta orqali kredit sotib olish ==========
+#
+# O'qituvchi admin kartasiga o'zi pul o'tkazadi va chek rasmini yuboradi.
+# Bot chekni admin'ga ✅/❌ tugmalari bilan yuboradi; admin tasdiqlasa,
+# o'qituvchiga kredit avtomatik yoziladi va unga xabar boradi.
+#
+# Nega to'liq avtomatik emas: Uzcard/Humo shaxsiy kartaga tushgan pulni
+# bot tekshira oladigan ochiq API bermaydi. Chekni soxtalashtirish oson,
+# shuning uchun oxirgi qarorni pul tushganini ko'ra oladigan odam — admin
+# qiladi. Unga faqat bitta tugmani bosish qoladi.
+
+# Rasm turlarini ularning birinchi baytlaridan aniqlaymiz (fayl nomiga ishonmaymiz)
+RECEIPT_SIGNATURES = {
+    b"\xff\xd8\xff": ("image/jpeg", "jpg"),
+    b"\x89PNG\r\n\x1a\n": ("image/png", "png"),
+    b"RIFF": ("image/webp", "webp"),
+}
+RECEIPT_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _card_topup_enabled() -> bool:
+    """Karta orqali to'lov faqat karta raqami VA chekni oladigan admin bo'lsa ishlaydi."""
+    return bool(ADMIN_CARD_NUMBER and ADMIN_ID and BOT_TOKEN)
+
+
+def _decode_receipt(receipt_base64: str) -> tuple[bytes, str, str]:
+    """Chek rasmini base64'dan o'qiydi va rasm ekanini tekshiradi."""
+
+    # "data:image/jpeg;base64,..." ko'rinishida kelishi ham mumkin
+    if receipt_base64.startswith("data:"):
+        receipt_base64 = receipt_base64.split(",", 1)[-1]
+
+    try:
+        data = base64.b64decode(receipt_base64, validate=True)
+    except (ValueError, binascii.Error):
+        raise HTTPException(status_code=422, detail="Chek rasmi o'qilmadi, qaytadan tanlang")
+
+    if len(data) > RECEIPT_MAX_BYTES:
+        raise HTTPException(status_code=422, detail="Chek rasmi juda katta (5 MB dan oshmasin)")
+
+    for signature, (mime, extension) in RECEIPT_SIGNATURES.items():
+        if data.startswith(signature):
+            if signature == b"RIFF" and data[8:12] != b"WEBP":
+                continue
+            return data, mime, extension
+
+    raise HTTPException(status_code=422, detail="Chek rasm bo'lishi kerak (JPG, PNG yoki WEBP)")
+
+
+def _format_sum(amount: int) -> str:
+    """150000 -> "150 000" (o'qish oson bo'lishi uchun)."""
+    return f"{amount:,}".replace(",", " ")
+
+
+def _card_topup_caption(purchase: CreditPurchase, teacher: Teacher) -> str:
+    return (
+        "💳 Karta orqali kredit so'rovi\n\n"
+        f"O'qituvchi: {teacher.user.full_name}\n"
+        f"Telegram ID: {teacher.user.tg_id}\n"
+        f"Kredit: {purchase.credits} ta\n"
+        f"Summa: {_format_sum(purchase.amount)} so'm\n\n"
+        "Kartangizga shu summa tushganini tekshirib, tasdiqlang."
+    )
+
+
+def _send_receipt_to_admin(purchase: CreditPurchase, teacher: Teacher, image: bytes, mime: str, extension: str) -> str:
+    """
+    Chekni admin'ning Telegram chatiga ✅/❌ tugmalari bilan yuboradi.
+    Telegram'dagi file_id'ni qaytaradi (rasm keyin shu orqali olinadi).
+    """
+
+    response = httpx.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+        data={
+            "chat_id": ADMIN_ID,
+            "caption": _card_topup_caption(purchase, teacher),
+            "reply_markup": json.dumps(
+                {
+                    "inline_keyboard": [
+                        [
+                            {"text": "✅ Pul tushdi", "callback_data": f"topup_approve:{purchase.id}"},
+                            {"text": "❌ Rad etish", "callback_data": f"topup_reject:{purchase.id}"},
+                        ]
+                    ]
+                }
+            ),
+        },
+        files={"photo": (f"chek_{purchase.id}.{extension}", image, mime)},
+        timeout=30,
+    )
+    data = response.json()
+    if not data.get("ok"):
+        raise RuntimeError(data.get("description") or "Telegram rasmni qabul qilmadi")
+
+    # Telegram bir rasmni bir nechta o'lchamda saqlaydi — eng kattasini olamiz
+    return data["result"]["photo"][-1]["file_id"]
+
+
+def _notify_teacher(teacher: Teacher, text: str) -> None:
+    """O'qituvchiga bot orqali xabar yuboradi. Yuborilmasa ham jarayon to'xtamaydi."""
+
+    try:
+        httpx.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id": teacher.user.tg_id, "text": text},
+            timeout=10,
+        )
+    except Exception:
+        logging.getLogger("backend").warning("O'qituvchiga xabar yuborilmadi", exc_info=True)
+
+
+def decide_card_topup(db: Session, purchase_id: int, approve: bool) -> tuple[bool, str]:
+    """
+    Karta orqali to'lovni tasdiqlaydi yoki rad etadi.
+
+    Ikki joydan chaqiriladi: bot (admin chekdagi tugmani bosganda) va admin
+    paneli. Mantiq bitta joyda bo'lgani uchun ikkala yo'l ham bir xil ishlaydi.
+
+    Faqat "pending" holatdagi so'rov o'zgaradi — shuning uchun tugma ikki
+    marta bosilsa ham kredit ikki marta yozilmaydi.
+
+    (muvaffaqiyatli_mi, admin'ga ko'rsatiladigan matn) qaytaradi.
+    """
+
+    purchase = db.scalar(
+        select(CreditPurchase).where(CreditPurchase.id == purchase_id).with_for_update()
+    )
+    if not purchase or purchase.method != "card":
+        return False, "So'rov topilmadi"
+    if purchase.status != "pending":
+        return False, "So'rov allaqachon ko'rib chiqilgan"
+
+    teacher = purchase.teacher
+    amount_text = _format_sum(purchase.amount)
+
+    if approve:
+        purchase.status = "paid"
+        purchase.performed_at = utcnow()
+        teacher.credits += purchase.credits
+        db.commit()
+
+        _notify_teacher(
+            teacher,
+            f"✅ To'lovingiz tasdiqlandi!\n\n"
+            f"Hisobingizga {purchase.credits} ta kredit qo'shildi.\n"
+            f"Joriy kredit: {teacher.credits} ta",
+        )
+        return True, (
+            f"✅ Tasdiqlandi: {teacher.user.full_name} — {purchase.credits} kredit ({amount_text} so'm)\n"
+            f"Uning krediti endi: {teacher.credits} ta"
+        )
+
+    purchase.status = "cancelled"
+    purchase.cancelled_at = utcnow()
+    db.commit()
+
+    _notify_teacher(
+        teacher,
+        f"❌ {amount_text} so'mlik to'lovingiz tasdiqlanmadi.\n\n"
+        "Chek noto'g'ri yoki kartaga pul tushmagan bo'lishi mumkin. "
+        "Savol bo'lsa, admin bilan bog'laning.",
+    )
+    return True, f"❌ Rad etildi: {teacher.user.full_name} — {purchase.credits} kredit ({amount_text} so'm)"
+
+
+@app.post("/api/teacher/card-topups")
+def create_card_topup(
+    body: CardTopUpIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
+):
+    """O'qituvchi admin kartasiga pul o'tkazgach, chek rasmini yuboradi."""
+
+    if not _card_topup_enabled():
+        raise HTTPException(status_code=503, detail="Karta orqali to'lov hali sozlanmagan, admin bilan bog'laning")
+
+    # Bir vaqtda faqat bitta kutilayotgan so'rov — aks holda bir xil chek
+    # bilan ketma-ket so'rov yuborib, admin'ni chalg'itish mumkin edi.
+    waiting = db.scalar(
+        select(CreditPurchase.id).where(
+            CreditPurchase.teacher_id == teacher.id,
+            CreditPurchase.method == "card",
+            CreditPurchase.status == "pending",
+        )
+    )
+    if waiting:
+        raise HTTPException(
+            status_code=409,
+            detail="Oldingi to'lovingiz hali tekshirilmoqda. Admin tasdiqlagach, yangisini yuborishingiz mumkin.",
+        )
+
+    image, mime, extension = _decode_receipt(body.receipt_base64)
+    amount = _calculate_credit_price(body.credits)
+
+    purchase = CreditPurchase(teacher_id=teacher.id, credits=body.credits, amount=amount, method="card")
+    db.add(purchase)
+    db.commit()
+
+    try:
+        purchase.receipt_file_id = _send_receipt_to_admin(purchase, teacher, image, mime, extension)
+        db.commit()
+    except Exception:
+        # Admin chekni ko'rmasa, so'rov hech qachon tasdiqlanmaydi — shuning
+        # uchun uni saqlab qo'ymaymiz va o'qituvchiga qayta urinishni aytamiz.
+        logging.getLogger("backend").warning("Chek admin'ga yuborilmadi", exc_info=True)
+        db.delete(purchase)
+        db.commit()
+        raise HTTPException(status_code=502, detail="Chek yuborilmadi, bir ozdan keyin qayta urinib ko'ring")
+
+    return {"id": purchase.id, "credits": purchase.credits, "amount": purchase.amount, "status": purchase.status}
 
 
 def _participant_key_expression():
@@ -2414,9 +2679,16 @@ def _payme_find_order_by_account(params: dict, db: Session):
         if raw_id in (None, ""):
             continue
         try:
-            return db.get(model, int(raw_id))
+            order = db.get(model, int(raw_id))
         except (TypeError, ValueError):
             return None
+
+        # Karta orqali qilingan xaridni Payme to'lay olmaydi — u admin
+        # tasdig'ini kutadi. Aks holda bitta buyurtma ikki yo'l bilan (chek +
+        # Payme) ikki marta kredit olishi mumkin edi.
+        if isinstance(order, CreditPurchase) and order.method != "payme":
+            return None
+        return order
 
     return None
 
@@ -2814,6 +3086,88 @@ def admin_reject_withdrawal(request_id: int, admin: User = Depends(get_current_a
     return {"ok": True}
 
 
+@app.get("/api/admin/card-topups")
+def admin_list_card_topups(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """
+    Tasdiq kutayotgan karta to'lovlari.
+
+    Asosan admin chekni Telegram'da ko'rib, o'sha yerda tugmani bosadi. Bu
+    ro'yxat — zaxira yo'l: xabar o'tkazib yuborilgan yoki o'chirilgan bo'lsa.
+    """
+
+    purchases = db.scalars(
+        select(CreditPurchase)
+        .where(CreditPurchase.method == "card", CreditPurchase.status == "pending")
+        .order_by(CreditPurchase.id)
+    ).all()
+
+    return [
+        {
+            "id": purchase.id,
+            "teacher": purchase.teacher.user.full_name,
+            "credits": purchase.credits,
+            "amount": purchase.amount,
+            "created_at": purchase.created_at,
+            "has_receipt": bool(purchase.receipt_file_id),
+        }
+        for purchase in purchases
+    ]
+
+
+@app.get("/api/admin/card-topups/{purchase_id}/receipt")
+def admin_card_topup_receipt(
+    purchase_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)
+):
+    """
+    Chek rasmini ko'rsatadi. Rasm serverda saqlanmaydi — Telegram'dan
+    file_id orqali olinadi (Render'da fayllar har deployda o'chadi).
+    """
+
+    purchase = db.get(CreditPurchase, purchase_id)
+    if not purchase or not purchase.receipt_file_id:
+        raise HTTPException(status_code=404, detail="Chek topilmadi")
+
+    try:
+        file_info = httpx.get(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/getFile",
+            params={"file_id": purchase.receipt_file_id},
+            timeout=15,
+        ).json()
+        file_path = file_info["result"]["file_path"]
+        image = httpx.get(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}", timeout=30)
+        image.raise_for_status()
+    except Exception:
+        logging.getLogger("backend").warning("Chek rasmi Telegram'dan olinmadi", exc_info=True)
+        raise HTTPException(status_code=502, detail="Chek rasmini olib bo'lmadi")
+
+    return StreamingResponse(
+        io.BytesIO(image.content),
+        media_type=image.headers.get("content-type", "image/jpeg"),
+        # Rasm maxfiy — brauzer yoki oraliq serverlar uni saqlab qolmasin
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@app.post("/api/admin/card-topups/{purchase_id}/approve")
+def admin_approve_card_topup(purchase_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Kartaga pul tushgani tasdiqlanadi — o'qituvchiga kredit yoziladi."""
+
+    ok, message = decide_card_topup(db, purchase_id, approve=True)
+    if not ok:
+        raise HTTPException(status_code=409, detail=message)
+    return {"ok": True, "message": message}
+
+
+@app.post("/api/admin/card-topups/{purchase_id}/reject")
+def admin_reject_card_topup(purchase_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """To'lov rad etiladi — kredit yozilmaydi, o'qituvchiga xabar boradi."""
+
+    ok, message = decide_card_topup(db, purchase_id, approve=False)
+    if not ok:
+        raise HTTPException(status_code=409, detail=message)
+    return {"ok": True, "message": message}
+
+
 # Barcha boshqa manzillarni frontend papkasidan beradi (index.html, css, js)
 def _asset_version() -> str:
     """
@@ -2826,11 +3180,7 @@ def _asset_version() -> str:
     """
 
     latest = 0.0
-    for path in (
-        FRONTEND_DIR / "js" / "app.js",
-        FRONTEND_DIR / "js" / "keyboard.js",
-        FRONTEND_DIR / "css" / "style.css",
-    ):
+    for path in (FRONTEND_DIR / "js" / "app.js", FRONTEND_DIR / "css" / "style.css"):
         if path.exists():
             latest = max(latest, path.stat().st_mtime)
     return format(int(latest), "x")
@@ -2842,7 +3192,7 @@ def serve_index():
 
     html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
     version = _asset_version()
-    for asset in ("/js/app.js", "/js/keyboard.js", "/css/style.css"):
+    for asset in ("/js/app.js", "/css/style.css"):
         html = html.replace(f'"{asset}"', f'"{asset}?v={version}"')
 
     return HTMLResponse(

@@ -270,6 +270,41 @@ select {
   o'zimiznikini chizamiz, aks holda u balandlikka moslashmay, kichik bo'lib
   qolardi. Shuning uchun o'ng tomonda strelkaga joy qoldiramiz.
 */
+/*
+  Sana-vaqt maydonlari (testning boshlanish va tugash vaqti) ham xuddi
+  ro'yxatdan tanlash maydonlaridek baland va qalin — bir sahifada yonma-yon
+  turadi, shuning uchun bir xil ko'rinishi kerak.
+*/
+input[type="datetime-local"],
+input[type="date"],
+input[type="time"] {
+  /* Aniq balandlik: sana maydonining ichki qatori brauzerga qarab 1-2px
+     farq qiladi, shunda yonidagi tanlash maydonlari bilan bir tekis turadi */
+  height: 52px;
+  min-height: 52px;
+  padding: 0 16px;
+  font-size: 16px;
+  font-weight: 600;
+  /* Ba'zi telefonlarda bu maydon matnga qarab torayib qoladi — to'liq kenglikda tursin */
+  display: block;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* Kalendar belgisi qorong'i fonda ham ko'rinsin */
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+[data-theme="dark"] input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator,
+[data-theme="dark"] input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+}
+
 select {
   min-height: 52px;
   padding: 14px 44px 14px 16px;
@@ -524,45 +559,20 @@ select:focus {
   border-bottom: 1px solid var(--color-border);
 }
 
-/* Yozma javob maydoni (MathLive) — oddiy input bilan bir xil ko'rinishda */
-.math-field {
-  display: block;
-  flex: 1;
-  width: 100%;
-  padding: 12px 14px;
-  margin: 10px 0;
-  font-size: 16px;
-  background: var(--color-surface);
-  color: var(--color-text);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-
-  /* MathLive ichki ranglari */
-  --caret-color: var(--color-primary);
-  --selection-background-color: rgba(99, 102, 241, 0.25);
-  --smart-fence-color: var(--color-primary);
-}
-
-.math-field:focus-within {
-  border-color: var(--color-primary);
-  outline: none;
-}
-
-.math-field::part(virtual-keyboard-toggle) {
-  color: var(--color-primary);
-}
-
 /*
-  Klaviatura ochilganda sahifa tagida joy qolsin — aks holda o'quvchi
-  yozayotgan javob maydoni klaviatura ostida ko'rinmay qoladi.
-
-  Balandlikni app.js o'lchab, --keyboard-height o'zgaruvchisiga yozib beradi
-  (qarang: syncMathKeyboardLayout). Ilgari bu yerda MathLive'ning ichki klass
-  nomiga tayangan qoida turgan edi, lekin u klass mavjud emas — ya'ni qoida
-  hech qachon ishlamagan va maydon klaviatura tagida qolib ketardi.
+  Yozma javob maydoni — oddiy matn maydoni (.input) ustiga bir oz qo'shimcha:
+  monospace emas, lekin raqam va belgilar aniq ajralib tursin.
 */
-#app {
-  transition: padding-bottom 0.18s ease;
+.math-input {
+  font-size: 17px;
+  letter-spacing: 0.3px;
+}
+
+/* Yozma javob qanday yozilishini ko'rsatuvchi namuna */
+.answer-hint {
+  margin: 6px 0 0;
+  font-size: 13px;
+  opacity: 0.85;
 }
 
 /* Yozma savol bloki: sarlavha + a/b qatorlari */
@@ -589,7 +599,7 @@ select:focus {
   min-width: 0;
 }
 
-.key-question .variant-list .math-field {
+.key-question .variant-list .math-input {
   margin: 4px 0;
 }
 
@@ -1030,12 +1040,9 @@ table td {
   background: rgba(99, 102, 241, 0.12);
 }
 
-/*
-  Sahifa tagidagi bo'sh joy: pastki menyu (96px) uchun, hamda matematik
-  klaviatura ochiq bo'lsa — uning balandligi uchun ham.
-*/
+/* Pastki menyu sahifa tagini yopib qo'ymasligi uchun */
 #app {
-  padding-bottom: calc(96px + var(--keyboard-height, 0px));
+  padding-bottom: 96px;
 }
 
 /* ========== Javoblar panjarasi ========== */
@@ -1101,19 +1108,14 @@ table td {
   text-align: right;
 }
 
-.written-cell .math-field {
+.written-cell .math-input {
   margin: 0 0 6px;
   padding: 8px 10px;
   background: var(--color-bg);
 }
 
-.written-cell .math-field:last-child {
+.written-cell .math-input:last-child {
   margin-bottom: 0;
-}
-
-/* MathLive'ning "menyu" tugmasi joy egallamasin — faqat klaviatura qolsin */
-math-field::part(menu-toggle) {
-  display: none;
 }
 
 /* ========== Ball taqsimoti diagrammasi ========== */
@@ -1181,31 +1183,4 @@ math-field::part(menu-toggle) {
   font-weight: 700;
   min-width: 48px;
   text-align: right;
-}
-
-/* Matematik klaviaturani yopish tugmasi — har doim klaviatura ustida turadi */
-.keyboard-close {
-  position: fixed;
-  left: 50%;
-  bottom: calc(var(--keyboard-height, 300px) + 8px);
-  z-index: 10050;
-  transform: translateX(-50%);
-  padding: 9px 18px;
-  font-size: 14px;
-  font-weight: 600;
-  font-family: inherit;
-  color: #ffffff;
-  background: var(--color-primary-dark);
-  border: none;
-  border-radius: 999px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
-  cursor: pointer;
-}
-
-.keyboard-close[hidden] {
-  display: none;
-}
-
-.keyboard-close:active {
-  transform: translateX(-50%) scale(0.94);
 }

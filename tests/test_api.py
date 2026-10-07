@@ -39,6 +39,7 @@ os.environ.update(
     PAYME_MERCHANT_ID="test_merchant",
     PAYME_SECRET_KEY="test_secret_key",
     PLATFORM_COMMISSION_PERCENT="30",
+    ADMIN_CARD_NUMBER="8600 1234 5678 9012",
 )
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -343,6 +344,90 @@ def test_yozma_javobning_turli_yozilishlari():
             headers=as_user(1000 + index),
         ).json()
         assert result["correct"] == 1, f"{written!r} to'g'ri deb hisoblanmadi: {result}"
+
+
+def test_oddiy_klaviaturada_yozilgan_javob_eski_latex_kalitga_mos_keladi():
+    """
+    Matematik klaviatura olib tashlandi: o'quvchi endi "2sqrt3", "pi/5" deb
+    yozadi. Eski testlarning kaliti esa LaTeX'da saqlangan — ular baribir
+    to'g'ri tekshirilishi shart.
+    """
+    reset_database()
+    register_teacher()
+    created = create_test(
+        key_questions=[
+            {"number": 1, "question_type": "text", "correct": r"2\sqrt{3}"},
+            {"number": 2, "question_type": "text", "correct": r"\frac{\pi}{5}"},
+            {"number": 3, "question_type": "text", "correct": r"\frac{1}{2}"},
+            {"number": 4, "question_type": "text", "correct": r"2\pi"},
+            {"number": 5, "question_type": "text", "correct": r"\sqrt{x+1}"},
+            {"number": 6, "question_type": "text", "correct": "x^{2}"},
+        ]
+    )
+
+    started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
+    result = client.post(
+        f"/api/attempts/{started['attempt_id']}/finish",
+        json={
+            "answers": {
+                "1": "2sqrt(3)",
+                "2": "pi/5",
+                "3": "1/2",
+                "4": "2*pi",
+                "5": "sqrt(x+1)",
+                "6": "x^2",
+            }
+        },
+        headers=as_user(901),
+    ).json()
+
+    assert result["correct"] == 6, result
+
+
+def test_oddiy_yozuvda_manosi_farqli_javob_xato_hisoblanadi():
+    """Yozilishni soddalashtirish ma'noni o'zgartirib yubormasligi kerak."""
+    reset_database()
+    register_teacher()
+    created = create_test(
+        key_questions=[
+            {"number": 1, "question_type": "text", "correct": r"2\times 3"},
+            {"number": 2, "question_type": "text", "correct": r"\sqrt{x+1}"},
+            {"number": 3, "question_type": "text", "correct": "x^2"},
+        ]
+    )
+
+    started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
+    result = client.post(
+        f"/api/attempts/{started['attempt_id']}/finish",
+        json={
+            "answers": {
+                "1": "23",         # 2×3 emas
+                "2": "sqrt(x)+1",  # √(x+1) emas
+                "3": "x^23",       # x² emas
+            }
+        },
+        headers=as_user(901),
+    ).json()
+
+    assert result["correct"] == 0, result
+
+
+def test_yangi_kalit_oddiy_yozuvda_ham_ishlaydi():
+    """O'qituvchi ham endi kalitni oddiy yozadi; bir nechta variant "|" bilan."""
+    reset_database()
+    register_teacher()
+    created = create_test(
+        key_questions=[{"number": 1, "question_type": "text", "correct": "0,5|1/2"}]
+    )
+
+    for tg_id, written in ((901, "0.5"), (902, "1/2"), (903, "(1)/(2)")):
+        started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(tg_id)).json()
+        result = client.post(
+            f"/api/attempts/{started['attempt_id']}/finish",
+            json={"answers": {"1": written}},
+            headers=as_user(tg_id),
+        ).json()
+        assert result["correct"] == 1, f"{written!r} qabul qilinmadi"
 
 
 def test_yozma_savol_ab_qismlari_bitta_savol():
@@ -982,6 +1067,223 @@ def test_admin_oqituvchilar_royxatini_koradi():
 
     # Oddiy o'qituvchi bu ro'yxatni ko'ra olmaydi
     assert client.get("/api/admin/teachers", headers=as_user(555)).status_code == 403
+
+
+# ========== 7.1) Karta orqali kredit sotib olish ==========
+
+
+# Chek o'rnida: PNG imzosi bilan boshlanadigan kichik "rasm"
+FAKE_RECEIPT = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 300).decode()
+
+
+class TelegramStub:
+    """Telegram'ga ketadigan so'rovlarni ushlab qoladi — haqiqiy xabar yuborilmaydi."""
+
+    def __init__(self, fail_receipt: bool = False):
+        self.fail_receipt = fail_receipt
+        self.receipts: list[str] = []      # admin'ga ketgan cheklar ostidagi matn
+        self.teacher_messages: list[str] = []
+
+    def __enter__(self):
+        self._send, self._notify = main._send_receipt_to_admin, main._notify_teacher
+
+        def send_receipt(purchase, teacher, image, mime, extension):
+            if self.fail_receipt:
+                raise RuntimeError("Telegram javob bermadi")
+            self.receipts.append(main._card_topup_caption(purchase, teacher))
+            return f"file-{purchase.id}"
+
+        main._send_receipt_to_admin = send_receipt
+        main._notify_teacher = lambda teacher, text: self.teacher_messages.append(text)
+        return self
+
+    def __exit__(self, *exc):
+        main._send_receipt_to_admin, main._notify_teacher = self._send, self._notify
+
+
+def send_card_topup(credits: int = 50, tg_id: int = 555, receipt: str = FAKE_RECEIPT):
+    return client.post(
+        "/api/teacher/card-topups",
+        json={"credits": credits, "receipt_base64": receipt},
+        headers=as_user(tg_id),
+    )
+
+
+def test_karta_orqali_chek_adminga_boradi_kredit_hali_yozilmaydi():
+    reset_database()
+    register_teacher()
+    before = credits_of()
+
+    with TelegramStub() as telegram:
+        response = send_card_topup(credits=50)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["amount"] == 50 * 800, response.json()
+    assert response.json()["status"] == "pending"
+
+    # Chek admin'ga summa va o'qituvchi ismi bilan bordi
+    assert len(telegram.receipts) == 1
+    assert "40 000 so'm" in telegram.receipts[0] and "Ali Valiyev" in telegram.receipts[0], telegram.receipts
+
+    # Admin tasdiqlamaguncha kredit yozilmaydi
+    assert credits_of() == before
+
+    history = client.get("/api/teacher/credit-purchases", headers=as_user(555)).json()
+    assert history[0]["method"] == "card" and history[0]["status"] == "pending", history
+
+
+def test_admin_tasdiqlasa_kredit_yoziladi_va_oqituvchiga_xabar_boradi():
+    reset_database()
+    register_teacher()
+    before = credits_of()
+
+    with TelegramStub() as telegram:
+        purchase_id = send_card_topup(credits=50).json()["id"]
+
+        pending = client.get("/api/admin/card-topups", headers=as_user(4242)).json()
+        assert [item["id"] for item in pending] == [purchase_id], pending
+        assert pending[0]["has_receipt"] is True
+
+        approved = client.post(f"/api/admin/card-topups/{purchase_id}/approve", headers=as_user(4242))
+
+    assert approved.status_code == 200, approved.text
+    assert credits_of() == before + 50, credits_of()
+    assert any("tasdiqlandi" in text for text in telegram.teacher_messages), telegram.teacher_messages
+
+    # Kutilayotganlar ro'yxatidan chiqdi, daromadga qo'shildi
+    assert client.get("/api/admin/card-topups", headers=as_user(4242)).json() == []
+    assert client.get("/api/admin/stats", headers=as_user(4242)).json()["credits_revenue"] == 40_000
+
+
+def test_tugma_ikki_marta_bosilsa_kredit_ikki_marta_yozilmaydi():
+    reset_database()
+    register_teacher()
+    before = credits_of()
+
+    with TelegramStub():
+        purchase_id = send_card_topup(credits=50).json()["id"]
+
+        # Bot tugmasi ham, admin paneli ham bitta funksiyani ishlatadi
+        session = SessionLocal()
+        try:
+            first = main.decide_card_topup(session, purchase_id, approve=True)
+            second = main.decide_card_topup(session, purchase_id, approve=True)
+            reject_after = main.decide_card_topup(session, purchase_id, approve=False)
+        finally:
+            session.close()
+
+        again = client.post(f"/api/admin/card-topups/{purchase_id}/approve", headers=as_user(4242))
+
+    assert first[0] is True
+    assert second == (False, "So'rov allaqachon ko'rib chiqilgan"), second
+    assert reject_after[0] is False
+    assert again.status_code == 409
+    assert credits_of() == before + 50, f"kredit ikki marta yozildi: {credits_of()}"
+
+
+def test_admin_rad_etsa_kredit_yozilmaydi():
+    reset_database()
+    register_teacher()
+    before = credits_of()
+
+    with TelegramStub() as telegram:
+        purchase_id = send_card_topup(credits=50).json()["id"]
+        rejected = client.post(f"/api/admin/card-topups/{purchase_id}/reject", headers=as_user(4242))
+
+    assert rejected.status_code == 200, rejected.text
+    assert credits_of() == before
+    assert any("tasdiqlanmadi" in text for text in telegram.teacher_messages), telegram.teacher_messages
+    assert client.get("/api/admin/stats", headers=as_user(4242)).json()["credits_revenue"] == 0
+
+    # Rad etilgandan keyin yangi chek yuborish mumkin
+    with TelegramStub():
+        assert send_card_topup(credits=10).status_code == 200
+
+
+def test_bir_vaqtda_faqat_bitta_kutilayotgan_chek():
+    reset_database()
+    register_teacher()
+
+    with TelegramStub() as telegram:
+        assert send_card_topup().status_code == 200
+        second = send_card_topup()
+
+    assert second.status_code == 409, second.text
+    assert len(telegram.receipts) == 1, "ikkinchi chek ham admin'ga ketib qoldi"
+
+
+def test_rasm_bolmagan_fayl_qabul_qilinmaydi():
+    reset_database()
+    register_teacher()
+
+    not_image = base64.b64encode(b"%PDF-1.4 bu rasm emas" + b" " * 300).decode()
+    with TelegramStub() as telegram:
+        response = send_card_topup(receipt=not_image)
+
+    assert response.status_code == 422, response.text
+    assert telegram.receipts == []
+    assert client.get("/api/teacher/credit-purchases", headers=as_user(555)).json() == []
+
+
+def test_chek_adminga_yetib_bormasa_sorov_saqlanmaydi():
+    """Admin ko'rmagan so'rov hech qachon tasdiqlanmaydi — uni qoldirib bo'lmaydi."""
+    reset_database()
+    register_teacher()
+
+    with TelegramStub(fail_receipt=True):
+        response = send_card_topup()
+
+    assert response.status_code == 502, response.text
+    assert client.get("/api/teacher/credit-purchases", headers=as_user(555)).json() == []
+
+    # Qayta urinish to'sib qo'yilmagan
+    with TelegramStub():
+        assert send_card_topup().status_code == 200
+
+
+def test_karta_sozlanmagan_bolsa_usul_ochiq():
+    reset_database()
+    register_teacher()
+
+    original = main.ADMIN_CARD_NUMBER
+    main.ADMIN_CARD_NUMBER = ""
+    try:
+        assert client.get("/api/teacher/balance", headers=as_user(555)).json()["card_enabled"] is False
+        with TelegramStub():
+            assert send_card_topup().status_code == 503
+    finally:
+        main.ADMIN_CARD_NUMBER = original
+
+    assert client.get("/api/teacher/balance", headers=as_user(555)).json()["card_enabled"] is True
+
+
+def test_karta_sorovini_payme_tolay_olmaydi():
+    """Aks holda bitta buyurtma chek + Payme orqali ikki marta kredit olardi."""
+    reset_database()
+    register_teacher()
+
+    with TelegramStub():
+        purchase = send_card_topup(credits=50).json()
+
+    answer = payme(
+        "CheckPerformTransaction",
+        {"account": {"purchase_id": str(purchase["id"])}, "amount": purchase["amount"] * 100},
+    )
+    assert answer["error"]["code"] == -31050, answer
+
+
+def test_oddiy_oqituvchi_tolovni_tasdiqlay_olmaydi():
+    reset_database()
+    register_teacher(555)
+    register_teacher(666, "Vali", "Aliyev")
+
+    with TelegramStub():
+        purchase_id = send_card_topup(tg_id=555).json()["id"]
+
+    # O'zi ham, boshqa o'qituvchi ham tasdiqlay olmaydi
+    for tg_id in (555, 666):
+        assert client.post(f"/api/admin/card-topups/{purchase_id}/approve", headers=as_user(tg_id)).status_code == 403
+    assert client.get("/api/admin/card-topups", headers=as_user(555)).status_code == 403
 
 
 # ========== 8) O'qituvchi oqimi ==========

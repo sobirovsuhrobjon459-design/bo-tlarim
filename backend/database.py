@@ -346,6 +346,17 @@ class CreditPurchase(Base):
     performed_at: Mapped[datetime | None] = mapped_column(default=None)
     cancelled_at: Mapped[datetime | None] = mapped_column(default=None)
 
+    # To'lov usuli:
+    #   "payme" — Payme sahifasi orqali, webhook avtomatik tasdiqlaydi
+    #   "card"  — o'qituvchi admin kartasiga o'zi pul o'tkazadi va chek rasmini
+    #             yuboradi; admin chekni ko'rib, bir bosishda tasdiqlaydi
+    method: Mapped[str] = mapped_column(String(10), default="payme")
+
+    # Karta orqali to'lovda chek rasmi. Rasmning o'zi serverda saqlanmaydi
+    # (Render'da fayllar vaqtinchalik) — u admin chatiga yuboriladi va
+    # Telegram'ning file_id'si saqlanadi, kerak bo'lsa shu orqali qayta olinadi.
+    receipt_file_id: Mapped[str | None] = mapped_column(String(200), default=None)
+
     teacher: Mapped["Teacher"] = relationship()
 
 
@@ -456,6 +467,20 @@ class CreditPurchaseIn(BaseModel):
     """O'qituvchi kredit sotib olmoqchi bo'lganda yuboriladi."""
 
     credits: int = Field(ge=1, le=100_000)
+
+
+class CardTopUpIn(BaseModel):
+    """
+    Karta orqali kredit sotib olish: o'qituvchi admin kartasiga pul o'tkazgach,
+    chek rasmini yuboradi.
+
+    Rasm base64 matn ko'rinishida keladi (oddiy JSON so'rovda) — fayl yuklash
+    uchun qo'shimcha kutubxona kerak bo'lmasligi uchun. Frontend rasmni
+    yuborishdan oldin kichraytiradi, shuning uchun ~7 MB chegara yetarli.
+    """
+
+    credits: int = Field(ge=1, le=100_000)
+    receipt_base64: str = Field(min_length=100, max_length=7_000_000)
 
 
 class StudentNamesIn(BaseModel):

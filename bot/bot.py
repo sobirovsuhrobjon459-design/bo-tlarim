@@ -144,6 +144,51 @@ async def handle_withdrawal_decision(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@dispatcher.callback_query(F.data.startswith("topup_"))
+async def handle_card_topup_decision(callback: CallbackQuery) -> None:
+    """Admin karta chekidagi "✅ Pul tushdi" / "❌ Rad etish" tugmasini bosganda ishlaydi."""
+
+    from backend.database import ADMIN_ID, SessionLocal
+
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("Bu tugma faqat admin uchun", show_alert=True)
+        return
+
+    action, separator, purchase_id_str = callback.data.partition(":")
+    if not separator or not purchase_id_str.isdigit():
+        await callback.answer("Bu tugma eskirgan", show_alert=True)
+        return
+
+    # Tasdiqlash mantig'i backend'da (admin paneli ham aynan shuni ishlatadi).
+    # Bot backend bilan bitta jarayonda ishlaydi, shuning uchun bu import
+    # tayyor modulni oladi, qaytadan yuklamaydi.
+    from backend.main import decide_card_topup
+
+    def decide() -> tuple[bool, str]:
+        session = SessionLocal()
+        try:
+            return decide_card_topup(session, int(purchase_id_str), approve=action == "topup_approve")
+        finally:
+            session.close()
+
+    # Baza va Telegram'ga so'rov — sinxron ishlar, botni to'xtatib qo'ymasligi
+    # uchun alohida ipda bajariladi.
+    ok, message = await asyncio.to_thread(decide)
+
+    if not ok:
+        await callback.answer(message, show_alert=True)
+        return
+
+    # Chek rasmi ostidagi matn natija bilan almashtiriladi, tugmalar olib tashlanadi —
+    # shunda qaysi so'rov ko'rib chiqilgani chatda darhol ko'rinadi.
+    try:
+        await callback.message.edit_caption(caption=message)
+    except Exception:
+        logger.warning("Chek xabarini yangilab bo'lmadi", exc_info=True)
+
+    await callback.answer("Bajarildi")
+
+
 async def _setup_menu_button() -> None:
     """Chat ichidagi doimiy PLAY tugmasini Mini App'ga ulaydi — Mini App'ni ochishning yagona yo'li shu."""
 

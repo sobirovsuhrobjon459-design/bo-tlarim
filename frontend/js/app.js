@@ -139,11 +139,6 @@ function localTimeToUtcIso(value) {
 }
 
 function showPage(html) {
-  // Matematik klaviatura ochiq qolgan bo'lsa yopiladi — aks holda u yangi
-  // sahifa ustida turib qolardi (yozish maydoni yo'q bo'lsa ham) va "✕
-  // Klaviaturani yopish" tugmasi aloqasi yo'q ekranlarda ko'rinardi.
-  closeMathKeyboard();
-
   // Menyu avval yashiriladi — kerak bo'lsa, sahifa o'zi qaytadan ko'rsatadi.
   // Ikkalasi bitta qadamda bo'lgani uchun ekranda miltillash sezilmaydi.
   hideBottomNav();
@@ -172,168 +167,76 @@ function showToast(message) {
 }
 
 /*
-  Yozma javoblar MathLive kutubxonasi orqali kiritiladi (index.html'da ulangan).
-  <math-field> oddiy input kabi ishlaydi, lekin ildiz, kasr, daraja, pi kabi
-  belgilarni to'g'ri ko'rinishda yozish imkonini beradi va o'zining matematik
-  klaviaturasini chiqaradi. Qiymati LaTeX ko'rinishida saqlanadi: "2\sqrt{3}".
+  Yozma javoblar — oddiy matn maydoni, telefonning o'z klaviaturasi bilan.
+
+  Ilgari bu yerda MathLive matematik klaviaturasi bor edi, lekin u Telegram
+  ichida barqaror ishlamadi (yopilmay qolardi, sahifalar ustida turib qolardi).
+  Endi o'quvchi javobni oddiy yozadi:
+
+      2sqrt3    pi/5    1/2    x^2    2*pi    0,5
+
+  Server bu yozuvlarni o'qituvchi kiritgan javob bilan "ma'nosi bo'yicha"
+  solishtiradi (qarang: backend _normalize_text_answer) — ya'ni "2sqrt(3)",
+  "2 ildiz 3" va eski testlardagi "2\sqrt{3}" hammasi bir xil hisoblanadi.
 */
 
+const ANSWER_INPUT_HINT = "Yozish namunalari: 2sqrt3 · pi/5 · 1/2 · x^2 · 0,5";
+
+function latexToPlain(value) {
+  /*
+    Eski testlardagi javoblar LaTeX'da saqlangan ("2\sqrt{3}", "\frac{\pi}{5}").
+    Ular oddiy matn maydonida tushunarli ko'rinishi uchun soddalashtiriladi:
+    "2√(3)", "(π)/(5)". Server buni asl LaTeX bilan baribir teng deb biladi.
+  */
+  let text = String(value ?? "").trim();
+  if (!text.includes("\\")) return text; // allaqachon oddiy matn
+
+  text = text
+    .replace(/\\left|\\right/g, "")
+    .replace(/\\[,;!]/g, "")
+    .replace(/\\[dt]frac/g, "\\frac");
+
+  for (let step = 0; step < 5; step += 1) {
+    const next = text.replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, "($1)/($2)");
+    if (next === text) break;
+    text = next;
+  }
+
+  return text
+    .replace(/\\sqrt/g, "√")
+    .replace(/\\pi/g, "π")
+    .replace(/\\(cdot|times)/g, "*")
+    .replace(/\\exponentialE/g, "e")
+    .replace(/\\(degree|circ)/g, "°")
+    .replace(/\\([a-zA-Z]+)/g, "$1") // qolgan buyruqlar: "\sin" -> "sin"
+    .replace(/\{/g, "(")
+    .replace(/\}/g, ")");
+}
+
 function mathFieldHtml(initialValue, extraAttributes = "") {
-  // math-virtual-keyboard-policy="manual" — klaviaturani OCHISH va YOPISHNI
-  // to'liq o'zimiz boshqaramiz.
-  //
-  // Nega shart: MathLive standart holatda ("auto") hujjatga o'z focusin
-  // tinglovchisini qo'yadi va maydonga fokus tushganidan 300 ms KEYIN
-  // klaviaturani o'zi qayta ochadi. Natijada biz yopsak ham, u 300 ms
-  // o'tib qaytadan ochilib, klaviaturani yopib bo'lmay qolardi.
-  //
-  // Atribut aynan HTML'da beriladi (JS'da emas): element hali "upgrade"
-  // bo'lmagan paytda xossa o'rnatilsa, u MathLive'ning o'z setteridan
-  // oldin turib qolishi mumkin.
-  return `<math-field class="math-field" math-virtual-keyboard-policy="manual" ${extraAttributes}>${escapeHtml(initialValue || "")}</math-field>`;
+  // autocapitalize/autocorrect o'chiriladi: telefon "sqrt" ni "Sqrt" yoki
+  // boshqa so'zga "tuzatib" yubormasligi uchun.
+  return `<input class="input math-input" type="text" autocomplete="off" autocorrect="off"
+                 autocapitalize="off" spellcheck="false" enterkeyhint="done"
+                 value="${escapeHtml(latexToPlain(initialValue))}" ${extraAttributes} />`;
 }
 
 function readMathValue(field) {
-  // MathLive hali yuklanmagan bo'lsa, element oddiy matn sifatida o'qiladi
-  return (typeof field.value === "string" ? field.value : field.textContent || "").trim();
-}
-
-let mathKeyboardReady = false;
-
-function configureMathKeyboard() {
-  // Klaviaturada uchta bo'lim bo'ladi (keyboard.js'da yozilgan):
-  //   "123"  — raqamlar, amallar, ildiz, daraja, kasr
-  //   "f(x)" — sin, cos, tg, log, ln, darajalar, ildizlar
-  //   "ABC"  — oddiy harflar
-  // MathLive kechroq yuklanadi (index.html'da "defer"), shuning uchun har
-  // ishlatishda qayta urinib ko'riladi — tayyor bo'lganda bir marta sozlanadi.
-  if (mathKeyboardReady || !window.mathVirtualKeyboard) return;
-
-  const keyboard = window.mathVirtualKeyboard;
-
-  try {
-    // O'z maketimiz bo'lmasa (keyboard.js yuklanmay qolsa), MathLive'ning
-    // tayyor maketlari ishlaydi — klaviatura baribir ochiladi.
-    keyboard.layouts = window.MATH_KEYBOARD_LAYOUTS || ["numeric", "alphabetic"];
-
-    // Klaviatura ochilib-yopilganda yoki o'lchami o'zgarganda sahifa moslashadi.
-    // MUHIM: bu tinglovchilar aynan shu yerda ulanadi, chunki ular MathLive
-    // yuklanib bo'lgandan keyin ulanishi kerak. Ilgari ular yopish tugmasi
-    // yaratilganda ulanardi — o'sha paytda mathVirtualKeyboard hali mavjud
-    // bo'lmasligi mumkin edi va natijada hech qachon ulanmay qolardi.
-    ["virtual-keyboard-toggle", "geometrychange"].forEach((eventName) => {
-      keyboard.addEventListener(eventName, syncMathKeyboardLayout);
-    });
-
-    mathKeyboardReady = true;
-  } catch (_) {
-    /* MathLive hali tayyor emas — keyingi safar urinib ko'riladi */
-  }
-}
-
-/*
-  Klaviatura ochilganda sahifa tagida joy qoldirish kerak, aks holda o'quvchi
-  yozayotgan javob maydoni klaviatura ostida ko'rinmay qoladi.
-
-  Ilgari buni CSS o'zi qilardi: "body:has(.ML__keyboard--visible)". Lekin
-  MathLive 0.111 bunday klass qo'ymaydi — u ".ML__keyboard" elementiga
-  "is-visible" klassini qo'shadi, ya'ni o'sha qoida hech qachon ishlamagan.
-  Shuning uchun endi klaviatura balandligini o'zimiz o'lchab, CSS o'zgaruvchisi
-  orqali beramiz — bu MathLive'ning ichki klass nomlariga bog'liq emas.
-*/
-function syncMathKeyboardLayout() {
-  const keyboard = window.mathVirtualKeyboard;
-  const isVisible = Boolean(keyboard?.visible);
-
-  // boundingRect o'lchanmasa, taxminiy balandlik olinadi
-  const height = isVisible ? Math.round(keyboard.boundingRect?.height || 300) : 0;
-  document.documentElement.style.setProperty("--keyboard-height", `${height}px`);
-
-  const button = document.getElementById("math-keyboard-close");
-  if (button) button.hidden = !isVisible;
-}
-
-function closeMathKeyboard() {
-  // Maydondan chiqamiz — shunda keyin maydonni qayta bosganda "focusin"
-  // hodisasi yana ishlaydi va klaviatura qaytadan ochiladi.
-  document.querySelectorAll("math-field").forEach((field) => field.blur?.());
-  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
-
-  window.mathVirtualKeyboard?.hide?.();
-  syncMathKeyboardLayout();
-}
-
-function keyboardCloseButton() {
-  let button = document.getElementById("math-keyboard-close");
-  if (button) return button;
-
-  button = document.createElement("button");
-  button.id = "math-keyboard-close";
-  button.className = "keyboard-close";
-  button.type = "button";
-  button.hidden = true;
-  button.textContent = "✕ Klaviaturani yopish";
-  document.body.appendChild(button);
-
-  // Tugmani bosganda fokus ketib, klaviatura o'zi yopilib qolmasin —
-  // yopishni o'zimiz boshqaramiz
-  ["mousedown", "touchstart", "pointerdown"].forEach((eventName) => {
-    button.addEventListener(eventName, (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-    });
-  });
-
-  button.addEventListener("click", (event) => {
-    event.preventDefault();
-    closeMathKeyboard();
-  });
-
-  // Javob maydonidan tashqariga bosilsa ham klaviatura yopiladi
-  document.addEventListener("pointerdown", (event) => {
-    if (!window.mathVirtualKeyboard?.visible) return;
-
-    const insideField = event.target.closest?.("math-field");
-    const insideKeyboard = event.target.closest?.(".ML__keyboard, #math-keyboard-close");
-    if (!insideField && !insideKeyboard) closeMathKeyboard();
-  });
-
-  return button;
+  return (field.value || "").trim();
 }
 
 function setupMathFields(container, onChange) {
-  container.querySelectorAll("math-field").forEach((field) => {
-    // Atribut HTML'da berilgan, lekin maydon boshqa joyda yasalgan bo'lishi
-    // mumkin — shuning uchun bu yerda ham ishonch hosil qilamiz.
-    field.setAttribute("math-virtual-keyboard-policy", "manual");
-
+  container.querySelectorAll(".math-input").forEach((field) => {
     field.addEventListener("input", () => onChange(field, readMathValue(field)));
 
-    // Matematik klaviatura faqat maydonga bosilganda chiqadi.
-    // "click" ham tinglanadi: maydon allaqachon fokusda bo'lsa (klaviatura
-    // yopilgan, lekin kursor shu yerda), "focusin" ikkinchi marta ishlamaydi —
-    // shunda bosish bilan klaviatura ochilmay qolardi.
-    const openKeyboard = () => {
-      configureMathKeyboard();
-      window.mathVirtualKeyboard?.show?.();
-      keyboardCloseButton().hidden = false;
-
-      // Klaviatura chizilib bo'lgach o'lchamini bilib olamiz va yozilayotgan
-      // maydonni ko'rinadigan joyga suramiz (ikki marta — birinchisi animatsiya
-      // davom etayotganda, ikkinchisi tugagandan keyin aniqlashtiradi).
-      [120, 400].forEach((delay) =>
-        setTimeout(() => {
-          syncMathKeyboardLayout();
-          field.scrollIntoView({ block: "center", behavior: "smooth" });
-        }, delay)
-      );
-    };
-
-    field.addEventListener("focusin", openKeyboard);
-    field.addEventListener("click", openKeyboard);
+    // "Tayyor" (Enter) bosilganda telefon klaviaturasi yopiladi
+    field.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        field.blur();
+      }
+    });
   });
-
-  configureMathKeyboard();
 }
 
 async function copyToClipboard(text) {
@@ -621,12 +524,38 @@ async function loadHome() {
 }
 
 async function renderAdminDashboard() {
-  const [stats, topStudents, withdrawalRequests, teachers] = await Promise.all([
+  const [stats, topStudents, withdrawalRequests, teachers, cardTopUps] = await Promise.all([
     api("/api/admin/stats"),
     api("/api/admin/top-students"),
     api("/api/admin/withdrawal-requests"),
     api("/api/admin/teachers"),
+    api("/api/admin/card-topups"),
   ]);
+
+  // Karta orqali kredit so'rovlari. Asosan admin ularni Telegram'dagi chek
+  // ostidagi tugma bilan tasdiqlaydi — bu yerdagisi zaxira yo'l.
+  const cardTopUpRows =
+    cardTopUps
+      .map(
+        (topUp) => `
+          <div class="card" style="cursor:default" data-topup-id="${topUp.id}">
+            <div class="card-body" style="width:100%">
+              <div class="row-between">
+                <span>${escapeHtml(topUp.teacher)}</span>
+                <b>${formatNumber(topUp.amount)} so'm</b>
+              </div>
+              <p>${formatNumber(topUp.credits)} ta kredit • ${formatDateTime(topUp.created_at)}</p>
+              ${topUp.has_receipt ? `<button class="btn btn-ghost" data-action="receipt" style="padding:8px">🧾 Chekni ko'rish</button>` : ""}
+              <img data-receipt-image alt="" hidden
+                   style="max-width:100%;border-radius:10px;margin:8px 0;display:block" />
+              <div class="row-between" style="margin-top:8px;gap:8px">
+                <button class="btn" data-action="approve" style="padding:8px">✅ Pul tushdi</button>
+                <button class="btn btn-ghost" data-action="reject" style="padding:8px">❌ Rad etish</button>
+              </div>
+            </div>
+          </div>`
+      )
+      .join("") || "<p>Tekshirilishi kerak bo'lgan to'lov yo'q</p>";
 
   // O'qituvchilar ro'yxati: eng ko'p to'lov qilgani birinchi
   const teacherRows =
@@ -722,6 +651,8 @@ async function renderAdminDashboard() {
         <button class="btn btn-ghost" id="backup-button">💾 Hozir zaxira olish</button>
       </div>
     </div>
+    <h3>💳 Karta orqali to'lovlar (tasdiq kutmoqda)</h3>
+    ${cardTopUpRows}
     <h3>💸 Pul yechish so'rovlari</h3>
     ${withdrawalRows}
     <h3>🧑‍🏫 O'qituvchilar (eng ko'p to'lov qilgani birinchi)</h3>
@@ -763,6 +694,55 @@ async function renderAdminDashboard() {
       })
     );
   });
+
+  document.querySelectorAll("[data-topup-id]").forEach((card) => {
+    const topUpId = card.dataset.topupId;
+
+    card.querySelector('[data-action="receipt"]')?.addEventListener(
+      "click",
+      guarded(async () => {
+        // Chek himoyalangan manzilda — oddiy <img src> header yubora olmaydi,
+        // shuning uchun rasm so'rov bilan olinib, ekranga qo'yiladi.
+        const button = card.querySelector('[data-action="receipt"]');
+        const image = card.querySelector("[data-receipt-image]");
+        button.disabled = true;
+        image.src = await fetchProtectedImage(`/api/admin/card-topups/${topUpId}/receipt`);
+        image.hidden = false;
+        button.hidden = true;
+      })
+    );
+
+    card.querySelector('[data-action="approve"]').addEventListener(
+      "click",
+      guarded(async () => {
+        if (!(await askConfirm("Kartangizga pul tushganini tekshirdingizmi? Kredit darhol yoziladi."))) return;
+        await api(`/api/admin/card-topups/${topUpId}/approve`, { method: "POST", body: {} });
+        showToast("✅ Kredit yozildi, o'qituvchiga xabar ketdi");
+        await renderAdminDashboard();
+      })
+    );
+
+    card.querySelector('[data-action="reject"]').addEventListener(
+      "click",
+      guarded(async () => {
+        if (!(await askConfirm("To'lovni rad etasizmi? O'qituvchiga xabar boradi."))) return;
+        await api(`/api/admin/card-topups/${topUpId}/reject`, { method: "POST", body: {} });
+        showToast("❌ Rad etildi");
+        await renderAdminDashboard();
+      })
+    );
+  });
+}
+
+async function fetchProtectedImage(path) {
+  // api() bilan bir xil autentifikatsiya header'lari, lekin javob JSON emas, rasm
+  const headers = { "X-Init-Data": telegram?.initData || "" };
+  if (!telegram?.initData) headers["X-Dev-User"] = DEV_USER_ID;
+
+  const response = await fetch(path, { headers });
+  if (!response.ok) throw new Error("Chek rasmini olib bo'lmadi");
+
+  return URL.createObjectURL(await response.blob());
 }
 
 /* ---------- 3) O'quvchi oqimi ---------- */
@@ -1234,6 +1214,7 @@ function renderKeyQuizQuestion() {
     <div class="progress-track"><div class="progress-fill" style="width:${progressPercent}%"></div></div>
     <p class="subtitle">${hintText}</p>
     ${answerAreaHtml}
+    ${isText ? `<p class="subtitle answer-hint">${ANSWER_INPUT_HINT}</p>` : ""}
     <button class="btn" id="next-button" style="margin-top:16px">${isLast ? "🏁 TESTNI YAKUNLASH" : "Keyingi →"}</button>
   `);
 
@@ -1613,31 +1594,81 @@ async function renderCreditPurchaseForm() {
     })
     .join("");
 
-  const statusLabels = { pending: "⏳ Kutilmoqda", paid: "✅ To'landi", cancelled: "❌ Bekor qilindi" };
+  const statusLabels = {
+    pending: "⏳ Tekshirilmoqda",
+    paid: "✅ Qabul qilindi",
+    cancelled: "❌ Rad etildi",
+  };
+  const methodIcons = { card: "💳", payme: "🅿️" };
+
   const historyRows =
     history
       .map(
         (purchase) => `
           <div class="card row-between" style="cursor:default">
-            <span>${purchase.credits} ta kredit (${formatNumber(purchase.amount)} so'm)</span>
-            <b>${statusLabels[purchase.status]}</b>
+            <span>${methodIcons[purchase.method] || ""} ${purchase.credits} ta kredit (${formatNumber(purchase.amount)} so'm)</span>
+            <b>${statusLabels[purchase.status] || purchase.status}</b>
           </div>`
       )
       .join("") || "<p>Hali buyurtmalar yo'q</p>";
 
+  // Kutilayotgan karta to'lovi bo'lsa, yangisini yuborib bo'lmaydi (server ham to'xtatadi)
+  const hasPendingCard = history.some((purchase) => purchase.method === "card" && purchase.status === "pending");
+
+  // Karta orqali to'lash: kartaga o'tkazish -> chek yuklash -> admin tasdiqlaydi
+  const cardSection = balanceInfo.card_enabled
+    ? `
+      <div class="card" style="cursor:default">
+        <div class="card-body" style="width:100%">
+          <h3>💳 Karta orqali</h3>
+          ${
+            hasPendingCard
+              ? `<p>⏳ Oldingi to'lovingiz tekshirilmoqda. Admin tasdiqlagach, kredit hisobingizga
+                 o'zi tushadi va bot sizga xabar beradi.</p>`
+              : `
+                <p><b>1.</b> Quyidagi kartaga <b id="card-amount">—</b> o'tkazing:</p>
+                ${copyCodeChip(escapeHtml(balanceInfo.admin_card))}
+                <p style="margin-top:12px"><b>2.</b> To'lov chekining rasmini (skrinshot) tanlang:</p>
+                <!-- Brauzerning o'z fayl tugmasi telefon tilida ("Выберите файл")
+                     chiqadi — uni yashirib, o'rniga o'zimizning tugmani qo'yamiz -->
+                <input id="receipt-input" type="file" accept="image/*" hidden />
+                <label for="receipt-input" class="btn btn-ghost" id="receipt-label"
+                       style="display:block;text-align:center;cursor:pointer">🧾 Chek rasmini tanlash</label>
+                <img id="receipt-preview" alt="" hidden
+                     style="max-width:100%;max-height:220px;border-radius:10px;margin:6px 0;display:block" />
+                <p style="margin-top:8px"><b>3.</b> Yuboring — admin tekshirgach, kredit o'zi tushadi.</p>
+                <button class="btn" id="send-receipt-button">📤 Chekni yuborish</button>`
+          }
+        </div>
+      </div>`
+    : "";
+
+  const paymeSection = balanceInfo.payme_enabled
+    ? `<button class="btn ${balanceInfo.card_enabled ? "btn-ghost" : ""}" id="pay-with-payme-button">🅿️ Payme orqali to'lash</button>`
+    : "";
+
+  const noMethods =
+    !balanceInfo.card_enabled && !balanceInfo.payme_enabled
+      ? `<div class="card" style="cursor:default"><div class="card-body">
+           <p>To'lov usullari hali sozlanmagan. Kredit olish uchun admin bilan bog'laning.</p>
+         </div></div>`
+      : "";
+
   showPage(`
     <button class="back-button" data-action="dashboard">←</button>
     <h2>Kredit sotib olish</h2>
-    <p class="subtitle">Necha dona kredit sotib olmoqchisiz?</p>
-    <input class="input" id="credit-count-input" type="number" min="1" placeholder="Kredit miqdori" value="10" />
+    <p class="subtitle">Joriy kredit: <b>${formatNumber(balanceInfo.credits)} ta</b>. Necha dona sotib olmoqchisiz?</p>
+    <input class="input" id="credit-count-input" type="number" min="1" placeholder="Kredit miqdori" value="50" />
+    <p class="subtitle">Jami narx: <b id="credit-price-preview">—</b></p>
     <div class="card" style="cursor:default">
       <div class="card-body">
         <h3>Narxlash tizimi</h3>
         ${tierRows}
       </div>
     </div>
-    <p class="subtitle">Jami narx: <b id="credit-price-preview">—</b></p>
-    <button class="btn" id="pay-with-payme-button">💳 Payme orqali to'lash</button>
+    ${cardSection}
+    ${paymeSection}
+    ${noMethods}
     <h3>Buyurtmalar tarixi</h3>
     ${historyRows}
   `);
@@ -1646,36 +1677,130 @@ async function renderCreditPurchaseForm() {
 
   const creditInput = document.getElementById("credit-count-input");
   const pricePreview = document.getElementById("credit-price-preview");
+  const cardAmount = document.getElementById("card-amount");
 
   const updatePricePreview = guarded(async () => {
     const credits = Number(creditInput.value) || 0;
     if (credits < 1) {
       pricePreview.textContent = "—";
+      if (cardAmount) cardAmount.textContent = "—";
       return;
     }
     const price = await api(`/api/teacher/credit-price?credits=${credits}`);
-    pricePreview.textContent = `${formatNumber(price.amount)} so'm`;
+    const text = `${formatNumber(price.amount)} so'm`;
+    pricePreview.textContent = text;
+    // Kartaga aynan shu summa o'tkazilishi kerak — admin chekni shu bilan solishtiradi
+    if (cardAmount) cardAmount.textContent = text;
   });
 
   creditInput.addEventListener("input", updatePricePreview);
   updatePricePreview();
 
-  document.getElementById("pay-with-payme-button").addEventListener(
-    "click",
+  const readCredits = () => {
+    const credits = Number(creditInput.value) || 0;
+    if (credits < 1) throw new Error("Kredit sonini kiriting");
+    return credits;
+  };
+
+  // --- Karta orqali ---
+  const receiptInput = document.getElementById("receipt-input");
+  const receiptPreview = document.getElementById("receipt-preview");
+  let receiptData = null;
+
+  receiptInput?.addEventListener(
+    "change",
     guarded(async () => {
-      const credits = Number(creditInput.value) || 0;
-      if (credits < 1) {
-        showToast("Kredit sonini kiriting");
-        return;
+      const file = receiptInput.files?.[0];
+      receiptData = null;
+      receiptPreview.hidden = true;
+      if (!file) return;
+
+      if (!file.type.startsWith("image/")) {
+        receiptInput.value = "";
+        throw new Error("Chek rasm bo'lishi kerak (skrinshot yoki foto)");
       }
-      const purchase = await api("/api/teacher/credit-purchases", { method: "POST", body: { credits } });
-      if (telegram?.openLink) {
-        telegram.openLink(purchase.checkout_url);
-      } else {
-        window.open(purchase.checkout_url, "_blank");
-      }
+
+      receiptData = await compressImage(file);
+      receiptPreview.src = receiptData;
+      receiptPreview.hidden = false;
+      document.getElementById("receipt-label").textContent = "🔄 Boshqa rasm tanlash";
     })
   );
+
+  document.getElementById("send-receipt-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const credits = readCredits();
+      if (!receiptData) throw new Error("Avval chek rasmini tanlang");
+
+      const button = document.getElementById("send-receipt-button");
+      button.disabled = true;
+      button.textContent = "⏳ Yuborilmoqda...";
+
+      try {
+        await api("/api/teacher/card-topups", {
+          method: "POST",
+          body: { credits, receipt_base64: receiptData },
+        });
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = "📤 Chekni yuborish";
+        throw error;
+      }
+
+      showToast("✅ Chek yuborildi. Admin tasdiqlagach, kredit o'zi tushadi");
+      await renderCreditPurchaseForm();
+    })
+  );
+
+  // --- Payme orqali ---
+  document.getElementById("pay-with-payme-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const credits = readCredits();
+      const purchase = await api("/api/teacher/credit-purchases", { method: "POST", body: { credits } });
+      openExternalLink(purchase.checkout_url);
+    })
+  );
+}
+
+/*
+  Rasmni yuborishdan oldin kichraytiradi.
+
+  Telefon kamerasidagi surat 4-8 MB bo'ladi — sekin internetda yuborish uzoq
+  cho'ziladi va server chegarasidan oshib ketishi mumkin. Chekni o'qish uchun
+  1600 piksel yetarli; JPEG ko'rinishida u odatda 200-500 KB bo'ladi.
+*/
+async function compressImage(file, maxSide = 1600, quality = 0.85) {
+  const readAsDataUrl = () =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error("Rasm o'qilmadi"));
+      reader.readAsDataURL(file);
+    });
+
+  const original = await readAsDataUrl();
+
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("Rasm ochilmadi"));
+      element.src = original;
+    });
+
+    const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+    canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    return canvas.toDataURL("image/jpeg", quality);
+  } catch (_) {
+    // Kichraytirib bo'lmasa (eski brauzer), asl rasmning o'zi yuboriladi
+    return original;
+  }
 }
 
 const SUBJECTS = [
@@ -2033,7 +2158,7 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
   // Savollar soni o'zgartirilganda belgilangan javoblar yo'qolmasin
   const previous = { ...(savedAnswers || {}) };
   container.querySelectorAll(".key-row").forEach((row) => {
-    const variants = [...row.querySelectorAll("math-field")].map(readMathValue);
+    const variants = [...row.querySelectorAll(".math-input")].map(readMathValue);
     previous[row.dataset.label] = {
       answer: row.dataset.answer || "",
       variants: variants.length ? variants : undefined,
@@ -2091,7 +2216,10 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
     ? `<p class="section-label">${testCount + 1}–${testCount + textCount}: YOZMA JAVOBLAR</p>
        <div class="panel">
          ${writtenRows.join("")}
-         <p class="subtitle" style="margin:8px 0 0">Bir nechta javob bo'lsa, qatorga yana maydon qo'shiladi.</p>
+         <p class="subtitle answer-hint">${ANSWER_INPUT_HINT}</p>
+         <p class="subtitle" style="margin:4px 0 0">
+           Bir nechta to'g'ri javob bo'lsa, | belgisi bilan ajrating: <b>0,5|1/2</b>
+         </p>
        </div>`
     : "";
 
@@ -2102,7 +2230,7 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
 
   setupMathFields(container, (field) => {
     const cell = field.closest(".key-row");
-    cell.dataset.answer = [...cell.querySelectorAll("math-field")].map(readMathValue).filter(Boolean).join("|");
+    cell.dataset.answer = [...cell.querySelectorAll(".math-input")].map(readMathValue).filter(Boolean).join("|");
   });
 }
 
@@ -2358,8 +2486,8 @@ async function renderStudentDetail(testId, attemptId) {
       (question) => `
         <div class="answer-row ${question.is_correct ? "" : "wrong"}">
           <b>${escapeHtml(question.label)}</b>
-          <span>${question.is_correct ? "✅" : "❌"} ${escapeHtml(question.chosen)}</span>
-          ${question.is_correct ? "" : `<span class="right-answer">to'g'ri: ${escapeHtml(question.correct)}</span>`}
+          <span>${question.is_correct ? "✅" : "❌"} ${escapeHtml(latexToPlain(question.chosen))}</span>
+          ${question.is_correct ? "" : `<span class="right-answer">to'g'ri: ${escapeHtml(latexToPlain(question.correct))}</span>`}
         </div>`
     )
     .join("");
@@ -2462,6 +2590,9 @@ async function renderStudentAnswersForm(testId, attemptId) {
     <button class="back-button" data-action="test">←</button>
     <h2>${escapeHtml(saved.name)}</h2>
     <p class="subtitle">O'quvchi varaqasida belgilangan javoblarni kiriting — bot avtomatik tekshiradi.</p>
+    ${structure.questions.some((question) => question.question_type === "text")
+      ? `<p class="subtitle answer-hint">${ANSWER_INPUT_HINT}</p>`
+      : ""}
     ${questionBlocks}
     <button class="btn" id="save-answers-button">✅ Saqlash va tekshirish</button>
   `);
