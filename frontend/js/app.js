@@ -169,9 +169,34 @@ function configureMathKeyboard() {
   }
 }
 
+function closeMathKeyboard() {
+  // Avval maydondan chiqamiz — fokus turganda klaviatura o'zi qayta ochilib ketadi
+  document.querySelectorAll("math-field").forEach((field) => field.blur?.());
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+
+  window.mathVirtualKeyboard?.hide?.();
+
+  const button = document.getElementById("math-keyboard-close");
+  if (button) button.hidden = true;
+}
+
+function positionKeyboardCloseButton() {
+  const button = document.getElementById("math-keyboard-close");
+  const keyboard = window.mathVirtualKeyboard;
+  if (!button || !keyboard) return;
+
+  if (!keyboard.visible) {
+    button.hidden = true;
+    return;
+  }
+
+  button.hidden = false;
+  const top = keyboard.boundingRect?.top;
+  // Klaviatura balandligi o'lchansa — aniq uning tepasiga, bo'lmasa taxminan
+  button.style.bottom = top ? `${Math.max(8, Math.round(window.innerHeight - top + 8))}px` : "300px";
+}
+
 function keyboardCloseButton() {
-  // Matematik klaviaturaning o'z yopish tugmasi yo'q — shuning uchun uning
-  // tepasida "Yopish" tugmasi turadi.
   let button = document.getElementById("math-keyboard-close");
   if (button) return button;
 
@@ -183,26 +208,33 @@ function keyboardCloseButton() {
   button.textContent = "✕ Klaviaturani yopish";
   document.body.appendChild(button);
 
-  // Tugmani bosganda maydondan fokus ketib, klaviatura o'zi yopilib qolmasin
-  ["mousedown", "touchstart"].forEach((eventName) => {
-    button.addEventListener(eventName, (event) => event.preventDefault());
+  // Tugmani bosganda fokus ketib, klaviatura o'zi yopilib qolmasin —
+  // yopishni o'zimiz boshqaramiz
+  ["mousedown", "touchstart", "pointerdown"].forEach((eventName) => {
+    button.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
   });
 
-  button.addEventListener("click", () => {
-    window.mathVirtualKeyboard?.hide?.();
-    document.activeElement?.blur?.();
-    button.hidden = true;
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    closeMathKeyboard();
   });
 
-  // Klaviatura ochilib-yopilganda tugma ham ko'rinib-yo'qoladi
-  window.mathVirtualKeyboard?.addEventListener?.("virtual-keyboard-toggle", () => {
-    const keyboard = window.mathVirtualKeyboard;
-    button.hidden = !keyboard?.visible;
+  // Klaviatura ochilib-yopilganda yoki o'lchami o'zgarganda joyi yangilanadi
+  const keyboard = window.mathVirtualKeyboard;
+  ["virtual-keyboard-toggle", "geometrychange"].forEach((eventName) => {
+    keyboard?.addEventListener?.(eventName, positionKeyboardCloseButton);
+  });
 
-    const top = keyboard?.boundingRect?.top;
-    if (keyboard?.visible && top) {
-      button.style.bottom = `${Math.max(8, window.innerHeight - top + 8)}px`;
-    }
+  // Javob maydonidan tashqariga bosilsa ham klaviatura yopiladi
+  document.addEventListener("pointerdown", (event) => {
+    if (!window.mathVirtualKeyboard?.visible) return;
+
+    const insideField = event.target.closest?.("math-field");
+    const insideKeyboard = event.target.closest?.(".ML__keyboard, #math-keyboard-close");
+    if (!insideField && !insideKeyboard) closeMathKeyboard();
   });
 
   return button;
@@ -216,7 +248,11 @@ function setupMathFields(container, onChange) {
     field.addEventListener("focusin", () => {
       configureMathKeyboard();
       window.mathVirtualKeyboard?.show?.();
+
       keyboardCloseButton().hidden = false;
+      // Klaviatura chizilib bo'lgach, tugmani uning tepasiga qo'yamiz
+      setTimeout(positionKeyboardCloseButton, 120);
+      setTimeout(positionKeyboardCloseButton, 400);
     });
   });
 
@@ -2139,10 +2175,12 @@ async function renderResultsTab(selectedId) {
   }
 
   const testId = selectedId || tests[0].id;
-  const [results, stats] = await Promise.all([
-    api(`/api/teacher/tests/${testId}/results`),
-    api(`/api/teacher/tests/${testId}/stats`),
-  ]);
+
+  // Faqat natijalar so'raladi — ishtirokchilar soni va o'rtacha foiz shu
+  // javobning o'zidan hisoblanadi, qo'shimcha so'rov kerak emas.
+  const results = await api(`/api/teacher/tests/${testId}/results`);
+  const percents = results.rows.map((row) => row.percent);
+  const average = percents.length ? Math.round((percents.reduce((sum, p) => sum + p, 0) / percents.length) * 10) / 10 : 0;
 
   // Ball taqsimoti: nechta o'quvchi qaysi oraliqda
   const buckets = [
@@ -2197,8 +2235,8 @@ async function renderResultsTab(selectedId) {
 
     <div class="panel">
       <div class="stats-grid" style="margin:0 0 16px">
-        <div class="stat-tile"><span class="stat-value">${stats.total}</span>Ishtirokchi</div>
-        <div class="stat-tile"><span class="stat-value">${stats.avg}</span>O'rtacha foiz</div>
+        <div class="stat-tile"><span class="stat-value">${results.rows.length}</span>Ishtirokchi</div>
+        <div class="stat-tile"><span class="stat-value">${average}%</span>O'rtacha</div>
       </div>
       <p class="section-label" style="margin:0 0 10px">BALL TAQSIMOTI</p>
       <div class="chart">${chart}</div>

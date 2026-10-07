@@ -36,7 +36,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from sqlalchemy import delete, func, inspect, select, text
+from sqlalchemy import case, delete, func, inspect, select, text
 from sqlalchemy.orm import Session
 
 from .auth import (
@@ -363,31 +363,53 @@ def _group_key_questions(test: Test) -> list[list[KeyQuestion]]:
     return groups
 
 
-def _attempt_score_split(db: Session, test: Test, attempt: Attempt) -> dict:
-    """Bitta urinishni yopiq (variantli) va yozma savollar bo'yicha ajratib sanaydi."""
+def _question_kinds(test: Test) -> dict[int, str]:
+    """Har bir savol havolasi (question_ref) qaysi turga tegishli: "closed" yoki "written"."""
 
-    if test.mode != "key":
-        total = len(test.questions)
-        correct = db.scalar(
-            select(func.count())
-            .select_from(StudentAnswer)
-            .where(StudentAnswer.attempt_id == attempt.id, StudentAnswer.is_correct.is_(True))
-        )
-        return {"closed_correct": correct or 0, "closed_total": total, "written_correct": 0, "written_total": 0}
+    if test.mode == "key":
+        return {
+            kq.number: ("written" if kq.question_type == "text" else "closed") for kq in test.key_questions
+        }
+    return {question.id: "closed" for question in test.questions}
 
-    answers = {
-        answer.question_ref: answer.is_correct
-        for answer in db.scalars(select(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id)).all()
+
+def score_splits(db: Session, test: Test, attempts: list[Attempt]) -> dict[int, dict]:
+    """
+    Bir nechta urinishni yopiq va yozma savollar bo'yicha ajratib sanaydi.
+
+    Hammasi BITTA so'rovda olinadi — har bir o'quvchi uchun alohida
+    so'rov yuborilsa, ro'yxat sekin ochilardi.
+    """
+
+    kinds = _question_kinds(test)
+    totals = {"closed": 0, "written": 0}
+    for kind in kinds.values():
+        totals[kind] += 1
+
+    splits = {
+        attempt.id: {
+            "closed_correct": 0,
+            "closed_total": totals["closed"],
+            "written_correct": 0,
+            "written_total": totals["written"],
+        }
+        for attempt in attempts
     }
 
-    split = {"closed_correct": 0, "closed_total": 0, "written_correct": 0, "written_total": 0}
-    for key_question in test.key_questions:
-        prefix = "written" if key_question.question_type == "text" else "closed"
-        split[f"{prefix}_total"] += 1
-        if answers.get(key_question.number):
-            split[f"{prefix}_correct"] += 1
+    if not splits:
+        return splits
 
-    return split
+    rows = db.execute(
+        select(StudentAnswer.attempt_id, StudentAnswer.question_ref)
+        .where(StudentAnswer.attempt_id.in_(list(splits)), StudentAnswer.is_correct.is_(True))
+    ).all()
+
+    for attempt_id, question_ref in rows:
+        kind = kinds.get(question_ref)
+        if kind:
+            splits[attempt_id][f"{kind}_correct"] += 1
+
+    return splits
 
 
 def _key_question_label(key_question: KeyQuestion) -> str:
@@ -396,26 +418,39 @@ def _key_question_label(key_question: KeyQuestion) -> str:
 
 
 def build_test_stats(db: Session, test: Test) -> dict:
-    """O'qituvchi dashboard'ida ko'rsatiladigan umumiy statistika."""
+    """
+    O'qituvchi ko'radigan umumiy statistika.
+
+    Savollar bo'yicha xatolar BITTA so'rovda yig'iladi — ilgari har bir savol
+    uchun alohida so'rov ketardi va 55 savolli testda sahifa sekin ochilardi.
+    """
 
     results = best_attempts(db, test)
     percents = [attempt.percent for attempt, _ in results]
 
-    def question_wrong_stats(ref: int, label: str) -> dict:
-        base_query = (
-            select(func.count())
-            .select_from(StudentAnswer)
+    counts = {
+        ref: (total, wrong or 0)
+        for ref, total, wrong in db.execute(
+            select(
+                StudentAnswer.question_ref,
+                func.count(),
+                func.sum(case((StudentAnswer.is_correct.is_(False), 1), else_=0)),
+            )
             .join(Attempt, Attempt.id == StudentAnswer.attempt_id)
-            .where(StudentAnswer.question_ref == ref, Attempt.test_id == test.id, Attempt.status == "done")
-        )
-        total_answers = db.scalar(base_query)
-        wrong_answers = db.scalar(base_query.where(StudentAnswer.is_correct.is_(False)))
-        return {"text": label, "total": total_answers, "wrong": wrong_answers}
+            .where(Attempt.test_id == test.id, Attempt.status == "done")
+            .group_by(StudentAnswer.question_ref)
+        ).all()
+    }
 
     if test.mode == "key":
-        question_stats = [question_wrong_stats(kq.number, _key_question_label(kq)) for kq in test.key_questions]
+        labelled = [(kq.number, _key_question_label(kq)) for kq in test.key_questions]
     else:
-        question_stats = [question_wrong_stats(q.id, q.text) for q in test.questions]
+        labelled = [(question.id, question.text) for question in test.questions]
+
+    question_stats = [
+        {"text": label, "total": counts.get(ref, (0, 0))[0], "wrong": counts.get(ref, (0, 0))[1]}
+        for ref, label in labelled
+    ]
 
     return {
         "total": len(results),
@@ -1689,6 +1724,9 @@ def test_results(test_id: int, teacher: Teacher = Depends(get_current_teacher), 
     """Shu testni ishlagan o'quvchilarning natijalar jadvali."""
 
     test = _get_own_test(db, teacher, test_id)
+    results = best_attempts(db, test)
+    splits = score_splits(db, test, [attempt for attempt, _ in results])
+
     return {
         "id": test.id,
         "title": test.title,
@@ -1704,9 +1742,9 @@ def test_results(test_id: int, teacher: Teacher = Depends(get_current_teacher), 
                 "wrong": attempt.wrong,
                 "percent": attempt.percent,
                 "seconds": attempt.seconds,
-                **_attempt_score_split(db, test, attempt),
+                **splits[attempt.id],
             }
-            for attempt, name in best_attempts(db, test)
+            for attempt, name in results
         ],
     }
 
