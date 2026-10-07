@@ -43,7 +43,7 @@ let teacherTestsTab = "active";
 
 /* ---------- 1) Yordamchi funksiyalar ---------- */
 
-async function api(path, { method = "GET", body } = {}) {
+async function api(path, { method = "GET", body, keepalive = false } = {}) {
   // Alohida o'qituvchi tokeni yo'q — Telegram initData o'zi kifoya,
   // "o'qituvchi" ekanligi backend'da shu odamga tegishli Teacher yozuvi
   // borligi orqali aniqlanadi.
@@ -61,6 +61,10 @@ async function api(path, { method = "GET", body } = {}) {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    // keepalive: sahifa yopilayotganda ham so'rov oxirigacha yetib boradi.
+    // Oddiy so'rov bu paytda uzilib ketardi — javoblarni oxirgi marta
+    // saqlash uchun aynan shu kerak.
+    keepalive,
   });
 
   if (!response.ok) {
@@ -71,7 +75,12 @@ async function api(path, { method = "GET", body } = {}) {
     } catch (_) {
       /* javobda JSON bo'lmasligi mumkin — standart xabar qoladi */
     }
-    throw new Error(message);
+
+    // Holat kodi xatoga biriktiriladi: chaqiruvchi ayrim xatolarni
+    // (masalan "obuna bo'lmagansiz") alohida ko'rsatishi uchun kerak.
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
   }
 
   return response.status === 204 ? null : response.json();
@@ -103,12 +112,21 @@ function formatDuration(totalSeconds) {
   return `${seconds} s`;
 }
 
-function formatDateTime(isoString) {
+function parseUtc(isoString) {
   // Backend vaqtni har doim UTC'da saqlaydi va mintaqasiz yuboradi
-  // ("2026-10-06T10:35:00"), shuning uchun "Z" qo'shib, foydalanuvchining
-  // mahalliy vaqtiga o'giramiz — aks holda sana 5 soat farq qilib ko'rinadi.
+  // ("2026-10-06T10:35:00"). JavaScript bunday matnni MAHALLIY vaqt deb
+  // o'qiydi, shuning uchun "Z" qo'shamiz — aks holda vaqt mintaqa farqicha
+  // (Toshkentda 5 soat) xato bo'lib, boshlangan test "hali boshlanmagan"
+  // bo'lib ko'rinardi.
+  if (!isoString) return null;
+
   const hasTimezone = /[zZ]|[+-]\d{2}:?\d{2}$/.test(isoString);
-  const date = new Date(hasTimezone ? isoString : `${isoString}Z`);
+  return new Date(hasTimezone ? isoString : `${isoString}Z`);
+}
+
+function formatDateTime(isoString) {
+  const date = parseUtc(isoString);
+  if (!date) return "";
 
   const pad = (value) => String(value).padStart(2, "0");
   return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} - ${pad(date.getHours())}:${pad(date.getMinutes())}`;
@@ -121,6 +139,11 @@ function localTimeToUtcIso(value) {
 }
 
 function showPage(html) {
+  // Matematik klaviatura ochiq qolgan bo'lsa yopiladi — aks holda u yangi
+  // sahifa ustida turib qolardi (yozish maydoni yo'q bo'lsa ham) va "✕
+  // Klaviaturani yopish" tugmasi aloqasi yo'q ekranlarda ko'rinardi.
+  closeMathKeyboard();
+
   // Menyu avval yashiriladi — kerak bo'lsa, sahifa o'zi qaytadan ko'rsatadi.
   // Ikkalasi bitta qadamda bo'lgani uchun ekranda miltillash sezilmaydi.
   hideBottomNav();
@@ -128,12 +151,24 @@ function showPage(html) {
   window.scrollTo(0, 0);
 }
 
+const TOAST_VISIBLE_MS = 2400;
+const TOAST_FADE_MS = 220; // CSS'dagi .toast.is-leaving davomiyligi bilan bir xil
+
 function showToast(message) {
+  // Avvalgi xabar hali turgan bo'lsa olib tashlanadi — aks holda ikkalasi
+  // ustma-ust tushib, o'qib bo'lmay qolardi.
+  document.querySelector(".toast")?.remove();
+
   const toast = document.createElement("div");
   toast.className = "toast";
   toast.textContent = message;
   document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), 2600);
+
+  // Avval asta so'nadi, keyin o'chiriladi — birdan yo'qolib qolmaydi
+  setTimeout(() => {
+    toast.classList.add("is-leaving");
+    setTimeout(() => toast.remove(), TOAST_FADE_MS);
+  }, TOAST_VISIBLE_MS);
 }
 
 /*
@@ -144,7 +179,18 @@ function showToast(message) {
 */
 
 function mathFieldHtml(initialValue, extraAttributes = "") {
-  return `<math-field class="math-field" ${extraAttributes}>${escapeHtml(initialValue || "")}</math-field>`;
+  // math-virtual-keyboard-policy="manual" — klaviaturani OCHISH va YOPISHNI
+  // to'liq o'zimiz boshqaramiz.
+  //
+  // Nega shart: MathLive standart holatda ("auto") hujjatga o'z focusin
+  // tinglovchisini qo'yadi va maydonga fokus tushganidan 300 ms KEYIN
+  // klaviaturani o'zi qayta ochadi. Natijada biz yopsak ham, u 300 ms
+  // o'tib qaytadan ochilib, klaviaturani yopib bo'lmay qolardi.
+  //
+  // Atribut aynan HTML'da beriladi (JS'da emas): element hali "upgrade"
+  // bo'lmagan paytda xossa o'rnatilsa, u MathLive'ning o'z setteridan
+  // oldin turib qolishi mumkin.
+  return `<math-field class="math-field" math-virtual-keyboard-policy="manual" ${extraAttributes}>${escapeHtml(initialValue || "")}</math-field>`;
 }
 
 function readMathValue(field) {
@@ -155,45 +201,66 @@ function readMathValue(field) {
 let mathKeyboardReady = false;
 
 function configureMathKeyboard() {
-  // Klaviaturada ikkita bo'lim qoladi:
-  //   "123" — raqamlar va arifmetik amallar (ildiz, daraja, kasr, pi, ...)
-  //   "abc" — oddiy harflar klaviaturasi
-  // MathLive kechroq yuklanadi, shuning uchun birinchi ishlatilganda sozlanadi.
+  // Klaviaturada uchta bo'lim bo'ladi (keyboard.js'da yozilgan):
+  //   "123"  — raqamlar, amallar, ildiz, daraja, kasr
+  //   "f(x)" — sin, cos, tg, log, ln, darajalar, ildizlar
+  //   "ABC"  — oddiy harflar
+  // MathLive kechroq yuklanadi (index.html'da "defer"), shuning uchun har
+  // ishlatishda qayta urinib ko'riladi — tayyor bo'lganda bir marta sozlanadi.
   if (mathKeyboardReady || !window.mathVirtualKeyboard) return;
 
+  const keyboard = window.mathVirtualKeyboard;
+
   try {
-    window.mathVirtualKeyboard.layouts = ["numeric", "alphabetic"];
+    // O'z maketimiz bo'lmasa (keyboard.js yuklanmay qolsa), MathLive'ning
+    // tayyor maketlari ishlaydi — klaviatura baribir ochiladi.
+    keyboard.layouts = window.MATH_KEYBOARD_LAYOUTS || ["numeric", "alphabetic"];
+
+    // Klaviatura ochilib-yopilganda yoki o'lchami o'zgarganda sahifa moslashadi.
+    // MUHIM: bu tinglovchilar aynan shu yerda ulanadi, chunki ular MathLive
+    // yuklanib bo'lgandan keyin ulanishi kerak. Ilgari ular yopish tugmasi
+    // yaratilganda ulanardi — o'sha paytda mathVirtualKeyboard hali mavjud
+    // bo'lmasligi mumkin edi va natijada hech qachon ulanmay qolardi.
+    ["virtual-keyboard-toggle", "geometrychange"].forEach((eventName) => {
+      keyboard.addEventListener(eventName, syncMathKeyboardLayout);
+    });
+
     mathKeyboardReady = true;
   } catch (_) {
     /* MathLive hali tayyor emas — keyingi safar urinib ko'riladi */
   }
 }
 
+/*
+  Klaviatura ochilganda sahifa tagida joy qoldirish kerak, aks holda o'quvchi
+  yozayotgan javob maydoni klaviatura ostida ko'rinmay qoladi.
+
+  Ilgari buni CSS o'zi qilardi: "body:has(.ML__keyboard--visible)". Lekin
+  MathLive 0.111 bunday klass qo'ymaydi — u ".ML__keyboard" elementiga
+  "is-visible" klassini qo'shadi, ya'ni o'sha qoida hech qachon ishlamagan.
+  Shuning uchun endi klaviatura balandligini o'zimiz o'lchab, CSS o'zgaruvchisi
+  orqali beramiz — bu MathLive'ning ichki klass nomlariga bog'liq emas.
+*/
+function syncMathKeyboardLayout() {
+  const keyboard = window.mathVirtualKeyboard;
+  const isVisible = Boolean(keyboard?.visible);
+
+  // boundingRect o'lchanmasa, taxminiy balandlik olinadi
+  const height = isVisible ? Math.round(keyboard.boundingRect?.height || 300) : 0;
+  document.documentElement.style.setProperty("--keyboard-height", `${height}px`);
+
+  const button = document.getElementById("math-keyboard-close");
+  if (button) button.hidden = !isVisible;
+}
+
 function closeMathKeyboard() {
-  // Avval maydondan chiqamiz — fokus turganda klaviatura o'zi qayta ochilib ketadi
+  // Maydondan chiqamiz — shunda keyin maydonni qayta bosganda "focusin"
+  // hodisasi yana ishlaydi va klaviatura qaytadan ochiladi.
   document.querySelectorAll("math-field").forEach((field) => field.blur?.());
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
 
   window.mathVirtualKeyboard?.hide?.();
-
-  const button = document.getElementById("math-keyboard-close");
-  if (button) button.hidden = true;
-}
-
-function positionKeyboardCloseButton() {
-  const button = document.getElementById("math-keyboard-close");
-  const keyboard = window.mathVirtualKeyboard;
-  if (!button || !keyboard) return;
-
-  if (!keyboard.visible) {
-    button.hidden = true;
-    return;
-  }
-
-  button.hidden = false;
-  const top = keyboard.boundingRect?.top;
-  // Klaviatura balandligi o'lchansa — aniq uning tepasiga, bo'lmasa taxminan
-  button.style.bottom = top ? `${Math.max(8, Math.round(window.innerHeight - top + 8))}px` : "300px";
+  syncMathKeyboardLayout();
 }
 
 function keyboardCloseButton() {
@@ -222,12 +289,6 @@ function keyboardCloseButton() {
     closeMathKeyboard();
   });
 
-  // Klaviatura ochilib-yopilganda yoki o'lchami o'zgarganda joyi yangilanadi
-  const keyboard = window.mathVirtualKeyboard;
-  ["virtual-keyboard-toggle", "geometrychange"].forEach((eventName) => {
-    keyboard?.addEventListener?.(eventName, positionKeyboardCloseButton);
-  });
-
   // Javob maydonidan tashqariga bosilsa ham klaviatura yopiladi
   document.addEventListener("pointerdown", (event) => {
     if (!window.mathVirtualKeyboard?.visible) return;
@@ -242,18 +303,34 @@ function keyboardCloseButton() {
 
 function setupMathFields(container, onChange) {
   container.querySelectorAll("math-field").forEach((field) => {
+    // Atribut HTML'da berilgan, lekin maydon boshqa joyda yasalgan bo'lishi
+    // mumkin — shuning uchun bu yerda ham ishonch hosil qilamiz.
+    field.setAttribute("math-virtual-keyboard-policy", "manual");
+
     field.addEventListener("input", () => onChange(field, readMathValue(field)));
 
-    // Matematik klaviatura faqat maydonga bosilganda chiqadi
-    field.addEventListener("focusin", () => {
+    // Matematik klaviatura faqat maydonga bosilganda chiqadi.
+    // "click" ham tinglanadi: maydon allaqachon fokusda bo'lsa (klaviatura
+    // yopilgan, lekin kursor shu yerda), "focusin" ikkinchi marta ishlamaydi —
+    // shunda bosish bilan klaviatura ochilmay qolardi.
+    const openKeyboard = () => {
       configureMathKeyboard();
       window.mathVirtualKeyboard?.show?.();
-
       keyboardCloseButton().hidden = false;
-      // Klaviatura chizilib bo'lgach, tugmani uning tepasiga qo'yamiz
-      setTimeout(positionKeyboardCloseButton, 120);
-      setTimeout(positionKeyboardCloseButton, 400);
-    });
+
+      // Klaviatura chizilib bo'lgach o'lchamini bilib olamiz va yozilayotgan
+      // maydonni ko'rinadigan joyga suramiz (ikki marta — birinchisi animatsiya
+      // davom etayotganda, ikkinchisi tugagandan keyin aniqlashtiradi).
+      [120, 400].forEach((delay) =>
+        setTimeout(() => {
+          syncMathKeyboardLayout();
+          field.scrollIntoView({ block: "center", behavior: "smooth" });
+        }, delay)
+      );
+    };
+
+    field.addEventListener("focusin", openKeyboard);
+    field.addEventListener("click", openKeyboard);
   });
 
   configureMathKeyboard();
@@ -293,6 +370,23 @@ appElement.addEventListener(
   },
   true
 );
+
+function openExternalLink(url) {
+  // Telegram ichida havolani brauzerda ochish uchun alohida usul bor; oddiy
+  // brauzerda esa window.open ishlatiladi. t.me havolalari Telegram ilovasida
+  // ochilishi kerak, qolganlari (masalan Payme to'lov sahifasi) brauzerda.
+  if (!url) return;
+
+  const isTelegramLink = /^https?:\/\/t\.me\//.test(url);
+
+  if (isTelegramLink && telegram?.openTelegramLink) {
+    telegram.openTelegramLink(url);
+  } else if (telegram?.openLink) {
+    telegram.openLink(url);
+  } else {
+    window.open(url, "_blank");
+  }
+}
 
 function askConfirm(message) {
   // Telegram ichida chiroyli dialog ko'rsatadi, oddiy brauzerda esa odatdagi confirm.
@@ -527,11 +621,32 @@ async function loadHome() {
 }
 
 async function renderAdminDashboard() {
-  const [stats, topStudents, withdrawalRequests] = await Promise.all([
+  const [stats, topStudents, withdrawalRequests, teachers] = await Promise.all([
     api("/api/admin/stats"),
     api("/api/admin/top-students"),
     api("/api/admin/withdrawal-requests"),
+    api("/api/admin/teachers"),
   ]);
+
+  // O'qituvchilar ro'yxati: eng ko'p to'lov qilgani birinchi
+  const teacherRows =
+    teachers
+      .map(
+        (teacher) => `
+          <div class="card" style="cursor:default">
+            <div class="card-body">
+              <div class="row-between">
+                <span>${escapeHtml(teacher.name)}</span>
+                <b>${formatNumber(teacher.paid_total)} so'm</b>
+              </div>
+              <p class="subtitle" style="margin:4px 0 0">
+                ${teacher.tests} ta test • ${formatNumber(teacher.credits)} kredit
+                ${teacher.balance ? ` • balansi ${formatNumber(teacher.balance)} so'm` : ""}
+              </p>
+            </div>
+          </div>`
+      )
+      .join("") || "<p>Hali o'qituvchi yo'q</p>";
 
   const topRows =
     topStudents
@@ -574,8 +689,27 @@ async function renderAdminDashboard() {
     </div>
     <div class="card" style="cursor:default">
       <div class="card-body">
-        <h3>💰 Jami to'lovlar</h3>
-        <p>${formatNumber(stats.revenue)} so'm (hozircha mock to'lovlar)</p>
+        <h3>💰 Platforma daromadi</h3>
+        <div class="row-between" style="margin-top:6px">
+          <span>🎟️ Kredit sotuvi <span class="subtitle">(${formatNumber(stats.credits_sold)} dona)</span></span>
+          <b>${formatNumber(stats.credits_revenue)} so'm</b>
+        </div>
+        <div class="row-between" style="margin-top:6px">
+          <span>📝 Testlardan komissiya <span class="subtitle">(${stats.commission_percent}%)</span></span>
+          <b>${formatNumber(stats.tests_commission)} so'm</b>
+        </div>
+        <div class="row-between" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-border)">
+          <b>Jami</b>
+          <b style="color:var(--color-primary)">${formatNumber(stats.revenue)} so'm</b>
+        </div>
+        ${
+          stats.teachers_owed
+            ? `<p class="subtitle" style="margin:10px 0 0">
+                 ⚠️ O'qituvchilar balansida ${formatNumber(stats.teachers_owed)} so'm turibdi —
+                 bu ular yechib olishi mumkin bo'lgan pul, sizniki emas.
+               </p>`
+            : ""
+        }
       </div>
     </div>
     <div class="card" style="cursor:default">
@@ -590,6 +724,8 @@ async function renderAdminDashboard() {
     </div>
     <h3>💸 Pul yechish so'rovlari</h3>
     ${withdrawalRows}
+    <h3>🧑‍🏫 O'qituvchilar (eng ko'p to'lov qilgani birinchi)</h3>
+    ${teacherRows}
     <h3>🏆 Eng yaxshi o'quvchilar (barcha testlar bo'yicha)</h3>
     ${topRows}
   `);
@@ -747,9 +883,9 @@ function renderTestFound(test) {
 
   if (test.enrollment_type === "closed") {
     blockedMessage = "🔒 Bu yopiq test — javoblarni o'qituvchining o'zi kiritadi.";
-  } else if (test.start_time && now < new Date(test.start_time)) {
+  } else if (test.start_time && now < parseUtc(test.start_time)) {
     blockedMessage = `⏳ Test hali boshlanmagan. Boshlanish vaqti: ${formatDateTime(test.start_time)}`;
-  } else if (test.end_time && now > new Date(test.end_time)) {
+  } else if (test.end_time && now > parseUtc(test.end_time)) {
     blockedMessage = "⌛ Test vaqti tugagan.";
   }
 
@@ -757,8 +893,11 @@ function renderTestFound(test) {
     ? `<button class="btn" disabled>▶️ TESTNI BOSHLASH</button>`
     : test.paid
       ? `<button class="btn" id="start-test-button">▶️ TESTNI BOSHLASH</button>`
-      : `<button class="btn" id="pay-button">💳 ${formatNumber(test.price)} so'm to'lash</button>
-       <button class="btn" disabled>▶️ TESTNI BOSHLASH</button>`;
+      : // To'lov Payme sahifasida amalga oshadi va tasdiq serverga webhook
+        // orqali keladi — shuning uchun o'quvchi qaytib kelib holatni
+        // yangilashi uchun alohida tugma turadi.
+        `<button class="btn" id="pay-button">💳 ${formatNumber(test.price)} so'm to'lash</button>
+         <button class="btn btn-ghost" id="recheck-payment-button">🔄 To'lovni tekshirish</button>`;
 
   document.getElementById("search-result").innerHTML = `
     <div class="card" style="cursor:default">
@@ -780,43 +919,212 @@ function renderTestFound(test) {
     </div>
   `;
 
-  document.getElementById("start-test-button")?.addEventListener("click", guarded(() => startTest(test.code)));
+  document.getElementById("start-test-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      try {
+        await startTest(test.code);
+      } catch (error) {
+        // Obunaga oid xatolarni alohida, tushunarli ekranda ko'rsatamiz —
+        // bir lahzada o'tib ketadigan xabar bilan o'quvchi nima qilishni
+        // bilmay qolardi.
+        if (error.status === 451 || error.status === 409) {
+          renderSubscriptionRequired(test, error.message, error.status === 409);
+          return;
+        }
+        throw error;
+      }
+    })
+  );
+
   document.getElementById("pay-button")?.addEventListener(
     "click",
     guarded(async () => {
-      await api(`/api/tests/${test.code}/pay`, { method: "POST", body: {} });
-      showToast("✅ To'lov muvaffaqiyatli (test rejim)");
-      renderTestFound(await api(`/api/tests/${test.code}`));
+      const payment = await api(`/api/tests/${test.code}/pay`, { method: "POST", body: {} });
+
+      if (payment.paid) {
+        renderTestFound(await api(`/api/tests/${test.code}`));
+        return;
+      }
+
+      // Payme'ning to'lov sahifasi ochiladi. To'lov o'tgani Payme'ning
+      // webhook'i orqali serverga keladi, shuning uchun o'quvchi qaytib
+      // kelganda "To'lovni tekshirish" tugmasi bilan holatni yangilaydi.
+      openExternalLink(payment.checkout_url);
+      showToast("💳 To'lov sahifasi ochildi. To'lagach, \"To'lovni tekshirish\" ni bosing");
+    })
+  );
+
+  document.getElementById("recheck-payment-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const fresh = await api(`/api/tests/${test.code}`);
+      if (fresh.paid) {
+        showToast("✅ To'lov tasdiqlandi");
+      } else {
+        showToast("To'lov hali tasdiqlanmadi, bir oz kutib qayta tekshiring");
+      }
+      renderTestFound(fresh);
     })
   );
   document.getElementById("subscribe-button")?.addEventListener("click", () => {
-    const link = `https://t.me/${test.required_channel.replace("@", "")}`;
-    if (telegram?.openTelegramLink) {
-      telegram.openTelegramLink(link);
-    } else {
-      window.open(link, "_blank");
-    }
+    openExternalLink(`https://t.me/${test.required_channel.replace("@", "")}`);
   });
   document.getElementById("rating-button").addEventListener("click", guarded(() => renderRating(test.code)));
 }
 
+function renderSubscriptionRequired(test, message, isMisconfigured) {
+  /*
+    Majburiy obuna ekrani.
+
+    Ikki xil holat bor va ularni aralashtirmaslik kerak:
+    - o'quvchi hali obuna bo'lmagan (451) — o'zi hal qila oladi
+    - bot kanalda admin emas (409) — buni faqat O'QITUVCHI hal qiladi
+  */
+  const channel = test.required_channel || "";
+
+  showPage(`
+    <button class="back-button" data-action="back">←</button>
+    <div class="result-number">${isMisconfigured ? "⚠️" : "📢"}</div>
+    <h2 style="text-align:center">${isMisconfigured ? "Obuna tekshirilmadi" : "Avval kanalga obuna bo'ling"}</h2>
+    <div class="card" style="cursor:default">
+      <div class="card-body">
+        <p>${escapeHtml(message)}</p>
+      </div>
+    </div>
+    ${
+      isMisconfigured
+        ? ""
+        : `<button class="btn" id="go-subscribe">📢 ${escapeHtml(channel)} — obuna bo'lish</button>
+           <button class="btn btn-ghost" id="recheck-subscribe">✅ Obuna bo'ldim, tekshirish</button>`
+    }
+  `);
+
+  document.querySelector('[data-action="back"]').addEventListener("click", guarded(() => renderTestFound(test)));
+
+  document.getElementById("go-subscribe")?.addEventListener("click", () => {
+    openExternalLink(`https://t.me/${channel.replace("@", "")}`);
+  });
+
+  document.getElementById("recheck-subscribe")?.addEventListener(
+    "click",
+    guarded(async () => {
+      try {
+        await startTest(test.code);
+      } catch (error) {
+        if (error.status === 451 || error.status === 409) {
+          showToast("Hali obuna ko'rinmayapti — bir oz kutib qayta urining");
+          return;
+        }
+        throw error;
+      }
+    })
+  );
+}
+
 async function startTest(code) {
   const data = await api(`/api/tests/${code}/start`, { method: "POST", body: {} });
+
+  // Javoblar ikki joyda saqlanadi: serverda va telefon xotirasida. Telefon
+  // nusxasi yangiroq bo'lishi mumkin (oxirgi so'rov internet uzilgani uchun
+  // yetib bormagan bo'lsa), shuning uchun u ustun turadi.
+  const serverAnswers = data.answers || {};
+  const localAnswers = readLocalAnswers(data.attempt_id);
 
   quizState = {
     attemptId: data.attempt_id,
     mode: data.mode,
     questions: data.questions,
     index: 0,
-    answers: {},
+    answers: { ...serverAnswers, ...localAnswers },
     endsAt: Date.now() + data.remaining * 1000,
     code,
     finished: false,
+    saveTimerId: null,
+    savedSnapshot: JSON.stringify(serverAnswers),
   };
+
+  const answeredCount = Object.keys(quizState.answers).length;
+  if (answeredCount) {
+    showToast(`↩️ Davom etamiz — ${answeredCount} ta javobingiz saqlanib qolgan`);
+  }
 
   renderQuizQuestion();
   clearInterval(quizTimerId);
   quizTimerId = setInterval(() => guarded(updateQuizTimer)(), 1000);
+}
+
+/*
+  Javoblarni serverda saqlash.
+
+  Telegram Mini App juda oson yopiladi (pastga surish, qo'ng'iroq kelishi) —
+  ilgari javoblar faqat "YAKUNLASH" bosilganda yuborilardi, ya'ni yarmida
+  yopilsa o'quvchining butun mehnati yo'qolardi. Endi har bir o'zgarishdan
+  keyin (bir oz kutib, bir yo'la) serverga yuboriladi.
+*/
+function answerStorageKey(attemptId) {
+  return `quiz-answers-${attemptId}`;
+}
+
+function readLocalAnswers(attemptId) {
+  // Telefon xotirasi yopiq bo'lishi mumkin (maxfiy oyna, cheklovlar) —
+  // shuning uchun har bir murojaat himoyalangan.
+  try {
+    const stored = localStorage.getItem(answerStorageKey(attemptId));
+    const parsed = stored ? JSON.parse(stored) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function writeLocalAnswers(attemptId, answers) {
+  try {
+    localStorage.setItem(answerStorageKey(attemptId), JSON.stringify(answers));
+  } catch (_) {
+    /* joy yo'q yoki xotira yopiq — serverdagi nusxa yetarli */
+  }
+}
+
+function clearLocalAnswers(attemptId) {
+  try {
+    localStorage.removeItem(answerStorageKey(attemptId));
+  } catch (_) {
+    /* ahamiyatsiz */
+  }
+}
+
+function scheduleAnswerSave() {
+  if (!quizState || quizState.finished) return;
+
+  // Telefon xotirasiga DARHOL yoziladi: bu tezkor va internetga bog'liq emas,
+  // ya'ni aloqa butunlay yo'q bo'lsa ham javoblar yo'qolmaydi.
+  writeLocalAnswers(quizState.attemptId, quizState.answers);
+
+  // Serverga esa bir oz kutib, bir yo'la yuboriladi — har bosishda alohida
+  // so'rov yuborilsa, sekin internetda ilova sudralib qolardi.
+  clearTimeout(quizState.saveTimerId);
+  quizState.saveTimerId = setTimeout(() => saveAnswersNow(), 800);
+}
+
+async function saveAnswersNow({ keepalive = false } = {}) {
+  if (!quizState || quizState.finished) return;
+
+  const snapshot = JSON.stringify(quizState.answers);
+  if (snapshot === quizState.savedSnapshot) return; // o'zgarish yo'q — so'rov yubormaymiz
+
+  try {
+    await api(`/api/attempts/${quizState.attemptId}/answers`, {
+      method: "POST",
+      body: { answers: quizState.answers },
+      keepalive,
+    });
+    quizState.savedSnapshot = snapshot;
+  } catch (_) {
+    // Internet uzilgan bo'lishi mumkin — javoblar telefon xotirasida va
+    // ekranda saqlanib turadi, keyingi o'zgarishda yana yuborishga urinadi.
+    // O'quvchini bezovta qilmaymiz.
+  }
 }
 
 function renderQuizQuestion() {
@@ -856,6 +1164,7 @@ function renderFullQuizQuestion() {
       quizState.answers[question.id] = optionEl.dataset.letter;
       document.querySelectorAll("#options-container .option").forEach((el) => el.classList.remove("selected"));
       optionEl.classList.add("selected");
+      scheduleAnswerSave();
     });
   });
 
@@ -865,6 +1174,9 @@ function renderFullQuizQuestion() {
       if (isLast) {
         await finishQuiz();
       } else {
+        // Keyingi savolga o'tishdan oldin javoblar serverga yetib boradi —
+        // shu paytda ilova yopilib qolsa ham hech narsa yo'qolmaydi.
+        saveAnswersNow();
         quizState.index += 1;
         renderQuizQuestion();
       }
@@ -928,6 +1240,7 @@ function renderKeyQuizQuestion() {
   if (isText) {
     setupMathFields(appElement, (field, value) => {
       quizState.answers[field.dataset.ref] = value;
+      scheduleAnswerSave();
     });
   } else {
     document.querySelectorAll(".options-grid").forEach((grid) => {
@@ -936,6 +1249,7 @@ function renderKeyQuizQuestion() {
           quizState.answers[grid.dataset.ref] = optionEl.dataset.letter;
           grid.querySelectorAll(".option").forEach((el) => el.classList.remove("selected"));
           optionEl.classList.add("selected");
+          scheduleAnswerSave();
         });
       });
     });
@@ -947,6 +1261,9 @@ function renderKeyQuizQuestion() {
       if (isLast) {
         await finishQuiz();
       } else {
+        // Keyingi savolga o'tishdan oldin javoblar serverga yetib boradi —
+        // shu paytda ilova yopilib qolsa ham hech narsa yo'qolmaydi.
+        saveAnswersNow();
         quizState.index += 1;
         renderQuizQuestion();
       }
@@ -958,8 +1275,19 @@ function renderKeyQuizQuestion() {
 
 async function updateQuizTimer() {
   const timerEl = document.getElementById("quiz-timer");
+
+  // Test ekranidan chiqib ketilgan bo'lsa, taymerni to'xtatamiz. Aks holda u
+  // fonda ishlashda davom etib, vaqt tugaganda butunlay boshqa sahifani
+  // natija ekraniga almashtirib yuborardi. Tashlab ketilgan urinishni server
+  // o'zi tekshiradi (qarang: _finish_expired_attempts).
+  if (!timerEl) {
+    clearInterval(quizTimerId);
+    return;
+  }
+
   const secondsLeft = Math.max(0, Math.round((quizState.endsAt - Date.now()) / 1000));
-  if (timerEl) timerEl.textContent = "⏱️ " + formatDuration(secondsLeft);
+  timerEl.textContent = "⏱️ " + formatDuration(secondsLeft);
+
   if (secondsLeft <= 0 && !quizState.finished) {
     await finishQuiz();
   }
@@ -968,15 +1296,37 @@ async function updateQuizTimer() {
 async function finishQuiz() {
   if (quizState.finished) return;
   quizState.finished = true;
+
   clearInterval(quizTimerId);
+  clearTimeout(quizState.saveTimerId);
 
-  const result = await api(`/api/attempts/${quizState.attemptId}/finish`, {
-    method: "POST",
-    body: { answers: quizState.answers },
-  });
+  try {
+    const result = await api(`/api/attempts/${quizState.attemptId}/finish`, {
+      method: "POST",
+      body: { answers: quizState.answers },
+    });
 
-  renderQuizResult(result, quizState.code);
+    clearLocalAnswers(quizState.attemptId);
+    renderQuizResult(result, quizState.code);
+  } catch (error) {
+    // Yakunlash o'tmasa (internet uzilgan bo'lsa), o'quvchi qaytib urinishi
+    // kerak — shuning uchun "yakunlandi" belgisini orqaga qaytaramiz.
+    quizState.finished = false;
+    quizTimerId = setInterval(() => guarded(updateQuizTimer)(), 1000);
+    throw error;
+  }
 }
+
+/*
+  Ilova yopilayotganda yoki fonga o'tayotganda javoblarni oxirgi marta
+  yuboramiz. Telegram'da Mini App'ni pastga surib yopish eng ko'p uchraydigan
+  holat — aynan shu paytda saqlanmagan javoblar yo'qolib ketardi.
+*/
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") saveAnswersNow({ keepalive: true });
+});
+
+window.addEventListener("pagehide", () => saveAnswersNow({ keepalive: true }));
 
 function renderQuizResult(result, code) {
   showPage(`

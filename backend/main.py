@@ -24,7 +24,7 @@ import logging
 import random
 import re
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -36,8 +36,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from sqlalchemy import case, delete, func, inspect, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy import String, case, cast, delete, distinct, func, inspect, select, text
+from sqlalchemy.orm import Session, selectinload
 
 from .auth import (
     get_current_admin,
@@ -75,6 +75,7 @@ from .database import (
     WithdrawalRequest,
     WithdrawalRequestIn,
     engine,
+    utcnow,
 )
 from bot.bot import run_bot
 
@@ -99,8 +100,13 @@ def _add_missing_columns() -> None:
             "required_channel": "VARCHAR(100)",
             "results_sent_at": "TIMESTAMP",
         },
-        "test_attempts": {"offline_name": "VARCHAR(200)"},
+        "test_attempts": {"offline_name": "VARCHAR(200)", "saved_answers": "TEXT"},
         "key_questions": {"label": "VARCHAR(20)"},
+        "payments": {
+            "payme_transaction_id": "VARCHAR(50)",
+            "performed_at": "TIMESTAMP",
+            "cancelled_at": "TIMESTAMP",
+        },
     }
 
     inspector = inspect(engine)
@@ -152,7 +158,7 @@ def export_database(db: Session) -> bytes:
     """Butun bazani bitta JSON faylga aylantiradi."""
 
     export: dict[str, list[dict]] = {
-        "exported_at": datetime.utcnow().isoformat(),
+        "exported_at": utcnow().isoformat(),
         "tables": {},
     }
 
@@ -233,7 +239,7 @@ def send_results_to_teacher(db: Session, test: Test) -> bool:
             caption=caption,
         )
 
-        test.results_sent_at = datetime.utcnow()
+        test.results_sent_at = utcnow()
         db.commit()
         return True
     except Exception:
@@ -241,34 +247,74 @@ def send_results_to_teacher(db: Session, test: Test) -> bool:
         return False
 
 
+def _finish_expired_attempts(db: Session) -> int:
+    """
+    Vaqti tugab, yakunlanmay qolgan urinishlarni tekshirib qo'yadi.
+
+    O'quvchi javoblarini belgilab borgan, lekin "YAKUNLASH" ni bosmagan bo'lishi
+    mumkin (ilovani yopib qo'ygan, interneti uzilgan). Javoblari serverda
+    saqlanib turadi — shuning uchun mehnati yo'qolmasligi uchun shu javoblar
+    bo'yicha natija o'zi hisoblanadi.
+    """
+
+    finished = 0
+    attempts = db.scalars(select(Attempt).where(Attempt.status == "in_progress")).all()
+
+    for attempt in attempts:
+        test = db.get(Test, attempt.test_id)
+        if not test:
+            continue
+        if (utcnow() - attempt.started_at).total_seconds() < test.duration * 60:
+            continue
+
+        _grade_attempt_from_saved_answers(db, attempt, test)
+        finished += 1
+
+    return finished
+
+
 async def _finish_expired_tests_loop() -> None:
     """
-    Vaqti tugagan testlarni har 5 daqiqada tekshiradi: yakunlaydi va
-    natijalarni o'qituvchiga yuboradi. Shunda o'qituvchi hech narsa
-    bosmasdan, barcha o'quvchilar ishlab bo'lgach hisobotni oladi.
+    Har 5 daqiqada: vaqti tugagan urinishlarni tekshiradi, vaqti tugagan
+    testlarni yakunlaydi va natijalarni o'qituvchiga yuboradi. Shunda o'qituvchi
+    hech narsa bosmasdan, barcha o'quvchilar ishlab bo'lgach hisobotni oladi.
     """
 
     while True:
         await asyncio.sleep(5 * 60)
 
-        session = SessionLocal()
         try:
-            expired = session.scalars(
-                select(Test).where(
-                    Test.end_time.is_not(None),
-                    Test.end_time <= datetime.utcnow(),
-                    Test.results_sent_at.is_(None),
-                )
-            ).all()
-
-            for test in expired:
-                test.status = "closed"
-                send_results_to_teacher(session, test)
-            session.commit()
+            # MUHIM: bu ish alohida ipda bajariladi. Telegram bot ham AYNAN shu
+            # event loop ichida ishlaydi, PDF yasash va Telegram'ga fayl yuborish
+            # esa sinxron amallar — to'g'ridan-to'g'ri chaqirilsa, bot o'nlab
+            # sekund davomida hech kimga javob bermay qolardi.
+            await asyncio.to_thread(_finish_expired_tests_once)
         except Exception:
             logging.getLogger("backend").warning("Vaqti tugagan testlarni tekshirib bo'lmadi", exc_info=True)
-        finally:
-            session.close()
+
+
+def _finish_expired_tests_once() -> None:
+    """Yuqoridagi tsiklning bitta qadami (alohida ipda ishlaydi)."""
+
+    session = SessionLocal()
+    try:
+        _finish_expired_attempts(session)
+        session.commit()
+
+        expired = session.scalars(
+            select(Test).where(
+                Test.end_time.is_not(None),
+                Test.end_time <= utcnow(),
+                Test.results_sent_at.is_(None),
+            )
+        ).all()
+
+        for test in expired:
+            test.status = "closed"
+            send_results_to_teacher(session, test)
+        session.commit()
+    finally:
+        session.close()
 
 
 async def _daily_backup_loop() -> None:
@@ -277,11 +323,20 @@ async def _daily_backup_loop() -> None:
     while True:
         await asyncio.sleep(24 * 60 * 60)
 
-        session = SessionLocal()
         try:
-            send_backup_to_admin(session)
-        finally:
-            session.close()
+            # Zaxira nusxa ham alohida ipda — butun bazani JSON qilib Telegram'ga
+            # yuborish uzoq davom etadi va bot kutib qolmasligi kerak.
+            await asyncio.to_thread(_send_backup_once)
+        except Exception:
+            logging.getLogger("backend").warning("Zaxira nusxa vazifasi bajarilmadi", exc_info=True)
+
+
+def _send_backup_once() -> None:
+    session = SessionLocal()
+    try:
+        send_backup_to_admin(session)
+    finally:
+        session.close()
 
 
 # ========== 2) Statistika va PDF yordamchilari ==========
@@ -363,14 +418,27 @@ def _group_key_questions(test: Test) -> list[list[KeyQuestion]]:
     return groups
 
 
-def _question_kinds(test: Test) -> dict[int, str]:
-    """Har bir savol havolasi (question_ref) qaysi turga tegishli: "closed" yoki "written"."""
+def _scored_groups(test: Test) -> list[tuple[str, list[int]]]:
+    """
+    Testning baholanadigan birliklari: (turi, savol havolalari) ko'rinishida.
 
-    if test.mode == "key":
-        return {
-            kq.number: ("written" if kq.question_type == "text" else "closed") for kq in test.key_questions
-        }
-    return {question.id: "closed" for question in test.questions}
+    Turi — "closed" (variantli) yoki "written" (yozma).
+
+    MUHIM: a/b qismli yozma savol BITTA birlik hisoblanadi va faqat ikkala
+    qismi to'g'ri bo'lgandagina to'g'ri sanaladi — xuddi umumiy natija
+    hisoblanganidek (qarang: _calculate_attempt_score). Shuning uchun
+    "Yopiq 3/3 + Yozma 1/1" yig'indisi umumiy "4/4" ga teng chiqadi.
+    """
+
+    if test.mode != "key":
+        return [("closed", [question.id]) for question in test.questions]
+
+    groups = []
+    for group in _group_key_questions(test):
+        kind = "written" if group[0].question_type == "text" else "closed"
+        groups.append((kind, [key_question.number for key_question in group]))
+
+    return groups
 
 
 def score_splits(db: Session, test: Test, attempts: list[Attempt]) -> dict[int, dict]:
@@ -381,9 +449,9 @@ def score_splits(db: Session, test: Test, attempts: list[Attempt]) -> dict[int, 
     so'rov yuborilsa, ro'yxat sekin ochilardi.
     """
 
-    kinds = _question_kinds(test)
+    groups = _scored_groups(test)
     totals = {"closed": 0, "written": 0}
-    for kind in kinds.values():
+    for kind, _ in groups:
         totals[kind] += 1
 
     splits = {
@@ -399,15 +467,19 @@ def score_splits(db: Session, test: Test, attempts: list[Attempt]) -> dict[int, 
     if not splits:
         return splits
 
+    correct_refs: dict[int, set[int]] = {attempt_id: set() for attempt_id in splits}
     rows = db.execute(
         select(StudentAnswer.attempt_id, StudentAnswer.question_ref)
         .where(StudentAnswer.attempt_id.in_(list(splits)), StudentAnswer.is_correct.is_(True))
     ).all()
 
     for attempt_id, question_ref in rows:
-        kind = kinds.get(question_ref)
-        if kind:
-            splits[attempt_id][f"{kind}_correct"] += 1
+        correct_refs[attempt_id].add(question_ref)
+
+    for attempt_id, answered in correct_refs.items():
+        for kind, refs in groups:
+            if refs and all(ref in answered for ref in refs):
+                splits[attempt_id][f"{kind}_correct"] += 1
 
     return splits
 
@@ -859,6 +931,11 @@ CREDIT_PRICE_TIERS_DISPLAY = [
 ]
 
 
+def _teacher_share(amount: int) -> int:
+    """O'quvchi to'lagan summadan o'qituvchiga tegadigan qismi (qolgani platformada qoladi)."""
+    return round(amount * (100 - PLATFORM_COMMISSION_PERCENT) / 100)
+
+
 def _calculate_credit_price(credit_count: int) -> int:
     """Kredit sonining jami narxini optom chegirma jadvali bo'yicha hisoblaydi."""
     for low, high, price_per_credit in CREDIT_PRICE_TIERS:
@@ -867,9 +944,17 @@ def _calculate_credit_price(credit_count: int) -> int:
     return credit_count * CREDIT_PRICE_TIERS[0][2]
 
 
-def _build_payme_checkout_url(purchase_id: int, amount: int) -> str:
-    """Payme'ning hosted to'lov sahifasiga olib boruvchi havolani yaratadi (amount — so'mda)."""
-    params = f"m={PAYME_MERCHANT_ID};ac.purchase_id={purchase_id};a={amount * 100}"
+def _build_payme_checkout_url(account_field: str, order_id: int, amount: int) -> str:
+    """
+    Payme'ning hosted to'lov sahifasiga olib boruvchi havolani yaratadi (amount — so'mda).
+
+    account_field — Payme buyurtmani qaysi nom bilan qaytarishi:
+      "purchase_id" — o'qituvchining kredit xaridi (CreditPurchase)
+      "payment_id"  — o'quvchining pullik testga to'lovi (Payment)
+    """
+
+    # Payme summani tiyinda kutadi
+    params = f"m={PAYME_MERCHANT_ID};ac.{account_field}={order_id};a={amount * 100}"
     encoded = base64.b64encode(params.encode()).decode()
     return f"https://checkout.paycom.uz/{encoded}"
 
@@ -950,40 +1035,105 @@ def _normalize_channel(raw_channel: str | None) -> str | None:
     return f"@{channel}" if channel else None
 
 
+class ChannelUnavailable(Exception):
+    """Botning kanalga ruxsati yo'q — ya'ni obunani umuman tekshirib bo'lmaydi."""
+
+
+def _ask_telegram_chat_member(channel: str, tg_id: int) -> dict:
+    """
+    Telegram'dan "bu odam shu kanalda bormi?" deb so'raydi.
+
+    Ikki xil muvaffaqiyatsizlikni ajratadi, chunki ularga munosabat ham har xil:
+
+    - ChannelUnavailable — bot kanalda admin emas yoki kanal nomi xato.
+      Buni O'QITUVCHI tuzatishi kerak.
+    - TimeoutError/boshqa xato — internet uzilgan, Telegram javob bermadi.
+      Bu o'tkinchi, hech kimning aybi yo'q.
+    """
+
+    response = httpx.get(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember",
+        params={"chat_id": channel, "user_id": tg_id},
+        timeout=10,
+    )
+    data = response.json()
+
+    if not data.get("ok"):
+        raise ChannelUnavailable(data.get("description") or "noma'lum sabab")
+
+    return data.get("result") or {}
+
+
+def _ensure_bot_can_check_channel(channel: str) -> None:
+    """
+    Test yaratilayotganda: bot shu kanalni tekshira oladimi?
+
+    Telegram botga faqat O'ZI a'zo (yoki admin) bo'lgan kanal haqida ma'lumot
+    beradi. Shuning uchun botning o'zini so'raymiz — javob kelsa, demak bot
+    kanalni ko'ryapti va o'quvchilarni ham tekshira oladi.
+    """
+
+    try:
+        bot_id = int(BOT_TOKEN.split(":")[0])
+    except (ValueError, IndexError):
+        return  # token noto'g'ri — bu boshqa joyda allaqachon aytilgan
+
+    try:
+        _ask_telegram_chat_member(channel, bot_id)
+    except ChannelUnavailable as error:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Bot {channel} kanalini ko'ra olmayapti ({error}). "
+                "Avval botni shu kanalga administrator qilib qo'shing, keyin testni saqlang. "
+                "Aks holda obuna tekshiruvi ishlamaydi."
+            ),
+        )
+    except Exception:
+        # Internet uzilgan bo'lishi mumkin — test yaratishni to'smaymiz
+        logging.getLogger("backend").warning("Kanalni tekshirib bo'lmadi (vaqtinchalik xato)", exc_info=True)
+
+
 def _check_channel_subscription(test: Test, user: User) -> None:
     """
     Majburiy obuna yoqilgan bo'lsa, o'quvchi kanalga obuna ekanini tekshiradi.
 
-    Agar bot o'sha kanalda administrator bo'lmasa, Telegram javob bera olmaydi —
-    bunday holatda o'quvchini to'smaymiz (aks holda o'qituvchining sozlamasidagi
-    xato tufayli hech kim test ishlay olmay qoladi), faqat logga yozib qo'yamiz.
+    MUHIM: ilgari bot kanalga kira olmasa, o'quvchi BEMALOL o'tkazib
+    yuborilardi — ya'ni "majburiy obuna" aslida hech kimni to'smasdi va
+    o'qituvchi buni bilmasdi ham. Endi sozlamadagi xato ochiq aytiladi.
+
+    Internet uzilishi kabi o'tkinchi xatolarda esa o'quvchini to'smaymiz —
+    aks holda Telegram bir soniya javob bermagani uchun butun sinf test
+    ishlay olmay qolardi.
     """
 
     if not test.required_channel:
         return
 
     try:
-        response = httpx.get(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember",
-            params={"chat_id": test.required_channel, "user_id": user.tg_id},
-            timeout=10,
-        )
-        data = response.json()
-    except Exception:
-        logging.getLogger("backend").warning("Kanal obunasini tekshirib bo'lmadi", exc_info=True)
-        return
-
-    if not data.get("ok"):
+        member = _ask_telegram_chat_member(test.required_channel, user.tg_id)
+    except ChannelUnavailable as error:
         logging.getLogger("backend").warning(
-            "Kanal obunasi tekshirilmadi (%s): %s — bot kanalda admin emas bo'lishi mumkin",
-            test.required_channel,
-            data.get("description"),
+            "Kanal obunasini tekshirib bo'lmadi (%s): %s", test.required_channel, error
         )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Bu testda {test.required_channel} kanaliga obuna shart, lekin bot "
+                "kanalni tekshira olmayapti. O'qituvchiga ayting: botni kanalga "
+                "administrator qilib qo'shish kerak."
+            ),
+        )
+    except Exception:
+        logging.getLogger("backend").warning("Kanal obunasi tekshirilmadi (vaqtinchalik xato)", exc_info=True)
         return
 
-    status = data.get("result", {}).get("status")
+    status = member.get("status")
+
+    # "restricted" — kanalda, lekin cheklangan. U ham obunachi hisoblanadi,
+    # faqat is_member rost bo'lsa. "left" va "kicked" — obuna emas.
     is_subscribed = status in ("creator", "administrator", "member") or (
-        status == "restricted" and data["result"].get("is_member")
+        status == "restricted" and member.get("is_member")
     )
 
     if not is_subscribed:
@@ -1003,7 +1153,7 @@ def _check_enrollment(test: Test) -> None:
     if test.status == "closed":
         raise HTTPException(status_code=403, detail="Test yakunlangan")
 
-    now = datetime.utcnow()
+    now = utcnow()
 
     if test.start_time and now < test.start_time:
         raise HTTPException(
@@ -1110,7 +1260,11 @@ def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str,
             if key_question.question_type == "multi":
                 raw_answer = student_answer.upper().replace(" ", "")
                 chosen_letters = {letter for letter in raw_answer.split(",") if letter}
-                correct_letters = set(key_question.correct.split(","))
+                # Kalit ham xuddi shunday tozalanadi — bazada eski, normallashtirilmagan
+                # yozuv ("a, c") qolgan bo'lsa ham to'g'ri solishtiriladi.
+                correct_letters = {
+                    part.strip().upper() for part in key_question.correct.split(",") if part.strip()
+                }
                 is_correct = bool(chosen_letters) and chosen_letters == correct_letters
                 chosen_value = ",".join(sorted(chosen_letters)) if chosen_letters else None
             elif key_question.question_type == "text":
@@ -1177,6 +1331,57 @@ def _calculate_attempt_score(db: Session, attempt: Attempt, test: Test) -> None:
     attempt.percent = round(correct_count / total * 100, 1) if total else 0
 
 
+def _finalize_attempt(db: Session, attempt: Attempt, test: Test, answers: dict[str, str]) -> int:
+    """
+    Urinishni yakunlaydi: javoblarni tekshiradi, natijani hisoblaydi va
+    bepul testda o'qituvchidan 1 kredit yechadi. Savollar sonini qaytaradi.
+
+    Uch joyda ishlatiladi — o'quvchi "YAKUNLASH" ni bosganda, vaqti tugab
+    qolgan urinish fon vazifasida avtomatik tekshirilganda, va o'quvchi
+    allaqachon tugab ketgan urinish bilan qaytib kelganda. Hammasi bitta
+    funksiyada bo'lgani uchun kredit hisobi hech qachon chalkashmaydi.
+    """
+
+    # Qayta yakunlanmasligi uchun: eski javoblar o'rniga yangilari yoziladi
+    db.execute(delete(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id))
+
+    total_questions = _grade_answers(db, attempt, test, answers)
+    _calculate_attempt_score(db, attempt, test)
+
+    attempt.finished_at = utcnow()
+    attempt.status = "done"
+    attempt.seconds = int(min((attempt.finished_at - attempt.started_at).total_seconds(), test.duration * 60))
+    attempt.saved_answers = None  # natija StudentAnswer'da — qoralamani saqlashning hojati yo'q
+
+    # Bepul testda har bir yakunlangan natija o'qituvchidan 1 kredit oladi.
+    # max(0, ...) — kredit test BOSHLANGANDA tekshiriladi, lekin oradagi vaqtda
+    # o'qituvchi uni boshqa joyda sarflab yuborishi mumkin; shunda balans
+    # manfiyga tushib, o'qituvchi keyin sotib olgan kreditini yo'qotardi.
+    if test.price == 0:
+        test.teacher.credits = max(0, test.teacher.credits - 1)
+
+    return total_questions
+
+
+def _grade_attempt_from_saved_answers(db: Session, attempt: Attempt, test: Test) -> int:
+    """Vaqti tugagan urinishni, o'quvchi belgilab qo'ygan javoblari bo'yicha yakunlaydi."""
+
+    return _finalize_attempt(db, attempt, test, _read_saved_answers(attempt))
+
+
+def _read_saved_answers(attempt: Attempt) -> dict[str, str]:
+    """Urinishdagi qoralama javoblarni o'qiydi. Yozuv buzilgan bo'lsa, bo'sh qaytaradi."""
+
+    if not attempt.saved_answers:
+        return {}
+    try:
+        saved = json.loads(attempt.saved_answers)
+    except (ValueError, TypeError):
+        return {}
+
+    return {str(key): str(value) for key, value in saved.items()} if isinstance(saved, dict) else {}
+
+
 # ========== 3) Umumiy endpointlar ==========
 
 
@@ -1237,24 +1442,17 @@ def my_attempts(user: User = Depends(get_current_user), db: Session = Depends(ge
                     "wrong": attempt.wrong,
                 }
             )
-
     return {"in_progress": in_progress, "completed": completed}
-
-
 # ========== 4) O'qituvchi ro'yxatdan o'tishi ==========
-
-
 @app.post("/api/teacher/register")
 def register_teacher(
     body: TeacherRegisterIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
     """
     Joriy Telegram foydalanuvchisini o'qituvchi sifatida ro'yxatdan o'tkazadi.
-
     Login/parol yo'q — faqat ism-familiya so'raladi va shu User'ning
     full_name maydoniga yoziladi (Telegram ismi ishonchli bo'lmasligi mumkin).
     """
-
     already_registered = db.scalar(select(Teacher.id).where(Teacher.user_id == user.id))
     if already_registered:
         raise HTTPException(status_code=400, detail="Siz allaqachon o'qituvchi sifatida ro'yxatdan o'tgansiz")
@@ -1362,7 +1560,7 @@ def create_credit_purchase(
         "id": purchase.id,
         "credits": purchase.credits,
         "amount": purchase.amount,
-        "checkout_url": _build_payme_checkout_url(purchase.id, amount),
+        "checkout_url": _build_payme_checkout_url("purchase_id", purchase.id, amount),
     }
 
 
@@ -1376,29 +1574,66 @@ def list_own_credit_purchases(teacher: Teacher = Depends(get_current_teacher), d
     return [{"id": p.id, "credits": p.credits, "amount": p.amount, "status": p.status} for p in purchases]
 
 
+def _participant_key_expression():
+    """
+    Qatnashchini ajratuvchi kalit (SQL ichida).
+
+    Telegram foydalanuvchisi bo'lsa — "user:12", o'qituvchi qo'lda qo'shgan
+    o'quvchi bo'lsa — "offline:hasan hasanov". Prefiks shuning uchun kerakki,
+    ism bilan raqam adashib ketmasin. best_attempts() bilan bir xil mantiq.
+    """
+
+    return case(
+        (Attempt.user_id.is_not(None), "user:" + cast(Attempt.user_id, String)),
+        else_="offline:" + func.lower(func.coalesce(Attempt.offline_name, "")),
+    )
+
+
 @app.get("/api/teacher/tests")
 def list_tests(teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
-    """O'qituvchining barcha testlari ro'yxati (eng yangisi birinchi), qatnashchilar soni bilan."""
+    """
+    O'qituvchining barcha testlari ro'yxati (eng yangisi birinchi), qatnashchilar soni bilan.
 
-    result = []
-    for test in reversed(teacher.tests):
-        result.append(
-            {
-                "id": test.id,
-                "code": test.code,
-                "title": test.title,
-                "subject": test.subject,
-                "mode": test.mode,
-                "enrollment_type": test.enrollment_type,
-                "status": test.status,
-                "created_at": test.created_at,
-                "count": _question_count(test),
-                "price": test.price,
-                "students": len(best_attempts(db, test)),
-            }
-        )
+    Qatnashchilar soni va savollar BITTA so'rovda olinadi. Ilgari har bir test
+    uchun alohida so'rov ketardi (qatnashchilar uchun bitta, savollar uchun
+    yana bitta) — 50 ta testi bor o'qituvchida bu 100 dan ortiq so'rov degani
+    edi va eng ko'p ochiladigan ekran sekin ochilardi.
+    """
 
-    return result
+    tests = db.scalars(
+        select(Test)
+        .where(Test.teacher_id == teacher.id)
+        .options(selectinload(Test.key_questions), selectinload(Test.questions))
+        .order_by(Test.id.desc())
+    ).all()
+
+    if not tests:
+        return []
+
+    participant_counts = dict(
+        db.execute(
+            select(Attempt.test_id, func.count(distinct(_participant_key_expression())))
+            .where(Attempt.test_id.in_([test.id for test in tests]), Attempt.status == "done")
+            .group_by(Attempt.test_id)
+        ).all()
+    )
+
+    return [
+        {
+            "id": test.id,
+            "code": test.code,
+            "title": test.title,
+            "subject": test.subject,
+            "mode": test.mode,
+            "enrollment_type": test.enrollment_type,
+            "status": test.status,
+            "created_at": test.created_at,
+            "count": _question_count(test),
+            "price": test.price,
+            "students": participant_counts.get(test.id, 0),
+        }
+        for test in tests
+    ]
 
 
 @app.post("/api/teacher/tests")
@@ -1411,6 +1646,18 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         raise HTTPException(status_code=422, detail="Kamida bitta savol kiriting")
     if body.price > 0 and body.enrollment_type == "closed":
         raise HTTPException(status_code=422, detail="Pullik testlar faqat ochiq test sifatida yaratiladi")
+    if body.price > 0 and not PAYME_MERCHANT_ID:
+        raise HTTPException(
+            status_code=503,
+            detail="To'lov tizimi hali sozlanmagan — hozircha faqat bepul test yaratish mumkin",
+        )
+
+    # Majburiy obuna so'ralgan bo'lsa, bot kanalni haqiqatan tekshira olishini
+    # SHU YERDA aniqlaymiz. Aks holda o'qituvchi testni tarqatib yuborgandan
+    # keyin, o'quvchilar kira olmay qolganda bilardi.
+    required_channel = _normalize_channel(body.required_channel)
+    if required_channel:
+        _ensure_bot_can_check_channel(required_channel)
 
     while True:
         code = "".join(random.choices(TEST_CODE_ALPHABET, k=TEST_CODE_LENGTH))
@@ -1427,7 +1674,7 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         duration=body.duration,
         mode=body.mode,
         telegram_group_id=body.telegram_group_id,
-        required_channel=_normalize_channel(body.required_channel),
+        required_channel=required_channel,
         enrollment_type=body.enrollment_type,
         start_time=body.start_time,
         end_time=body.end_time,
@@ -1603,9 +1850,13 @@ def student_answer_detail(
             )
 
     # Yopiq (variantli) va yozma savollar alohida sanaladi:
-    # "Yopiq 15/35", "Yozma 5/20" ko'rinishida ko'rsatish uchun.
-    closed = [question for question in questions if question["kind"] != "text"]
-    written = [question for question in questions if question["kind"] == "text"]
+    # "Yopiq 15/35", "Yozma 5/10" ko'rinishida ko'rsatish uchun.
+    #
+    # Sanoq natijalar jadvali bilan BIR XIL usulda olinadi (score_splits) —
+    # ya'ni a/b qismli yozma savol bitta savol deb hisoblanadi. Ilgari bu yerda
+    # qismlar alohida sanalardi va "Yopiq 35/35 + Yozma 20/20" yig'indisi
+    # umumiy "45" dan katta chiqib, o'qituvchini chalg'itardi.
+    splits = score_splits(db, test, [attempt])[attempt.id]
 
     return {
         "name": student.full_name if student else (attempt.offline_name or "Noma'lum"),
@@ -1614,10 +1865,7 @@ def student_answer_detail(
         "total": _question_count(test),
         "percent": attempt.percent,
         "seconds": attempt.seconds,
-        "closed_correct": sum(1 for question in closed if question["is_correct"]),
-        "closed_total": len(closed),
-        "written_correct": sum(1 for question in written if question["is_correct"]),
-        "written_total": len(written),
+        **splits,
         "questions": questions,
     }
 
@@ -1669,10 +1917,10 @@ def save_student_answers(
     total_questions = _grade_answers(db, attempt, test, body.answers)
     _calculate_attempt_score(db, attempt, test)
     attempt.status = "done"
-    attempt.finished_at = datetime.utcnow()
+    attempt.finished_at = utcnow()
 
     if test.price == 0 and not was_filled:
-        teacher.credits -= 1
+        teacher.credits = max(0, teacher.credits - 1)
 
     db.commit()
 
@@ -1715,6 +1963,11 @@ def reopen_test(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
 
     test = _get_own_test(db, teacher, test_id)
     test.status = "active"
+
+    # Hisobot "allaqachon yuborilgan" belgisi ham tozalanadi — aks holda test
+    # qayta yakunlanganda, yangi o'quvchilar natijasi bilan hisobot kelmay qolardi.
+    test.results_sent_at = None
+
     db.commit()
     return {"ok": True}
 
@@ -1783,6 +2036,14 @@ def update_test_price(
     """O'qituvchi testni yaratgandan keyin ham narxini o'zgartirishi uchun. Avvalgi to'lovlarga ta'sir qilmaydi."""
 
     test = _get_own_test(db, teacher, test_id)
+
+    # Yaratishdagi qoidalar bu yerda ham amal qiladi — aks holda bepul yopiq
+    # testni keyin pullik qilib, to'lov tizimini chetlab o'tish mumkin bo'lardi.
+    if body.price > 0 and test.enrollment_type == "closed":
+        raise HTTPException(status_code=422, detail="Yopiq testni pullik qilib bo'lmaydi")
+    if body.price > 0 and not PAYME_MERCHANT_ID:
+        raise HTTPException(status_code=503, detail="To'lov tizimi hali sozlanmagan")
+
     test.price = body.price
     db.commit()
     return {"id": test.id, "price": test.price}
@@ -1895,30 +2156,57 @@ def get_test(code: str, user: User = Depends(get_current_user), db: Session = De
 @app.post("/api/tests/{code}/pay")
 def pay_for_test(code: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
-    HOZIRCHA MOCK: to'lov darhol "paid" deb belgilanadi.
+    Pullik testga to'lov boshlaydi: Payme to'lov sahifasiga havola qaytaradi.
 
-    Haqiqiy Click/Payme ulanganda: bu yerda to'lov "pending" holatda yaratiladi va
-    foydalanuvchi to'lov sahifasiga yo'naltiriladi; to'lov tizimining webhook'i kelganda
-    shu yozuv "paid"ga o'zgartiriladi.
+    To'lov "pending" holatda yaratiladi. O'quvchi haqiqatan pul to'lagandan
+    keyin Payme webhook'i (qarang: 7-bo'lim) uni "paid" ga o'tkazadi va
+    shundagina test ochiladi, o'qituvchi balansiga ulush qo'shiladi.
     """
 
     test = _get_test_by_code(db, code)
     if _is_paid(db, user, test):
-        return {"ok": True}
+        return {"paid": True}
 
-    db.add(Payment(user_id=user.id, test_id=test.id, amount=test.price, status="paid", provider="mock"))
+    if test.price <= 0:
+        return {"paid": True}  # bepul test — to'lovning hojati yo'q
 
-    # To'lovning bir qismi darhol o'qituvchi balansiga qo'shiladi, qolgani platformada qoladi.
-    teacher_share = round(test.price * (100 - PLATFORM_COMMISSION_PERCENT) / 100)
-    test.teacher.balance += teacher_share
+    if not PAYME_MERCHANT_ID:
+        raise HTTPException(status_code=503, detail="To'lov tizimi hali sozlanmagan, admin bilan bog'laning")
 
-    db.commit()
-    return {"ok": True}
+    # Boshlangan, lekin tugatilmagan to'lov bo'lsa — yangisini yaratmaymiz,
+    # o'sha havolani qaytaramiz (aks holda har bosishda yangi buyurtma to'planardi).
+    payment = db.scalar(
+        select(Payment)
+        .where(Payment.user_id == user.id, Payment.test_id == test.id, Payment.status == "pending")
+        .order_by(Payment.id.desc())
+    )
+
+    if not payment or payment.amount != test.price:
+        payment = Payment(user_id=user.id, test_id=test.id, amount=test.price, status="pending")
+        db.add(payment)
+        db.commit()
+
+    return {
+        "paid": False,
+        "payment_id": payment.id,
+        "amount": payment.amount,
+        "checkout_url": _build_payme_checkout_url("payment_id", payment.id, payment.amount),
+    }
 
 
 @app.post("/api/tests/{code}/start")
 def start_test(code: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Testni boshlaydi (yoki tugamagan urinishni davom ettiradi). To'g'ri javoblar yuborilmaydi."""
+    """
+    Testni boshlaydi yoki tugamagan urinishni davom ettiradi.
+
+    Har bir o'quvchiga BITTA urinish beriladi. Ilgari tugatilgan urinish
+    e'tiborga olinmasdi va har bosishda yangisi ochilardi — o'quvchi javoblarni
+    yodlab, 100% olguncha qayta-qayta ishlab, reytingni ma'nosiz qilib qo'yardi
+    (va har urinish o'qituvchining kreditini yeyardi).
+
+    To'g'ri javoblar hech qachon yuborilmaydi — aks holda o'quvchi ularni
+    brauzerning so'rovlar oynasidan ko'rib olishi mumkin.
+    """
 
     test = _get_test_by_code(db, code)
     if not _is_paid(db, user, test):
@@ -1928,13 +2216,22 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
 
     attempt = db.scalar(
         select(Attempt)
-        .where(Attempt.test_id == test.id, Attempt.user_id == user.id, Attempt.status == "in_progress")
+        .where(Attempt.test_id == test.id, Attempt.user_id == user.id)
         .order_by(Attempt.id.desc())
     )
 
-    if attempt and (datetime.utcnow() - attempt.started_at).total_seconds() >= test.duration * 60:
-        attempt.status = "expired"
-        attempt = None
+    # Vaqti tugab qolgan urinish: o'quvchi belgilab qo'ygan javoblar bo'yicha
+    # darhol tekshirib, natijasini qotiramiz — mehnati yo'qolmasligi uchun.
+    if attempt and attempt.status == "in_progress":
+        if (utcnow() - attempt.started_at).total_seconds() >= test.duration * 60:
+            _grade_attempt_from_saved_answers(db, attempt, test)
+            db.commit()
+
+    if attempt and attempt.status == "done":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Siz bu testni allaqachon ishlab bo'lgansiz — natijangiz: {attempt.percent}%",
+        )
 
     if not attempt:
         # Bepul testda har bir natija o'qituvchidan 1 kredit oladi —
@@ -1949,7 +2246,7 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
         db.add(attempt)
         db.commit()
 
-    remaining_seconds = int(test.duration * 60 - (datetime.utcnow() - attempt.started_at).total_seconds())
+    remaining_seconds = max(0, int(test.duration * 60 - (utcnow() - attempt.started_at).total_seconds()))
 
     if test.mode == "key":
         # Savol matni yuborilmaydi — faqat raqami, turi va nechta variant borligi.
@@ -1979,7 +2276,45 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
         "duration": test.duration,
         "remaining": remaining_seconds,
         "questions": questions_payload,
+        # Ilgari belgilangan javoblar — Mini App yopilib qayta ochilsa,
+        # o'quvchi to'xtagan joyidan davom etadi.
+        "answers": _read_saved_answers(attempt),
     }
+
+
+def _get_own_attempt(db: Session, user: User, attempt_id: int) -> Attempt:
+    """Urinish aynan shu o'quvchiga tegishli ekanini tekshiradi."""
+
+    attempt = db.get(Attempt, attempt_id)
+    if not attempt or attempt.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Urinish topilmadi")
+    return attempt
+
+
+@app.post("/api/attempts/{attempt_id}/answers")
+def save_attempt_progress(
+    attempt_id: int, body: FinishIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """
+    O'quvchi belgilagan javoblarni yakunlashni kutmasdan saqlab qo'yadi.
+
+    Telegram Mini App juda oson yopiladi (pastga surish, qo'ng'iroq kelishi) —
+    ilgari bunda o'quvchining 45 ta savolga bergan javobi butunlay yo'qolardi,
+    chunki javoblar faqat yakunlashda yuborilardi. Endi har savoldan keyin shu
+    yerga yuboriladi va qaytib kelganda joyidan davom etadi.
+    """
+
+    attempt = _get_own_attempt(db, user, attempt_id)
+    if attempt.status != "in_progress":
+        raise HTTPException(status_code=400, detail="Test allaqachon yakunlangan")
+
+    # Javoblar o'lchami cheklanadi — buzilgan yoki ataylab kattalashtirilgan
+    # so'rov bazani to'ldirib qo'ymasligi uchun.
+    cleaned = {str(ref)[:20]: str(value)[:300] for ref, value in list(body.answers.items())[:300]}
+    attempt.saved_answers = json.dumps(cleaned, ensure_ascii=False)
+    db.commit()
+
+    return {"saved": len(cleaned)}
 
 
 @app.post("/api/attempts/{attempt_id}/finish")
@@ -1988,24 +2323,18 @@ def finish_attempt(
 ):
     """O'quvchi javoblarini qabul qiladi, avtomatik tekshiradi va natijani qaytaradi."""
 
-    attempt = db.get(Attempt, attempt_id)
-    if not attempt or attempt.user_id != user.id:
-        raise HTTPException(status_code=404, detail="Urinish topilmadi")
+    attempt = _get_own_attempt(db, user, attempt_id)
     if attempt.status != "in_progress":
         raise HTTPException(status_code=400, detail="Test allaqachon yakunlangan")
 
     test = db.get(Test, attempt.test_id)
-    total_questions = _grade_answers(db, attempt, test, body.answers)
+    if not test:
+        raise HTTPException(status_code=404, detail="Test topilmadi")
 
-    _calculate_attempt_score(db, attempt, test)
-    attempt.finished_at = datetime.utcnow()
-    attempt.status = "done"
-    attempt.seconds = int(min((attempt.finished_at - attempt.started_at).total_seconds(), test.duration * 60))
-
-    # Bepul testda har bir yakunlangan natija o'qituvchidan 1 kredit oladi
-    if test.price == 0:
-        test.teacher.credits -= 1
-
+    # Saqlangan qoralama ham hisobga olinadi: aloqa uzilib, oxirgi so'rov
+    # yetib kelmagan bo'lsa ham, avval belgilangan javoblar yo'qolmaydi.
+    answers = {**_read_saved_answers(attempt), **body.answers}
+    total_questions = _finalize_attempt(db, attempt, test, answers)
     db.commit()
 
     return {
@@ -2043,6 +2372,14 @@ def _payme_result(request_id, result: dict) -> JSONResponse:
 
 def _payme_check_auth(request: Request) -> bool:
     """Payme har bir so'rovda 'Paycom:{secret_key}' ko'rinishida Basic Auth yuboradi."""
+
+    # MUHIM: kalit sozlanmagan bo'lsa, hech kimni o'tkazmaymiz. Aks holda
+    # hmac.compare_digest("", "") -> True bo'lib, istalgan odam soxta "to'lov
+    # bo'ldi" xabarini yuborib, o'ziga tekinga kredit yozdirib olardi.
+    if not PAYME_SECRET_KEY:
+        logging.getLogger("backend").warning("Payme webhook so'rovi keldi, lekin PAYME_SECRET_KEY sozlanmagan")
+        return False
+
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Basic "):
         return False
@@ -2058,16 +2395,86 @@ def _payme_state(status: str) -> int:
     return {"pending": 1, "paid": 2, "cancelled": -1}.get(status, 1)
 
 
-def _payme_check_perform_transaction(request_id, params: dict, db: Session) -> JSONResponse:
-    purchase_id = params.get("account", {}).get("purchase_id")
-    amount = params.get("amount")
+# Payme ikki xil buyurtmani to'laydi va ikkalasi ham bir xil maydonlarga ega
+# (status, amount, payme_transaction_id, created_at, performed_at, cancelled_at),
+# shuning uchun quyidagi funksiyalar ikkalasi bilan ham bir xil ishlaydi:
+#
+#   CreditPurchase — o'qituvchining kredit xaridi,     account: {"purchase_id": ...}
+#   Payment        — o'quvchining pullik testga to'lovi, account: {"payment_id": ...}
+PAYME_ORDER_MODELS = {"purchase_id": CreditPurchase, "payment_id": Payment}
 
-    purchase = db.get(CreditPurchase, int(purchase_id)) if purchase_id else None
-    if not purchase:
+
+def _payme_find_order_by_account(params: dict, db: Session):
+    """So'rovdagi "account" bo'yicha buyurtmani topadi (kredit xaridi yoki testga to'lov)."""
+
+    account = params.get("account") or {}
+
+    for field, model in PAYME_ORDER_MODELS.items():
+        raw_id = account.get(field)
+        if raw_id in (None, ""):
+            continue
+        try:
+            return db.get(model, int(raw_id))
+        except (TypeError, ValueError):
+            return None
+
+    return None
+
+
+def _payme_find_order_by_transaction(params: dict, db: Session):
+    """So'rovdagi Payme tranzaksiya ID'si bo'yicha buyurtmani topadi."""
+
+    payme_id = params.get("id")
+    if not payme_id:
+        return None
+
+    for model in PAYME_ORDER_MODELS.values():
+        order = db.scalar(select(model).where(model.payme_transaction_id == payme_id))
+        if order:
+            return order
+
+    return None
+
+
+def _payme_account_of(order) -> dict:
+    """Buyurtmani Payme tushunadigan "account" ko'rinishida qaytaradi."""
+
+    field = "purchase_id" if isinstance(order, CreditPurchase) else "payment_id"
+    return {field: str(order.id)}
+
+
+def _payme_apply_paid(order) -> None:
+    """
+    To'lov haqiqatan o'tganda bajariladi.
+
+    Kredit xaridida — o'qituvchiga kredit yoziladi.
+    Testga to'lovda — o'qituvchi balansiga ulushi qo'shiladi (qolgani platformada).
+    """
+
+    if isinstance(order, CreditPurchase):
+        order.teacher.credits += order.credits
+        return
+
+    order.test.teacher.balance += _teacher_share(order.amount)
+
+
+def _payme_revert_paid(order) -> None:
+    """To'lov bekor qilinganda (pul qaytarilganda) yozilgani orqaga olinadi."""
+
+    if isinstance(order, CreditPurchase):
+        order.teacher.credits = max(0, order.teacher.credits - order.credits)
+        return
+
+    order.test.teacher.balance = max(0, order.test.teacher.balance - _teacher_share(order.amount))
+
+
+def _payme_check_perform_transaction(request_id, params: dict, db: Session) -> JSONResponse:
+    order = _payme_find_order_by_account(params, db)
+    if not order:
         return _payme_error(request_id, -31050, "Buyurtma topilmadi")
-    if purchase.status != "pending":
+    if order.status != "pending":
         return _payme_error(request_id, -31051, "Buyurtma allaqachon ko'rib chiqilgan")
-    if amount != purchase.amount * 100:
+    if params.get("amount") != order.amount * 100:
         return _payme_error(request_id, -31001, "Summa mos kelmadi")
 
     return _payme_result(request_id, {"allow": True})
@@ -2075,110 +2482,109 @@ def _payme_check_perform_transaction(request_id, params: dict, db: Session) -> J
 
 def _payme_create_transaction(request_id, params: dict, db: Session) -> JSONResponse:
     payme_id = params.get("id")
-    purchase_id = params.get("account", {}).get("purchase_id")
-    amount = params.get("amount")
+    order = _payme_find_order_by_account(params, db)
 
-    purchase = db.get(CreditPurchase, int(purchase_id)) if purchase_id else None
-    if not purchase:
+    if not order:
         return _payme_error(request_id, -31050, "Buyurtma topilmadi")
-
-    if purchase.payme_transaction_id and purchase.payme_transaction_id != payme_id:
+    if order.payme_transaction_id and order.payme_transaction_id != payme_id:
         return _payme_error(request_id, -31008, "Boshqa tranzaksiya allaqachon mavjud")
-    if purchase.status == "paid":
+    if order.status == "paid":
         return _payme_error(request_id, -31008, "Buyurtma allaqachon to'langan")
-    if amount != purchase.amount * 100:
+    if order.status == "cancelled":
+        return _payme_error(request_id, -31008, "Buyurtma bekor qilingan")
+    if params.get("amount") != order.amount * 100:
         return _payme_error(request_id, -31001, "Summa mos kelmadi")
 
-    if not purchase.payme_transaction_id:
-        purchase.payme_transaction_id = payme_id
+    if not order.payme_transaction_id:
+        order.payme_transaction_id = payme_id
         db.commit()
 
-    create_time = int(purchase.created_at.timestamp() * 1000)
-    return _payme_result(request_id, {"create_time": create_time, "transaction": str(purchase.id), "state": 1})
+    create_time = int(order.created_at.timestamp() * 1000)
+    return _payme_result(request_id, {"create_time": create_time, "transaction": str(order.id), "state": 1})
 
 
 def _payme_perform_transaction(request_id, params: dict, db: Session) -> JSONResponse:
-    payme_id = params.get("id")
-    purchase = db.scalar(select(CreditPurchase).where(CreditPurchase.payme_transaction_id == payme_id))
-    if not purchase:
+    order = _payme_find_order_by_transaction(params, db)
+    if not order:
         return _payme_error(request_id, -31003, "Tranzaksiya topilmadi")
-
-    if purchase.status == "cancelled":
+    if order.status == "cancelled":
         return _payme_error(request_id, -31008, "Tranzaksiya bekor qilingan")
 
-    if purchase.status != "paid":
-        purchase.status = "paid"
-        purchase.performed_at = datetime.utcnow()
-        purchase.teacher.credits += purchase.credits
+    if order.status != "paid":
+        order.status = "paid"
+        order.performed_at = utcnow()
+        _payme_apply_paid(order)
         db.commit()
 
-    perform_time = int(purchase.performed_at.timestamp() * 1000)
-    return _payme_result(request_id, {"transaction": str(purchase.id), "perform_time": perform_time, "state": 2})
+    perform_time = int(order.performed_at.timestamp() * 1000)
+    return _payme_result(request_id, {"transaction": str(order.id), "perform_time": perform_time, "state": 2})
 
 
 def _payme_cancel_transaction(request_id, params: dict, db: Session) -> JSONResponse:
-    payme_id = params.get("id")
-    purchase = db.scalar(select(CreditPurchase).where(CreditPurchase.payme_transaction_id == payme_id))
-    if not purchase:
+    order = _payme_find_order_by_transaction(params, db)
+    if not order:
         return _payme_error(request_id, -31003, "Tranzaksiya topilmadi")
 
-    was_paid = purchase.status == "paid"
+    was_paid = order.status == "paid"
 
-    if purchase.status != "cancelled":
+    if order.status != "cancelled":
         if was_paid:
-            purchase.teacher.credits -= purchase.credits
-        purchase.status = "cancelled"
-        purchase.cancelled_at = datetime.utcnow()
+            _payme_revert_paid(order)
+        order.status = "cancelled"
+        order.cancelled_at = utcnow()
         db.commit()
 
-    cancel_time = int(purchase.cancelled_at.timestamp() * 1000)
+    cancel_time = int(order.cancelled_at.timestamp() * 1000)
     state = -2 if was_paid else -1
-    return _payme_result(request_id, {"transaction": str(purchase.id), "cancel_time": cancel_time, "state": state})
+    return _payme_result(request_id, {"transaction": str(order.id), "cancel_time": cancel_time, "state": state})
+
+
+def _payme_transaction_info(order) -> dict:
+    """Payme kutayotgan, tranzaksiya holatini tasvirlovchi javob."""
+
+    return {
+        "create_time": int(order.created_at.timestamp() * 1000),
+        "perform_time": int(order.performed_at.timestamp() * 1000) if order.performed_at else 0,
+        "cancel_time": int(order.cancelled_at.timestamp() * 1000) if order.cancelled_at else 0,
+        "transaction": str(order.id),
+        "state": _payme_state(order.status),
+        "reason": None,
+    }
 
 
 def _payme_check_transaction(request_id, params: dict, db: Session) -> JSONResponse:
-    payme_id = params.get("id")
-    purchase = db.scalar(select(CreditPurchase).where(CreditPurchase.payme_transaction_id == payme_id))
-    if not purchase:
+    order = _payme_find_order_by_transaction(params, db)
+    if not order:
         return _payme_error(request_id, -31003, "Tranzaksiya topilmadi")
 
-    return _payme_result(
-        request_id,
-        {
-            "create_time": int(purchase.created_at.timestamp() * 1000),
-            "perform_time": int(purchase.performed_at.timestamp() * 1000) if purchase.performed_at else 0,
-            "cancel_time": int(purchase.cancelled_at.timestamp() * 1000) if purchase.cancelled_at else 0,
-            "transaction": str(purchase.id),
-            "state": _payme_state(purchase.status),
-            "reason": None,
-        },
-    )
+    return _payme_result(request_id, _payme_transaction_info(order))
 
 
 def _payme_get_statement(request_id, params: dict, db: Session) -> JSONResponse:
-    from_dt = datetime.utcfromtimestamp(params.get("from", 0) / 1000)
-    to_dt = datetime.utcfromtimestamp(params.get("to", 0) / 1000)
+    from_dt = datetime.fromtimestamp(params.get("from", 0) / 1000, tz=timezone.utc).replace(tzinfo=None)
+    to_dt = datetime.fromtimestamp(params.get("to", 0) / 1000, tz=timezone.utc).replace(tzinfo=None)
 
-    purchases = db.scalars(
-        select(CreditPurchase)
-        .where(CreditPurchase.created_at >= from_dt, CreditPurchase.created_at <= to_dt)
-        .where(CreditPurchase.payme_transaction_id.is_not(None))
-    ).all()
+    orders = []
+    for model in PAYME_ORDER_MODELS.values():
+        orders.extend(
+            db.scalars(
+                select(model)
+                .where(model.created_at >= from_dt, model.created_at <= to_dt)
+                .where(model.payme_transaction_id.is_not(None))
+            ).all()
+        )
+
+    orders.sort(key=lambda order: order.created_at)
 
     transactions = [
         {
-            "id": purchase.payme_transaction_id,
-            "time": int(purchase.created_at.timestamp() * 1000),
-            "amount": purchase.amount * 100,
-            "account": {"purchase_id": str(purchase.id)},
-            "create_time": int(purchase.created_at.timestamp() * 1000),
-            "perform_time": int(purchase.performed_at.timestamp() * 1000) if purchase.performed_at else 0,
-            "cancel_time": int(purchase.cancelled_at.timestamp() * 1000) if purchase.cancelled_at else 0,
-            "transaction": str(purchase.id),
-            "state": _payme_state(purchase.status),
-            "reason": None,
+            "id": order.payme_transaction_id,
+            "time": int(order.created_at.timestamp() * 1000),
+            "amount": order.amount * 100,
+            "account": _payme_account_of(order),
+            **_payme_transaction_info(order),
         }
-        for purchase in purchases
+        for order in orders
     ]
     return _payme_result(request_id, {"transactions": transactions})
 
@@ -2195,9 +2601,15 @@ PAYME_METHOD_HANDLERS = {
 
 @app.post("/api/payme/webhook")
 async def payme_webhook(request: Request, db: Session = Depends(get_db)):
-    """Payme Merchant API — kredit uchun to'lov hodisalari shu yerga keladi."""
+    """Payme Merchant API — kredit va testga to'lov hodisalari shu yerga keladi."""
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        return _payme_error(None, -32700, "JSON o'qilmadi")
+    if not isinstance(body, dict):
+        return _payme_error(None, -32600, "So'rov noto'g'ri")
+
     request_id = body.get("id")
     method = body.get("method")
     params = body.get("params", {})
@@ -2217,17 +2629,93 @@ async def payme_webhook(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/api/admin/stats")
 def admin_overview(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
-    """Butun platforma bo'yicha umumiy statistika — faqat ADMIN_ID'ga ega foydalanuvchi ko'ra oladi."""
+    """
+    Butun platforma bo'yicha umumiy statistika — faqat ADMIN_ID'ga ega foydalanuvchi ko'ra oladi.
 
-    total_revenue = db.scalar(select(func.sum(Payment.amount)).where(Payment.status == "paid")) or 0
+    Platformaning daromadi IKKI manbadan keladi va ularni aralashtirmaslik kerak:
+
+    1) Kredit sotuvi — o'qituvchilar kredit sotib oladi. Bu pul to'liq
+       platformaga tegishli (100%).
+    2) Pullik testlar — o'quvchi to'laydi, uning faqat komissiya qismi
+       ({PLATFORM_COMMISSION_PERCENT}%) platformada qoladi, qolgani o'qituvchiniki.
+
+    Ilgari bu yerda faqat testga to'lovlarning TO'LIQ summasi ko'rsatilardi:
+    ya'ni asosiy daromad (kredit sotuvi) umuman hisoblanmas, test to'lovi esa
+    o'qituvchining ulushi bilan birga, oshirib ko'rsatilardi.
+    """
+
+    credits_revenue = (
+        db.scalar(select(func.sum(CreditPurchase.amount)).where(CreditPurchase.status == "paid")) or 0
+    )
+    tests_turnover = db.scalar(select(func.sum(Payment.amount)).where(Payment.status == "paid")) or 0
+    tests_commission = tests_turnover - _teacher_share(tests_turnover)
+
+    # O'qituvchilar balansidagi pul — bu platformaning QARZI: ular istalgan
+    # paytda yechib olishni so'rashi mumkin, shuning uchun "sof" daromad emas.
+    teachers_owed = db.scalar(select(func.sum(Teacher.balance))) or 0
 
     return {
         "users": db.scalar(select(func.count()).select_from(User)),
         "teachers": db.scalar(select(func.count()).select_from(Teacher)),
         "tests": db.scalar(select(func.count()).select_from(Test)),
         "attempts": db.scalar(select(func.count()).select_from(Attempt).where(Attempt.status == "done")),
-        "revenue": total_revenue,
+        # Daromad tafsiloti
+        "credits_revenue": credits_revenue,
+        "credits_sold": db.scalar(
+            select(func.sum(CreditPurchase.credits)).where(CreditPurchase.status == "paid")
+        ) or 0,
+        "tests_turnover": tests_turnover,
+        "tests_commission": tests_commission,
+        "revenue": credits_revenue + tests_commission,
+        "teachers_owed": teachers_owed,
+        "commission_percent": PLATFORM_COMMISSION_PERCENT,
     }
+
+
+@app.get("/api/admin/teachers")
+def admin_list_teachers(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """
+    Barcha o'qituvchilar ro'yxati: kim qancha kredit sotib olgan, qancha
+    test yaratgan, balansida qancha pul bor.
+
+    Ko'p o'qituvchili platformada eng faol (va eng ko'p to'lov qiladigan)
+    o'qituvchilarni ko'rish uchun kerak.
+    """
+
+    spent = (
+        select(
+            CreditPurchase.teacher_id.label("teacher_id"),
+            func.sum(CreditPurchase.amount).label("paid_total"),
+        )
+        .where(CreditPurchase.status == "paid")
+        .group_by(CreditPurchase.teacher_id)
+        .subquery()
+    )
+    test_counts = (
+        select(Test.teacher_id.label("teacher_id"), func.count().label("test_count"))
+        .group_by(Test.teacher_id)
+        .subquery()
+    )
+
+    query = (
+        select(Teacher, User.full_name, spent.c.paid_total, test_counts.c.test_count)
+        .join(User, User.id == Teacher.user_id)
+        .outerjoin(spent, spent.c.teacher_id == Teacher.id)
+        .outerjoin(test_counts, test_counts.c.teacher_id == Teacher.id)
+        .order_by(func.coalesce(spent.c.paid_total, 0).desc(), Teacher.id)
+    )
+
+    return [
+        {
+            "id": teacher.id,
+            "name": full_name,
+            "credits": teacher.credits,
+            "balance": teacher.balance,
+            "paid_total": paid_total or 0,
+            "tests": test_count or 0,
+        }
+        for teacher, full_name, paid_total, test_count in db.execute(query).all()
+    ]
 
 
 @app.post("/api/admin/backup")
@@ -2338,7 +2826,11 @@ def _asset_version() -> str:
     """
 
     latest = 0.0
-    for path in (FRONTEND_DIR / "js" / "app.js", FRONTEND_DIR / "css" / "style.css"):
+    for path in (
+        FRONTEND_DIR / "js" / "app.js",
+        FRONTEND_DIR / "js" / "keyboard.js",
+        FRONTEND_DIR / "css" / "style.css",
+    ):
         if path.exists():
             latest = max(latest, path.stat().st_mtime)
     return format(int(latest), "x")
@@ -2350,8 +2842,8 @@ def serve_index():
 
     html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
     version = _asset_version()
-    html = html.replace("/js/app.js", f"/js/app.js?v={version}")
-    html = html.replace("/css/style.css", f"/css/style.css?v={version}")
+    for asset in ("/js/app.js", "/js/keyboard.js", "/css/style.css"):
+        html = html.replace(f'"{asset}"', f'"{asset}?v={version}"')
 
     return HTMLResponse(
         html,

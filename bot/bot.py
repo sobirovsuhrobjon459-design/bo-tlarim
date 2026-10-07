@@ -16,6 +16,7 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, MenuButtonWebApp, Message, ReplyKeyboardRemove, WebAppInfo
 
@@ -24,20 +25,26 @@ from .config import BOT_TOKEN, WEBAPP_URL
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("bot")
 
-if not BOT_TOKEN or BOT_TOKEN == "your_bot_token_here":
-    raise SystemExit(
-        "BOT_TOKEN sozlanmagan. .env faylida BOT_TOKEN=... qiymatini "
-        "BotFather'dan olingan haqiqiy tokenga almashtiring."
+TOKEN_IS_SET = bool(BOT_TOKEN) and BOT_TOKEN != "your_bot_token_here"
+
+if not TOKEN_IS_SET:
+    # MUHIM: bu yerda ilovani to'xtatmaymiz. Bot backend bilan BITTA jarayonda
+    # ishlaydi, shuning uchun bu fayl import paytida xato ko'tarsa, Mini App
+    # ham ishga tushmay qolardi. Token yo'q bo'lsa, faqat bot ishlamaydi.
+    logger.error(
+        "BOT_TOKEN sozlanmagan. .env faylida BOT_TOKEN=... qiymatini BotFather'dan "
+        "olingan haqiqiy tokenga almashtiring. Bot ishga tushmaydi, Mini App esa ishlaydi."
     )
 
-if not WEBAPP_URL.startswith("https://"):
+if TOKEN_IS_SET and not WEBAPP_URL.startswith("https://"):
     logger.warning(
         "WEBAPP_URL noto'g'ri yoki sozlanmagan (%r). Telegram Mini App faqat "
         "https:// bilan boshlanadigan manzilni qabul qiladi, aks holda PLAY tugmasi ishlamaydi.",
         WEBAPP_URL,
     )
 
-bot = Bot(token=BOT_TOKEN)
+# Token yo'q bo'lsa Bot() obyekti yaratilmaydi — aiogram tokenni darhol tekshiradi
+bot = Bot(token=BOT_TOKEN) if TOKEN_IS_SET else None
 dispatcher = Dispatcher()
 
 
@@ -91,7 +98,13 @@ async def handle_withdrawal_decision(callback: CallbackQuery) -> None:
         await callback.answer("Bu tugma faqat admin uchun", show_alert=True)
         return
 
-    action, request_id_str = callback.data.split(":")
+    # Tugma ma'lumoti kutilganidan boshqa ko'rinishda bo'lsa (eski xabar, qo'lda
+    # yuborilgan so'rov) — xato ko'tarmasdan, tushunarli javob qaytaramiz.
+    action, separator, request_id_str = callback.data.partition(":")
+    if not separator or not request_id_str.isdigit():
+        await callback.answer("Bu tugma eskirgan", show_alert=True)
+        return
+
     request_id = int(request_id_str)
 
     session = SessionLocal()
@@ -102,6 +115,10 @@ async def handle_withdrawal_decision(callback: CallbackQuery) -> None:
             return
 
         teacher = session.get(Teacher, request.teacher_id)
+        if not teacher:
+            await callback.answer("O'qituvchi topilmadi", show_alert=True)
+            return
+
         teacher_name = teacher.user.full_name
 
         if action == "withdrawal_approve":
@@ -129,20 +146,62 @@ async def handle_withdrawal_decision(callback: CallbackQuery) -> None:
 
 async def _setup_menu_button() -> None:
     """Chat ichidagi doimiy PLAY tugmasini Mini App'ga ulaydi — Mini App'ni ochishning yagona yo'li shu."""
-    if WEBAPP_URL.startswith("https://"):
+
+    if not WEBAPP_URL.startswith("https://"):
+        return
+
+    try:
         await bot.set_chat_menu_button(
             menu_button=MenuButtonWebApp(text="PLAY", web_app=WebAppInfo(url=WEBAPP_URL))
         )
+    except Exception:
+        # Internet uzilgan yoki Telegram javob bermagan bo'lishi mumkin. Bu
+        # botning ishlashiga to'sqinlik qilmasligi kerak — tugma avvalgi
+        # deploydan saqlanib qolgan bo'ladi, keyingi ishga tushishda yangilanadi.
+        logger.warning("PLAY tugmasini sozlab bo'lmadi", exc_info=True)
+
+
+# Aloqa uzilib qolsa, bot qayta ulanishga urinadi. Har xatodan keyin kutish
+# vaqti oshib boradi, 5 daqiqadan oshmaydi — shunda Telegram API'ni ham
+# bezovta qilmaymiz, bot ham o'zi tiklanadi (qo'lda qayta deploy shart emas).
+RETRY_DELAYS_SECONDS = [5, 15, 60, 300]
 
 
 async def run_bot() -> None:
     """Botni ishga tushiradi. backend/main.py ham, standalone ishga tushirish ham shuni chaqiradi."""
-    logger.info("Bot ishga tushmoqda...")
-    await _setup_menu_button()
+
+    if not TOKEN_IS_SET:
+        logger.error("Bot ishga tushmadi: BOT_TOKEN sozlanmagan")
+        return
+
+    attempt = 0
     try:
-        await dispatcher.start_polling(bot)
+        while True:
+            try:
+                logger.info("Bot ishga tushmoqda...")
+                await _setup_menu_button()
+                attempt = 0  # muvaffaqiyatli ulandi — keyingi xatoda yana 5 sekunddan boshlanadi
+                await dispatcher.start_polling(bot)
+                return  # start_polling o'z-o'zidan tugasa (to'xtatilsa), qayta urinmaymiz
+            except TelegramUnauthorizedError:
+                # Token noto'g'ri — qayta urinishdan foyda yo'q, faqat vaqt va
+                # so'rov limiti sarflanadi. Mini App esa ishlashda davom etadi.
+                logger.error("Bot ishga tushmadi: BOT_TOKEN noto'g'ri (BotFather'dan tekshiring)")
+                return
+            except Exception:
+                delay = RETRY_DELAYS_SECONDS[min(attempt, len(RETRY_DELAYS_SECONDS) - 1)]
+                attempt += 1
+                logger.warning("Bot xato bilan to'xtadi, %s sekunddan keyin qayta urinadi", delay, exc_info=True)
+                await asyncio.sleep(delay)
+    except asyncio.CancelledError:
+        logger.info("Bot to'xtatildi")
+        raise
     finally:
-        await bot.session.close()
+        # Ulanish bir marta, bot butunlay to'xtaganda yopiladi
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

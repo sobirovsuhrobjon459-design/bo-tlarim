@@ -4,11 +4,11 @@ Ma'lumotlar bazasi fayli: .env sozlamalari, bazaga ulanish, barcha jadvallar
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import BigInteger, ForeignKey, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
@@ -16,6 +16,18 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship,
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
+
+
+def utcnow() -> datetime:
+    """
+    Hozirgi UTC vaqti, mintaqa belgisisiz.
+
+    datetime.utcnow() Python 3.12'dan boshlab eskirgan deb ogohlantiradi, lekin
+    bazadagi ustunlar mintaqasiz (naive) saqlangani uchun mintaqani olib
+    tashlaymiz — aks holda vaqtlarni solishtirganda xato chiqadi.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
@@ -34,8 +46,13 @@ for prefix in ("postgres://", "postgresql://"):
         DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[len(prefix) :]
         break
 
-# 1 bo'lsa, Telegram'siz (oddiy brauzerda) ham sinash mumkin bo'ladi. Productionda 0 bo'lsin.
-DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
+# 1 bo'lsa, Telegram'siz (oddiy brauzerda) ham sinash mumkin bo'ladi.
+#
+# MUHIM: bu rejimda "X-Dev-User" header'i Telegram imzosini butunlay almashtiradi,
+# ya'ni istalgan odam istalgan foydalanuvchi (hatto admin) bo'lib kirishi mumkin.
+# Shuning uchun u FAQAT lokal SQLite bazasi bilan ishlaganda yoqiladi — Render'da
+# DEV_MODE=1 qolib ketsa ham, PostgreSQL bo'lgani uchun o'zi o'chadi.
+DEV_MODE = os.getenv("DEV_MODE", "0") == "1" and DATABASE_URL.startswith("sqlite")
 
 # Shu Telegram ID'ga ega foydalanuvchi "ADMIN" bo'limini ko'radi va boshqara oladi.
 ADMIN_ID = int(os.getenv("ADMIN_ID") or 0)
@@ -85,7 +102,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(200), default="")
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
 class Teacher(Base):
@@ -148,7 +165,7 @@ class Test(Base):
     # "@kanal_nomi" ko'rinishida saqlanadi; bo'sh bo'lsa, tekshiruv yo'q.
     required_channel: Mapped[str | None] = mapped_column(String(100), default=None)
 
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     teacher: Mapped["Teacher"] = relationship(back_populates="tests")
     questions: Mapped[list["Question"]] = relationship(
@@ -224,13 +241,25 @@ class Attempt(Base):
     test_id: Mapped[int] = mapped_column(ForeignKey("tests.id"), index=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
     offline_name: Mapped[str | None] = mapped_column(String(200), default=None)
-    started_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    started_at: Mapped[datetime] = mapped_column(default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(default=None)
-    status: Mapped[str] = mapped_column(String(20), default="in_progress")  # in_progress | done | expired
+    # pending  — o'qituvchi yopiq testga qo'shgan, javoblari hali kiritilmagan
+    # in_progress — o'quvchi testni ishlayapti
+    # done     — yakunlangan va tekshirilgan
+    status: Mapped[str] = mapped_column(String(20), default="in_progress")  # pending | in_progress | done
     correct: Mapped[int] = mapped_column(default=0)
     wrong: Mapped[int] = mapped_column(default=0)
     percent: Mapped[float] = mapped_column(default=0)
     seconds: Mapped[int] = mapped_column(default=0)
+
+    # O'quvchi test ishlayotganda belgilab borgan javoblari, JSON ko'rinishida:
+    # {"1": "B", "36a": "2\\sqrt{3}"}. Telegram Mini App juda oson yopiladi
+    # (pastga surish, qo'ng'iroq kelishi), shuning uchun javoblar yakunlashni
+    # kutmasdan serverda saqlanib boradi — aks holda o'quvchi qaytib kelganda
+    # hammasini boshidan yozishi kerak bo'lardi.
+    #
+    # Yakunlanganda tozalanadi: natija StudentAnswer jadvalida qoladi.
+    saved_answers: Mapped[str | None] = mapped_column(Text, default=None)
 
 
 class StudentAnswer(Base):
@@ -253,7 +282,14 @@ class StudentAnswer(Base):
 
 
 class Payment(Base):
-    """To'lov yozuvi. Hozircha provider har doim 'mock'."""
+    """
+    O'quvchining pullik testga to'lovi — Payme orqali amalga oshiriladi.
+
+    Payme'ning webhook'i shu yozuvni "pending" -> "paid" holatiga o'tkazadi va
+    shundagina o'quvchi testni boshlay oladi (qarang: _is_paid). To'lovning
+    o'qituvchiga tegishli ulushi ham aynan shu paytda balansga qo'shiladi —
+    ya'ni haqiqiy pul kelmaguncha hech kimning balansi oshmaydi.
+    """
 
     __tablename__ = "payments"
 
@@ -261,9 +297,14 @@ class Payment(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     test_id: Mapped[int] = mapped_column(ForeignKey("tests.id"), index=True)
     amount: Mapped[int] = mapped_column(default=0)
-    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | paid | failed
-    provider: Mapped[str] = mapped_column(String(20), default="mock")
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | paid | cancelled
+    provider: Mapped[str] = mapped_column(String(20), default="payme")
+    payme_transaction_id: Mapped[str | None] = mapped_column(String(50), default=None, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    performed_at: Mapped[datetime | None] = mapped_column(default=None)
+    cancelled_at: Mapped[datetime | None] = mapped_column(default=None)
+
+    test: Mapped["Test"] = relationship()
 
 
 class WithdrawalRequest(Base):
@@ -282,7 +323,7 @@ class WithdrawalRequest(Base):
     amount: Mapped[int]
     card_number: Mapped[str] = mapped_column(String(50))
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | approved | rejected
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
 class CreditPurchase(Base):
@@ -301,7 +342,7 @@ class CreditPurchase(Base):
     amount: Mapped[int]  # so'm
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | paid | cancelled
     payme_transaction_id: Mapped[str | None] = mapped_column(String(50), default=None, unique=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
     performed_at: Mapped[datetime | None] = mapped_column(default=None)
     cancelled_at: Mapped[datetime | None] = mapped_column(default=None)
 
@@ -344,6 +385,33 @@ class KeyQuestionIn(BaseModel):
     question_type: str = Field(pattern="^(single|multi|text)$")
     option_count: int = Field(4, ge=2, le=8)  # "text" turida ishlatilmaydi
     correct: str = Field(min_length=1, max_length=300)
+
+    @model_validator(mode="after")
+    def normalize_correct(self) -> "KeyQuestionIn":
+        """
+        Variantli savollarning to'g'ri javobini bitta ko'rinishga keltiradi.
+
+        O'quvchining javobi tekshirishdan oldin katta harfga o'tkaziladi va
+        saralanadi, shuning uchun KALIT ham xuddi shunday saqlanishi kerak —
+        aks holda "a,c" deb kiritilgan kalitga hech qanday javob mos kelmaydi.
+        Yozma ("text") javobga tegmaymiz: u LaTeX va alohida solishtiriladi.
+        """
+
+        if self.question_type == "text":
+            return self
+
+        letters = sorted({part.strip().upper() for part in self.correct.split(",") if part.strip()})
+        if not letters:
+            raise ValueError("to'g'ri javob bo'sh")
+
+        allowed = {chr(65 + index) for index in range(self.option_count)}
+        if not set(letters) <= allowed:
+            raise ValueError(f"to'g'ri javob faqat A–{chr(64 + self.option_count)} harflaridan bo'lishi kerak")
+        if self.question_type == "single" and len(letters) > 1:
+            raise ValueError("bitta javobli savolda faqat bitta harf bo'ladi")
+
+        self.correct = ",".join(letters)
+        return self
 
 
 class TestIn(BaseModel):

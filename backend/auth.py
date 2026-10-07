@@ -52,10 +52,19 @@ def validate_init_data(init_data: str) -> dict:
     secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
     expected_hash = hmac.new(secret_key, check_string.encode(), hashlib.sha256).hexdigest()
 
+    if not BOT_TOKEN:
+        # Token sozlanmagan bo'lsa, yuqoridagi imzo bo'sh kalit bilan hisoblanadi —
+        # ya'ni soxta initData ham o'tib ketishi mumkin. Shuning uchun to'smaymiz.
+        raise InitDataError("server sozlanmagan (BOT_TOKEN yo'q)")
+
     if not hmac.compare_digest(expected_hash, received_hash):
         raise InitDataError("imzo noto'g'ri — bu so'rov Telegramdan kelmagan bo'lishi mumkin")
 
-    auth_date = int(parsed_fields.get("auth_date", 0))
+    try:
+        auth_date = int(parsed_fields.get("auth_date", 0))
+    except ValueError:
+        raise InitDataError("auth_date noto'g'ri")
+
     if time.time() - auth_date > INIT_DATA_MAX_AGE_SECONDS:
         raise InitDataError("initData eskirgan, Mini App'ni qaytadan oching")
 
@@ -63,7 +72,16 @@ def validate_init_data(init_data: str) -> dict:
     if not user_json:
         raise InitDataError("foydalanuvchi ma'lumoti topilmadi")
 
-    return json.loads(user_json)
+    # Buzilgan JSON kelsa, 500 emas — tushunarli 401 qaytishi kerak
+    try:
+        telegram_user = json.loads(user_json)
+    except ValueError:
+        raise InitDataError("foydalanuvchi ma'lumoti o'qilmadi")
+
+    if not isinstance(telegram_user, dict) or not isinstance(telegram_user.get("id"), int):
+        raise InitDataError("foydalanuvchi ma'lumoti noto'g'ri")
+
+    return telegram_user
 
 
 # ========== 2) FastAPI Depends() funksiyalari ==========

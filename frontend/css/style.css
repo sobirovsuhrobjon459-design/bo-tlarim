@@ -84,9 +84,23 @@ body {
   }
 }
 
+/*
+  Foydalanuvchi telefon sozlamalarida "harakatni kamaytirish" ni yoqqan bo'lsa
+  (ba'zilarda animatsiya bosh og'rig'i yoki ko'ngil aynishiga sabab bo'ladi),
+  barcha animatsiyalar o'chadi — lekin hamma narsa ko'rinib turadi.
+*/
 @media (prefers-reduced-motion: reduce) {
-  body {
-    animation: none;
+  body,
+  .page,
+  .toast,
+  .fade-up,
+  .card-entrance,
+  .pop {
+    animation: none !important;
+  }
+
+  #app {
+    transition: none;
   }
 }
 
@@ -243,6 +257,32 @@ select {
   color: var(--color-text);
   font-size: 15px;
   font-family: var(--font-main);
+}
+
+/*
+  Ro'yxatdan tanlash maydonlari (test turi, fan) — baland va yirikroq.
+
+  Bular eng ko'p bosiladigan joylar, shuning uchun barmoq adashmasligi uchun
+  boshqa maydonlardan kattaroq qilingan. 52px — telefonda qulay bosiladigan
+  eng kichik o'lcham (Apple va Google tavsiyasi 44px dan boshlanadi).
+
+  appearance:none — brauzerning o'z o'qchasi olib tashlanadi va o'rniga
+  o'zimiznikini chizamiz, aks holda u balandlikka moslashmay, kichik bo'lib
+  qolardi. Shuning uchun o'ng tomonda strelkaga joy qoldiramiz.
+*/
+select {
+  min-height: 52px;
+  padding: 14px 44px 14px 16px;
+  font-size: 16px;
+  font-weight: 600;
+
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 22px) calc(50% + 2px), calc(100% - 16px) calc(50% + 2px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
 }
 
 textarea {
@@ -512,9 +552,17 @@ select:focus {
   color: var(--color-primary);
 }
 
-/* Klaviatura ochilganda sahifa tagida joy qolsin */
-body:has(.ML__keyboard--visible) #app {
-  padding-bottom: 320px;
+/*
+  Klaviatura ochilganda sahifa tagida joy qolsin — aks holda o'quvchi
+  yozayotgan javob maydoni klaviatura ostida ko'rinmay qoladi.
+
+  Balandlikni app.js o'lchab, --keyboard-height o'zgaruvchisiga yozib beradi
+  (qarang: syncMathKeyboardLayout). Ilgari bu yerda MathLive'ning ichki klass
+  nomiga tayangan qoida turgan edi, lekin u klass mavjud emas — ya'ni qoida
+  hech qachon ishlamagan va maydon klaviatura tagida qolib ketardi.
+*/
+#app {
+  transition: padding-bottom 0.18s ease;
 }
 
 /* Yozma savol bloki: sarlavha + a/b qatorlari */
@@ -636,11 +684,23 @@ table td {
   text-align: left;
 }
 
+/*
+  Xabar banneri ("✅ Saqlandi" kabi).
+
+  Markazga qo'yish uchun ilgari "left:50% + translateX(-50%)" ishlatilardi.
+  Lekin animatsiya ham "transform" ni o'zgartiradi va uni BEKOR QILIB yuborardi —
+  natijada banner avval chapga siljib chiqib, keyin markazga sakrab o'tardi.
+  Endi markazlashtirish "left/right + margin:auto" orqali, ya'ni transform
+  faqat animatsiyaga qoladi va sakrash yo'qoladi.
+*/
 .toast {
   position: fixed;
   bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  width: fit-content;
+  max-width: calc(100% - 32px);
+  margin: 0 auto;
   background: var(--color-text);
   color: var(--color-bg);
   padding: 12px 18px;
@@ -648,19 +708,24 @@ table td {
   font-size: 14px;
   z-index: 50;
   box-shadow: var(--shadow-md);
-  animation: fade-up 0.25s ease;
+  animation: banner-rise 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Yo'qolayotganda ham silliq: joyida turib, asta so'nadi */
+.toast.is-leaving {
+  animation: banner-fade 0.22s ease forwards;
 }
 
 /* ========== 4) Animatsiyalar ========== */
 
 .page {
-  animation: fade-in 0.18s ease;
+  animation: fade-in 0.2s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @keyframes fade-in {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    transform: translateY(5px);
   }
   to {
     opacity: 1;
@@ -669,7 +734,7 @@ table td {
 }
 
 .card-entrance {
-  animation: card-in 0.35s ease both;
+  animation: card-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* nth-of-type: faqat "div" turidagi birodarlar orasida sanaydi,
@@ -678,30 +743,50 @@ table td {
   animation-delay: 0.08s;
 }
 
+/* Kartalar ham xuddi bannerlar kabi — 5 piksel ko'tarilib paydo bo'ladi */
 @keyframes card-in {
   from {
     opacity: 0;
-    transform: translateY(10px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-.fade-up {
-  animation: fade-up 0.4s ease both;
-}
-
-@keyframes fade-up {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(5px);
   }
   to {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/*
+  Barcha bannerlar va kartalar uchun yagona chiqish animatsiyasi.
+
+  Harakat ataylab juda kichik — 5 piksel. Katta sakrash ko'zni charchatadi,
+  5 piksel esa "paydo bo'ldi" degan tuyg'uni beradi-yu, sezilmaydi.
+  cubic-bezier(.22,1,.36,1) — oxiriga borib sekinlashadi, shuning uchun
+  harakat to'xtagani bilinmaydi.
+*/
+@keyframes banner-rise {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes banner-fade {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+}
+
+.fade-up {
+  animation: banner-rise 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* Skeleton (yuklanish) animatsiyasi */
@@ -945,9 +1030,12 @@ table td {
   background: rgba(99, 102, 241, 0.12);
 }
 
-/* Menyu sahifa tagini yopib qo'ymasligi uchun */
+/*
+  Sahifa tagidagi bo'sh joy: pastki menyu (96px) uchun, hamda matematik
+  klaviatura ochiq bo'lsa — uning balandligi uchun ham.
+*/
 #app {
-  padding-bottom: 96px;
+  padding-bottom: calc(96px + var(--keyboard-height, 0px));
 }
 
 /* ========== Javoblar panjarasi ========== */
@@ -1095,11 +1183,11 @@ math-field::part(menu-toggle) {
   text-align: right;
 }
 
-/* Matematik klaviaturani yopish tugmasi */
+/* Matematik klaviaturani yopish tugmasi — har doim klaviatura ustida turadi */
 .keyboard-close {
   position: fixed;
   left: 50%;
-  bottom: 320px;
+  bottom: calc(var(--keyboard-height, 300px) + 8px);
   z-index: 10050;
   transform: translateX(-50%);
   padding: 9px 18px;

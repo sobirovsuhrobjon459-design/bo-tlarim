@@ -1,8 +1,15 @@
-fastapi
-uvicorn[standard]
-python-dotenv
-aiogram
-sqlalchemy
-psycopg[binary]
-reportlab
-httpx
+# Versiyalar ataylab aniq ko'rsatilgan.
+#
+# Ilgari bu yerda faqat nomlar turardi — Render har deployda eng yangi
+# versiyani o'rnatardi va kutubxonaning mos kelmaydigan yangi versiyasi
+# ishlab turgan botni buzib qo'yishi mumkin edi. Yangilash kerak bo'lsa,
+# qo'lda, sinab ko'rib o'zgartiriladi.
+
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
+python-dotenv==1.2.4
+aiogram==3.31.0
+sqlalchemy==2.1.3
+psycopg[binary]==3.3.6
+reportlab==5.0.1
+httpx==0.28.1
