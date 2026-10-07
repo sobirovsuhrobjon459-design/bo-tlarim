@@ -1932,8 +1932,6 @@ async function renderTestDetail(testId) {
 async function renderStudentDetail(testId, attemptId) {
   const detail = await api(`/api/teacher/tests/${testId}/students/${attemptId}/detail`);
 
-  const wrongQuestions = detail.questions.filter((question) => !question.is_correct);
-
   const rows = detail.questions
     .map(
       (question) => `
@@ -1949,16 +1947,19 @@ async function renderStudentDetail(testId, attemptId) {
     <button class="back-button" data-action="test">←</button>
     <h2>${escapeHtml(detail.name)}</h2>
     <div class="stats-grid">
-      <div class="stat-tile"><span class="stat-value">${detail.correct}/${detail.total}</span>Natija</div>
+      <div class="stat-tile">
+        <span class="stat-value">${detail.closed_correct}/${detail.closed_total}</span>Yopiq savollar
+      </div>
+      ${
+        detail.written_total
+          ? `<div class="stat-tile">
+               <span class="stat-value">${detail.written_correct}/${detail.written_total}</span>Yozma javoblar
+             </div>`
+          : ""
+      }
       <div class="stat-tile"><span class="stat-value">${detail.percent}%</span>Foiz</div>
-      <div class="stat-tile"><span class="stat-value">${wrongQuestions.length}</span>Xato</div>
       <div class="stat-tile"><span class="stat-value">${formatDuration(detail.seconds)}</span>Vaqt</div>
     </div>
-    ${
-      wrongQuestions.length
-        ? `<p class="subtitle">Xato qilgan savollari: <b>${wrongQuestions.map((q) => escapeHtml(q.label)).join(", ")}</b></p>`
-        : `<p class="subtitle">Hamma savolga to'g'ri javob bergan 🎉</p>`
-    }
     <h3>Barcha javoblar</h3>
     ${rows}
   `);
@@ -2139,7 +2140,9 @@ async function renderResultsTab(selectedId) {
       <div class="result-line" data-detail-id="${row.attempt_id}">
         <span class="result-rank">${index + 1}</span>
         <span class="result-name">${escapeHtml(row.name)}</span>
-        <span class="result-score">${row.correct}/${results.total_questions}</span>
+        <span class="result-score">${row.closed_correct}/${row.closed_total}${
+          row.written_total ? ` • ${row.written_correct}/${row.written_total}` : ""
+        }</span>
         <span class="result-percent">${row.percent}%</span>
       </div>`
     )
@@ -2166,7 +2169,10 @@ async function renderResultsTab(selectedId) {
       <div class="chart">${chart}</div>
     </div>
 
-    <p class="section-label">ISHTIROKCHILAR</p>
+    <div class="row-between" style="margin:18px 0 8px">
+      <span class="section-label" style="margin:0">ISHTIROKCHILAR</span>
+      <span class="subtitle" style="margin:0;font-size:12px">yopiq • yozma</span>
+    </div>
     <div class="panel" style="padding:4px 0">${rows}</div>
   `);
 

@@ -363,6 +363,33 @@ def _group_key_questions(test: Test) -> list[list[KeyQuestion]]:
     return groups
 
 
+def _attempt_score_split(db: Session, test: Test, attempt: Attempt) -> dict:
+    """Bitta urinishni yopiq (variantli) va yozma savollar bo'yicha ajratib sanaydi."""
+
+    if test.mode != "key":
+        total = len(test.questions)
+        correct = db.scalar(
+            select(func.count())
+            .select_from(StudentAnswer)
+            .where(StudentAnswer.attempt_id == attempt.id, StudentAnswer.is_correct.is_(True))
+        )
+        return {"closed_correct": correct or 0, "closed_total": total, "written_correct": 0, "written_total": 0}
+
+    answers = {
+        answer.question_ref: answer.is_correct
+        for answer in db.scalars(select(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id)).all()
+    }
+
+    split = {"closed_correct": 0, "closed_total": 0, "written_correct": 0, "written_total": 0}
+    for key_question in test.key_questions:
+        prefix = "written" if key_question.question_type == "text" else "closed"
+        split[f"{prefix}_total"] += 1
+        if answers.get(key_question.number):
+            split[f"{prefix}_correct"] += 1
+
+    return split
+
+
 def _key_question_label(key_question: KeyQuestion) -> str:
     """Savolning ko'rinadigan nomi: odatda "12-savol", a/b qismli bo'lsa — "36a"."""
     return key_question.label or f"{key_question.number}-savol"
@@ -1521,6 +1548,7 @@ def student_answer_detail(
                 questions.append(
                     {
                         "label": _key_question_label(key_question),
+                        "kind": key_question.question_type,
                         "chosen": (answer.chosen if answer else None) or "—",
                         "correct": " / ".join(_split_accepted_variants(key_question.correct)),
                         "is_correct": bool(answer and answer.is_correct),
@@ -1532,11 +1560,17 @@ def student_answer_detail(
             questions.append(
                 {
                     "label": f"{index}-savol",
+                    "kind": "single",
                     "chosen": (answer.chosen if answer else None) or "—",
                     "correct": question.correct,
                     "is_correct": bool(answer and answer.is_correct),
                 }
             )
+
+    # Yopiq (variantli) va yozma savollar alohida sanaladi:
+    # "Yopiq 15/35", "Yozma 5/20" ko'rinishida ko'rsatish uchun.
+    closed = [question for question in questions if question["kind"] != "text"]
+    written = [question for question in questions if question["kind"] == "text"]
 
     return {
         "name": student.full_name if student else (attempt.offline_name or "Noma'lum"),
@@ -1545,6 +1579,10 @@ def student_answer_detail(
         "total": _question_count(test),
         "percent": attempt.percent,
         "seconds": attempt.seconds,
+        "closed_correct": sum(1 for question in closed if question["is_correct"]),
+        "closed_total": len(closed),
+        "written_correct": sum(1 for question in written if question["is_correct"]),
+        "written_total": len(written),
         "questions": questions,
     }
 
@@ -1666,6 +1704,7 @@ def test_results(test_id: int, teacher: Teacher = Depends(get_current_teacher), 
                 "wrong": attempt.wrong,
                 "percent": attempt.percent,
                 "seconds": attempt.seconds,
+                **_attempt_score_split(db, test, attempt),
             }
             for attempt, name in best_attempts(db, test)
         ],
