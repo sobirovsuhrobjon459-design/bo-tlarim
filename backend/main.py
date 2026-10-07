@@ -1210,6 +1210,13 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
     if body.price > 0 and body.enrollment_type == "closed":
         raise HTTPException(status_code=422, detail="Pullik testlar faqat ochiq test sifatida yaratiladi")
 
+    # Har bir yaratilgan test o'qituvchidan 1 kredit oladi
+    if teacher.credits <= 0:
+        raise HTTPException(
+            status_code=402,
+            detail="Kreditingiz tugagan — yangi test yaratish uchun kredit sotib oling",
+        )
+
     while True:
         code = "".join(random.choices(TEST_CODE_ALPHABET, k=TEST_CODE_LENGTH))
         if not db.scalar(select(Test.id).where(Test.code == code)):
@@ -1236,10 +1243,12 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
             else []
         ),
     )
+    teacher.credits -= 1
+
     db.add(test)
     db.commit()
 
-    return {"id": test.id, "code": test.code}
+    return {"id": test.id, "code": test.code, "credits_left": teacher.credits}
 
 
 @app.get("/api/teacher/tests/{test_id}")
@@ -1385,10 +1394,7 @@ def save_student_answers(
     test = _get_own_test(db, teacher, test_id)
     attempt = _get_offline_attempt(db, test, attempt_id)
 
-    was_filled = attempt.status == "done"
-    if test.price == 0 and not was_filled and teacher.credits <= 0:
-        raise HTTPException(status_code=402, detail="Krediti tugagan — avval kredit sotib oling")
-
+    # Kredit test yaratilganda olingan — o'quvchi javoblari uchun qo'shimcha olinmaydi.
     # Qayta kiritilsa, eski javoblar o'rniga yangilari yoziladi.
     db.execute(delete(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id))
 
@@ -1396,9 +1402,6 @@ def save_student_answers(
     _calculate_attempt_score(db, attempt)
     attempt.status = "done"
     attempt.finished_at = datetime.utcnow()
-
-    if test.price == 0 and not was_filled:
-        teacher.credits -= 1
 
     db.commit()
 
@@ -1653,14 +1656,6 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
         attempt = None
 
     if not attempt:
-        # Bepul testga yangi urinish boshlashdan oldin, o'qituvchining kredit
-        # balansi borligi tekshiriladi (har bir natija uchun 1 kredit sarflanadi).
-        if test.price == 0 and test.teacher.credits <= 0:
-            raise HTTPException(
-                status_code=450,
-                detail="O'qituvchining krediti tugagan, hozircha bu bepul testni boshlab bo'lmaydi",
-            )
-
         attempt = Attempt(test_id=test.id, user_id=user.id)
         db.add(attempt)
         db.commit()
@@ -1707,10 +1702,6 @@ def finish_attempt(
     attempt.finished_at = datetime.utcnow()
     attempt.status = "done"
     attempt.seconds = int(min((attempt.finished_at - attempt.started_at).total_seconds(), test.duration * 60))
-
-    # Bepul test uchun har bir yakunlangan natija o'qituvchidan 1 kredit "yeydi".
-    if test.price == 0:
-        test.teacher.credits -= 1
 
     db.commit()
 
