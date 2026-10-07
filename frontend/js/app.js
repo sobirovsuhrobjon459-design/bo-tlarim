@@ -220,6 +220,25 @@ function askConfirm(message) {
   });
 }
 
+const TRASH_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M10 11v6M14 11v6"/>
+</svg>`;
+
+const COPY_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <rect x="9" y="9" width="12" height="12" rx="2"/>
+  <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>
+</svg>`;
+
+function deleteButton(attribute, value) {
+  return `<button class="delete-button" type="button" ${attribute}="${value}" title="O'chirish">${TRASH_ICON}</button>`;
+}
+
+function copyCodeChip(code) {
+  return `<span class="copy-code" data-copy="${code}"><b>${code}</b>${COPY_ICON}</span>`;
+}
+
 function testBadges(test) {
   const enrollment =
     test.enrollment_type === "closed"
@@ -882,11 +901,11 @@ async function renderTeacherDashboard() {
                     ${testBadges(test)}
                   </h3>
                   <p><b>${escapeHtml(test.subject)}</b></p>
-                  <p class="subtitle" style="margin:0">Test kodi: <span class="copy-code" data-copy="${test.code}">${test.code} 📋</span></p>
+                  <p class="subtitle" style="margin:0">Test kodi: ${copyCodeChip(test.code)}</p>
                   <p class="subtitle" style="margin:0">Yaratilgan vaqti: ${formatDateTime(test.created_at)}</p>
                 </div>
                 <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
-                  <button class="icon-button danger" data-delete-test="${test.id}" title="O'chirish">🗑</button>
+                  ${deleteButton("data-delete-test", test.id)}
                   <span style="color:var(--color-text-muted);font-size:22px">›</span>
                 </div>
               </div>
@@ -1739,7 +1758,7 @@ async function renderTestDetail(testId) {
             </div>
             <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
               ${student.editable
-            ? `<button class="icon-button danger" data-delete-student="${student.id}" title="O'chirish">🗑</button>
+            ? `${deleteButton("data-delete-student", student.id)}
                      <button class="icon-button" data-edit-student="${student.id}" title="Javoblarni kiritish">✏️</button>`
             : ""
           }
@@ -1753,7 +1772,7 @@ async function renderTestDetail(testId) {
     <h2 style="text-align:center">${escapeHtml(test.title)}</h2>
     <div class="row-between" style="margin-bottom:14px">
       <div>${testBadges(test)}</div>
-      <span class="subtitle" style="margin:0">Kod: <b class="copy-code" data-copy="${test.code}">${test.code} 📋</b></span>
+      <span class="subtitle" style="margin:0">Kod: ${copyCodeChip(test.code)}</span>
     </div>
     ${
       test.required_channel
