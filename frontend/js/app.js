@@ -1038,7 +1038,7 @@ async function renderTeacherDashboard() {
     <div class="card" style="cursor:default">
       <div class="card-body">
         <div class="row-between"><span>🎫 Kredit balansi</span><b>${stats.credits} ta</b></div>
-        <p>Har bir yaratilgan test uchun 1 kredit sarflanadi. O'quvchilar soni cheklanmagan.</p>
+        <p>Har bir o'quvchi natijasi uchun 1 kredit sarflanadi (bepul testlarda)</p>
         <button class="btn btn-ghost" id="buy-credit-button">🛒 Kredit sotib olish</button>
       </div>
     </div>
@@ -1336,7 +1336,7 @@ function renderNewTestForm(testType, draft = {}) {
       ${
         draft.paid
           ? "O'quvchi to'lov qilgandan keyin testni ishlaydi"
-          : "O'quvchilar bepul ishlaydi. Testni yaratganingizda sizdan 1 kredit yechiladi."
+          : "O'quvchilar bepul ishlaydi. Har bir natija uchun sizdan 1 kredit yechiladi."
       }
     </p>
     <div id="price-wrapper" style="display:${draft.paid ? "block" : "none"};margin-bottom:16px">
@@ -1479,7 +1479,7 @@ function renderNewTestForm(testType, draft = {}) {
     priceFreeButton.classList.remove("btn-ghost");
     pricePaidButton.classList.add("btn-ghost");
     priceWrapper.style.display = "none";
-    priceHint.textContent = "O'quvchilar bepul ishlaydi. Testni yaratganingizda sizdan 1 kredit yechiladi.";
+    priceHint.textContent = "O'quvchilar bepul ishlaydi. Har bir natija uchun sizdan 1 kredit yechiladi.";
   });
 
   pricePaidButton.addEventListener("click", () => {
@@ -1749,7 +1749,7 @@ async function saveNewTest() {
   });
 
   const result = await api("/api/teacher/tests", { method: "POST", body });
-  showToast(`✅ Test yaratildi! Kodi: ${result.code} • ${result.credits_left} kredit qoldi`);
+  showToast(`✅ Test yaratildi! Kodi: ${result.code}`);
 
   // Test yaratilgach, darhol shu testning sahifasi ochiladi — o'quvchi qo'shish,
   // javoblar varaqasini olish va yakunlash shu yerdan qilinadi.
