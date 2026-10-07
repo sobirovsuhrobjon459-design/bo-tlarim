@@ -2344,6 +2344,12 @@ function renderNewTestForm(testType, draft = {}) {
   document.getElementById("save-test-button").addEventListener("click", guarded(saveNewTest));
   document.getElementById("build-key-rows-button").addEventListener("click", () => buildKeyQuestionRows());
 
+  // Variantlar soni o'zgarishi bilan javoblar katakchalari darhol yangilanadi
+  document.getElementById("field-option-count").addEventListener("input", (event) => {
+    const value = Number(event.target.value);
+    if (value >= 2 && value <= 8) buildKeyQuestionRows();
+  });
+
   // "Jami 45 ta savol" degan eslatma sonlar o'zgarganda yangilanib turadi
   const updateTotalHint = () => {
     const total =
@@ -2405,14 +2411,22 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
     return;
   }
 
+  // "Variantlar" soni o'zgargan bo'lsa, eski umumiy songa ega savollar yangi
+  // songa o'tadi. Ilgari ular eski sonda (masalan, 4 ta — ABCD) qolib ketardi:
+  // 3 yoki 6 kiritilsa ham hammasi ABCD bo'lib turardi. Fan bo'yicha alohida
+  // sonli savollar (masalan, matematikada 33–35 — A–F) o'zgarmaydi.
+  const previousDefault = Number(container.dataset.defaultOptions) || 0;
+  container.dataset.defaultOptions = defaultOptions;
+
   // Savollar soni o'zgartirilganda belgilangan javoblar yo'qolmasin
   const previous = { ...(savedAnswers || {}) };
   container.querySelectorAll(".key-row").forEach((row) => {
     const variants = [...row.querySelectorAll(".math-input")].map(readMathValue);
+    const followsDefault = Number(row.dataset.options) === previousDefault;
     previous[row.dataset.label] = {
       answer: row.dataset.answer || "",
       variants: variants.length ? variants : undefined,
-      options: resetOptions ? undefined : row.dataset.options,
+      options: resetOptions || followsDefault ? undefined : row.dataset.options,
     };
   });
 
@@ -2422,7 +2436,10 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
   for (let number = 1; number <= testCount; number += 1) {
     const saved = previous[number] || {};
     const options = Number(saved.options) || Number(optionOverrides[number]) || defaultOptions;
-    const answer = saved.answer || "A";
+    // Variantlar kamaytirilsa (masalan, 4 dan 3 ga), endi yo'q harf ("D") qolmasin
+    const savedAnswer = String(saved.answer || "A").toUpperCase();
+    const fitsOptions = [...savedAnswer.replace(/,/g, "")].every((letter) => letter.charCodeAt(0) - 65 < options);
+    const answer = fitsOptions ? savedAnswer : "A";
 
     cells.push(`
       <button class="answer-cell key-row" type="button" data-label="${number}" data-kind="letters"

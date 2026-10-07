@@ -291,6 +291,14 @@ input[type="time"] {
   appearance: none;
 }
 
+/* iPhone'da sana matni markazga surilib, bo'sh maydon pastroq bo'lib qolardi */
+input[type="datetime-local"]::-webkit-date-and-time-value,
+input[type="date"]::-webkit-date-and-time-value,
+input[type="time"]::-webkit-date-and-time-value {
+  text-align: left;
+  min-height: 1.4em;
+}
+
 /* Kalendar belgisi qorong'i fonda ham ko'rinsin */
 input[type="datetime-local"]::-webkit-calendar-picker-indicator,
 input[type="date"]::-webkit-calendar-picker-indicator,
