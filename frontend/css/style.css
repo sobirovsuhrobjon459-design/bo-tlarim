@@ -793,3 +793,20 @@ table td {
 [data-theme="dark"] .delete-button {
   box-shadow: 0 4px 14px rgba(220, 38, 38, 0.5);
 }
+
+/* O'quvchi ekranidagi savol qismi (a, b) */
+.quiz-part {
+  margin-bottom: 14px;
+}
+
+.quiz-part .part-letter {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--color-text-muted);
+}
+
+.options-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+  gap: 10px;
+}

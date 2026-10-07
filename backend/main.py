@@ -256,6 +256,27 @@ def _get_offline_attempt(db: Session, test: Test, attempt_id: int) -> Attempt:
     return attempt
 
 
+def _group_key_questions(test: Test) -> list[list[KeyQuestion]]:
+    """
+    "36a" va "36b" kabi qismlarni bitta savol sifatida guruhlaydi.
+
+    O'quvchi uchun bu bitta savol (36-savol, ikkita javob maydoni bilan),
+    shuning uchun savollar soni ham shunga qarab sanaladi: 35 + 10 = 45.
+    """
+
+    groups: list[list[KeyQuestion]] = []
+    current_base = None
+
+    for key_question in test.key_questions:
+        base = re.sub(r"[a-z]+$", "", key_question.label) if key_question.label else str(key_question.number)
+        if base != current_base or not groups:
+            groups.append([])
+            current_base = base
+        groups[-1].append(key_question)
+
+    return groups
+
+
 def _key_question_label(key_question: KeyQuestion) -> str:
     """Savolning ko'rinadigan nomi: odatda "12-savol", a/b qismli bo'lsa — "36a"."""
     return key_question.label or f"{key_question.number}-savol"
@@ -308,9 +329,20 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes
         Spacer(1, 14),
     ]
 
-    table_data = [["#", "O'quvchi", "To'g'ri", "Noto'g'ri", "Natija"]]
+    total_questions = _question_count(test)
+
+    table_data = [["#", "O'quvchi", "Natija", "To'g'ri", "Noto'g'ri", "Foiz"]]
     for index, (attempt, name) in enumerate(best_attempts(db, test), start=1):
-        table_data.append([index, name, attempt.correct, attempt.wrong, f"{attempt.percent}%"])
+        table_data.append(
+            [
+                index,
+                name,
+                f"{attempt.correct}/{total_questions}",
+                attempt.correct,
+                attempt.wrong,
+                f"{attempt.percent}%",
+            ]
+        )
 
     table = Table(table_data, repeatRows=1)
     table.setStyle(
@@ -634,8 +666,11 @@ def generate_answer_sheet_pdf(test: Test, with_answers: bool = False) -> bytes:
 
 
 def _question_count(test: Test) -> int:
-    """Testning rejimiga qarab savollar sonini qaytaradi."""
-    return len(test.key_questions) if test.mode == "key" else len(test.questions)
+    """
+    Savollar soni. "key" rejimida a/b qismlar bitta savol deb sanaladi,
+    shuning uchun 35 ta test + 10 ta yozma = 45 bo'ladi.
+    """
+    return len(_group_key_questions(test)) if test.mode == "key" else len(test.questions)
 
 
 def _get_own_test(db: Session, teacher: Teacher, test_id: int) -> Test:
@@ -952,7 +987,7 @@ def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str,
                     is_correct=is_correct,
                 )
             )
-        return len(test.key_questions)
+        return len(_group_key_questions(test))
 
     for question in test.questions:
         chosen = (answers.get(str(question.id)) or "").upper()
@@ -963,12 +998,31 @@ def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str,
     return len(test.questions)
 
 
-def _calculate_attempt_score(db: Session, attempt: Attempt) -> None:
-    """Saqlangan javoblardan attempt.correct/wrong/percent'ni hisoblaydi."""
+def _calculate_attempt_score(db: Session, attempt: Attempt, test: Test) -> None:
+    """
+    Saqlangan javoblardan attempt.correct/wrong/percent'ni hisoblaydi.
 
-    answers = db.scalars(select(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id)).all()
-    correct_count = sum(1 for answer in answers if answer.is_correct)
-    total = len(answers)
+    Yozma savol a va b qismlardan iborat bo'lsa, u BITTA savol deb sanaladi va
+    ikkala qismi ham to'g'ri bo'lgandagina to'g'ri hisoblanadi. Shuning uchun
+    natija "31/45" ko'rinishida chiqadi, "31/55" emas.
+    """
+
+    answers = {
+        answer.question_ref: answer
+        for answer in db.scalars(select(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id)).all()
+    }
+
+    if test.mode == "key":
+        groups = _group_key_questions(test)
+        total = len(groups)
+        correct_count = sum(
+            1
+            for group in groups
+            if group and all(answers.get(kq.number) is not None and answers[kq.number].is_correct for kq in group)
+        )
+    else:
+        total = len(answers)
+        correct_count = sum(1 for answer in answers.values() if answer.is_correct)
 
     attempt.correct = correct_count
     attempt.wrong = total - correct_count
@@ -1399,7 +1453,7 @@ def save_student_answers(
     db.execute(delete(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id))
 
     total_questions = _grade_answers(db, attempt, test, body.answers)
-    _calculate_attempt_score(db, attempt)
+    _calculate_attempt_score(db, attempt, test)
     attempt.status = "done"
     attempt.finished_at = datetime.utcnow()
 
@@ -1664,10 +1718,20 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
 
     if test.mode == "key":
         # Savol matni yuborilmaydi — faqat raqami, turi va nechta variant borligi.
-        questions_payload = [
-            {"number": kq.number, "question_type": kq.question_type, "option_count": kq.option_count}
-            for kq in test.key_questions
-        ]
+        # a/b qismli yozma savol o'quvchiga bitta savol bo'lib ko'rinadi.
+        questions_payload = []
+        for index, group in enumerate(_group_key_questions(test), start=1):
+            first = group[0]
+            questions_payload.append(
+                {
+                    "number": index,
+                    "question_type": first.question_type,
+                    "option_count": first.option_count,
+                    "parts": [
+                        {"ref": kq.number, "label": re.sub(r"^\d+", "", kq.label or "")} for kq in group
+                    ],
+                }
+            )
     else:
         # To'g'ri javob (correct) yuborilmaydi — aks holda o'quvchi brauzer orqali ko'rib olishi mumkin.
         questions_payload = [
@@ -1698,7 +1762,7 @@ def finish_attempt(
     test = db.get(Test, attempt.test_id)
     total_questions = _grade_answers(db, attempt, test, body.answers)
 
-    _calculate_attempt_score(db, attempt)
+    _calculate_attempt_score(db, attempt, test)
     attempt.finished_at = datetime.utcnow()
     attempt.status = "done"
     attempt.seconds = int(min((attempt.finished_at - attempt.started_at).total_seconds(), test.duration * 60))

@@ -693,23 +693,40 @@ function renderKeyQuizQuestion() {
   const total = quizState.questions.length;
   const isLast = quizState.index === total - 1;
   const progressPercent = Math.round(((quizState.index + 1) / total) * 100);
-  const isMulti = question.question_type === "multi";
   const isText = question.question_type === "text";
 
-  const selectedAnswer = quizState.answers[question.number] || "";
-  const selectedLetters = new Set(selectedAnswer ? selectedAnswer.split(",") : []);
+  // Yozma savol a va b qismlardan iborat bo'lishi mumkin — ular bitta
+  // savol sahifasida, ketma-ket ko'rsatiladi.
+  const parts = question.parts || [{ ref: question.number, label: "" }];
 
-  const answerAreaHtml = isText
-    ? mathFieldHtml(selectedAnswer, 'id="text-answer-input" placeholder="Javobingizni yozing"')
-    : `<div id="options-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(60px,1fr));gap:10px">
-         ${Array.from({ length: question.option_count }, (_, index) => {
-      const letter = String.fromCharCode(65 + index);
-      const selected = selectedLetters.has(letter) ? "selected" : "";
-      return `<div class="option ${selected}" data-letter="${letter}" style="text-align:center"><b>${letter}</b></div>`;
-    }).join("")}
-       </div>`;
+  const answerAreaHtml = parts
+    .map((part) => {
+      const saved = quizState.answers[part.ref] || "";
+      const partTitle = part.label ? `<b class="part-letter">${part.label})</b>` : "";
 
-  const hintText = isText ? "Javobingizni yozib kiriting" : isMulti ? "Bir nechta to'g'ri javobni tanlang" : "To'g'ri javobni tanlang";
+      if (isText) {
+        return `<div class="quiz-part">${partTitle}
+          ${mathFieldHtml(saved, `data-ref="${part.ref}" placeholder="Javobingizni yozing"`)}
+        </div>`;
+      }
+
+      return `<div class="quiz-part">${partTitle}
+        <div class="options-grid" data-ref="${part.ref}">
+          ${Array.from({ length: question.option_count }, (_, index) => {
+            const letter = String.fromCharCode(65 + index);
+            return `<div class="option ${saved === letter ? "selected" : ""}" data-letter="${letter}"
+                         style="text-align:center;margin:0"><b>${letter}</b></div>`;
+          }).join("")}
+        </div>
+      </div>`;
+    })
+    .join("");
+
+  const hintText = isText
+    ? parts.length > 1
+      ? "Har bir qism uchun javobingizni yozing"
+      : "Javobingizni yozib kiriting"
+    : "To'g'ri javobni tanlang";
 
   showPage(`
     <div class="row-between">
@@ -724,26 +741,16 @@ function renderKeyQuizQuestion() {
 
   if (isText) {
     setupMathFields(appElement, (field, value) => {
-      quizState.answers[question.number] = value;
+      quizState.answers[field.dataset.ref] = value;
     });
   } else {
-    document.querySelectorAll("#options-container .option").forEach((optionEl) => {
-      optionEl.addEventListener("click", () => {
-        const letter = optionEl.dataset.letter;
-
-        if (isMulti) {
-          if (selectedLetters.has(letter)) {
-            selectedLetters.delete(letter);
-          } else {
-            selectedLetters.add(letter);
-          }
-          quizState.answers[question.number] = [...selectedLetters].sort().join(",");
-          optionEl.classList.toggle("selected");
-        } else {
-          quizState.answers[question.number] = letter;
-          document.querySelectorAll("#options-container .option").forEach((el) => el.classList.remove("selected"));
+    document.querySelectorAll(".options-grid").forEach((grid) => {
+      grid.querySelectorAll(".option").forEach((optionEl) => {
+        optionEl.addEventListener("click", () => {
+          quizState.answers[grid.dataset.ref] = optionEl.dataset.letter;
+          grid.querySelectorAll(".option").forEach((el) => el.classList.remove("selected"));
           optionEl.classList.add("selected");
-        }
+        });
       });
     });
   }
@@ -1780,8 +1787,12 @@ async function renderTestDetail(testId) {
         : ""
     }
 
-    <button class="btn btn-ghost" id="answer-sheet-button">📄 Javoblar varaqasini olish</button>
-    <button class="btn btn-ghost" id="answer-key-button">🔑 To'g'ri javoblar (kalit)</button>
+    ${
+      isClosedTest
+        ? `<button class="btn btn-ghost" id="answer-sheet-button">📄 Javoblar varaqasini olish</button>
+           <button class="btn btn-ghost" id="answer-key-button">🔑 To'g'ri javoblar (kalit)</button>`
+        : ""
+    }
     ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
     <button class="btn btn-ghost" id="results-button">📊 Natijalarni ko'rish</button>
     ${isFinished
@@ -1806,7 +1817,7 @@ async function renderTestDetail(testId) {
 
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
 
-  document.getElementById("answer-sheet-button").addEventListener(
+  document.getElementById("answer-sheet-button")?.addEventListener(
     "click",
     guarded(() =>
       deliverPdf(
@@ -1817,7 +1828,7 @@ async function renderTestDetail(testId) {
     )
   );
 
-  document.getElementById("answer-key-button").addEventListener(
+  document.getElementById("answer-key-button")?.addEventListener(
     "click",
     guarded(() =>
       deliverPdf(
