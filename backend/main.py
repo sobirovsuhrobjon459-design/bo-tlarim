@@ -1038,6 +1038,11 @@ def _normalize_channel(raw_channel: str | None) -> str | None:
         return None
 
     channel = raw_channel.strip()
+
+    # Username'siz yopiq guruh/kanal — raqamli ID bilan ("-1001234567890")
+    if re.fullmatch(r"-?\d{5,20}", channel):
+        return channel
+
     for prefix in ("https://t.me/", "http://t.me/", "t.me/", "@"):
         if channel.startswith(prefix):
             channel = channel[len(prefix) :]
@@ -1091,32 +1096,48 @@ def _ensure_bot_can_check_channel(channel: str) -> None:
         return  # token noto'g'ri — bu boshqa joyda allaqachon aytilgan
 
     try:
-        _ask_telegram_chat_member(channel, bot_id)
+        bot_member = _ask_telegram_chat_member(channel, bot_id)
     except ChannelUnavailable as error:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"Bot {channel} kanalini ko'ra olmayapti ({error}). "
-                "Avval botni shu kanalga administrator qilib qo'shing, keyin testni saqlang. "
+                f"Bot {channel} kanali/guruhini ko'ra olmayapti ({error}). "
+                "Avval botni shu kanal yoki guruhga administrator qilib qo'shing, keyin testni saqlang. "
                 "Aks holda obuna tekshiruvi ishlamaydi."
             ),
         )
     except Exception:
-        # Internet uzilgan bo'lishi mumkin — test yaratishni to'smaymiz
+        # Tekshirib bo'lmasa testni saqlamaymiz: aks holda obuna tekshiruvi
+        # ishlamaydigan test o'quvchilarga tarqab ketishi mumkin edi.
         logging.getLogger("backend").warning("Kanalni tekshirib bo'lmadi (vaqtinchalik xato)", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Telegram hozir javob bermadi — kanalni tekshirib bo'lmadi. Bir oz kutib, qayta saqlang.",
+        )
+
+    # Bot oddiy a'zo bo'lsa, kanalda o'quvchilarni tekshira olmaydi —
+    # Telegram obunachilar ro'yxatini faqat administratorga ochadi.
+    if bot_member.get("status") not in ("administrator", "creator"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Bot {channel} da administrator emas. Botni shu kanal yoki guruhga "
+                "administrator qilib qo'shing, keyin testni saqlang."
+            ),
+        )
 
 
 def _check_channel_subscription(test: Test, user: User) -> None:
     """
     Majburiy obuna yoqilgan bo'lsa, o'quvchi kanalga obuna ekanini tekshiradi.
 
-    MUHIM: ilgari bot kanalga kira olmasa, o'quvchi BEMALOL o'tkazib
-    yuborilardi — ya'ni "majburiy obuna" aslida hech kimni to'smasdi va
-    o'qituvchi buni bilmasdi ham. Endi sozlamadagi xato ochiq aytiladi.
+    Obuna tasdiqlanmaguncha test boshlanmaydi — har qanday holatda:
 
-    Internet uzilishi kabi o'tkinchi xatolarda esa o'quvchini to'smaymiz —
-    aks holda Telegram bir soniya javob bermagani uchun butun sinf test
-    ishlay olmay qolardi.
+    - 451 — o'quvchi obuna emas (o'zi obuna bo'lib, qayta tekshiradi);
+    - 424 — bot kanalda admin emas (buni faqat O'QITUVCHI tuzatadi);
+    - 503 — Telegram javob bermadi (bir oz kutib qayta urinadi).
+
+    Kanal qo'shilmagan testda tekshiruv yo'q — o'quvchi darhol boshlaydi.
     """
 
     if not test.required_channel:
@@ -1125,20 +1146,32 @@ def _check_channel_subscription(test: Test, user: User) -> None:
     try:
         member = _ask_telegram_chat_member(test.required_channel, user.tg_id)
     except ChannelUnavailable as error:
+        # O'quvchi kanalda umuman bo'lmasa, Telegram ba'zan "user not found"
+        # deb javob beradi — bu sozlama xatosi emas, shunchaki obuna yo'q.
+        reason = str(error).lower()
+        if any(marker in reason for marker in ("user not found", "participant_id_invalid", "member not found")):
+            raise HTTPException(
+                status_code=451,
+                detail=f"Testni boshlash uchun avval {test.required_channel} ga obuna bo'ling",
+            )
+
         logging.getLogger("backend").warning(
             "Kanal obunasini tekshirib bo'lmadi (%s): %s", test.required_channel, error
         )
         raise HTTPException(
-            status_code=409,
+            status_code=424,
             detail=(
-                f"Bu testda {test.required_channel} kanaliga obuna shart, lekin bot "
-                "kanalni tekshira olmayapti. O'qituvchiga ayting: botni kanalga "
-                "administrator qilib qo'shish kerak."
+                f"Bu testda {test.required_channel} ga obuna shart, lekin bot "
+                "obunani tekshira olmayapti. O'qituvchiga ayting: botni kanal yoki "
+                "guruhga administrator qilib qo'shish kerak."
             ),
         )
     except Exception:
         logging.getLogger("backend").warning("Kanal obunasi tekshirilmadi (vaqtinchalik xato)", exc_info=True)
-        return
+        raise HTTPException(
+            status_code=503,
+            detail="Obunani tekshirib bo'lmadi — Telegram javob bermadi. Bir oz kutib, qayta urinib ko'ring.",
+        )
 
     status = member.get("status")
 
@@ -2591,13 +2624,21 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
     if not _is_paid(db, user, test):
         raise HTTPException(status_code=402, detail="Avval to'lov qiling")
     _check_enrollment(test)
-    _check_channel_subscription(test, user)
 
     attempt = db.scalar(
         select(Attempt)
         .where(Attempt.test_id == test.id, Attempt.user_id == user.id)
         .order_by(Attempt.id.desc())
     )
+
+    # Testni allaqachon ishlagan o'quvchiga obuna ekrani emas, aniq xabar chiqsin
+    if attempt and attempt.status == "done":
+        raise HTTPException(
+            status_code=409,
+            detail="Siz bu testni allaqachon ishlab bo'lgansiz. Natijangiz o'qituvchingizga yuborilgan.",
+        )
+
+    _check_channel_subscription(test, user)
 
     # Vaqti tugab qolgan urinish: o'quvchi belgilab qo'ygan javoblar bo'yicha
     # darhol tekshirib, natijasini qotiramiz — mehnati yo'qolmasligi uchun.

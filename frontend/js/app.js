@@ -1097,6 +1097,13 @@ function renderTestCodeSearch() {
 }
 
 function renderTestFound(test) {
+  // Obuna ekranidagi "←" kabi boshqa sahifadan chaqirilganda qidiruv sahifasi
+  // yo'q bo'ladi — ilgari shu sabab "Cannot set properties of null" xatosi chiqardi.
+  if (!document.getElementById("search-result")) {
+    renderTestCodeSearch();
+    document.getElementById("test-code-input").value = test.code;
+  }
+
   const priceLabel = test.price ? `${formatNumber(test.price)} so'm` : "Bepul";
 
   const now = new Date();
@@ -1129,8 +1136,8 @@ function renderTestFound(test) {
         <p>💰 ${priceLabel}</p>
         ${
           test.required_channel
-            ? `<p>📢 Kanalga obuna shart: <b>${escapeHtml(test.required_channel)}</b></p>
-               <button class="btn btn-ghost" id="subscribe-button">Kanalga obuna bo'lish</button>`
+            ? `<p>📢 Obuna shart: <b>${escapeHtml(test.required_channel)}</b></p>
+               ${channelLink(test.required_channel) ? `<button class="btn btn-ghost" id="subscribe-button">Obuna bo'lish</button>` : ""}`
             : ""
         }
         ${blockedMessage ? `<p style="color:var(--color-primary);font-weight:600">${blockedMessage}</p>` : ""}
@@ -1148,11 +1155,11 @@ function renderTestFound(test) {
         // Obunaga oid xatolarni alohida, tushunarli ekranda ko'rsatamiz —
         // bir lahzada o'tib ketadigan xabar bilan o'quvchi nima qilishni
         // bilmay qolardi.
-        if (error.status === 451 || error.status === 409) {
-          renderSubscriptionRequired(test, error.message, error.status === 409);
+        if (error.status === 451 || error.status === 424) {
+          renderSubscriptionRequired(test, error.message, error.status === 424);
           return;
         }
-        throw error;
+        throw error; // 409 (allaqachon ishlagan), 503 (qayta urinish) — xabar sifatida
       }
     })
   );
@@ -1188,8 +1195,14 @@ function renderTestFound(test) {
     })
   );
   document.getElementById("subscribe-button")?.addEventListener("click", () => {
-    openExternalLink(`https://t.me/${test.required_channel.replace("@", "")}`);
+    openExternalLink(channelLink(test.required_channel));
   });
+}
+
+function channelLink(channel) {
+  // "@kanal" -> havola. Raqamli ID'li yopiq guruhga havola yasab bo'lmaydi.
+  const value = String(channel || "");
+  return value.startsWith("@") ? `https://t.me/${value.slice(1)}` : "";
 }
 
 function renderSubscriptionRequired(test, message, isMisconfigured) {
@@ -1198,7 +1211,7 @@ function renderSubscriptionRequired(test, message, isMisconfigured) {
 
     Ikki xil holat bor va ularni aralashtirmaslik kerak:
     - o'quvchi hali obuna bo'lmagan (451) — o'zi hal qila oladi
-    - bot kanalda admin emas (409) — buni faqat O'QITUVCHI hal qiladi
+    - bot kanalda admin emas (424) — buni faqat O'QITUVCHI hal qiladi
   */
   const channel = test.required_channel || "";
 
@@ -1214,7 +1227,7 @@ function renderSubscriptionRequired(test, message, isMisconfigured) {
     ${
       isMisconfigured
         ? ""
-        : `<button class="btn" id="go-subscribe">📢 ${escapeHtml(channel)} — obuna bo'lish</button>
+        : `${channelLink(channel) ? `<button class="btn" id="go-subscribe">📢 ${escapeHtml(channel)} — obuna bo'lish</button>` : ""}
            <button class="btn btn-ghost" id="recheck-subscribe">✅ Obuna bo'ldim, tekshirish</button>`
     }
   `);
@@ -1222,7 +1235,7 @@ function renderSubscriptionRequired(test, message, isMisconfigured) {
   document.querySelector('[data-action="back"]').addEventListener("click", guarded(() => renderTestFound(test)));
 
   document.getElementById("go-subscribe")?.addEventListener("click", () => {
-    openExternalLink(`https://t.me/${channel.replace("@", "")}`);
+    openExternalLink(channelLink(channel));
   });
 
   document.getElementById("recheck-subscribe")?.addEventListener(
@@ -1231,7 +1244,7 @@ function renderSubscriptionRequired(test, message, isMisconfigured) {
       try {
         await startTest(test.code);
       } catch (error) {
-        if (error.status === 451 || error.status === 409) {
+        if (error.status === 451) {
           showToast("Hali obuna ko'rinmayapti — bir oz kutib qayta urining");
           return;
         }
@@ -2216,16 +2229,18 @@ function renderNewTestForm(testType, draft = {}) {
       <label class="setting-row">
         <input type="checkbox" id="field-require-channel" ${draft.channel ? "checked" : ""} />
         <span>
-          <b>Telegram kanalga majburiy obuna</b>
+          <b>Kanal yoki guruhga majburiy obuna</b>
           <p class="subtitle" style="margin:4px 0 0">
-            Yoqilgan bo'lsa, o'quvchilar testni boshlashdan oldin kanalingizga obuna bo'lishi shart.
+            Yoqilgan bo'lsa, o'quvchi kanalingiz yoki guruhingizga obuna bo'lmaguncha testni boshlay olmaydi.
+            Yoqilmasa — hamma darhol boshlaydi.
           </p>
         </span>
       </label>
       <div id="channel-input-wrapper" style="display:${draft.channel ? "block" : "none"};margin-top:10px">
-        <input class="input" id="field-channel" placeholder="@kanalingiz" value="${escapeHtml(draft.channel || "")}" style="margin:0" />
+        <input class="input" id="field-channel" placeholder="@kanalingiz yoki -100… (guruh ID)" value="${escapeHtml(draft.channel || "")}" style="margin:0" />
         <p class="subtitle" style="margin:6px 0 0;color:var(--color-primary)">
-          Eslatma: bot kanalingizda administrator bo'lishi kerak!
+          Avval botni shu kanal yoki guruhga <b>administrator</b> qilib qo'shing — saqlashda bot buni
+          tekshiradi, admin bo'lmasa test saqlanmaydi.
         </p>
       </div>
     </div>
@@ -2940,7 +2955,20 @@ async function renderResultsTab(selectedId) {
     return;
   }
 
-  const testId = selectedId || tests[0].id;
+  // Avval testlar ro'yxati: o'qituvchi qaysi testning natijasini ochayotganini
+  // aniq ko'rsin. Ilgari birinchi test o'zi ochilib, boshqasini tanlash
+  // ro'yxati oddiy matn maydoniga o'xshab qolgani uchun bilinmasdi.
+  if (!selectedId) {
+    renderResultsTestList(tests);
+    return;
+  }
+
+  const testId = selectedId;
+  const test = tests.find((item) => item.id === testId);
+  if (!test) {
+    renderResultsTestList(tests);
+    return;
+  }
 
   // Faqat natijalar so'raladi — ishtirokchilar soni va o'rtacha foiz shu
   // javobning o'zidan hisoblanadi, qo'shimcha so'rov kerak emas.
@@ -2989,15 +3017,16 @@ async function renderResultsTab(selectedId) {
 
   showPage(`
     ${pageHeader("Natijalar")}
-    <label class="field-label" for="results-test-select">Test</label>
-    <select class="input" id="results-test-select">
-      ${tests
-        .map(
-          (test) =>
-            `<option value="${test.id}" ${test.id === testId ? "selected" : ""}>${escapeHtml(test.title)}</option>`
-        )
-        .join("")}
-    </select>
+    <button class="btn btn-ghost" id="all-results-button" style="width:auto;padding:8px 14px;margin:0 0 10px">
+      ← Barcha testlar
+    </button>
+    <div class="card results-test-card" style="cursor:default">
+      <div class="card-body" style="width:100%">
+        <h3 style="margin-bottom:6px">${escapeHtml(test.title)} ${testBadges(test)}</h3>
+        <p style="margin:0"><b>${escapeHtml(test.subject)}</b> • Kod: ${copyCodeChip(test.code)}</p>
+        <p class="subtitle" style="margin:4px 0 0">${test.count} ta savol • Yaratilgan: ${formatDateTime(test.created_at)}</p>
+      </div>
+    </div>
 
     <div class="panel">
       <div class="stats-grid" style="margin:0 0 16px">
@@ -3017,16 +3046,45 @@ async function renderResultsTab(selectedId) {
 
   wireTeacherChrome("results");
 
-  document.getElementById("results-test-select").addEventListener(
-    "change",
-    guarded((event) => renderResultsTab(Number(event.target.value)))
-  );
+  document.getElementById("all-results-button").addEventListener("click", () => renderResultsTestList(tests));
 
   document.querySelectorAll("[data-detail-id]").forEach((line) => {
     line.addEventListener(
       "click",
       guarded(() => renderStudentDetail(testId, Number(line.dataset.detailId)))
     );
+  });
+}
+
+function renderResultsTestList(tests) {
+  const cards = tests
+    .map(
+      (test) => `
+        <div class="card card-entrance" data-results-test-id="${test.id}">
+          <div class="card-body" style="width:100%">
+            <div class="row-between" style="align-items:flex-start">
+              <div>
+                <h3 style="margin-bottom:6px">${escapeHtml(test.title)} ${testBadges(test)}</h3>
+                <p style="margin:0"><b>${escapeHtml(test.subject)}</b> • Kod: <b>${escapeHtml(test.code)}</b></p>
+                <p class="subtitle" style="margin:4px 0 0">👥 ${test.students} ta qatnashchi • ${formatDateTime(test.created_at)}</p>
+              </div>
+              <span style="color:var(--color-text-muted);font-size:22px">›</span>
+            </div>
+          </div>
+        </div>`
+    )
+    .join("");
+
+  showPage(`
+    ${pageHeader("Natijalar")}
+    <p class="subtitle">Qaysi testning natijalarini ko'rmoqchisiz?</p>
+    ${cards}
+  `);
+
+  wireTeacherChrome("results");
+
+  document.querySelectorAll("[data-results-test-id]").forEach((card) => {
+    card.addEventListener("click", guarded(() => renderResultsTab(Number(card.dataset.resultsTestId))));
   });
 }
 

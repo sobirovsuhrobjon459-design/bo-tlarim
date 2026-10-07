@@ -28,6 +28,7 @@ sys.path.insert(0, str(BASE_DIR))
 # MUHIM: sozlamalar backend import qilinishidan OLDIN berilishi kerak —
 # backend.database ularni import paytida .env dan o'qiydi.
 TEST_BOT_TOKEN = "123456:TEST-TOKEN-FOR-AUTOMATED-CHECKS"
+BOT_USER_ID = 123456  # tokenning boshidagi raqam — botning Telegram ID'si
 DB_PATH = Path(tempfile.mkdtemp(prefix="matemttest-")) / "test.db"
 
 os.environ.update(
@@ -1052,6 +1053,8 @@ def test_majburiy_obuna_obunasizni_toxtatadi():
     answers = {"status": "left"}
 
     def fake_member(channel, tg_id):
+        if tg_id == BOT_USER_ID:
+            return {"status": "administrator"}
         return dict(answers)
 
     original = main._ask_telegram_chat_member
@@ -1083,7 +1086,7 @@ def test_majburiy_obuna_bot_kira_olmasa_oquvchi_otkazilmaydi():
     register_teacher()
 
     def ok(channel, tg_id):
-        return {"status": "member"}
+        return {"status": "administrator" if tg_id == BOT_USER_ID else "member"}
 
     original = main._ask_telegram_chat_member
     main._ask_telegram_chat_member = ok
@@ -1099,19 +1102,19 @@ def test_majburiy_obuna_bot_kira_olmasa_oquvchi_otkazilmaydi():
     main._ask_telegram_chat_member = cannot
     try:
         response = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901))
-        assert response.status_code == 409, f"o'quvchi o'tkazib yuborildi: {response.status_code}"
+        assert response.status_code == 424, f"o'quvchi o'tkazib yuborildi: {response.status_code}"
         assert "administrator" in response.json()["detail"]
     finally:
         main._ask_telegram_chat_member = original
 
 
-def test_majburiy_obuna_vaqtinchalik_xatoda_toxtatmaydi():
-    """Internet uzilsa, butun sinf test ishlay olmay qolmasligi kerak."""
+def test_majburiy_obuna_tekshirib_bolmasa_ham_otkazilmaydi():
+    """Obuna tasdiqlanmaguncha test boshlanmaydi — Telegram javob bermasa ham (503, qayta urinadi)."""
     reset_database()
     register_teacher()
 
     def ok(channel, tg_id):
-        return {"status": "member"}
+        return {"status": "administrator" if tg_id == BOT_USER_ID else "member"}
 
     original = main._ask_telegram_chat_member
     main._ask_telegram_chat_member = ok
@@ -1126,7 +1129,7 @@ def test_majburiy_obuna_vaqtinchalik_xatoda_toxtatmaydi():
     main._ask_telegram_chat_member = timeout
     try:
         response = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901))
-        assert response.status_code == 200, response.text
+        assert response.status_code == 503, response.text
     finally:
         main._ask_telegram_chat_member = original
 
@@ -1136,7 +1139,7 @@ def test_kanal_nomi_har_xil_yozilsa_ham_bir_xil_saqlanadi():
     register_teacher()
 
     def ok(channel, tg_id):
-        return {"status": "member"}
+        return {"status": "administrator" if tg_id == BOT_USER_ID else "member"}
 
     original = main._ask_telegram_chat_member
     main._ask_telegram_chat_member = ok
@@ -1147,6 +1150,140 @@ def test_kanal_nomi_har_xil_yozilsa_ham_bir_xil_saqlanadi():
             assert info["required_channel"] == "@kanalim", f"{written!r} -> {info['required_channel']}"
     finally:
         main._ask_telegram_chat_member = original
+
+
+def _fake_telegram(statuses: dict, error: Exception | None = None):
+    """
+    _ask_telegram_chat_member o'rniga: statuses[tg_id] holatini qaytaradi
+    (bot uchun ham). error berilsa, botdan boshqa hamma uchun shuni ko'taradi.
+    """
+    original = main._ask_telegram_chat_member
+
+    def fake(channel, tg_id):
+        if error is not None and tg_id != BOT_USER_ID:
+            raise error
+        return {"status": statuses.get(tg_id, "left")}
+
+    main._ask_telegram_chat_member = fake
+    return lambda: setattr(main, "_ask_telegram_chat_member", original)
+
+
+def test_kanal_qoshilmagan_test_tekshiruvsiz_boshlanadi():
+    reset_database()
+    register_teacher()
+    created = create_test()
+
+    restore = _fake_telegram({}, error=AssertionError("kanalsiz testda Telegram so'ralmasligi kerak"))
+    try:
+        response = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901))
+    finally:
+        restore()
+    assert response.status_code == 200, response.text
+
+
+def test_bot_admin_bolmasa_test_yaratilmaydi():
+    """Bot kanal/guruhda oddiy a'zo bo'lsa — obunani tekshira olmaydi, test saqlanmaydi."""
+    reset_database()
+    register_teacher()
+
+    restore = _fake_telegram({BOT_USER_ID: "member"})
+    try:
+        response = client.post(
+            "/api/teacher/tests",
+            json={
+                "title": "Obunali test",
+                "subject": "Matematika",
+                "mode": "key",
+                "required_channel": "@kanal",
+                "key_questions": [{"number": 1, "question_type": "single", "option_count": 4, "correct": "A"}],
+            },
+            headers=as_user(555),
+        )
+    finally:
+        restore()
+    assert response.status_code == 422 and "administrator" in response.json()["detail"], response.text
+
+
+def test_kanalni_tekshirib_bolmasa_test_yaratilmaydi():
+    reset_database()
+    register_teacher()
+
+    original = main._ask_telegram_chat_member
+
+    def timeout(channel, tg_id):
+        raise TimeoutError("Telegram javob bermadi")
+
+    main._ask_telegram_chat_member = timeout
+    try:
+        response = client.post(
+            "/api/teacher/tests",
+            json={
+                "title": "Obunali test",
+                "subject": "Matematika",
+                "mode": "key",
+                "required_channel": "@kanal",
+                "key_questions": [{"number": 1, "question_type": "single", "option_count": 4, "correct": "A"}],
+            },
+            headers=as_user(555),
+        )
+    finally:
+        main._ask_telegram_chat_member = original
+    assert response.status_code == 503, response.text
+
+
+def test_guruh_raqamli_id_bilan_ham_ishlaydi():
+    reset_database()
+    register_teacher()
+
+    restore = _fake_telegram({BOT_USER_ID: "administrator", 901: "member"})
+    try:
+        created = create_test(required_channel="-1001234567890")
+        info = client.get(f"/api/tests/{created['code']}", headers=as_user(901)).json()
+        assert info["required_channel"] == "-1001234567890", info
+        assert client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).status_code == 200
+    finally:
+        restore()
+
+
+def test_kanalda_umuman_yoq_oquvchi_obuna_bolishga_yuboriladi():
+    """Telegram "user not found" desa — bu sozlama xatosi emas, o'quvchi obuna emas (451)."""
+    reset_database()
+    register_teacher()
+
+    restore = _fake_telegram({BOT_USER_ID: "administrator"})
+    try:
+        created = create_test(required_channel="@kanal")
+    finally:
+        restore()
+
+    restore = _fake_telegram({}, error=main.ChannelUnavailable("Bad Request: user not found"))
+    try:
+        response = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901))
+    finally:
+        restore()
+    assert response.status_code == 451, response.text
+
+
+def test_ishlab_bolgan_oquvchiga_obuna_emas_allaqachon_xabari_chiqadi():
+    """Ilgari 409 obuna xatosi deb ko'rsatilib, "Obuna tekshirilmadi" ekrani chiqardi."""
+    reset_database()
+    register_teacher()
+
+    restore = _fake_telegram({BOT_USER_ID: "administrator", 901: "member"})
+    try:
+        created = create_test(required_channel="@kanal")
+        started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
+        finish_and_grade(started["attempt_id"], json={"answers": {"1": "B"}}, headers=as_user(901))
+    finally:
+        restore()
+
+    # Endi bot kanalni ko'rmasa ham — o'quvchiga "allaqachon ishlagansiz" deyiladi
+    restore = _fake_telegram({}, error=main.ChannelUnavailable("chat not found"))
+    try:
+        again = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901))
+    finally:
+        restore()
+    assert again.status_code == 409 and "allaqachon" in again.json()["detail"], again.text
 
 
 def test_testlar_royxatidagi_qatnashchilar_soni_togri():
