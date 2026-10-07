@@ -354,10 +354,29 @@ function renderSkeleton() {
   `);
 }
 
+// Bosh sahifadagi rol ikonkalari (emoji o'rniga — har qurilmada bir xil chiqadi)
+const ROLE_ICONS = {
+  student: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+    stroke-linecap="round" stroke-linejoin="round"><path d="M22 10 12 5 2 10l10 5 10-5Z"/>
+    <path d="M6 12v5c0 1 2.7 2.5 6 2.5s6-1.5 6-2.5v-5"/></svg>`,
+  teacher: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+    stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/>
+    <path d="M8 9h8M8 12.5h5M12 17v3"/></svg>`,
+  admin: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+    stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v5c0 5 3.4 8.6 8 10 4.6-1.4 8-5 8-10V6l-8-3Z"/>
+    <path d="m9 12 2 2 4-4"/></svg>`,
+};
+
+function roleCard(action, icon, title, description) {
+  return `
+    <div class="card card-entrance role-card" data-action="${action}">
+      <div class="card-icon">${icon}</div>
+      <div class="card-body"><h3>${title}</h3><p>${description}</p></div>
+    </div>`;
+}
+
 function renderHome(userName, backendOk) {
-  const greeting = userName
-    ? `Xush kelibsiz, ${escapeHtml(userName)} 👋`
-    : "Test Platformasiga xush kelibsiz 👋";
+  const greeting = userName ? `Xush kelibsiz,<br>${escapeHtml(userName)}` : "Test Platformasiga<br>xush kelibsiz";
 
   // Hammasi joyida bo'lganda hech narsa ko'rsatilmaydi — faqat haqiqiy xatoda ogohlantirish chiqadi.
   const statusHtml = backendOk ? "" : `<p class="status">Backend bilan aloqa yo'q ❌</p>`;
@@ -366,30 +385,34 @@ function renderHome(userName, backendOk) {
     <h1 class="fade-up">${greeting}</h1>
     <p class="subtitle fade-up">Bilimingizni sinang va natijangizni kuzating.</p>
 
-    <div class="card card-entrance" data-action="student">
-      <div class="card-icon">👨‍🎓</div>
-      <div class="card-body"><h3>O'QUVCHI</h3><p>Testlarni topish va ishlash</p></div>
-    </div>
-
-    <div class="card card-entrance" data-action="teacher">
-      <div class="card-icon">👨‍🏫</div>
-      <div class="card-body"><h3>O'QITUVCHI</h3><p>Test yaratish va natijalarni boshqarish</p></div>
-    </div>
-
-    ${isAdmin
-      ? `<div class="card card-entrance" data-action="admin">
-             <div class="card-icon">👑</div>
-             <div class="card-body"><h3>ADMIN</h3><p>Umumiy statistika va boshqaruv</p></div>
-           </div>`
-      : ""
-    }
+    ${roleCard("student", ROLE_ICONS.student, "O'QUVCHI", "Testlarni topish va ishlash")}
+    ${roleCard("teacher", ROLE_ICONS.teacher, "O'QITUVCHI", "Test yaratish va natijalarni boshqarish")}
+    ${isAdmin ? roleCard("admin", ROLE_ICONS.admin, "ADMIN", "Umumiy statistika va boshqaruv") : ""}
 
     ${statusHtml}
   `);
 
-  document.querySelector('[data-action="student"]').addEventListener("click", guarded(renderStudentHome));
-  document.querySelector('[data-action="teacher"]').addEventListener("click", guarded(enterTeacherArea));
-  document.querySelector('[data-action="admin"]')?.addEventListener("click", guarded(renderAdminDashboard));
+  document.querySelector('[data-action="student"]').addEventListener(
+    "click",
+    guarded(async () => {
+      currentRole = "student";
+      await renderStudentHome();
+    })
+  );
+  document.querySelector('[data-action="teacher"]').addEventListener(
+    "click",
+    guarded(async () => {
+      currentRole = "teacher";
+      await enterTeacherArea();
+    })
+  );
+  document.querySelector('[data-action="admin"]')?.addEventListener(
+    "click",
+    guarded(async () => {
+      currentRole = "admin";
+      await renderAdminDashboard();
+    })
+  );
 }
 
 async function loadHome() {

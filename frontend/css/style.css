@@ -154,9 +154,31 @@ p {
 }
 
 .card-icon {
-  font-size: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  font-size: 26px;
   line-height: 1;
+  border-radius: 14px;
+  background: rgba(99, 102, 241, 0.14);
+  color: var(--color-primary);
   transition: transform 0.15s ease;
+}
+
+.card-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.role-card h3 {
+  letter-spacing: 0.6px;
+}
+
+h1 {
+  line-height: 1.25;
 }
 
 .card:active .card-icon {
