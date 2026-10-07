@@ -143,15 +143,35 @@ function readMathValue(field) {
   return (typeof field.value === "string" ? field.value : field.textContent || "").trim();
 }
 
+let mathKeyboardReady = false;
+
+function configureMathKeyboard() {
+  // Klaviaturada ikkita bo'lim qoladi:
+  //   "123" — raqamlar va arifmetik amallar (ildiz, daraja, kasr, pi, ...)
+  //   "abc" — oddiy harflar klaviaturasi
+  // MathLive kechroq yuklanadi, shuning uchun birinchi ishlatilganda sozlanadi.
+  if (mathKeyboardReady || !window.mathVirtualKeyboard) return;
+
+  try {
+    window.mathVirtualKeyboard.layouts = ["numeric", "alphabetic"];
+    mathKeyboardReady = true;
+  } catch (_) {
+    /* MathLive hali tayyor emas — keyingi safar urinib ko'riladi */
+  }
+}
+
 function setupMathFields(container, onChange) {
   container.querySelectorAll("math-field").forEach((field) => {
     field.addEventListener("input", () => onChange(field, readMathValue(field)));
 
     // Matematik klaviatura faqat maydonga bosilganda chiqadi
     field.addEventListener("focusin", () => {
+      configureMathKeyboard();
       window.mathVirtualKeyboard?.show?.();
     });
   });
+
+  configureMathKeyboard();
 }
 
 function askConfirm(message) {
@@ -1087,10 +1107,10 @@ const SUBJECTS = [
 const SUBJECT_PRESETS = {
   Matematika: {
     testCount: 35,
-    options: { 32: 6, 33: 6, 34: 6 },
+    options: { 33: 6, 34: 6, 35: 6 },
     textCount: 10,
     textParts: 2,
-    note: "Matematika: 35 ta test (32-34 savollar A-F), 10 ta yozma (a, b)",
+    note: "Matematika: 35 ta test (33-35 savollar A-F), 10 ta yozma (a, b)",
   },
 };
 
@@ -1502,28 +1522,14 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
 
   container.innerHTML = blocks.join("");
 
-  container.querySelectorAll('.key-row[data-kind="letters"]').forEach((row) => {
-    drawLetterGrid(row);
+  container.querySelectorAll('.key-row[data-kind="letters"]').forEach(drawLetterGrid);
 
-    row.querySelectorAll("[data-step]").forEach((stepButton) => {
-      stepButton.addEventListener("click", () => {
-        const next = Number(row.dataset.options) + Number(stepButton.dataset.step);
-        if (next < 2 || next > 8) return;
-
-        row.dataset.options = next;
-        row.querySelector(".option-count").textContent = next;
-
-        // Variantlar kamaysa, endi mavjud bo'lmagan harflar javobdan olib tashlanadi.
-        const lastLetter = String.fromCharCode(64 + next);
-        row.dataset.answer = (row.dataset.answer || "")
-          .split(",")
-          .filter((letter) => letter && letter <= lastLetter)
-          .join(",");
-
-        drawLetterGrid(row);
-      });
-    });
-  });
+  // Bitta umumiy tinglovchi: qaysi savol bosilgani har safar o'sha
+  // bosilgan harfdan aniqlanadi, shuning uchun tanlov aralashib ketmaydi.
+  container.removeEventListener("click", handleLetterClick);
+  container.removeEventListener("click", handleOptionStep);
+  container.addEventListener("click", handleLetterClick);
+  container.addEventListener("click", handleOptionStep);
 
   container.querySelectorAll("[data-part-step]").forEach((stepButton) => {
     stepButton.addEventListener("click", () => {
@@ -1566,16 +1572,39 @@ function drawLetterGrid(row) {
     const letter = String.fromCharCode(65 + index);
     return `<div class="letter-option ${selected.includes(letter) ? "selected" : ""}" data-letter="${letter}">${letter}</div>`;
   }).join("");
+}
 
-  grid.querySelectorAll(".letter-option").forEach((letterEl) => {
-    letterEl.addEventListener("click", () => {
-      // Har bir savolda faqat bitta to'g'ri javob bo'ladi — boshqasini
-      // bosganda avvalgisi bekor qilinadi.
-      row.dataset.answer = letterEl.dataset.letter;
-      grid.querySelectorAll(".letter-option").forEach((item) => item.classList.remove("selected"));
-      letterEl.classList.add("selected");
-    });
-  });
+function handleLetterClick(event) {
+  const letterEl = event.target.closest(".letter-option");
+  if (!letterEl) return;
+
+  // Tanlov faqat SHU savolning qatorida o'zgaradi — boshqa savollarga tegmaydi.
+  const row = letterEl.closest(".key-row");
+  if (!row) return;
+
+  row.dataset.answer = letterEl.dataset.letter;
+  row.querySelectorAll(".letter-option").forEach((item) => item.classList.remove("selected"));
+  letterEl.classList.add("selected");
+}
+
+function handleOptionStep(event) {
+  const stepButton = event.target.closest("[data-step]");
+  if (!stepButton) return;
+
+  const row = stepButton.closest(".key-row");
+  const next = Number(row.dataset.options) + Number(stepButton.dataset.step);
+  if (next < 2 || next > 8) return;
+
+  row.dataset.options = next;
+  row.querySelector(".option-count").textContent = next;
+
+  // Variantlar kamaysa, endi mavjud bo'lmagan harf javobdan olib tashlanadi.
+  const lastLetter = String.fromCharCode(64 + next);
+  if ((row.dataset.answer || "") > lastLetter) {
+    row.dataset.answer = "";
+  }
+
+  drawLetterGrid(row);
 }
 
 async function saveNewTest() {
