@@ -189,6 +189,7 @@ function showPage(html) {
   // Menyu avval yashiriladi — kerak bo'lsa, sahifa o'zi qaytadan ko'rsatadi.
   // Ikkalasi bitta qadamda bo'lgani uchun ekranda miltillash sezilmaydi.
   hideBottomNav();
+  document.querySelector(".sheet-backdrop")?.remove();
   unsavedChanges = false;
   setExitProtection(false);
   // Ochiq matematik klaviatura yangi sahifa ustida qolib ketmasin
@@ -675,7 +676,7 @@ function showBottomNav(activeTab) {
 
 function hideBottomNav() {
   // O'qituvchi bo'limi va maktab bo'limi menyulari — ikkalasi ham yashiriladi
-  ["bottom-nav-host", "school-nav-host"].forEach((id) => {
+  ["bottom-nav-host", "school-nav-host", "class-nav-host"].forEach((id) => {
     const host = document.getElementById(id);
     if (host) host.hidden = true;
   });
@@ -975,143 +976,427 @@ function renderCreateClass() {
       const created = await api("/api/classes", { method: "POST", body: { name } });
       myClassesCache = null;
       showToast(`✅ «${created.name}» yaratildi — endi o'quvchilarni qo'shing`);
-      renderClassStudents(created);
+      openClassTab(created, "students");
+      openAddStudentSheet(created);
     })
   );
 }
 
-// Sinf sahifasi: davomat olish, o'quvchilar, davomat tarixi
-async function renderClass(classOrId) {
-  const schoolClass = typeof classOrId === "object" ? classOrId : await api(`/api/classes/${classOrId}`);
+/* ---------- Sinf markazi: o'z pastki menyusi bilan ---------- */
 
-  showPage(`
-    ${schoolPageHeader(schoolClass.name, "back-profile")}
-    <div class="row-between" style="margin:0 0 6px">
-      <p class="subtitle" style="margin:0">👨‍🎓 ${schoolClass.students.length} ta o'quvchi</p>
-      <button type="button" class="share-pill" id="rename-class-button">✏️ Nomini o'zgartirish</button>
-    </div>
-    ${roleCard("take-attendance", "📋", "DAVOMAT OLISH", "Bugungi dars uchun bor-yo'qlama")}
-    ${roleCard("class-students", "👨‍🎓", `O'QUVCHILAR (${schoolClass.students.length})`, "Qo'shish va ro'yxatni boshqarish")}
-    ${roleCard("attendance-history", "🗂", `DAVOMAT TARIXI (${schoolClass.attendances.length})`, "Ko'rish, tahrirlash va yuborish")}
+/*
+  Sinf ichida: 📋 Davomat · 👨‍🎓 O'quvchilar · 📊 Natijalar.
+  O'quvchi sinfga BIR MARTA qo'shiladi — u davomatda ham, o'quvchi
+  profilida ham (keyinchalik natijalarda ham) avtomatik bo'ladi.
+*/
+const CLASS_TABS = [
+  { id: "attendance", icon: "📋", label: "Davomat" },
+  { id: "students", icon: "👨‍🎓", label: "O'quvchilar" },
+  { id: "results", icon: "📊", label: "Natijalar" },
+];
+
+let currentClass = null;
+
+function showClassNav(activeTab) {
+  let host = document.getElementById("class-nav-host");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "class-nav-host";
+    host.className = "bottom-nav";
+    host.innerHTML = CLASS_TABS.map(
+      (tab) => `
+        <button class="nav-item" type="button" data-class-nav="${tab.id}">
+          <span class="nav-icon">${tab.icon}</span>
+          <span>${tab.label}</span>
+        </button>`
+    ).join("");
+    document.body.appendChild(host);
+
+    host.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-class-nav]");
+      if (!button || button.classList.contains("active") || !currentClass) return;
+      openClassTab(currentClass, button.dataset.classNav);
+    });
+  }
+  host.hidden = false;
+  host.querySelectorAll(".nav-item").forEach((button) => {
+    button.classList.toggle("active", button.dataset.classNav === activeTab);
+  });
+}
+
+function openClassTab(schoolClass, tab) {
+  currentClass = schoolClass;
+  if (tab === "students") renderClassStudentsTab(schoolClass);
+  else if (tab === "results") renderClassResultsTab(schoolClass);
+  else renderClassAttendanceTab(schoolClass);
+}
+
+// Sinfni (yangi ma'lumot bilan) ochadi. Eski chaqiruvlar ham shu orqali ishlaydi.
+async function renderClass(classOrId, tab = "attendance") {
+  const id = typeof classOrId === "object" ? classOrId.id : classOrId;
+  const fresh = await api(`/api/classes/${id}`);
+  openClassTab(fresh, tab);
+}
+
+function classHeader(schoolClass, action = "") {
+  return `
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-classes" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">${escapeHtml(schoolClass.name)}</h2>
+      ${action}
+      <button type="button" class="icon-button" id="class-settings-button" aria-label="Sinf sozlamalari">⚙️</button>
+    </div>`;
+}
+
+function wireClassTab(schoolClass, tab) {
+  showClassNav(tab);
+  document.querySelector('[data-action="back-classes"]').addEventListener("click", () => renderSchoolClasses(currentSchool));
+  document.getElementById("class-settings-button").addEventListener("click", () => openClassSettings(schoolClass, tab));
+}
+
+/* --- Pastdan ochiladigan oyna (bottom sheet) --- */
+
+function openSheet(innerHtml, { onClose = null } = {}) {
+  document.querySelector(".sheet-backdrop")?.remove();
+  const backdrop = document.createElement("div");
+  backdrop.className = "sheet-backdrop";
+  backdrop.innerHTML = `<div class="sheet" role="dialog"><div class="sheet-handle"></div>${innerHtml}</div>`;
+  document.body.appendChild(backdrop);
+  requestAnimationFrame(() => backdrop.classList.add("open"));
+
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    backdrop.classList.remove("open");
+    setTimeout(() => backdrop.remove(), 200);
+    onClose?.();
+  };
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) close();
+  });
+  backdrop.querySelectorAll("[data-sheet-close]").forEach((button) => button.addEventListener("click", close));
+  return { sheet: backdrop.querySelector(".sheet"), close };
+}
+
+function openClassSettings(schoolClass, tab) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 10px">⚙️ Sinf sozlamalari</h3>
+    <label class="field-label" for="sheet-class-name">Sinf / guruh nomi</label>
+    <input class="input" id="sheet-class-name" maxlength="100" value="${escapeHtml(schoolClass.name)}" />
+    <button class="btn" id="sheet-save-name" style="margin-top:10px">💾 Nomini saqlash</button>
+    <button class="btn btn-ghost" id="sheet-delete-class" style="margin-top:8px">🗑 Sinfni o'chirish</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Yopish</button>
   `);
 
-  document.querySelector('[data-action="back-profile"]').addEventListener("click", () => renderSchoolClasses(currentSchool));
-  document.getElementById("rename-class-button").addEventListener("click", () => renderRenameClass(schoolClass));
-  document.querySelector('[data-action="take-attendance"]').addEventListener("click", () => {
+  sheet.querySelector("#sheet-save-name").addEventListener(
+    "click",
+    guarded(async () => {
+      const name = sheet.querySelector("#sheet-class-name").value.trim();
+      if (!name) throw new Error("Sinf nomini kiriting");
+      if (name !== schoolClass.name) {
+        const updated = await api(`/api/classes/${schoolClass.id}`, { method: "PUT", body: { name } });
+        myClassesCache = null;
+        showToast(`✅ Nomi o'zgartirildi: ${updated.name}`);
+        openClassTab(updated, tab);
+      }
+      close();
+    })
+  );
+
+  sheet.querySelector("#sheet-delete-class").addEventListener(
+    "click",
+    guarded(async () => {
+      const confirmed = await askConfirm(
+        `«${schoolClass.name}» sinfi ro'yxatingizdan olinsinmi? O'quvchilar va davomat tarixi bazada saqlanib qoladi.`
+      );
+      if (!confirmed) return;
+      await api(`/api/classes/${schoolClass.id}`, { method: "DELETE" });
+      myClassesCache = null;
+      close();
+      showToast("Sinf ro'yxatdan olindi");
+      renderSchoolClasses(currentSchool);
+    })
+  );
+}
+
+/* --- 📋 Davomat tabi: olish + tarix (kunlar bo'yicha) --- */
+
+function dayLabel(isoString) {
+  const date = parseUtc(isoString);
+  const today = new Date();
+  const yesterday = new Date(Date.now() - 86400000);
+  const same = (a, b) => a.toDateString() === b.toDateString();
+  if (same(date, today)) return "Bugun";
+  if (same(date, yesterday)) return "Kecha";
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()}`;
+}
+
+function timeLabel(isoString) {
+  const date = parseUtc(isoString);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function renderClassAttendanceTab(schoolClass) {
+  currentClass = schoolClass;
+  const groups = [];
+  schoolClass.attendances.forEach((item) => {
+    const label = dayLabel(item.taken_at);
+    if (!groups.length || groups[groups.length - 1].label !== label) groups.push({ label, items: [] });
+    groups[groups.length - 1].items.push(item);
+  });
+
+  const historyHtml = groups.length
+    ? groups
+        .map(
+          (group) => `
+            <p class="section-label" style="margin-top:16px">${group.label.toUpperCase()}</p>
+            <div class="panel pick-list">
+              ${group.items
+                .map(
+                  (item) => `
+                    <button type="button" class="pick-item" data-attendance-id="${item.id}">
+                      <span class="pick-title">🕘 ${timeLabel(item.taken_at)}${item.subject ? ` · ${escapeHtml(item.subject)}` : ""}
+                        <small>✅ ${item.counts.present} · ❌ ${item.counts.absent} · 🟡 ${item.counts.excused} · ⏰ ${item.counts.late}${
+                          item.updated_at ? " · ✏️ tahrirlangan" : ""
+                        }</small>
+                      </span>
+                      <span>›</span>
+                    </button>`
+                )
+                .join("")}
+            </div>`
+        )
+        .join("")
+    : `<p class="subtitle" style="margin-top:14px">Hali davomat olinmagan. Birinchi davomatni oling!</p>`;
+
+  showPage(`
+    <div data-class-tab="attendance">
+      ${classHeader(schoolClass)}
+      <button class="btn att-take-button" id="take-attendance-button">📋 Davomat olish</button>
+      <p class="subtitle" style="margin:6px 0 0;text-align:center">👨‍🎓 ${schoolClass.students.length} ta o'quvchi · hamma oldindan "Bor"</p>
+      ${historyHtml}
+    </div>
+  `);
+
+  wireClassTab(schoolClass, "attendance");
+  document.getElementById("take-attendance-button").addEventListener("click", () => {
     if (!schoolClass.students.length) {
       showToast("Avval sinfga o'quvchilarni qo'shing");
-      renderClassStudents(schoolClass);
+      openClassTab(schoolClass, "students");
+      openAddStudentSheet(schoolClass);
       return;
     }
     renderAttendanceForm(schoolClass);
   });
-  document.querySelector('[data-action="class-students"]').addEventListener("click", () => renderClassStudents(schoolClass));
-  document.querySelector('[data-action="attendance-history"]').addEventListener("click", () => renderAttendanceHistory(schoolClass));
-}
-
-function renderRenameClass(schoolClass) {
-  showPage(`
-    ${schoolPageHeader("Sinf nomini o'zgartirish", "back-class")}
-    <label class="field-label" for="class-name-input">Sinf / guruh nomi</label>
-    <input class="input" id="class-name-input" maxlength="100" value="${escapeHtml(schoolClass.name)}"
-           placeholder="Masalan: 10/2, Iqtisod guruhi" />
-    <p class="subtitle" style="margin:6px 0 0">O'quvchilar va davomat tarixi o'zgarmaydi.</p>
-    <button class="btn" id="save-class-name" style="margin-top:14px">💾 Saqlash</button>
-  `);
-
-  const input = document.getElementById("class-name-input");
-  input.focus();
-  input.select();
-  input.addEventListener("input", markUnsaved);
-
-  document.querySelector('[data-action="back-class"]').addEventListener(
-    "click",
-    guarded(async () => {
-      if (await confirmLeave()) await renderClass(schoolClass);
-    })
-  );
-
-  const save = guarded(async () => {
-    const name = input.value.trim();
-    if (!name) throw new Error("Sinf nomini kiriting");
-    if (name === schoolClass.name) {
-      await renderClass(schoolClass);
-      return;
-    }
-    const updated = await api(`/api/classes/${schoolClass.id}`, { method: "PUT", body: { name } });
-    myClassesCache = null;
-    showToast(`✅ Nomi o'zgartirildi: ${updated.name}`);
-    await renderClass(updated);
-  });
-  document.getElementById("save-class-name").addEventListener("click", save);
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") save(event);
+  document.querySelectorAll("[data-attendance-id]").forEach((item) => {
+    item.addEventListener("click", guarded(() => renderAttendanceDetail(Number(item.dataset.attendanceId), schoolClass)));
   });
 }
 
-function renderClassStudents(schoolClass) {
+/* --- 👨‍🎓 O'quvchilar tabi --- */
+
+function rateBadge(stats) {
+  if (!stats || stats.rate === null || stats.rate === undefined) return `<span class="rate-badge none">—</span>`;
+  const level = stats.rate >= 90 ? "good" : stats.rate >= 70 ? "mid" : "low";
+  return `<span class="rate-badge ${level}">${stats.rate}%</span>`;
+}
+
+function initials(name) {
+  const parts = String(name || "?").trim().split(/\s+/);
+  return escapeHtml(((parts[0] || "?").charAt(0) + (parts[1] || "").charAt(0)).toUpperCase());
+}
+
+function renderClassStudentsTab(schoolClass) {
+  currentClass = schoolClass;
   const rows = schoolClass.students.length
     ? schoolClass.students
         .map(
-          (student, index) => `
-            <div class="member-line">
-              <div class="member-avatar">${index + 1}</div>
-              <div class="member-info">
+          (student) => `
+            <button type="button" class="student-card" data-student-id="${student.id}">
+              <span class="student-avatar">${initials(student.full_name)}</span>
+              <span class="student-info">
                 <b>${escapeHtml(student.full_name)}</b>
-                ${student.birth_date ? `<small>🎂 ${formatBirthDate(student.birth_date)}</small>` : ""}
-              </div>
-              <button type="button" class="subject-remove" data-remove-student="${student.id}" aria-label="Chiqarish">✕</button>
-            </div>`
+                <small>${student.birth_date ? `🎂 ${formatBirthDate(student.birth_date)}` : "Tug'ilgan sana kiritilmagan"}</small>
+              </span>
+              ${rateBadge(student.stats)}
+            </button>`
         )
         .join("")
-    : `<p class="subtitle" style="padding:12px 14px;margin:0">Hali o'quvchi qo'shilmagan.</p>`;
+    : `<div class="empty-state">
+         <div style="font-size:42px">👨‍🎓</div>
+         <p>Sinfda hali o'quvchi yo'q.</p>
+         <p class="subtitle">Tepadagi "➕ Qo'shish" bilan o'quvchilarni qo'shing — ular davomatda va boshqa bo'limlarda o'zi chiqadi.</p>
+       </div>`;
 
   showPage(`
-    ${schoolPageHeader(`${schoolClass.name} — o'quvchilar`, "back-class")}
-    <div class="card" style="cursor:default;display:block">
-      <label class="field-label" for="student-name-input" style="margin-top:0">Ism-familiya</label>
-      <input class="input" id="student-name-input" maxlength="200" placeholder="Masalan: Islom Karimov" />
-      <label class="field-label" for="student-birth-input">Tug'ilgan sana (ixtiyoriy)</label>
-      <input class="input" id="student-birth-input" type="date" />
-      <button class="btn" id="add-student-button" style="margin-top:10px">➕ O'quvchi qo'shish</button>
+    <div data-class-tab="students">
+      ${classHeader(schoolClass, `<button type="button" class="share-pill" id="add-student-pill">➕ Qo'shish</button>`)}
+      <p class="subtitle" style="margin:0 0 10px">${schoolClass.students.length} ta o'quvchi · % — darsda qatnashish</p>
+      <div class="student-list">${rows}</div>
     </div>
-    <p class="section-label" style="margin-top:18px">RO'YXAT (${schoolClass.students.length})</p>
-    <div class="panel" style="padding:4px 0">${rows}</div>
   `);
 
-  document.querySelector('[data-action="back-class"]').addEventListener("click", () => renderClass(schoolClass));
-  const nameInput = document.getElementById("student-name-input");
-  nameInput.focus();
+  wireClassTab(schoolClass, "students");
+  document.getElementById("add-student-pill").addEventListener("click", () => openAddStudentSheet(schoolClass));
+  document.querySelectorAll("[data-student-id]").forEach((card) => {
+    card.addEventListener("click", guarded(() => renderStudentProfile(schoolClass, Number(card.dataset.studentId))));
+  });
+}
+
+function openAddStudentSheet(schoolClass) {
+  let addedCount = 0;
+  // Oyna yopilganda (Tayyor yoki orqa fonga bosilsa) ro'yxat yangilanadi
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 4px">➕ O'quvchi qo'shish</h3>
+    <p class="subtitle" style="margin:0 0 8px">Ketma-ket qo'shavering — har biridan keyin maydon tozalanadi.</p>
+    <label class="field-label" for="sheet-student-name">Ism-familiya</label>
+    <input class="input" id="sheet-student-name" maxlength="200" placeholder="Masalan: Islom Karimov" enterkeyhint="next" />
+    <label class="field-label" for="sheet-student-birth">Tug'ilgan sana (ixtiyoriy)</label>
+    <input class="input" id="sheet-student-birth" type="date" />
+    <button class="btn" id="sheet-add-student" style="margin-top:10px">➕ Qo'shish</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Tayyor</button>
+    <p class="subtitle" id="sheet-added" style="margin:8px 0 0"></p>
+  `, {
+    onClose: () => {
+      if (addedCount) openClassTab(currentClass, "students");
+    },
+  });
+
+  const nameInput = sheet.querySelector("#sheet-student-name");
+  const birthInput = sheet.querySelector("#sheet-student-birth");
+  setTimeout(() => nameInput.focus(), 250);
 
   const add = guarded(async () => {
     const fullName = nameInput.value.trim();
     if (fullName.length < 2) throw new Error("O'quvchining ism-familiyasini kiriting");
-    const birthDate = document.getElementById("student-birth-input").value || null;
     const updated = await api(`/api/classes/${schoolClass.id}/students`, {
       method: "POST",
-      body: { full_name: fullName, birth_date: birthDate },
+      body: { full_name: fullName, birth_date: birthInput.value || null },
     });
     myClassesCache = null;
-    showToast(`✅ ${fullName} qo'shildi`);
-    renderClassStudents(updated);
+    addedCount += 1;
+    currentClass = updated;
+    sheet.querySelector("#sheet-added").textContent = `✅ ${fullName} qo'shildi (jami: ${addedCount})`;
+    nameInput.value = "";
+    birthInput.value = "";
+    nameInput.focus();
   });
-  document.getElementById("add-student-button").addEventListener("click", add);
+
+  sheet.querySelector("#sheet-add-student").addEventListener("click", add);
   nameInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") add(event);
   });
+  return close;
+}
 
-  document.querySelectorAll("[data-remove-student]").forEach((button) => {
-    button.addEventListener(
+async function renderStudentProfile(schoolClass, studentId) {
+  const student = await api(`/api/classes/${schoolClass.id}/students/${studentId}`);
+  const stats = student.stats;
+
+  const historyHtml = student.history.length
+    ? student.history
+        .map(
+          (item) => `
+            <div class="att-row" style="cursor:default">
+              <span class="att-name">${dayLabel(item.taken_at)} · ${timeLabel(item.taken_at)}
+                ${item.subject ? `<small class="subtitle" style="display:block;margin:0">${escapeHtml(item.subject)}</small>` : ""}
+              </span>
+              <span class="att-status ${item.status}">${ATTENDANCE_STATE_BY_ID[item.status].icon} ${ATTENDANCE_STATE_BY_ID[item.status].label}</span>
+            </div>`
+        )
+        .join("")
+    : `<p class="subtitle" style="padding:12px 14px;margin:0">Hali davomat olinmagan.</p>`;
+
+  showPage(`
+    ${schoolPageHeader(student.full_name, "back-students")}
+    <div class="card" style="cursor:default">
+      <span class="student-avatar" style="width:56px;height:56px;font-size:20px">${initials(student.full_name)}</span>
+      <div class="card-body" style="width:100%">
+        <h3 style="margin:0">${escapeHtml(student.full_name)}</h3>
+        <p style="margin:4px 0 0">📚 ${escapeHtml(student.class_name)}</p>
+        <p class="subtitle" style="margin:2px 0 0">${student.birth_date ? `🎂 ${formatBirthDate(student.birth_date)}` : "Tug'ilgan sana kiritilmagan"}</p>
+      </div>
+      ${rateBadge(stats)}
+    </div>
+
+    <div class="stats-grid" style="margin-top:12px">
+      <div class="stat-tile"><span class="stat-value" style="color:#1e9e4a">${stats.present}</span>Bor</div>
+      <div class="stat-tile"><span class="stat-value" style="color:#d93636">${stats.absent}</span>Yo'q</div>
+      <div class="stat-tile"><span class="stat-value" style="color:#e0a800">${stats.excused}</span>Sababli</div>
+      <div class="stat-tile"><span class="stat-value" style="color:#2e75b6">${stats.late}</span>Kechikdi</div>
+    </div>
+
+    <div class="row-between" style="gap:8px;margin-top:12px">
+      <button class="btn btn-ghost" id="edit-student-button" style="margin:0">✏️ Tahrirlash</button>
+      <button class="btn btn-ghost" id="remove-student-button" style="margin:0">🚪 Sinfdan chiqarish</button>
+    </div>
+
+    <p class="section-label" style="margin-top:18px">DARSLAR TARIXI (${stats.total})</p>
+    <div class="panel" style="padding:4px 0">${historyHtml}</div>
+  `);
+
+  document.querySelector('[data-action="back-students"]').addEventListener("click", guarded(() => renderClass(schoolClass.id, "students")));
+
+  document.getElementById("edit-student-button").addEventListener("click", () => {
+    const { sheet, close } = openSheet(`
+      <h3 style="margin:0 0 10px">✏️ O'quvchini tahrirlash</h3>
+      <label class="field-label" for="sheet-edit-name">Ism-familiya</label>
+      <input class="input" id="sheet-edit-name" maxlength="200" value="${escapeHtml(student.full_name)}" />
+      <label class="field-label" for="sheet-edit-birth">Tug'ilgan sana (ixtiyoriy)</label>
+      <input class="input" id="sheet-edit-birth" type="date" value="${student.birth_date || ""}" />
+      <button class="btn" id="sheet-save-student" style="margin-top:10px">💾 Saqlash</button>
+      <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+    `);
+    sheet.querySelector("#sheet-save-student").addEventListener(
       "click",
       guarded(async () => {
-        const student = schoolClass.students.find((item) => item.id === Number(button.dataset.removeStudent));
-        if (!(await askConfirm(`${student.full_name} sinfdan chiqarilsinmi? Eski davomatlarda u saqlanib qoladi.`))) return;
-        const updated = await api(`/api/classes/${schoolClass.id}/students/${student.id}`, { method: "DELETE" });
+        const fullName = sheet.querySelector("#sheet-edit-name").value.trim();
+        if (fullName.length < 2) throw new Error("Ism-familiyani kiriting");
+        await api(`/api/classes/${schoolClass.id}/students/${student.id}`, {
+          method: "PUT",
+          body: { full_name: fullName, birth_date: sheet.querySelector("#sheet-edit-birth").value || null },
+        });
         myClassesCache = null;
-        renderClassStudents(updated);
+        close();
+        showToast("✅ Saqlandi");
+        await renderStudentProfile(schoolClass, student.id);
       })
     );
   });
+
+  document.getElementById("remove-student-button").addEventListener(
+    "click",
+    guarded(async () => {
+      if (!(await askConfirm(`${student.full_name} sinfdan chiqarilsinmi? Eski davomatlarda u saqlanib qoladi.`))) return;
+      await api(`/api/classes/${schoolClass.id}/students/${student.id}`, { method: "DELETE" });
+      myClassesCache = null;
+      showToast("O'quvchi sinfdan chiqarildi");
+      await renderClass(schoolClass.id, "students");
+    })
+  );
+}
+
+/* --- 📊 Natijalar tabi --- */
+
+function renderClassResultsTab(schoolClass) {
+  currentClass = schoolClass;
+  showPage(`
+    <div data-class-tab="results">
+      ${classHeader(schoolClass)}
+      <div class="empty-state">
+        <div style="font-size:42px">📊</div>
+        <p><b>Test natijalari — tez orada</b></p>
+        <p class="subtitle">
+          Sinf o'quvchilari testlarga bog'langach, har birining natijalari shu yerda va o'quvchi
+          profilida ko'rinadi. O'quvchilarni qayta qo'shish shart bo'lmaydi.
+        </p>
+      </div>
+    </div>
+  `);
+  wireClassTab(schoolClass, "results");
 }
 
 function attendanceSubjectFieldHtml(current = "") {
@@ -1266,34 +1551,6 @@ function renderAttendanceShare(attendance, schoolClass, { justSaved = false } = 
   });
 }
 
-function renderAttendanceHistory(schoolClass) {
-  const rows = schoolClass.attendances.length
-    ? schoolClass.attendances
-        .map(
-          (item) => `
-            <button type="button" class="pick-item" data-attendance-id="${item.id}">
-              <span class="pick-title">🗓 ${formatDateTime(item.taken_at)}${item.subject ? ` · ${escapeHtml(item.subject)}` : ""}
-                <small>✅ ${item.counts.present} · ❌ ${item.counts.absent} · 🟡 ${item.counts.excused} · ⏰ ${item.counts.late}${
-                  item.updated_at ? " · ✏️ tahrirlangan" : ""
-                }</small>
-              </span>
-              <span>›</span>
-            </button>`
-        )
-        .join("")
-    : `<p class="subtitle" style="padding:12px 14px;margin:0">Hali davomat olinmagan.</p>`;
-
-  showPage(`
-    ${schoolPageHeader(`${schoolClass.name} — tarix`, "back-class")}
-    <div class="panel pick-list">${rows}</div>
-  `);
-
-  document.querySelector('[data-action="back-class"]').addEventListener("click", () => renderClass(schoolClass));
-  document.querySelectorAll("[data-attendance-id]").forEach((item) => {
-    item.addEventListener("click", guarded(() => renderAttendanceDetail(Number(item.dataset.attendanceId), schoolClass)));
-  });
-}
-
 async function renderAttendanceDetail(attendanceId, schoolClass) {
   const attendance = await api(`/api/attendance/${attendanceId}`);
 
@@ -1323,7 +1580,7 @@ async function renderAttendanceDetail(attendanceId, schoolClass) {
 
   document.querySelector('[data-action="back-history"]').addEventListener(
     "click",
-    guarded(async () => renderAttendanceHistory(await api(`/api/classes/${schoolClass.id}`)))
+    guarded(() => renderClass(schoolClass.id, "attendance"))
   );
   document.getElementById("edit-attendance-button").addEventListener("click", () => renderAttendanceForm(schoolClass, attendance));
   document.getElementById("share-attendance-button").addEventListener("click", () => renderAttendanceShare(attendance, schoolClass));

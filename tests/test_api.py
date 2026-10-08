@@ -1144,6 +1144,15 @@ def test_davomat_olish_tahrirlash_va_vaqtlar():
     history = client.get(f"/api/classes/{cid}", headers=as_user(701)).json()["attendances"]
     assert len(history) == 1 and history[0]["subject"] == "Matematika"
 
+    # O'quvchi profili: statistika va darslar tarixi (kechikkan ham qatnashgan hisoblanadi)
+    profile = client.get(f"/api/classes/{cid}/students/{ids['Ali Valiyev']}", headers=as_user(701)).json()
+    assert profile["stats"]["late"] == 1 and profile["stats"]["total"] == 1 and profile["stats"]["rate"] == 100, profile
+    assert profile["history"][0]["status"] == "late" and profile["history"][0]["subject"] == "Matematika"
+    dilnoza = client.get(f"/api/classes/{cid}/students/{ids['Dilnoza Aliyeva']}", headers=as_user(701)).json()
+    assert dilnoza["stats"]["excused"] == 1 and dilnoza["stats"]["rate"] == 0, dilnoza["stats"]
+    students = client.get(f"/api/classes/{cid}", headers=as_user(701)).json()["students"]
+    assert all("stats" in student for student in students)
+
     # Begona o'qituvchi ko'ra olmaydi
     _set_name(709, "Begona", "Odam")
     assert client.get(f"/api/attendance/{attendance['id']}", headers=as_user(709)).status_code == 404

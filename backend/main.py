@@ -3635,6 +3635,27 @@ def _attendance_view(attendance: Attendance) -> dict:
     }
 
 
+def _student_attendance_stats(db: Session, student_ids: list[int]) -> dict[int, dict]:
+    """Har bir o'quvchi bo'yicha: necha darsda bor/yo'q/sababli/kechikkan — bitta so'rovda."""
+
+    stats = {sid: {status: 0 for status in ATTENDANCE_LABELS} for sid in student_ids}
+    if not student_ids:
+        return stats
+    rows = db.execute(
+        select(AttendanceMark.student_id, AttendanceMark.status, func.count())
+        .where(AttendanceMark.student_id.in_(student_ids))
+        .group_by(AttendanceMark.student_id, AttendanceMark.status)
+    ).all()
+    for student_id, status, count in rows:
+        stats[student_id][status] = count
+    for item in stats.values():
+        item["total"] = sum(item[status] for status in ATTENDANCE_LABELS)
+        # Kechikkan ham darsda bo'lgan hisoblanadi
+        attended = item["present"] + item["late"]
+        item["rate"] = round(attended / item["total"] * 100) if item["total"] else None
+    return stats
+
+
 def _class_view(db: Session, school_class: SchoolClass, with_details: bool = False) -> dict:
     students = _active_students(school_class)
     view = {
@@ -3644,8 +3665,14 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
         "created_at": school_class.created_at,
     }
     if with_details:
+        stats = _student_attendance_stats(db, [student.id for student in students])
         view["students"] = [
-            {"id": student.id, "full_name": student.full_name, "birth_date": student.birth_date}
+            {
+                "id": student.id,
+                "full_name": student.full_name,
+                "birth_date": student.birth_date,
+                "stats": stats[student.id],
+            }
             for student in students
         ]
         recent = db.scalars(
@@ -3763,6 +3790,39 @@ def edit_student(
     db.commit()
     db.refresh(school_class)
     return _class_view(db, school_class, with_details=True)
+
+
+@app.get("/api/classes/{class_id}/students/{student_id}")
+def student_profile(class_id: int, student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """O'quvchi haqida: ma'lumotlari, davomat statistikasi va har darsdagi holati."""
+
+    school_class = _own_class(db, user, class_id)
+    student = db.get(ClassStudent, student_id)
+    if not student or student.class_id != school_class.id:
+        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+
+    history = db.execute(
+        select(Attendance.id, Attendance.taken_at, Attendance.subject, AttendanceMark.status)
+        .join(AttendanceMark, AttendanceMark.attendance_id == Attendance.id)
+        .where(AttendanceMark.student_id == student.id)
+        .order_by(Attendance.taken_at.desc())
+        .limit(100)
+    ).all()
+
+    return {
+        "id": student.id,
+        "class_id": school_class.id,
+        "class_name": school_class.name,
+        "full_name": student.full_name,
+        "birth_date": student.birth_date,
+        "created_at": student.created_at,
+        "removed": student.removed_at is not None,
+        "stats": _student_attendance_stats(db, [student.id])[student.id],
+        "history": [
+            {"attendance_id": aid, "taken_at": taken_at, "subject": subject, "status": status}
+            for aid, taken_at, subject, status in history
+        ],
+    }
 
 
 @app.delete("/api/classes/{class_id}/students/{student_id}")

@@ -1717,3 +1717,142 @@ select option {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ========== Sinf markazi ========== */
+
+.att-take-button {
+  min-height: 58px;
+  font-size: 17px;
+  margin-top: 4px;
+}
+
+/* O'quvchilar ro'yxati — kartalar */
+.student-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.student-card {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  font-family: inherit;
+  color: var(--color-text);
+  text-align: left;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.student-card:active {
+  transform: scale(0.98);
+}
+
+.student-avatar {
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--color-primary), var(--color-accent));
+  border-radius: 50%;
+}
+
+.student-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.student-info small {
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+}
+
+/* Davomat foizi: yashil 90+, sariq 70+, qizil — past */
+.rate-badge {
+  flex-shrink: 0;
+  min-width: 52px;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  border-radius: 999px;
+}
+
+.rate-badge.good {
+  color: #ffffff;
+  background: #1e9e4a;
+}
+
+.rate-badge.mid {
+  color: #1f2937;
+  background: #e0a800;
+}
+
+.rate-badge.low {
+  color: #ffffff;
+  background: #d93636;
+}
+
+.rate-badge.none {
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+.empty-state {
+  margin-top: 30px;
+  text-align: center;
+}
+
+/* Pastdan ochiladigan oyna (bottom sheet) */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0);
+  transition: background-color 0.2s ease;
+}
+
+.sheet-backdrop.open {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.sheet {
+  width: 100%;
+  max-width: 520px;
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: 10px 16px calc(18px + env(safe-area-inset-bottom));
+  background: var(--color-bg);
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.3);
+  transform: translateY(100%);
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.sheet-backdrop.open .sheet {
+  transform: translateY(0);
+}
+
+.sheet-handle {
+  width: 40px;
+  height: 4px;
+  margin: 0 auto 12px;
+  background: var(--color-border);
+  border-radius: 999px;
+}
