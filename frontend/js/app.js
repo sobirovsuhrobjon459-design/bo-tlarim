@@ -931,45 +931,68 @@ function renderPrivateSchoolStart() {
   `);
 
   document.querySelector('[data-action="back-folder"]').addEventListener("click", renderSchoolFolder);
-  document.querySelector('[data-action="school-join"]').addEventListener("click", guarded(() => renderRegionPicker("join")));
-  document.querySelector('[data-action="school-register"]').addEventListener("click", guarded(() => renderRegionPicker("register")));
+  document.querySelector('[data-action="school-join"]').addEventListener("click", guarded(() => renderJoinBrowser()));
+  document.querySelector('[data-action="school-register"]').addEventListener("click", guarded(() => renderCreateSchool()));
 }
 
-async function renderRegionPicker(mode) {
+/*
+  Viloyat va tuman — ikkita ochiluvchi ro'yxat (select). Tuman ro'yxati faqat
+  viloyat tanlangach ochiladi va faqat o'sha viloyatning tumanlarini ko'rsatadi.
+  Oxirgi tanlov eslab qolinadi: orqaga qaytilganda qayta tanlash shart emas.
+*/
+let lastSchoolPlace = { region: "", district: "" };
+
+function locationSelectsHtml({ allDistricts = false } = {}) {
+  return `
+    <label class="field-label" for="place-region">Viloyat</label>
+    <select id="place-region"><option value="">Viloyatni tanlang</option></select>
+    <label class="field-label" for="place-district">Tuman / shahar</label>
+    <select id="place-district" disabled>
+      <option value="">${allDistricts ? "Barcha tumanlar" : "Avval viloyatni tanlang"}</option>
+    </select>`;
+}
+
+async function wireLocationSelects({ allDistricts = false, onChange }) {
   const regions = await loadRegions();
-  const isJoin = mode === "join";
+  const regionSelect = document.getElementById("place-region");
+  const districtSelect = document.getElementById("place-district");
 
-  showPage(`
-    ${schoolPageHeader(isJoin ? "Maktabga kirish" : "Maktabni ro'yxatdan o'tkazish", "back-start")}
-    ${
-      isJoin
-        ? `<div class="card" data-action="code-only">
-             <div class="card-icon">⌨️</div>
-             <div class="card-body"><h3>Kodim bor</h3><p>Maktab kodini to'g'ridan-to'g'ri kiritish</p></div>
-           </div>`
-        : ""
-    }
-    <p class="section-label" style="margin-top:14px">VILOYATNI TANLANG</p>
-    <div class="panel pick-list">
-      ${regions
-        .map((region, index) => `<button type="button" class="pick-item" data-region="${index}">${escapeHtml(region.name)}<span>›</span></button>`)
-        .join("")}
-    </div>
-  `);
-
-  document.querySelector('[data-action="back-start"]').addEventListener("click", renderPrivateSchoolStart);
-  document.querySelector('[data-action="code-only"]')?.addEventListener(
-    "click",
-    guarded(() => renderJoinSchool({ onBack: () => renderRegionPicker("join") }))
+  regionSelect.insertAdjacentHTML(
+    "beforeend",
+    regions.map((region) => `<option value="${escapeHtml(region.name)}">${escapeHtml(region.name)}</option>`).join("")
   );
-  document.querySelectorAll("[data-region]").forEach((item) => {
-    const region = regions[Number(item.dataset.region)];
-    item.addEventListener("click", guarded(() => (isJoin ? renderRegionSchools(region) : renderRegisterRegion(region))));
+
+  const fillDistricts = (keepDistrict = "") => {
+    const region = regions.find((item) => item.name === regionSelect.value);
+    const placeholder = region ? (allDistricts ? "Barcha tumanlar" : "Tumanni tanlang") : "Avval viloyatni tanlang";
+    districtSelect.innerHTML =
+      `<option value="">${placeholder}</option>` +
+      (region ? region.districts.map((d) => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join("") : "");
+    districtSelect.disabled = !region;
+    if (keepDistrict && region?.districts.includes(keepDistrict)) districtSelect.value = keepDistrict;
+  };
+
+  const notify = () => {
+    lastSchoolPlace = { region: regionSelect.value, district: districtSelect.value };
+    onChange?.(lastSchoolPlace);
+  };
+
+  regionSelect.addEventListener("change", () => {
+    fillDistricts();
+    notify();
   });
+  districtSelect.addEventListener("change", notify);
+
+  // Oldingi tanlovni tiklash
+  if (lastSchoolPlace.region && regions.some((region) => region.name === lastSchoolPlace.region)) {
+    regionSelect.value = lastSchoolPlace.region;
+    fillDistricts(lastSchoolPlace.district);
+  }
+  notify();
 }
 
 function schoolListHtml(schools, emptyText) {
-  if (!schools.length) return `<p class="subtitle">${emptyText}</p>`;
+  if (!schools.length) return `<p class="subtitle" style="margin:8px 0 0">${emptyText}</p>`;
   return `
     <div class="panel pick-list">
       ${schools
@@ -986,59 +1009,63 @@ function schoolListHtml(schools, emptyText) {
     </div>`;
 }
 
-async function fetchSchools(region, district = "") {
-  const query = `region=${encodeURIComponent(region.name)}${district ? `&district=${encodeURIComponent(district)}` : ""}`;
+async function fetchSchools(regionName, district = "") {
+  const query = `region=${encodeURIComponent(regionName)}${district ? `&district=${encodeURIComponent(district)}` : ""}`;
   return api(`/api/schools?${query}`);
 }
 
-// Kirish yo'li: viloyatdagi barcha maktablar — o'zinikini tanlaydi
-async function renderRegionSchools(region) {
-  const schools = await fetchSchools(region);
+/*
+  Tanlangan joydagi maktablar ro'yxatini yangilaydi. Tez-tez almashtirilsa,
+  faqat oxirgi so'rov natijasi ko'rsatiladi (eski javob ustiga yozib qo'ymasin).
+*/
+let schoolListRequest = 0;
 
-  showPage(`
-    ${schoolPageHeader(region.name, "back-regions")}
-    <p class="section-label">BU VILOYATDAGI MAKTABLAR (${schools.length})</p>
-    ${schoolListHtml(schools, "Bu viloyatda hali xususiy maktab ro'yxatdan o'tmagan.")}
-    <p class="subtitle" style="margin-top:8px">Maktabingizni tanlang — kirish uchun maktab kodi kerak bo'ladi.</p>
-  `);
+async function showSchoolsFor(place, container, { emptyText, onPick }) {
+  const requestId = ++schoolListRequest;
+  if (!place.region) {
+    container.innerHTML = "";
+    return;
+  }
 
-  document.querySelector('[data-action="back-regions"]').addEventListener("click", guarded(() => renderRegionPicker("join")));
-  document.querySelectorAll("[data-school-index]").forEach((item) => {
-    const school = schools[Number(item.dataset.schoolIndex)];
-    item.addEventListener("click", guarded(() => renderJoinSchool({ school, onBack: () => renderRegionSchools(region) })));
+  container.innerHTML = `<p class="subtitle" style="margin:8px 0 0">⏳ Yuklanmoqda...</p>`;
+  let schools;
+  try {
+    schools = await fetchSchools(place.region, place.district);
+  } catch (error) {
+    if (requestId === schoolListRequest) container.innerHTML = `<p class="subtitle">${escapeHtml(error.message)}</p>`;
+    return;
+  }
+  if (requestId !== schoolListRequest || !container.isConnected) return;
+
+  container.innerHTML = schoolListHtml(schools, emptyText);
+  container.querySelectorAll("[data-school-index]").forEach((item) => {
+    item.addEventListener("click", guarded(() => onPick(schools[Number(item.dataset.schoolIndex)])));
   });
 }
 
-// Ro'yxatdan o'tkazish yo'li: avval shu viloyatda ochilgan maktablar, keyin tumanlar
-async function renderRegisterRegion(region) {
-  const schools = await fetchSchools(region);
-
+// 🔑 Maktabga kirish: viloyat/tuman tanlanadi, pastda maktablar ro'yxati
+async function renderJoinBrowser() {
   showPage(`
-    ${schoolPageHeader(region.name, "back-regions")}
-    ${
-      schools.length
-        ? `<p class="section-label">BU VILOYATDA OCHILGAN MAKTABLAR (${schools.length})</p>
-           ${schoolListHtml(schools, "")}
-           <p class="subtitle" style="margin-top:8px">
-             Maktabingiz shu ro'yxatda bo'lsa — yangisini ochmang, uni tanlab qo'shiling.
-           </p>`
-        : `<p class="subtitle">Bu viloyatda hali xususiy maktab ochilmagan — birinchi bo'lib oching!</p>`
-    }
-    <p class="section-label" style="margin-top:18px">YANGI MAKTAB OCHISH — TUMANNI TANLANG</p>
-    <div class="panel pick-list">
-      ${region.districts
-        .map((district, index) => `<button type="button" class="pick-item" data-district="${index}">${escapeHtml(district)}<span>›</span></button>`)
-        .join("")}
-    </div>
+    ${schoolPageHeader("Maktabga kirish", "back-start")}
+    ${locationSelectsHtml({ allDistricts: true })}
+    <p class="section-label" style="margin-top:18px">MAKTABLAR</p>
+    <div id="school-results"><p class="subtitle" style="margin:8px 0 0">Viloyatni tanlang — u yerdagi maktablar shu yerda chiqadi.</p></div>
+    <button type="button" class="btn btn-ghost" id="code-only" style="margin-top:18px">⌨️ Kodim bor — to'g'ridan-to'g'ri kirish</button>
   `);
 
-  document.querySelector('[data-action="back-regions"]').addEventListener("click", guarded(() => renderRegionPicker("register")));
-  document.querySelectorAll("[data-school-index]").forEach((item) => {
-    const school = schools[Number(item.dataset.schoolIndex)];
-    item.addEventListener("click", guarded(() => renderJoinSchool({ school, onBack: () => renderRegisterRegion(region) })));
-  });
-  document.querySelectorAll("[data-district]").forEach((item) => {
-    item.addEventListener("click", guarded(() => renderCreateSchool(region, region.districts[Number(item.dataset.district)])));
+  document.querySelector('[data-action="back-start"]').addEventListener("click", renderPrivateSchoolStart);
+  document.getElementById("code-only").addEventListener("click", guarded(() => renderJoinSchool({ onBack: renderJoinBrowser })));
+
+  const results = document.getElementById("school-results");
+  await wireLocationSelects({
+    allDistricts: true,
+    onChange: (place) =>
+      place.region
+        ? showSchoolsFor(place, results, {
+            emptyText: "Bu yerda hali xususiy maktab ro'yxatdan o'tmagan.",
+            onPick: (school) => renderJoinSchool({ school, onBack: renderJoinBrowser }),
+          })
+        : (results.innerHTML = `<p class="subtitle" style="margin:8px 0 0">Viloyatni tanlang — u yerdagi maktablar shu yerda chiqadi.</p>`),
   });
 }
 
@@ -1122,16 +1149,14 @@ function protectSchoolForm() {
   });
 }
 
-async function renderCreateSchool(region, district) {
+// 📝 Maktabni ro'yxatdan o'tkazish — hammasi bitta formada
+async function renderCreateSchool() {
   const nameFields = await profileNameFieldsHtml();
 
   showPage(`
-    ${schoolPageHeader("Maktab ochish", "back-districts")}
-    <div class="card" style="cursor:default">
-      <div class="card-body">
-        <p style="margin:0">📍 <b>${escapeHtml(region.name)}</b>, ${escapeHtml(district)}</p>
-      </div>
-    </div>
+    ${schoolPageHeader("Maktabni ro'yxatdan o'tkazish", "back-start")}
+    ${locationSelectsHtml()}
+    <div id="existing-schools"></div>
 
     <label class="field-label" for="school-name-input">Maktab nomi</label>
     <input class="input" id="school-name-input" placeholder="Masalan: Kelajak xususiy maktabi" />
@@ -1146,16 +1171,42 @@ async function renderCreateSchool(region, district) {
 
   protectSchoolForm();
   wireSubjectChips();
-  document.querySelector('[data-action="back-districts"]').addEventListener(
+  document.querySelector('[data-action="back-start"]').addEventListener(
     "click",
     guarded(async () => {
-      if (await confirmLeave()) await renderRegisterRegion(region);
+      if (await confirmLeave()) renderPrivateSchoolStart();
     })
   );
+
+  // Viloyat tanlanishi bilan shu yerda ochilgan maktablar ko'rinadi —
+  // o'qituvchining maktabi bor bo'lsa, yangisini ochmay, unga qo'shiladi.
+  const existing = document.getElementById("existing-schools");
+  await wireLocationSelects({
+    onChange: async (place) => {
+      if (!place.region) {
+        existing.innerHTML = "";
+        return;
+      }
+      existing.innerHTML = `
+        <p class="section-label" style="margin-top:16px">${place.district ? "BU TUMANDA" : "BU VILOYATDA"} OCHILGAN MAKTABLAR</p>
+        <div id="existing-list"></div>
+        <p class="subtitle" style="margin:6px 0 0">Maktabingiz ro'yxatda bo'lsa — yangisini ochmang, uni bosib qo'shiling.</p>`;
+      await showSchoolsFor(place, document.getElementById("existing-list"), {
+        emptyText: "Hali maktab ochilmagan — birinchi bo'lib oching!",
+        onPick: async (school) => {
+          if (await confirmLeave()) await renderJoinSchool({ school, onBack: renderCreateSchool });
+        },
+      });
+    },
+  });
 
   document.getElementById("create-school-button").addEventListener(
     "click",
     guarded(async () => {
+      const region = document.getElementById("place-region").value;
+      const district = document.getElementById("place-district").value;
+      if (!region) throw new Error("Viloyatni tanlang");
+      if (!district) throw new Error("Tumanni tanlang");
       const name = document.getElementById("school-name-input").value.trim();
       if (name.length < 2) throw new Error("Maktab nomini kiriting");
       const subjects = readSelectedSubjects();
@@ -1164,7 +1215,7 @@ async function renderCreateSchool(region, district) {
       await saveProfileName();
       const { school } = await api("/api/schools", {
         method: "POST",
-        body: { region: region.name, district, name, subjects },
+        body: { region, district, name, subjects },
       });
 
       showToast(`✅ Maktab ochildi! Kodi: ${school.code}`);
