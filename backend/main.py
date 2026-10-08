@@ -3242,6 +3242,12 @@ def _require_profile_name(user: User) -> None:
         raise HTTPException(status_code=422, detail="Avval ism-familiyangizni kiriting")
 
 
+def _require_subjects(subjects: list[str]) -> None:
+    """O'qituvchi profilida qaysi fandan dars berishi majburiy."""
+    if not subjects:
+        raise HTTPException(status_code=422, detail="Qaysi fandan dars berishingizni tanlang")
+
+
 _bot_username_cache: str | None = None
 _bot_username_checked_at = -1e9
 
@@ -3440,6 +3446,7 @@ def create_school(body: SchoolCreateIn, user: User = Depends(get_current_user), 
     """Yangi xususiy maktab ochadi; yaratgan o'qituvchi uning egasi bo'ladi."""
 
     _require_profile_name(user)
+    _require_subjects(body.subjects)
     if _active_membership(db, user):
         raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
     if not is_valid_location(body.region, body.district):
@@ -3485,6 +3492,7 @@ def join_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db: 
     """Maktab kodi bilan maktabga qo'shiladi."""
 
     _require_profile_name(user)
+    _require_subjects(body.subjects)
     if _active_membership(db, user):
         raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
 
@@ -3522,6 +3530,7 @@ def update_school_profile(body: SchoolProfileIn, user: User = Depends(get_curren
     member = _active_membership(db, user)
     if not member:
         raise HTTPException(status_code=404, detail="Siz hech qaysi maktabga a'zo emassiz")
+    _require_subjects(body.subjects)
 
     member.subjects = json.dumps(body.subjects, ensure_ascii=False)
     db.commit()
@@ -3904,7 +3913,9 @@ def _attendance_context(db: Session, attendance: Attendance) -> dict:
         "class_name": school_class.name,
         "school_name": school.name if school else "",
         "teacher_name": teacher.full_name if teacher else "",
-        "subject": attendance.subject or "—",
+        "subject": attendance.subject or "",
+        # O'qituvchi profilidagi fan bo'yicha: "Matematika darsi"
+        "lesson": f"{attendance.subject} darsi" if attendance.subject else "Dars",
         "taken_at": _local_time(attendance.taken_at),
         "updated_at": _local_time(attendance.updated_at),
         "counts": _attendance_counts(attendance),
@@ -3917,9 +3928,8 @@ def attendance_text(context: dict) -> str:
 
     counts = context["counts"]
     lines = [
-        f"📋 Davomat — {context['class_name']}",
+        f"📋 {context['class_name']} — {context['lesson']} davomati",
         f"🏫 {context['school_name']}",
-        f"📚 Fan: {context['subject']}",
         f"👤 O'qituvchi: {context['teacher_name']}",
         f"🕘 Olingan: {context['taken_at']}",
     ]
@@ -3948,7 +3958,7 @@ def attendance_pdf(context: dict) -> bytes:
                                  title=f"Davomat — {context['class_name']}")
     width = document.width
 
-    meta = f"🏫 {context['school_name']}  ·  Fan: {context['subject']}  ·  O'qituvchi: {context['teacher_name']}"
+    meta = f"🏫 {context['school_name']}  ·  {context['lesson']}  ·  O'qituvchi: {context['teacher_name']}"
     times = f"Olingan: {context['taken_at']}" + (f"  ·  Tahrirlangan: {context['updated_at']}" if context["updated_at"] else "")
     counts = context["counts"]
     summary = "   ".join(f"{ATTENDANCE_LABELS[s][0]}: {counts.get(s, 0)}" for s in ATTENDANCE_LABELS)
@@ -3970,7 +3980,7 @@ def attendance_pdf(context: dict) -> bytes:
     table.setStyle(TableStyle(commands))
 
     document.build([
-        Paragraph(xml_escape(f"Davomat — {context['class_name']}"), styles["title"]),
+        Paragraph(xml_escape(f"{context['class_name']} — {context['lesson']} davomati"), styles["title"]),
         Paragraph(xml_escape(meta.replace("🏫 ", "")), styles["meta"]),
         Paragraph(xml_escape(times), styles["meta"]),
         Spacer(1, 8),
@@ -4000,8 +4010,8 @@ def attendance_image(context: dict) -> bytes:
     image = Image.new("RGB", (width, height), "#ffffff")
     draw = ImageDraw.Draw(image)
     draw.rectangle([0, 0, width, 12], fill="#1f4e79")
-    draw.text((50, 40), f"Davomat — {context['class_name']}", font=title_font, fill="#1f4e79")
-    draw.text((50, 110), f"{context['school_name']}  ·  {context['subject']}", font=text_font, fill="#374151")
+    draw.text((50, 40), f"{context['class_name']} — {context['lesson']}", font=title_font, fill="#1f4e79")
+    draw.text((50, 110), f"{context['school_name']}  ·  davomat", font=text_font, fill="#374151")
     draw.text((50, 152), f"O'qituvchi: {context['teacher_name']}", font=text_font, fill="#374151")
     times = f"Olingan: {context['taken_at']}" + (f"   Tahrir: {context['updated_at']}" if context["updated_at"] else "")
     draw.text((50, 194), times, font=text_font, fill="#6b7280")
@@ -4067,7 +4077,7 @@ def send_attendance(
     """
 
     context = _attendance_context(db, _own_attendance(db, user, attendance_id))
-    caption = f"📋 Davomat — {context['class_name']} ({context['taken_at']}). Ota-onalar guruhiga uzating."
+    caption = f"📋 {context['class_name']} — {context['lesson']} davomati ({context['taken_at']}). Ota-onalar guruhiga uzating."
 
     if format == "text":
         if not _send_bot_text(user.tg_id, attendance_text(context)):

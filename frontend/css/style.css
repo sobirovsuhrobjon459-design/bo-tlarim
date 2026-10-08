@@ -1856,3 +1856,89 @@ select option {
   background: var(--color-border);
   border-radius: 999px;
 }
+
+/* Majburiy maydon belgisi */
+.required-mark {
+  color: #d93636;
+  font-weight: 700;
+}
+
+/* Diqqat talab qiladigan karta (masalan, fan kiritilmagan) */
+.warning-card {
+  border-color: #e0a800;
+  background: rgba(224, 168, 0, 0.12);
+}
+
+/* Xavfli amal (o'chirish) ogohlantirishi */
+.danger-panel {
+  padding: 16px;
+  margin-top: 4px;
+  line-height: 1.5;
+  background: rgba(217, 54, 54, 0.1);
+  border: 1.5px solid rgba(217, 54, 54, 0.55);
+  border-radius: var(--radius-md);
+}
+
+.danger-panel ul {
+  margin: 6px 0 10px;
+  padding-left: 20px;
+}
+
+.danger-panel li {
+  margin: 4px 0;
+}
+
+.consent-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  font-size: 14.5px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.consent-row input {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin: 1px 0 0;
+  accent-color: #d93636;
+}
+
+.btn-danger {
+  color: #ffffff;
+  background: #d93636;
+  border-color: #d93636;
+}
+
+.btn-danger:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Davomat qaysi dars uchun olinayotgani (o'qituvchi profilidagi fan) */
+.lesson-chip {
+  display: inline-block;
+  margin: 10px 0 0;
+  padding: 8px 14px;
+  font-weight: 700;
+  color: var(--color-primary);
+  background: rgba(99, 102, 241, 0.12);
+  border-radius: 999px;
+}
+
+/* O'quvchi kartasidagi tez tahrirlash tugmasi */
+.student-edit {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  font-size: 15px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  cursor: pointer;
+}
