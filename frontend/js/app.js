@@ -1027,7 +1027,8 @@ async function saveProfileName() {
   const firstName = document.getElementById("profile-first-name").value.trim();
   const lastName = document.getElementById("profile-last-name").value.trim();
   if (firstName.length < 2 || lastName.length < 2) throw new Error("Ism va familiyangizni to'liq kiriting");
-  await api("/api/me/name", { method: "POST", body: { first_name: firstName, last_name: lastName } });
+  const result = await api("/api/me/name", { method: "POST", body: { first_name: firstName, last_name: lastName } });
+  if (homeSnapshot) homeSnapshot.full_name = result.full_name;
 }
 
 function protectSchoolForm() {
@@ -1258,17 +1259,58 @@ function renderLeaveSchool(school) {
   );
 }
 
+/*
+  Bosh sahifa ma'lumoti (ism, admin/o'qituvchi belgisi) eslab qolinadi.
+
+  Ilgari "←" bilan bosh sahifaga har qaytishda server so'ralardi va sahifa
+  1–2 soniya kechikib ochilardi — papkaga kirish esa darhol edi. Endi qaytish
+  ham darhol: eslangan ma'lumot bilan chiziladi, yangilanish esa fonda
+  so'raladi va faqat nimadir o'zgargan bo'lsagina sahifa yangilanadi.
+*/
+let homeSnapshot = null;
+
+function applyHomeData(me) {
+  isAdmin = Boolean(me.is_admin);
+  isTeacher = Boolean(me.is_teacher);
+}
+
 async function loadHome() {
+  if (homeSnapshot) {
+    renderHome(homeSnapshot.full_name || null, true);
+    refreshHomeInBackground();
+    return;
+  }
+
   renderSkeleton();
   try {
     const me = await api("/api/me");
-    isAdmin = Boolean(me.is_admin);
-    isTeacher = Boolean(me.is_teacher);
+    homeSnapshot = me;
+    applyHomeData(me);
     renderHome(me.full_name || null, true);
   } catch (error) {
     isAdmin = false;
     isTeacher = false;
     renderHome(null, false);
+  }
+}
+
+async function refreshHomeInBackground() {
+  try {
+    const me = await api("/api/me");
+    const changed =
+      me.full_name !== homeSnapshot.full_name ||
+      Boolean(me.is_admin) !== Boolean(homeSnapshot.is_admin) ||
+      Boolean(me.is_teacher) !== Boolean(homeSnapshot.is_teacher);
+
+    homeSnapshot = me;
+    applyHomeData(me);
+
+    // Foydalanuvchi hali ham bosh sahifada bo'lsa va nimadir o'zgargan bo'lsa
+    if (changed && document.querySelector('[data-action="school-folder"]')) {
+      renderHome(me.full_name || null, true);
+    }
+  } catch (_) {
+    /* fonda — xato bo'lsa eslangan ma'lumot qoladi */
   }
 }
 
@@ -1574,7 +1616,8 @@ function renderEditName(me, onDone) {
     guarded(async () => {
       const first_name = document.getElementById("edit-first-name").value.trim();
       const last_name = document.getElementById("edit-last-name").value.trim();
-      await api("/api/me/name", { method: "POST", body: { first_name, last_name } });
+      const result = await api("/api/me/name", { method: "POST", body: { first_name, last_name } });
+      if (homeSnapshot) homeSnapshot.full_name = result.full_name;
       showToast("✅ Saqlandi");
       await onDone();
     })
