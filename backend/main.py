@@ -3713,7 +3713,20 @@ def class_detail(class_id: int, user: User = Depends(get_current_user), db: Sess
 
 @app.put("/api/classes/{class_id}")
 def rename_class(class_id: int, body: ClassIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Sinf nomini o'zgartiradi (o'quvchilar va davomat tarixi o'z joyida qoladi)."""
+
     school_class = _own_class(db, user, class_id)
+    duplicate = db.scalar(
+        select(SchoolClass.id).where(
+            SchoolClass.teacher_user_id == user.id,
+            SchoolClass.school_id == school_class.school_id,
+            SchoolClass.deleted_at.is_(None),
+            SchoolClass.id != school_class.id,
+            func.lower(SchoolClass.name) == body.name.lower(),
+        )
+    )
+    if duplicate:
+        raise HTTPException(status_code=409, detail=f"«{body.name}» nomli sinfingiz allaqachon bor")
     school_class.name = body.name
     db.commit()
     return _class_view(db, school_class, with_details=True)

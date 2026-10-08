@@ -1088,6 +1088,13 @@ def test_sinf_yaratish_va_oquvchilar():
     listed = client.get("/api/classes", headers=as_user(701)).json()
     assert listed[0]["students_count"] == 2, listed
 
+    # Nomini o'zgartirish: o'quvchilar joyida qoladi, takror nom bo'lmaydi
+    client.post("/api/classes", json={"name": "11-A"}, headers=as_user(701))
+    renamed = client.put(f"/api/classes/{cid}", json={"name": "10/2 Iqtisod"}, headers=as_user(701))
+    assert renamed.status_code == 200 and renamed.json()["name"] == "10/2 Iqtisod", renamed.text
+    assert len(renamed.json()["students"]) == 2
+    assert client.put(f"/api/classes/{cid}", json={"name": "11-a"}, headers=as_user(701)).status_code == 409
+
     # Boshqa o'qituvchi bu sinfni ko'ra olmaydi
     client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
                                       "name": "Boshqa maktab"}, headers=as_user(709))

@@ -986,13 +986,17 @@ async function renderClass(classOrId) {
 
   showPage(`
     ${schoolPageHeader(schoolClass.name, "back-profile")}
-    <p class="subtitle" style="margin-top:0">👨‍🎓 ${schoolClass.students.length} ta o'quvchi</p>
+    <div class="row-between" style="margin:0 0 6px">
+      <p class="subtitle" style="margin:0">👨‍🎓 ${schoolClass.students.length} ta o'quvchi</p>
+      <button type="button" class="share-pill" id="rename-class-button">✏️ Nomini o'zgartirish</button>
+    </div>
     ${roleCard("take-attendance", "📋", "DAVOMAT OLISH", "Bugungi dars uchun bor-yo'qlama")}
     ${roleCard("class-students", "👨‍🎓", `O'QUVCHILAR (${schoolClass.students.length})`, "Qo'shish va ro'yxatni boshqarish")}
     ${roleCard("attendance-history", "🗂", `DAVOMAT TARIXI (${schoolClass.attendances.length})`, "Ko'rish, tahrirlash va yuborish")}
   `);
 
   document.querySelector('[data-action="back-profile"]').addEventListener("click", () => renderSchoolClasses(currentSchool));
+  document.getElementById("rename-class-button").addEventListener("click", () => renderRenameClass(schoolClass));
   document.querySelector('[data-action="take-attendance"]').addEventListener("click", () => {
     if (!schoolClass.students.length) {
       showToast("Avval sinfga o'quvchilarni qo'shing");
@@ -1003,6 +1007,46 @@ async function renderClass(classOrId) {
   });
   document.querySelector('[data-action="class-students"]').addEventListener("click", () => renderClassStudents(schoolClass));
   document.querySelector('[data-action="attendance-history"]').addEventListener("click", () => renderAttendanceHistory(schoolClass));
+}
+
+function renderRenameClass(schoolClass) {
+  showPage(`
+    ${schoolPageHeader("Sinf nomini o'zgartirish", "back-class")}
+    <label class="field-label" for="class-name-input">Sinf / guruh nomi</label>
+    <input class="input" id="class-name-input" maxlength="100" value="${escapeHtml(schoolClass.name)}"
+           placeholder="Masalan: 10/2, Iqtisod guruhi" />
+    <p class="subtitle" style="margin:6px 0 0">O'quvchilar va davomat tarixi o'zgarmaydi.</p>
+    <button class="btn" id="save-class-name" style="margin-top:14px">💾 Saqlash</button>
+  `);
+
+  const input = document.getElementById("class-name-input");
+  input.focus();
+  input.select();
+  input.addEventListener("input", markUnsaved);
+
+  document.querySelector('[data-action="back-class"]').addEventListener(
+    "click",
+    guarded(async () => {
+      if (await confirmLeave()) await renderClass(schoolClass);
+    })
+  );
+
+  const save = guarded(async () => {
+    const name = input.value.trim();
+    if (!name) throw new Error("Sinf nomini kiriting");
+    if (name === schoolClass.name) {
+      await renderClass(schoolClass);
+      return;
+    }
+    const updated = await api(`/api/classes/${schoolClass.id}`, { method: "PUT", body: { name } });
+    myClassesCache = null;
+    showToast(`✅ Nomi o'zgartirildi: ${updated.name}`);
+    await renderClass(updated);
+  });
+  document.getElementById("save-class-name").addEventListener("click", save);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") save(event);
+  });
 }
 
 function renderClassStudents(schoolClass) {
