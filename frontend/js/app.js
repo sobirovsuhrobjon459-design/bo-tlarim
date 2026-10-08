@@ -668,7 +668,7 @@ function hideBottomNav() {
 }
 
 function pageHeader(title) {
-  // Chapdagi "←" — "Testlar" papkasiga (o'quvchi/o'qituvchi tanlash) qaytaradi
+  // Chapdagi "←" — "Test markazi" papkasiga (o'quvchi/o'qituvchi tanlash) qaytaradi
   return `
     <div class="page-header">
       <button class="back-button" type="button" data-action="back" style="margin:0">←</button>
@@ -796,21 +796,15 @@ function renderHome(userName, backendOk) {
     <h1 class="fade-up">${greeting}</h1>
     <p class="subtitle fade-up">Bilimingizni sinang va natijangizni kuzating.</p>
 
-    ${roleCard("tests", ROLE_ICONS.folder, "TESTLAR", "O'quvchi va o'qituvchi bo'limlari")}
-    ${roleCard("school", ROLE_ICONS.school, "MAKTAB", "Maktab bo'limi")}
-    ${roleCard("parents", ROLE_ICONS.parents, "OTA-ONA", "Ota-onalar bo'limi")}
+    ${roleCard("school-folder", ROLE_ICONS.school, "MAKTAB VA OTA-ONA", "Maktab va ota-onalar bo'limlari")}
+    ${roleCard("tests", ROLE_ICONS.folder, "TEST MARKAZI", "O'quvchi va o'qituvchilar uchun testlar")}
     ${isAdmin ? roleCard("admin", ROLE_ICONS.admin, "ADMIN", "Umumiy statistika va boshqaruv") : ""}
 
     ${statusHtml}
   `);
 
+  document.querySelector('[data-action="school-folder"]').addEventListener("click", renderSchoolFolder);
   document.querySelector('[data-action="tests"]').addEventListener("click", renderTestFolder);
-  document.querySelector('[data-action="school"]').addEventListener("click", () =>
-    renderComingSoon("Maktab", ROLE_ICONS.school)
-  );
-  document.querySelector('[data-action="parents"]').addEventListener("click", () =>
-    renderComingSoon("Ota-ona", ROLE_ICONS.parents)
-  );
   document.querySelector('[data-action="admin"]')?.addEventListener(
     "click",
     guarded(async () => {
@@ -820,14 +814,37 @@ function renderHome(userName, backendOk) {
 }
 
 /*
-  "Testlar" papkasi — o'quvchi va o'qituvchi bo'limlari shu yerda. Ularning
-  ichidagi "←" tugmalari ham shu papkaga qaytaradi (bosh sahifaga emas).
+  Bosh sahifada ikkita papka bor:
+    • "Maktab va ota-ona" — Maktab va Ota-ona bo'limlari;
+    • "Test markazi" — O'quvchi va O'qituvchi bo'limlari.
+  Bo'limlar ichidagi "←" tugmalari o'z papkasiga qaytaradi (bosh sahifaga emas).
 */
+function renderSchoolFolder() {
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="home" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">Maktab va ota-ona</h2>
+    </div>
+    <p class="subtitle fade-up">Bo'limni tanlang</p>
+
+    ${roleCard("school", ROLE_ICONS.school, "MAKTAB", "Maktab bo'limi")}
+    ${roleCard("parents", ROLE_ICONS.parents, "OTA-ONA", "Ota-onalar bo'limi")}
+  `);
+
+  document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
+  document.querySelector('[data-action="school"]').addEventListener("click", () =>
+    renderComingSoon("Maktab", ROLE_ICONS.school)
+  );
+  document.querySelector('[data-action="parents"]').addEventListener("click", () =>
+    renderComingSoon("Ota-ona", ROLE_ICONS.parents)
+  );
+}
+
 function renderTestFolder() {
   showPage(`
     <div class="page-header">
       <button class="back-button" type="button" data-action="home" style="margin:0">←</button>
-      <h2 style="margin:0;flex:1">Testlar</h2>
+      <h2 style="margin:0;flex:1">Test markazi</h2>
     </div>
     <p class="subtitle fade-up">Kim sifatida kirasiz?</p>
 
@@ -856,7 +873,7 @@ function renderComingSoon(title, icon) {
     </div>
   `);
 
-  document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
+  document.querySelector('[data-action="home"]').addEventListener("click", renderSchoolFolder);
 }
 
 async function loadHome() {
