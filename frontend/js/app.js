@@ -803,7 +803,7 @@ function renderHome(userName, backendOk) {
     <p class="subtitle fade-up">Bilimingizni sinang va natijangizni kuzating.</p>
 
     ${roleCard("school-folder", ROLE_ICONS.school, "TA'LIM MUASSASALARI", "Xususiy maktab, kurslar, to'garaklar")}
-    ${roleCard("tests", ROLE_ICONS.folder, "TEST MARKAZI", "O'quvchi va o'qituvchilar uchun testlar")}
+    ${roleCard("tests", ROLE_ICONS.folder, "TEST MARKAZI", "Testlar")}
     ${isAdmin ? roleCard("admin", ROLE_ICONS.admin, "ADMIN", "Umumiy statistika va boshqaruv") : ""}
 
     ${statusHtml}
