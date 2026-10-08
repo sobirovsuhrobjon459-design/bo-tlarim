@@ -2973,19 +2973,20 @@ async function renderResultsTab(selectedId) {
   // Faqat natijalar so'raladi — ishtirokchilar soni va o'rtacha foiz shu
   // javobning o'zidan hisoblanadi, qo'shimcha so'rov kerak emas.
   const results = await api(`/api/teacher/tests/${testId}/results`);
-  const percents = results.rows.map((row) => row.percent);
-  const average = percents.length ? Math.round((percents.reduce((sum, p) => sum + p, 0) / percents.length) * 10) / 10 : 0;
+  const summary = results.summary;
 
-  // Ball taqsimoti: nechta o'quvchi qaysi oraliqda
+  // Darajalar taqsimoti (Rasch balli bo'yicha, Milliy sertifikat uslubida)
   const buckets = [
-    { label: "<30", from: 0, to: 30 },
-    { label: "30-45", from: 30, to: 45 },
-    { label: "45-60", from: 45, to: 60 },
-    { label: "60-75", from: 60, to: 75 },
-    { label: "75+", from: 75, to: 101 },
+    { label: "—", from: 0, to: 46 },
+    { label: "C", from: 46, to: 50 },
+    { label: "C+", from: 50, to: 55 },
+    { label: "B", from: 55, to: 60 },
+    { label: "B+", from: 60, to: 65 },
+    { label: "A", from: 65, to: 70 },
+    { label: "A+", from: 70, to: 101 },
   ].map((bucket) => ({
     ...bucket,
-    count: results.rows.filter((row) => row.percent >= bucket.from && row.percent < bucket.to).length,
+    count: results.rows.filter((row) => row.ball >= bucket.from && row.ball < bucket.to).length,
   }));
 
   const maxCount = Math.max(1, ...buckets.map((bucket) => bucket.count));
@@ -3003,14 +3004,14 @@ async function renderResultsTab(selectedId) {
 
   const rows = results.rows
     .map(
-      (row, index) => `
+      (row) => `
       <div class="result-line" data-detail-id="${row.attempt_id}">
-        <span class="result-rank">${index + 1}</span>
-        <span class="result-name">${escapeHtml(row.name)}</span>
-        <span class="result-score">${row.closed_correct}/${row.closed_total}${
-          row.written_total ? ` • ${row.written_correct}/${row.written_total}` : ""
-        }</span>
-        <span class="result-percent">${row.percent}%</span>
+        <span class="result-rank">${row.rank}</span>
+        <span class="result-name">
+          ${escapeHtml(row.name)}
+          <small class="result-meta">✅ ${row.correct} • ❌ ${row.wrong} • ${row.percent}%</small>
+        </span>
+        <span class="result-percent">${row.ball.toFixed(2)}<small class="result-grade">${escapeHtml(row.grade)}</small></span>
       </div>`
     )
     .join("") || `<p class="subtitle" style="padding:14px">Hali natija yo'q</p>`;
@@ -3030,16 +3031,20 @@ async function renderResultsTab(selectedId) {
 
     <div class="panel">
       <div class="stats-grid" style="margin:0 0 16px">
-        <div class="stat-tile"><span class="stat-value">${results.rows.length}</span>Ishtirokchi</div>
-        <div class="stat-tile"><span class="stat-value">${average}%</span>O'rtacha</div>
+        <div class="stat-tile"><span class="stat-value">${summary.participants}</span>Ishtirokchi</div>
+        <div class="stat-tile"><span class="stat-value">${summary.avg_ball.toFixed(2)}</span>O'rtacha ball</div>
+        <div class="stat-tile"><span class="stat-value">${summary.max_ball.toFixed(2)}</span>Eng yuqori ball</div>
+        <div class="stat-tile"><span class="stat-value">${summary.top_count} ta</span>A+ va A</div>
       </div>
-      <p class="section-label" style="margin:0 0 10px">BALL TAQSIMOTI</p>
+      <p class="section-label" style="margin:0 0 10px">DARAJALAR (RASCH BALLI)</p>
       <div class="chart">${chart}</div>
     </div>
 
+    <button class="btn" id="results-pdf-button" style="margin-top:14px">📄 PDF HISOBOT</button>
+
     <div class="row-between" style="margin:18px 0 8px">
-      <span class="section-label" style="margin:0">ISHTIROKCHILAR</span>
-      <span class="subtitle" style="margin:0;font-size:12px">yopiq • yozma</span>
+      <span class="section-label" style="margin:0">ISHTIROKCHILAR (O'RIN BO'YICHA)</span>
+      <span class="subtitle" style="margin:0;font-size:12px">ball • daraja</span>
     </div>
     <div class="panel" style="padding:4px 0">${rows}</div>
   `);
@@ -3047,6 +3052,7 @@ async function renderResultsTab(selectedId) {
   wireTeacherChrome("results");
 
   document.getElementById("all-results-button").addEventListener("click", () => renderResultsTestList(tests));
+  document.getElementById("results-pdf-button").addEventListener("click", guarded(() => downloadOrSendPdf(testId)));
 
   document.querySelectorAll("[data-detail-id]").forEach((line) => {
     line.addEventListener(
@@ -3096,10 +3102,11 @@ async function renderTestResults(testId) {
 
   const tableRows = results.rows
     .map(
-      (row, index) => `
+      (row) => `
         <tr class="result-row">
-          <td>${index + 1}</td><td>${escapeHtml(row.name)}</td>
+          <td>${row.rank}</td><td>${escapeHtml(row.name)}</td>
           <td>${row.correct}</td><td>${row.wrong}</td><td>${row.percent}%</td>
+          <td><b>${row.ball.toFixed(2)}</b></td><td><b>${escapeHtml(row.grade)}</b></td>
         </tr>`
     )
     .join("");
@@ -3124,18 +3131,17 @@ async function renderTestResults(testId) {
       <button class="btn btn-ghost" id="edit-price-button" style="width:auto;padding:8px 16px">✏️ Tahrirlash</button>
     </div>
     <div class="stats-grid">
-      <div class="stat-tile"><span class="stat-value">${stats.total}</span>Qatnashchilar</div>
-      <div class="stat-tile"><span class="stat-value">${stats.avg}%</span>O'rtacha</div>
-      <div class="stat-tile"><span class="stat-value">${stats.max}%</span>Eng yuqori</div>
-      <div class="stat-tile"><span class="stat-value">${stats.min}%</span>Eng past</div>
+      <div class="stat-tile"><span class="stat-value">${results.summary.participants}</span>Qatnashchilar</div>
+      <div class="stat-tile"><span class="stat-value">${results.summary.avg_ball.toFixed(2)}</span>O'rtacha ball</div>
+      <div class="stat-tile"><span class="stat-value">${results.summary.max_ball.toFixed(2)}</span>Eng yuqori ball</div>
+      <div class="stat-tile"><span class="stat-value">${results.summary.top_count} ta</span>A+ va A</div>
     </div>
-    <p>⏱️ O'rtacha vaqt: <b>${formatDuration(stats.avg_seconds)}</b></p>
     <button class="btn" id="pdf-button">📄 PDF HISOBOT</button>
     <h3>Natijalar</h3>
     <input class="input" id="filter-input" placeholder="🔍 O'quvchini qidirish..." />
     <div style="overflow-x:auto">
       <table>
-        <tr><th>№</th><th>O'quvchi</th><th>✅</th><th>❌</th><th>%</th></tr>
+        <tr><th>O'rin</th><th>O'quvchi</th><th>✅</th><th>❌</th><th>%</th><th>Ball</th><th>Daraja</th></tr>
         ${tableRows}
       </table>
     </div>

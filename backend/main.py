@@ -26,6 +26,7 @@ import random
 import re
 import threading
 from contextlib import asynccontextmanager
+from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,12 +36,18 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.graphics.shapes import Drawing, Line, Rect
+from reportlab.graphics.shapes import String as ChartString
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdf_canvas
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import String, case, cast, delete, distinct, func, inspect, select, text
 from sqlalchemy.orm import Session, selectinload
 
+from .rasch import grade_for, rasch_scores
 from .auth import (
     get_current_admin,
     get_current_teacher,
@@ -544,49 +551,374 @@ def build_test_stats(db: Session, test: Test) -> dict:
     }
 
 
-def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes:
-    """Berilgan test bo'yicha to'liq PDF hisobotni bayt ko'rinishida qaytaradi."""
+def _rasch_items(test: Test) -> list[tuple[int, str]]:
+    """
+    Rasch modelidagi savollar: (javob havolasi, qisqa nomi).
 
-    stats = build_test_stats(db, test)
-    styles = getSampleStyleSheet()
-    buffer = io.BytesIO()
+    a/b qismli yozma savolning har bir qismi ALOHIDA savol hisoblanadi —
+    Milliy sertifikatdagidek (36(a), 36(b)). Foiz esa avvalgidek savollar
+    guruhi bo'yicha qoladi (qarang: _calculate_attempt_score).
+    """
 
-    elements = [
-        Paragraph(f"Test hisoboti: {test.title}", styles["Title"]),
-        Paragraph(f"Fan: {test.subject} | Mavzu: {test.topic or '-'}", styles["Normal"]),
-        Paragraph(f"O'qituvchi: {teacher.user.full_name} | Sana: {datetime.now():%d.%m.%Y}", styles["Normal"]),
-        Paragraph(f"Qatnashchilar: {stats['total']} | O'rtacha natija: {stats['avg']}%", styles["Normal"]),
-        Spacer(1, 14),
-    ]
+    if test.mode != "key":
+        return [(question.id, str(index)) for index, question in enumerate(test.questions, start=1)]
 
+    items = []
+    for key_question in test.key_questions:
+        label = key_question.label or str(key_question.number)
+        match = re.fullmatch(r"(\d+)([a-z]+)", label)
+        items.append((key_question.number, f"{match.group(1)}({match.group(2)})" if match else label))
+    return items
+
+
+def build_rasch_report(db: Session, test: Test) -> dict:
+    """
+    Test natijalari Rasch modeli bo'yicha: har bir qatnashchining balli,
+    darajasi va o'rni, umumiy statistika va savollar bo'yicha to'g'ri javoblar
+    ulushi. O'qituvchining natijalar sahifasi ham, PDF hisobot ham shundan oladi.
+
+    Rasch balli qatnashchilarga nisbatan hisoblanadi: yangi o'quvchi qo'shilsa,
+    savollar qiyinligi aniqlashadi va ballar biroz o'zgarishi mumkin.
+    """
+
+    results = best_attempts(db, test)
+    items = _rasch_items(test)
     total_questions = _question_count(test)
 
-    table_data = [["#", "O'quvchi", "Natija", "To'g'ri", "Noto'g'ri", "Foiz"]]
-    for index, (attempt, name) in enumerate(best_attempts(db, test), start=1):
-        table_data.append(
+    correct_refs: dict[int, set[int]] = {attempt.id: set() for attempt, _ in results}
+    if correct_refs:
+        for attempt_id, question_ref in db.execute(
+            select(StudentAnswer.attempt_id, StudentAnswer.question_ref).where(
+                StudentAnswer.attempt_id.in_(list(correct_refs)), StudentAnswer.is_correct.is_(True)
+            )
+        ).all():
+            correct_refs[attempt_id].add(question_ref)
+
+    matrix = [[1 if ref in correct_refs[attempt.id] else 0 for ref, _ in items] for attempt, _ in results]
+    rasch = rasch_scores(matrix)
+
+    rows = [
+        {
+            "attempt_id": attempt.id,
+            "name": name,
+            "correct": attempt.correct,
+            "wrong": attempt.wrong,
+            "total": total_questions,
+            "percent": attempt.percent,
+            "seconds": attempt.seconds,
+            "ball": score,
+            "grade": grade_for(score),
+        }
+        for (attempt, name), score in zip(results, rasch["scores"])
+    ]
+
+    # O'rin: ball bo'yicha; teng ball — teng o'rin (1, 1, 3 ...)
+    rows.sort(key=lambda row: (-row["ball"], -row["percent"], row["name"].lower()))
+    for index, row in enumerate(rows):
+        same_as_previous = index and rows[index - 1]["ball"] == row["ball"]
+        row["rank"] = rows[index - 1]["rank"] if same_as_previous else index + 1
+
+    participants = len(rows)
+    item_stats = []
+    for column, (ref, label) in enumerate(items):
+        solved = sum(matrix_row[column] for matrix_row in matrix)
+        item_stats.append(
+            {
+                "label": label,
+                "correct": solved,
+                "share": round(solved / participants * 100, 1) if participants else 0.0,
+            }
+        )
+
+    top_count = sum(1 for row in rows if row["ball"] >= 65)
+    best = rows[0] if rows else None
+
+    return {
+        "rows": rows,
+        "items": item_stats,
+        "summary": {
+            "participants": participants,
+            "avg_ball": round(sum(row["ball"] for row in rows) / participants, 2) if participants else 0,
+            "max_ball": best["ball"] if best else 0,
+            "max_name": best["name"] if best else "",
+            "top_count": top_count,
+            "top_share": round(top_count / participants * 100, 1) if participants else 0,
+            "avg_percent": round(sum(row["percent"] for row in rows) / participants, 1) if participants else 0,
+        },
+    }
+
+
+# ---------- PDF hisobot (Milliy sertifikat natijalari uslubida) ----------
+
+FONTS_DIR = Path(__file__).resolve().parent / "fonts"
+
+# Kirill va o'zbek harflari (Комилжонов, oʻ, gʻ) uchun shrift. Standart
+# Helvetica ularni chiza olmaydi — ilgari bunday ismlar PDF'da yo'qolib qolardi.
+REPORT_FONT, REPORT_FONT_BOLD, REPORT_FONT_ITALIC = "Helvetica", "Helvetica-Bold", "Helvetica-Oblique"
+try:
+    pdfmetrics.registerFont(TTFont("ReportSerif", str(FONTS_DIR / "DejaVuSerif.ttf")))
+    pdfmetrics.registerFont(TTFont("ReportSerif-Bold", str(FONTS_DIR / "DejaVuSerif-Bold.ttf")))
+    pdfmetrics.registerFont(TTFont("ReportSerif-Italic", str(FONTS_DIR / "DejaVuSerif-Italic.ttf")))
+    REPORT_FONT, REPORT_FONT_BOLD, REPORT_FONT_ITALIC = "ReportSerif", "ReportSerif-Bold", "ReportSerif-Italic"
+except Exception:
+    logging.getLogger("backend").warning("PDF shrifti topilmadi — Helvetica ishlatiladi", exc_info=True)
+
+REPORT_BLUE = colors.HexColor("#1f4e79")
+REPORT_TILE_BG = colors.HexColor("#f0f3f7")
+REPORT_MUTED = colors.HexColor("#6b7280")
+REPORT_GRID = colors.HexColor("#e5e7eb")
+SHARE_BANDS = [
+    (70, colors.HexColor("#1e7b34"), "70% va yuqori"),
+    (40, colors.HexColor("#2e75b6"), "40–70%"),
+    (15, colors.HexColor("#ed7d31"), "15–40%"),
+    (0, colors.HexColor("#c00000"), "15% dan past"),
+]
+
+
+def _share_color(share: float):
+    for threshold, color, _ in SHARE_BANDS:
+        if share >= threshold:
+            return color
+    return SHARE_BANDS[-1][1]
+
+
+def _report_styles() -> dict:
+    base = {"fontName": REPORT_FONT, "textColor": colors.HexColor("#111827"), "leading": 13, "fontSize": 9.5}
+    return {
+        "title": ParagraphStyle("title", **{**base, "fontName": REPORT_FONT_BOLD, "fontSize": 17, "leading": 21,
+                                            "textColor": REPORT_BLUE}),
+        "meta": ParagraphStyle("meta", **{**base, "fontSize": 9, "textColor": REPORT_MUTED}),
+        "section": ParagraphStyle("section", **{**base, "fontName": REPORT_FONT_BOLD, "fontSize": 14, "leading": 18,
+                                                "textColor": REPORT_BLUE}),
+        "tile_label": ParagraphStyle("tile_label", **{**base, "fontSize": 7.5, "leading": 10, "textColor": REPORT_MUTED}),
+        "tile_value": ParagraphStyle("tile_value", **{**base, "fontName": REPORT_FONT_BOLD, "fontSize": 19, "leading": 23}),
+        "tile_note": ParagraphStyle("tile_note", **{**base, "fontName": REPORT_FONT_ITALIC, "fontSize": 7.5,
+                                                    "leading": 10, "textColor": REPORT_MUTED}),
+        "cell": ParagraphStyle("cell", **base),
+        "cell_bold": ParagraphStyle("cell_bold", **{**base, "fontName": REPORT_FONT_BOLD}),
+        "cell_muted": ParagraphStyle("cell_muted", **{**base, "fontSize": 8, "textColor": REPORT_MUTED,
+                                                      "alignment": 2}),
+        "hard": ParagraphStyle("hard", **{**base, "fontName": REPORT_FONT_BOLD, "fontSize": 11,
+                                          "textColor": colors.HexColor("#c00000")}),
+        "easy": ParagraphStyle("easy", **{**base, "fontName": REPORT_FONT_BOLD, "fontSize": 11,
+                                          "textColor": colors.HexColor("#1e7b34")}),
+    }
+
+
+def _section_heading(text: str, styles: dict) -> list:
+    return [
+        Spacer(1, 10),
+        Paragraph(xml_escape(text), styles["section"]),
+        HRFlowable(width="100%", thickness=1.4, color=REPORT_BLUE, spaceBefore=3, spaceAfter=10),
+    ]
+
+
+def _stat_tiles(summary: dict, styles: dict, width: float):
+    tiles = [
+        ("ISHTIROKCHILAR", f"{summary['participants']}", ""),
+        ("O'RTACHA BALL", f"{summary['avg_ball']:.2f}", f"o'rtacha foiz {summary['avg_percent']}%"),
+        ("ENG YUQORI BALL", f"{summary['max_ball']:.2f}", summary["max_name"]),
+        ("A+ VA A", f"{summary['top_count']} ta", f"ishtirokchilarning {summary['top_share']}%"),
+    ]
+
+    gap = 8
+    tile_width = (width - gap * 3) / 4
+    cells, column_widths = [], []
+    for index, (label, value, note) in enumerate(tiles):
+        cells.append(
             [
-                index,
-                name,
-                f"{attempt.correct}/{total_questions}",
-                attempt.correct,
-                attempt.wrong,
-                f"{attempt.percent}%",
+                Paragraph(xml_escape(label), styles["tile_label"]),
+                Paragraph(xml_escape(value), styles["tile_value"]),
+                Paragraph(xml_escape(note) or "&nbsp;", styles["tile_note"]),
+            ]
+        )
+        column_widths.append(tile_width)
+        if index < len(tiles) - 1:
+            cells.append("")
+            column_widths.append(gap)
+
+    table = Table([cells], colWidths=column_widths)
+    commands = [("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 8),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8)]
+    for column in range(0, len(cells), 2):
+        commands += [
+            ("BACKGROUND", (column, 0), (column, 0), REPORT_TILE_BG),
+            ("LINEBEFORE", (column, 0), (column, 0), 3.5, REPORT_BLUE),
+            ("LEFTPADDING", (column, 0), (column, 0), 10),
+        ]
+    table.setStyle(TableStyle(commands))
+    return table
+
+
+def _chart_text(x: float, y: float, text: str, size: float, color=None, anchor: str = "start") -> ChartString:
+    """Diagrammadagi yozuv (ReportLab'ning String'i shriftni faqat xossa orqali qabul qiladi)."""
+    label = ChartString(x, y, text)
+    label.fontName = REPORT_FONT
+    label.fontSize = size
+    label.fillColor = color or REPORT_MUTED
+    label.textAnchor = anchor
+    return label
+
+
+def _share_chart(items: list[dict], width: float) -> Drawing:
+    """Savollar bo'yicha to'g'ri javoblar ulushi — rangli ustunlar."""
+
+    height = 210
+    left, bottom, top = 34, 34, 8
+    plot_width = width - left - 4
+    plot_height = height - bottom - top
+    drawing = Drawing(width, height)
+
+    for percent in (0, 25, 50, 75, 100):
+        y = bottom + plot_height * percent / 100
+        drawing.add(Line(left, y, left + plot_width, y, strokeColor=REPORT_GRID, strokeWidth=0.6))
+        drawing.add(_chart_text(left - 5, y - 3, f"{percent}%", 7, anchor="end"))
+
+    count = max(1, len(items))
+    slot = plot_width / count
+    bar_width = slot * 0.72
+    label_size = 6 if count <= 60 else 4.5
+
+    for index, item in enumerate(items):
+        x = left + index * slot + (slot - bar_width) / 2
+        bar_height = plot_height * item["share"] / 100
+        drawing.add(Rect(x, bottom, bar_width, max(bar_height, 0.6), fillColor=_share_color(item["share"]),
+                         strokeColor=None))
+
+        number, _, part = item["label"].partition("(")
+        center = x + bar_width / 2
+        drawing.add(_chart_text(center, bottom - 10, number, label_size, anchor="middle"))
+        if part:
+            drawing.add(_chart_text(center, bottom - 18, f"({part}", label_size, anchor="middle"))
+
+    return drawing
+
+
+def _share_legend(width: float) -> Drawing:
+    drawing = Drawing(width, 14)
+    x = 0
+    for _, color, label in SHARE_BANDS:
+        drawing.add(Rect(x, 2, 10, 10, fillColor=color, strokeColor=None))
+        drawing.add(_chart_text(x + 14, 4, label, 8))
+        x += 14 + stringWidth(label, REPORT_FONT, 8) + 22
+    return drawing
+
+
+def _question_list(title: str, items: list[dict], title_style, styles: dict, width: float) -> list:
+    rows = [
+        [
+            Paragraph(xml_escape(f"{item['label']}-savol"), styles["cell"]),
+            Paragraph(f"{item['share']:.0f}%", styles["cell_bold"]),
+            Paragraph(xml_escape(f"{item['correct']} ta ishtirokchi to'g'ri yechgan"), styles["cell_muted"]),
+        ]
+        for item in items
+    ] or [[Paragraph("—", styles["cell"]), "", ""]]
+
+    table = Table(rows, colWidths=[width * 0.27, width * 0.16, width * 0.57])
+    table.setStyle(TableStyle([("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                               ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    return [Paragraph(xml_escape(title), title_style),
+            HRFlowable(width="100%", thickness=0.5, color=REPORT_GRID, spaceBefore=3, spaceAfter=5), table]
+
+
+def _results_table(rows: list[dict], styles: dict, width: float) -> Table:
+    header = ["O'rin", "F.I.Sh.", "To'g'ri", "Xato", "Foiz", "Ball", "Daraja"]
+    data = [[Paragraph(f"<font color='white'>{xml_escape(text)}</font>", styles["cell_bold"]) for text in header]]
+    for row in rows:
+        data.append(
+            [
+                Paragraph(str(row["rank"]), styles["cell_bold"]),
+                Paragraph(xml_escape(row["name"]), styles["cell"]),
+                Paragraph(f"{row['correct']}/{row['total']}", styles["cell"]),
+                Paragraph(str(row["wrong"]), styles["cell"]),
+                Paragraph(f"{row['percent']}%", styles["cell"]),
+                Paragraph(f"{row['ball']:.2f}", styles["cell_bold"]),
+                Paragraph(xml_escape(row["grade"]), styles["cell_bold"]),
             ]
         )
 
-    table = Table(table_data, repeatRows=1)
-    table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4f46e5")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
-            ]
-        )
+    column_widths = [0.08, 0.38, 0.11, 0.08, 0.11, 0.12, 0.12]
+    table = Table(data, colWidths=[width * part for part in column_widths], repeatRows=1)
+    commands = [
+        ("BACKGROUND", (0, 0), (-1, 0), REPORT_BLUE),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.4, REPORT_GRID),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]
+    for index in range(1, len(data)):
+        if index % 2 == 0:
+            commands.append(("BACKGROUND", (0, index), (-1, index), REPORT_TILE_BG))
+    table.setStyle(TableStyle(commands))
+    return table
+
+
+def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes:
+    """
+    Test natijalari hisoboti (PDF): umumiy statistika, savollar bo'yicha
+    to'g'ri javoblar ulushi, eng qiyin/oson savollar va o'rinlar jadvali.
+    Ball — Rasch modeli bo'yicha (pullik va bepul testda ham).
+    """
+
+    report = build_rasch_report(db, test)
+    styles = _report_styles()
+    buffer = io.BytesIO()
+    document = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=34, bottomMargin=34,
+                                 title=f"{test.title} — natijalar")
+    width = document.width
+
+    status = "yakunlangan" if test.status == "closed" else "davom etmoqda"
+    elements = [
+        Paragraph(xml_escape(test.title), styles["title"]),
+        Paragraph(
+            xml_escape(
+                f"Fan: {test.subject}  ·  Test kodi: {test.code}  ·  O'qituvchi: {teacher.user.full_name}  ·  "
+                f"Sana: {datetime.now():%d.%m.%Y}  ·  Test {status}"
+            ),
+            styles["meta"],
+        ),
+        *_section_heading("Umumiy statistika", styles),
+        _stat_tiles(report["summary"], styles, width),
+        *_section_heading("Savollar bo'yicha to'g'ri javoblar ulushi", styles),
+        _share_chart(report["items"], width),
+        Spacer(1, 4),
+        _share_legend(width),
+        Spacer(1, 16),
+    ]
+
+    answered_items = [item for item in report["items"]]
+    hardest = sorted(answered_items, key=lambda item: (item["share"], item["label"]))[:8]
+    easiest = sorted(answered_items, key=lambda item: (-item["share"], item["label"]))[:8]
+
+    half = (width - 24) / 2
+    lists = Table(
+        [[_question_list("Eng qiyin savollar", hardest, styles["hard"], styles, half), "",
+          _question_list("Eng oson savollar", easiest, styles["easy"], styles, half)]],
+        colWidths=[half, 24, half],
     )
-    elements.append(table)
+    lists.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                               ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    elements.append(lists)
 
-    SimpleDocTemplate(buffer, pagesize=A4).build(elements)
+    elements.append(PageBreak())
+    elements += _section_heading("Natijalar (Rasch balli bo'yicha o'rinlar)", styles)
+    if report["rows"]:
+        elements.append(_results_table(report["rows"], styles, width))
+    else:
+        elements.append(Paragraph("Hali hech kim testni yakunlamagan.", styles["cell"]))
+
+    elements += [
+        Spacer(1, 10),
+        Paragraph(
+            xml_escape(
+                "Ball Rasch modeli bo'yicha hisoblangan (Milliy sertifikat uslubida): qiyin savol ko'proq ball "
+                "beradi, o'rtacha ball ~50. Darajalar: A+ 70+, A 65+, B+ 60+, B 55+, C+ 50+, C 46+."
+            ),
+            styles["meta"],
+        ),
+    ]
+
+    document.build(elements)
     return buffer.getvalue()
 
 
@@ -2386,31 +2718,27 @@ def reopen_test(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
 
 @app.get("/api/teacher/tests/{test_id}/results")
 def test_results(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
-    """Shu testni ishlagan o'quvchilarning natijalar jadvali."""
+    """
+    Shu testni ishlagan o'quvchilarning natijalar jadvali: o'rin, ism, to'g'ri,
+    xato, foiz, Rasch balli va darajasi (o'rin bo'yicha tartiblangan).
+    """
 
     test = _get_own_test(db, teacher, test_id)
-    results = best_attempts(db, test)
-    splits = score_splits(db, test, [attempt for attempt, _ in results])
+    report = build_rasch_report(db, test)
+    attempts = [db.get(Attempt, row["attempt_id"]) for row in report["rows"]]
+    splits = score_splits(db, test, attempts)
 
     return {
         "id": test.id,
         "title": test.title,
+        "code": test.code,
+        "status": test.status,
         "price": test.price,
         "mode": test.mode,
         "enrollment_type": test.enrollment_type,
         "total_questions": _question_count(test),
-        "rows": [
-            {
-                "attempt_id": attempt.id,
-                "name": name,
-                "correct": attempt.correct,
-                "wrong": attempt.wrong,
-                "percent": attempt.percent,
-                "seconds": attempt.seconds,
-                **splits[attempt.id],
-            }
-            for attempt, name in results
-        ],
+        "summary": report["summary"],
+        "rows": [{**row, **splits[row["attempt_id"]]} for row in report["rows"]],
     }
 
 

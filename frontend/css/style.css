@@ -1230,10 +1230,35 @@ body.keyboard-open .bottom-nav {
   color: var(--color-text-muted);
 }
 
+.result-line {
+  grid-template-columns: 26px 1fr auto;
+}
+
 .result-percent {
   font-weight: 700;
   min-width: 48px;
   text-align: right;
+}
+
+/* Ism ostida: to'g'ri • xato • foiz */
+.result-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.result-meta {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-text-muted);
+}
+
+/* Ball ostida daraja (A+, A, B+ ...) */
+.result-grade {
+  display: block;
+  font-size: 12px;
+  color: var(--color-primary);
 }
 
 /* Matematik klaviaturani yopish tugmasi — har doim klaviatura ustida turadi */

@@ -721,6 +721,66 @@ def test_yopilgan_test_natijalari_ochirilmaguncha_saqlanadi():
     assert client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).status_code == 404
 
 
+def test_rasch_balli_orin_va_daraja():
+    """Ko'proq (va qiyinroq) yechgan yuqori o'rinda; teng natija — teng o'rin; o'rtacha ~50."""
+    from backend.rasch import grade_for, rasch_scores
+
+    result = rasch_scores([[1, 1, 1, 0], [1, 1, 0, 0], [1, 0, 0, 0], [1, 1, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0]])
+    scores = result["scores"]
+    assert scores[4] > scores[0] > scores[1] > scores[2] > scores[5], scores
+    assert scores[1] == scores[3], "bir xil natija — bir xil ball"
+    assert abs(sum(scores) / len(scores) - 50) < 0.5, scores
+    assert grade_for(70) == "A+" and grade_for(65.5) == "A" and grade_for(45.9) == "—"
+
+    # Bitta o'quvchi bo'lsa ham ma'noli ball (hammasi 50 bo'lib qolmaydi)
+    assert rasch_scores([[1] * 10])["scores"][0] > rasch_scores([[1] * 5 + [0] * 5])["scores"][0]
+
+    reset_database()
+    register_teacher()
+    created = create_test()  # 1-savolning to'g'ri javobi B (jami 4 savol)
+    sent, restore = _capture_result_notices()
+    try:
+        for tg_id, answer in ((901, "B"), (902, "A"), (903, "B")):
+            started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(tg_id)).json()
+            client.post(
+                f"/api/attempts/{started['attempt_id']}/finish", json={"answers": {"1": answer}}, headers=as_user(tg_id)
+            )
+    finally:
+        restore()
+
+    results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
+    rows = results["rows"]
+    assert [row["rank"] for row in rows] == [1, 1, 3], rows
+    assert rows[0]["ball"] > rows[2]["ball"] and rows[2]["correct"] == 0 and rows[0]["correct"] == 1, rows
+    assert all("grade" in row and "correct" in row for row in rows), rows
+    assert results["summary"]["participants"] == 3, results["summary"]
+
+
+def test_pdf_hisobot_kirill_ismlar_va_yopilgan_test():
+    """PDF yopilgan (eski) test uchun ham olinadi, kirill ismlar bilan ham buzilmaydi."""
+    reset_database()
+    register_teacher()
+    client.post("/api/me/name", json={"first_name": "Фаррух", "last_name": "Комилжонов"}, headers=as_user(901))
+    created = create_test()
+
+    sent, restore = _capture_result_notices()
+    try:
+        started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
+        client.post(f"/api/attempts/{started['attempt_id']}/finish", json={"answers": {"1": "B"}}, headers=as_user(901))
+    finally:
+        restore()
+
+    assert client.post(f"/api/teacher/tests/{created['id']}/close", headers=as_user(555)).status_code == 200
+
+    pdf = client.get(f"/api/teacher/tests/{created['id']}/pdf", headers=as_user(555))
+    assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF"), pdf.text[:200]
+    assert len(pdf.content) > 5000
+
+    # Bo'sh test ham PDF beradi (xato emas)
+    empty = create_test()
+    assert client.get(f"/api/teacher/tests/{empty['id']}/pdf", headers=as_user(555)).status_code == 200
+
+
 def test_testni_qayta_ishlab_bolmaydi():
     """Tugatilgan testni qayta boshlashga yo'l qo'yilmaydi (reyting soxtalashmasin)."""
     reset_database()
