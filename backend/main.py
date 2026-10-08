@@ -51,6 +51,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from .rasch import grade_for, rasch_scores
 from .regions import REGIONS, is_valid_location
+from .student_import import names_from_rows, parse_student_file, rows_from_text
 from .auth import (
     get_current_admin,
     get_current_teacher,
@@ -88,7 +89,9 @@ from .database import (
     SchoolMember,
     SchoolClass,
     SchoolProfileIn,
+    StudentImportIn,
     StudentIn,
+    StudentsBulkIn,
     SessionLocal,
     StudentAnswer,
     StudentAnswersIn,
@@ -3784,6 +3787,63 @@ def add_student(class_id: int, body: StudentIn, user: User = Depends(get_current
     db.commit()
     db.refresh(school_class)
     return _class_view(db, school_class, with_details=True)
+
+
+@app.post("/api/classes/{class_id}/students/import/preview")
+def preview_student_import(
+    class_id: int, body: StudentImportIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """
+    Excel/CSV fayl yoki joylangan matndan ismlarni ajratadi — hali SAQLAMAYDI.
+    O'qituvchi ro'yxatni ko'rib, tasdiqlagandan keyingina qo'shiladi.
+    """
+
+    school_class = _own_class(db, user, class_id)
+    try:
+        if body.file_base64:
+            try:
+                data = base64.b64decode(body.file_base64.split(",")[-1], validate=True)
+            except (binascii.Error, ValueError):
+                raise ValueError("Fayl buzilgan — qayta tanlab ko'ring")
+            names = parse_student_file(body.file_name or "", data)
+        elif body.text:
+            names = names_from_rows(rows_from_text(body.text))
+        else:
+            raise ValueError("Fayl yoki ro'yxat yuborilmadi")
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+
+    if not names:
+        raise HTTPException(status_code=422, detail="Ro'yxatdan birorta ham ism topilmadi")
+
+    existing = {student.full_name.lower() for student in _active_students(school_class)}
+    return {
+        "names": [name for name in names if name.lower() not in existing],
+        "already_in_class": [name for name in names if name.lower() in existing],
+    }
+
+
+@app.post("/api/classes/{class_id}/students/bulk")
+def add_students_bulk(
+    class_id: int, body: StudentsBulkIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """Ko'rib chiqilgan ro'yxatni bir yo'la qo'shadi; sinfda bor ismlar takrorlanmaydi."""
+
+    school_class = _own_class(db, user, class_id)
+    existing = {student.full_name.lower() for student in _active_students(school_class)}
+
+    added = 0
+    for raw_name in body.names:
+        name = " ".join(str(raw_name).split())[:200]
+        if len(name) < 2 or name.lower() in existing:
+            continue
+        existing.add(name.lower())
+        db.add(ClassStudent(class_id=school_class.id, full_name=name))
+        added += 1
+
+    db.commit()
+    db.refresh(school_class)
+    return {"added": added, "class": _class_view(db, school_class, with_details=True)}
 
 
 @app.put("/api/classes/{class_id}/students/{student_id}")

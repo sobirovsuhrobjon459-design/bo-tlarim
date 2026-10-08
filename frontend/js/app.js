@@ -1321,7 +1321,7 @@ function renderClassStudentsTab(schoolClass) {
     : `<div class="empty-state">
          <div style="font-size:42px">👨‍🎓</div>
          <p>Sinfda hali o'quvchi yo'q.</p>
-         <p class="subtitle">Tepadagi "➕ Qo'shish" bilan o'quvchilarni qo'shing — ular davomatda va boshqa bo'limlarda o'zi chiqadi.</p>
+         <p class="subtitle">Tepadagi "➕ Qo'shish" bilan o'quvchilarni qo'shing — bittalab yoki Excel'dan bir yo'la. Ular davomatda va boshqa bo'limlarda o'zi chiqadi.</p>
        </div>`;
 
   showPage(`
@@ -1355,8 +1355,15 @@ function openAddStudentSheet(schoolClass) {
   let addedCount = 0;
   // Oyna yopilganda (Tayyor yoki orqa fonga bosilsa) ro'yxat yangilanadi
   const { sheet, close } = openSheet(`
-    <h3 style="margin:0 0 4px">➕ O'quvchi qo'shish</h3>
-    <p class="subtitle" style="margin:0 0 8px">Ketma-ket qo'shavering — har biridan keyin maydon tozalanadi.</p>
+    <h3 style="margin:0 0 8px">➕ O'quvchi qo'shish</h3>
+    <div class="import-actions">
+      <label class="btn btn-ghost import-file-label">
+        📄 Excel'dan
+        <input type="file" id="import-file" accept=".xlsx,.csv,.txt" hidden />
+      </label>
+      <button type="button" class="btn btn-ghost" id="open-paste">📋 Ro'yxatni joylash</button>
+    </div>
+    <p class="subtitle" style="margin:8px 0 8px">yoki bittalab yozing — har biridan keyin maydon tozalanadi:</p>
     <label class="field-label" for="sheet-student-name">Ism-familiya</label>
     <input class="input" id="sheet-student-name" maxlength="200" placeholder="Masalan: Islom Karimov" enterkeyhint="next" />
     <button class="btn" id="sheet-add-student" style="margin-top:10px">➕ Qo'shish</button>
@@ -1387,10 +1394,116 @@ function openAddStudentSheet(schoolClass) {
   });
 
   sheet.querySelector("#sheet-add-student").addEventListener("click", add);
+
+  // Tayyor ro'yxat: Excel/CSV fayl yoki nusxalab joylash
+  sheet.querySelector("#import-file").addEventListener(
+    "change",
+    guarded(async (event) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (!file) return;
+      close();
+      await importStudentsFromFile(schoolClass, file);
+    })
+  );
+  sheet.querySelector("#open-paste").addEventListener("click", () => {
+    close();
+    openPasteSheet(schoolClass);
+  });
   nameInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") add(event);
   });
   return close;
+}
+
+/* --- O'quvchilarni Excel yoki ro'yxatdan import qilish --- */
+
+const IMPORT_MAX_FILE_BYTES = 3 * 1024 * 1024;
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",").pop());
+    reader.onerror = () => reject(new Error("Faylni o'qib bo'lmadi"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function importStudentsFromFile(schoolClass, file) {
+  if (!file) return;
+  if (file.size > IMPORT_MAX_FILE_BYTES) throw new Error("Fayl juda katta (3 MB dan oshmasin)");
+  const fileBase64 = await readFileAsBase64(file);
+  const preview = await api(`/api/classes/${schoolClass.id}/students/import/preview`, {
+    method: "POST",
+    body: { file_base64: fileBase64, file_name: file.name },
+  });
+  showImportPreview(schoolClass, preview, `📄 ${file.name}`);
+}
+
+function openPasteSheet(schoolClass) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 4px">📋 Ro'yxatni joylash</h3>
+    <p class="subtitle" style="margin:0 0 8px">
+      Excel, Word yoki Telegram'dagi ro'yxatni nusxalab shu yerga joylang — har qatorda bitta o'quvchi.
+      Raqamlar ("1.", "2)") va sarlavha o'zi olib tashlanadi.
+    </p>
+    <textarea id="paste-students" rows="9" placeholder="1. Karimov Islom&#10;2. Aliyeva Dilnoza&#10;3. Raximov Sardor"></textarea>
+    <button class="btn" id="paste-preview" style="margin-top:10px">🔍 Ko'rib chiqish</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+  const textarea = sheet.querySelector("#paste-students");
+  setTimeout(() => textarea.focus(), 250);
+
+  sheet.querySelector("#paste-preview").addEventListener(
+    "click",
+    guarded(async () => {
+      const text = textarea.value.trim();
+      if (!text) throw new Error("Ro'yxatni joylang");
+      const preview = await api(`/api/classes/${schoolClass.id}/students/import/preview`, {
+        method: "POST",
+        body: { text },
+      });
+      close();
+      showImportPreview(schoolClass, preview, "📋 Joylangan ro'yxat");
+    })
+  );
+}
+
+// Ko'rib chiqish: nima qo'shilishini ko'rsatadi — tasdiqlangandagina saqlanadi
+function showImportPreview(schoolClass, preview, sourceLabel) {
+  const names = preview.names;
+  const skipped = preview.already_in_class;
+
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 4px">${names.length ? `✅ ${names.length} ta o'quvchi topildi` : "Yangi o'quvchi topilmadi"}</h3>
+    <p class="subtitle" style="margin:0 0 8px">${escapeHtml(sourceLabel)}</p>
+    ${
+      skipped.length
+        ? `<p class="subtitle" style="margin:0 0 8px">ℹ️ ${skipped.length} tasi sinfda allaqachon bor — qayta qo'shilmaydi.</p>`
+        : ""
+    }
+    <ol class="import-list">${names.map((name) => `<li>${escapeHtml(name)}</li>`).join("")}</ol>
+    ${
+      names.length
+        ? `<button class="btn" id="import-confirm" style="margin-top:12px">➕ ${names.length} ta o'quvchini qo'shish</button>`
+        : ""
+    }
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+
+  sheet.querySelector("#import-confirm")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const result = await api(`/api/classes/${schoolClass.id}/students/bulk`, {
+        method: "POST",
+        body: { names },
+      });
+      myClassesCache = null;
+      close();
+      showToast(`✅ ${result.added} ta o'quvchi qo'shildi`);
+      openClassTab(result.class, "students");
+    })
+  );
 }
 
 async function renderStudentProfile(schoolClass, studentId) {

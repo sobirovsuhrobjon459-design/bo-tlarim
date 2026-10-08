@@ -707,3 +707,17 @@ class AttendanceIn(BaseModel):
             if status not in ATTENDANCE_STATUSES:
                 raise ValueError(f"Noto'g'ri holat: {status}")
         return self
+
+
+class StudentImportIn(BaseModel):
+    """O'quvchilar ro'yxatini o'qish: Excel/CSV fayl (base64) yoki joylangan matn."""
+
+    file_base64: str | None = Field(default=None, max_length=4_000_000)  # ~3 MB fayl
+    file_name: str | None = Field(default=None, max_length=200)
+    text: str | None = Field(default=None, max_length=200_000)
+
+
+class StudentsBulkIn(BaseModel):
+    """Ko'rib chiqilgan ro'yxatni bir yo'la qo'shish."""
+
+    names: list[str] = Field(min_length=1, max_length=500)

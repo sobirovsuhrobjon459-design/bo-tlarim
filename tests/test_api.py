@@ -11,6 +11,7 @@ qo'riqlaydi: agar kimdir ularni qaytarib qo'ysa, test darhol yiqiladi.
 """
 
 import base64
+import io
 import hashlib
 import hmac
 import json
@@ -1195,6 +1196,63 @@ def test_davomat_matn_rasm_va_pdf():
     finally:
         main._send_bot_text, main._send_pdf_to_telegram, main._send_photo_to_telegram = originals
     assert sent == [("text", 701), ("image", 701), ("pdf", 701)], sent
+
+
+def test_oquvchilarni_excel_va_matndan_import():
+    """Tayyor ro'yxat Excel/CSV/matndan o'qiladi: sarlavha, raqam, sana tashlanadi; takror qo'shilmaydi."""
+    from datetime import date as _date
+
+    from openpyxl import Workbook
+
+    reset_database()
+    school_class = _school_with_class()
+    cid = school_class["id"]
+    client.post(f"/api/classes/{cid}/students", json={"full_name": "Karimov Islom"}, headers=as_user(701))
+
+    # Excel: sarlavha + "№ | Familiya | Ism | Tug'ilgan sana" + bo'sh qator
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["№", "Familiya", "Ism", "Tug'ilgan sana"])
+    sheet.append([1, "Karimov", "Islom", _date(2010, 5, 14)])
+    sheet.append([2, "Комилжонов", "Фаррух", None])
+    sheet.append([None, None, None, None])
+    sheet.append([3, "Aliyeva", "Dilnoza", "14.05.2011"])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    encoded = base64.b64encode(buffer.getvalue()).decode()
+
+    preview = client.post(f"/api/classes/{cid}/students/import/preview",
+                          json={"file_base64": encoded, "file_name": "10-2 sinf.xlsx"}, headers=as_user(701))
+    assert preview.status_code == 200, preview.text
+    data = preview.json()
+    assert data["names"] == ["Комилжонов Фаррух", "Aliyeva Dilnoza"], data
+    assert data["already_in_class"] == ["Karimov Islom"], data
+
+    # Hali hech narsa saqlanmagan — faqat ko'rib chiqish
+    assert len(client.get(f"/api/classes/{cid}", headers=as_user(701)).json()["students"]) == 1
+
+    added = client.post(f"/api/classes/{cid}/students/bulk", json={"names": data["names"] + ["Karimov Islom"]},
+                        headers=as_user(701)).json()
+    assert added["added"] == 2 and len(added["class"]["students"]) == 3, added
+
+    # Excel'dan nusxalab joylangan matn (TAB) va raqamlangan ro'yxat
+    pasted = "F.I.Sh\n1. Sardor Raximov\n2) Malika Yusupova\nToshev\tJasur\n\n"
+    names = client.post(f"/api/classes/{cid}/students/import/preview", json={"text": pasted}, headers=as_user(701)).json()["names"]
+    assert names == ["Sardor Raximov", "Malika Yusupova", "Toshev Jasur"], names
+
+    # CSV (nuqta-vergul bilan, kirillcha)
+    csv_bytes = "ФИО;Телефон\nНилуфар Каримова;+998 90 123 45 67\n".encode("utf-8-sig")
+    names = client.post(f"/api/classes/{cid}/students/import/preview",
+                        json={"file_base64": base64.b64encode(csv_bytes).decode(), "file_name": "royxat.csv"},
+                        headers=as_user(701)).json()["names"]
+    assert names == ["Нилуфар Каримова"], names
+
+    # Eski .xls va bo'sh ro'yxat — tushunarli xato
+    old = client.post(f"/api/classes/{cid}/students/import/preview",
+                      json={"file_base64": base64.b64encode(b"xx").decode(), "file_name": "a.xls"}, headers=as_user(701))
+    assert old.status_code == 422 and ".xlsx" in old.json()["detail"]
+    empty = client.post(f"/api/classes/{cid}/students/import/preview", json={"text": "№\n1\n2\n"}, headers=as_user(701))
+    assert empty.status_code == 422
 
 
 def test_maktab_kodini_taxmin_qilib_topish_toxtatiladi():

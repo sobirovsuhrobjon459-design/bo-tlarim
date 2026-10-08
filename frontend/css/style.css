@@ -1942,3 +1942,41 @@ select option {
   border-radius: 10px;
   cursor: pointer;
 }
+
+/* O'quvchilarni import qilish */
+.import-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.import-actions .btn {
+  flex: 1;
+  margin: 0;
+  padding: 12px 8px;
+  font-size: 14px;
+  text-align: center;
+}
+
+.import-file-label {
+  cursor: pointer;
+}
+
+.import-list {
+  max-height: 42vh;
+  overflow-y: auto;
+  margin: 0;
+  padding: 10px 14px 10px 34px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.import-list li {
+  padding: 3px 0;
+}
+
+#paste-students {
+  width: 100%;
+  font-size: 15px;
+  line-height: 1.5;
+}
