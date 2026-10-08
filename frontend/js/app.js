@@ -936,7 +936,7 @@ async function renderRegionPicker() {
   `);
 
   document.querySelector('[data-action="back-folder"]').addEventListener("click", renderSchoolFolder);
-  document.querySelector('[data-action="join-school"]').addEventListener("click", guarded(renderJoinSchool));
+  document.querySelector('[data-action="join-school"]').addEventListener("click", guarded(() => renderJoinSchool()));
   document.querySelectorAll("[data-region]").forEach((item) => {
     item.addEventListener("click", () => renderDistrictPicker(regions[Number(item.dataset.region)]));
   });
@@ -955,7 +955,56 @@ function renderDistrictPicker(region) {
 
   document.querySelector('[data-action="back-regions"]').addEventListener("click", guarded(renderRegionPicker));
   document.querySelectorAll("[data-district]").forEach((item) => {
-    item.addEventListener("click", guarded(() => renderCreateSchool(region, region.districts[Number(item.dataset.district)])));
+    item.addEventListener("click", guarded(() => renderDistrictSchools(region, region.districts[Number(item.dataset.district)])));
+  });
+}
+
+/*
+  Tuman sahifasi: yangi maktab ochish yoki shu tumandagi mavjud maktabga
+  kirish. Maktab nomi ko'rinadi, lekin kirish uchun uning kodi kerak —
+  boshqa maktab o'qituvchilari kirib qolmasligi uchun.
+*/
+async function renderDistrictSchools(region, district) {
+  const schools = await api(
+    `/api/schools?region=${encodeURIComponent(region.name)}&district=${encodeURIComponent(district)}`
+  );
+
+  const schoolRows = schools.length
+    ? `<div class="panel pick-list">
+        ${schools
+          .map(
+            (school, index) => `
+              <button type="button" class="pick-item" data-school-index="${index}">
+                <span class="pick-title">🏫 ${escapeHtml(school.name)}<small>${school.teachers} ta o'qituvchi</small></span>
+                <span>🔒</span>
+              </button>`
+          )
+          .join("")}
+      </div>
+      <p class="subtitle" style="margin:6px 0 0">Maktabga kirish uchun uning kodi kerak — kodni maktab o'qituvchisidan oling.</p>`
+    : `<p class="subtitle">Bu tumanda hali xususiy maktab ochilmagan. Birinchi bo'lib oching!</p>`;
+
+  showPage(`
+    ${schoolPageHeader(district, "back-districts")}
+    <p class="subtitle" style="margin-top:0">📍 ${escapeHtml(region.name)}</p>
+    <div class="card" data-action="new-school">
+      <div class="card-icon">➕</div>
+      <div class="card-body">
+        <h3>Yangi maktab ochish</h3>
+        <p>Maktabingiz ro'yxatda bo'lmasa</p>
+      </div>
+    </div>
+    <p class="section-label" style="margin-top:18px">BU TUMANDAGI MAKTABLAR (${schools.length})</p>
+    ${schoolRows}
+  `);
+
+  document.querySelector('[data-action="back-districts"]').addEventListener("click", () => renderDistrictPicker(region));
+  document.querySelector('[data-action="new-school"]').addEventListener("click", guarded(() => renderCreateSchool(region, district)));
+  document.querySelectorAll("[data-school-index]").forEach((item) => {
+    item.addEventListener(
+      "click",
+      guarded(() => renderJoinSchool({ school: schools[Number(item.dataset.schoolIndex)], region, district }))
+    );
   });
 }
 
@@ -1066,7 +1115,7 @@ async function renderCreateSchool(region, district) {
   document.querySelector('[data-action="back-districts"]').addEventListener(
     "click",
     guarded(async () => {
-      if (await confirmLeave()) renderDistrictPicker(region);
+      if (await confirmLeave()) await renderDistrictSchools(region, district);
     })
   );
 
@@ -1090,13 +1139,23 @@ async function renderCreateSchool(region, district) {
   );
 }
 
-async function renderJoinSchool() {
+async function renderJoinSchool({ school: target = null, region = null, district = null } = {}) {
   const nameFields = await profileNameFieldsHtml();
 
   showPage(`
     ${schoolPageHeader("Maktabga qo'shilish", "back-regions")}
+    ${
+      target
+        ? `<div class="card" style="cursor:default">
+             <div class="card-body">
+               <h3 style="margin:0">🏫 ${escapeHtml(target.name)}</h3>
+               <p class="subtitle" style="margin:4px 0 0">📍 ${escapeHtml(region.name)}, ${escapeHtml(district)}</p>
+             </div>
+           </div>`
+        : ""
+    }
     <label class="field-label" for="school-code-input">Maktab kodi</label>
-    <input class="input" id="school-code-input" placeholder="Masalan: K7M2QX" maxlength="12"
+    <input class="input" id="school-code-input" placeholder="Maktab kodi (8 belgi)" maxlength="12"
            style="text-transform:uppercase;letter-spacing:3px;text-align:center;font-size:18px" />
     <p class="subtitle" style="margin:4px 0 0">Kodni maktabingizdagi o'qituvchidan oling.</p>
 
@@ -1113,7 +1172,9 @@ async function renderJoinSchool() {
   document.querySelector('[data-action="back-regions"]').addEventListener(
     "click",
     guarded(async () => {
-      if (await confirmLeave()) await renderRegionPicker();
+      if (!(await confirmLeave())) return;
+      if (target) await renderDistrictSchools(region, district);
+      else await renderRegionPicker();
     })
   );
 
@@ -1131,7 +1192,10 @@ async function renderJoinSchool() {
       if (!confirmed) return;
 
       await saveProfileName();
-      const { school } = await api("/api/schools/join", { method: "POST", body: { code, subjects } });
+      const { school } = await api("/api/schools/join", {
+        method: "POST",
+        body: { code, subjects, school_id: target ? target.id : null },
+      });
       showToast(`✅ "${school.name}" maktabiga qo'shildingiz`);
       renderMySchool(school);
     })

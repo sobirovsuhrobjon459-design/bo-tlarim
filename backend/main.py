@@ -26,6 +26,7 @@ import os
 import random
 import re
 import threading
+import time
 from contextlib import asynccontextmanager
 from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timezone
@@ -3178,7 +3179,31 @@ def test_rating(code: str, user: User = Depends(get_current_user), db: Session =
 # bitta maktabda bo'ladi va u yerda doimiy qoladi — chiqish uchun ham maktab
 # kodini kiritish kerak (tasodifan yoki begona odam chiqarib yubormasligi uchun).
 
-SCHOOL_CODE_LENGTH = 6
+# 8 belgi (31 xil belgidan) — ~850 milliard xil kod: taxmin qilib topib bo'lmaydi.
+# Avval ochilgan 6 belgili kodlar ham ishlayveradi.
+SCHOOL_CODE_LENGTH = 8
+
+# Kodni taxmin qilib topishdan himoya: bir foydalanuvchi 15 daqiqada ko'pi
+# bilan 5 marta noto'g'ri kod kirita oladi, keyin vaqtincha to'xtatiladi.
+SCHOOL_CODE_MAX_FAILURES = 5
+SCHOOL_CODE_WINDOW_SECONDS = 15 * 60
+_school_code_failures: dict[int, list[float]] = {}
+
+
+def _check_code_attempts(user: User) -> None:
+    now = time.monotonic()
+    recent = [moment for moment in _school_code_failures.get(user.id, []) if now - moment < SCHOOL_CODE_WINDOW_SECONDS]
+    _school_code_failures[user.id] = recent
+    if len(recent) >= SCHOOL_CODE_MAX_FAILURES:
+        minutes = int((SCHOOL_CODE_WINDOW_SECONDS - (now - recent[0])) // 60) + 1
+        raise HTTPException(
+            status_code=429,
+            detail=f"Kod juda ko'p marta noto'g'ri kiritildi. {minutes} daqiqadan keyin qayta urinib ko'ring.",
+        )
+
+
+def _record_code_failure(user: User) -> None:
+    _school_code_failures.setdefault(user.id, []).append(time.monotonic())
 
 
 def _active_membership(db: Session, user: User) -> SchoolMember | None:
@@ -3243,6 +3268,34 @@ def list_regions():
     return [{"name": name, "districts": districts} for name, districts in REGIONS.items()]
 
 
+@app.get("/api/schools")
+def schools_in_district(
+    region: str, district: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """
+    Tanlangan tumandagi mavjud maktablar — o'qituvchi yangi ochish o'rniga
+    o'z maktabini tanlab, kod bilan kirishi uchun. Kod bu yerda BERILMAYDI.
+    """
+
+    if not is_valid_location(region, district):
+        raise HTTPException(status_code=422, detail="Viloyat yoki tuman noto'g'ri tanlangan")
+
+    schools = db.scalars(
+        select(PrivateSchool)
+        .where(PrivateSchool.region == region, PrivateSchool.district == district)
+        .order_by(PrivateSchool.name)
+    ).all()
+
+    return [
+        {
+            "id": school.id,
+            "name": school.name,
+            "teachers": sum(1 for member in school.members if member.left_at is None),
+        }
+        for school in schools
+    ]
+
+
 @app.get("/api/schools/me")
 def my_school(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """O'qituvchi a'zo bo'lgan maktab (bo'lmasa — null)."""
@@ -3260,6 +3313,20 @@ def create_school(body: SchoolCreateIn, user: User = Depends(get_current_user), 
         raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
     if not is_valid_location(body.region, body.district):
         raise HTTPException(status_code=422, detail="Viloyat yoki tuman noto'g'ri tanlangan")
+
+    # Bitta tumanda bir xil nomli ikki maktab o'qituvchilarni chalg'itadi
+    same_name = db.scalar(
+        select(PrivateSchool.id).where(
+            PrivateSchool.region == body.region,
+            PrivateSchool.district == body.district,
+            func.lower(PrivateSchool.name) == body.name.lower(),
+        )
+    )
+    if same_name:
+        raise HTTPException(
+            status_code=409,
+            detail=f"«{body.name}» maktabi bu tumanda allaqachon ochilgan. Uni ro'yxatdan tanlab, kod bilan kiring.",
+        )
 
     school = PrivateSchool(
         name=body.name,
@@ -3290,9 +3357,23 @@ def join_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db: 
     if _active_membership(db, user):
         raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
 
-    school = db.scalar(select(PrivateSchool).where(PrivateSchool.code == body.code))
-    if not school:
-        raise HTTPException(status_code=404, detail="Bunday kodli maktab topilmadi. Kodni tekshirib qayta kiriting.")
+    _check_code_attempts(user)
+
+    if body.school_id:
+        # Ro'yxatdan tanlangan maktab — kod aynan shu maktabniki bo'lishi shart
+        school = db.get(PrivateSchool, body.school_id)
+        if not school:
+            raise HTTPException(status_code=404, detail="Maktab topilmadi")
+        if not hmac.compare_digest(body.code, school.code):
+            _record_code_failure(user)
+            raise HTTPException(status_code=403, detail="Maktab kodi noto'g'ri. Kodni maktabingiz o'qituvchisidan oling.")
+    else:
+        school = db.scalar(select(PrivateSchool).where(PrivateSchool.code == body.code))
+        if not school:
+            _record_code_failure(user)
+            raise HTTPException(status_code=404, detail="Bunday kodli maktab topilmadi. Kodni tekshirib qayta kiriting.")
+
+    _school_code_failures.pop(user.id, None)
 
     member = SchoolMember(
         school_id=school.id, user_id=user.id, role="teacher", subjects=json.dumps(body.subjects, ensure_ascii=False)
@@ -3331,7 +3412,9 @@ def leave_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db:
         raise HTTPException(status_code=404, detail="Siz hech qaysi maktabga a'zo emassiz")
 
     school = member.school
+    _check_code_attempts(user)
     if not hmac.compare_digest(body.code, school.code):
+        _record_code_failure(user)
         raise HTTPException(status_code=403, detail="Maktab kodi noto'g'ri. Chiqish uchun maktab kodini kiriting.")
 
     member.left_at = utcnow()

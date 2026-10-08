@@ -575,6 +575,8 @@ class SchoolCodeIn(BaseModel):
 
     code: str = Field(min_length=4, max_length=20)
     subjects: list[str] = Field(default_factory=list, max_length=20)
+    # Tuman ro'yxatidan tanlangan maktab (bo'lmasa — maktab kod bo'yicha topiladi)
+    school_id: int | None = None
 
     @model_validator(mode="after")
     def normalize(self) -> "SchoolCodeIn":

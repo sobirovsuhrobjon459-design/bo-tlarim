@@ -59,6 +59,7 @@ def reset_database() -> None:
     """Har bir test toza bazada boshlanadi."""
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
+    main._school_code_failures.clear()  # noto'g'ri kod urinishlari hisobi ham tozalanadi
 
 
 def as_user(tg_id: int) -> dict:
@@ -907,7 +908,7 @@ def test_xususiy_maktab_yaratish_va_kod_bilan_qoshilish():
     )
     assert created.status_code == 200, created.text
     school = created.json()["school"]
-    assert school["name"] == "Kelajak maktabi" and len(school["code"]) == 6, school
+    assert school["name"] == "Kelajak maktabi" and len(school["code"]) == 8, school
     assert school["my_role"] == "owner" and school["my_subjects"] == ["Matematika", "Fizika"], school
 
     # Ikkinchi maktab ochib bo'lmaydi
@@ -964,6 +965,59 @@ def test_maktabdan_faqat_kod_bilan_chiqiladi_va_tarix_saqlanadi():
 
     # Chiqqandan keyin yana qo'shila oladi
     assert client.post("/api/schools/join", json={"code": school["code"]}, headers=as_user(701)).status_code == 200
+
+
+def test_tumandagi_maktablar_royxati_va_tanlangan_maktabga_faqat_uning_kodi_bilan():
+    reset_database()
+    main._school_code_failures.clear()
+    _set_name(701, "Aziza", "Karimova")
+    _set_name(702, "Bobur", "Aliyev")
+    _set_name(703, "Sardor", "Raximov")
+    place = {"region": "Samarqand viloyati", "district": "Urgut tumani"}
+
+    first = client.post("/api/schools", json={**place, "name": "Ilm maktabi"}, headers=as_user(701)).json()["school"]
+    second = client.post("/api/schools", json={**place, "name": "Bilim maktabi"}, headers=as_user(702)).json()["school"]
+    assert len(first["code"]) == 8, first["code"]
+
+    # Shu tumanda bir xil nomli maktab ikkinchi marta ochilmaydi (katta-kichik harf farqi bilan ham)
+    _set_name(704, "Dilshod", "Toshev")
+    duplicate = client.post("/api/schools", json={**place, "name": "ilm MAKTABI"}, headers=as_user(704))
+    assert duplicate.status_code == 409, duplicate.text
+
+    listed = client.get("/api/schools", params=place, headers=as_user(703)).json()
+    assert [school["name"] for school in listed] == ["Bilim maktabi", "Ilm maktabi"], listed
+    assert all("code" not in school for school in listed), "kod ro'yxatda ko'rinib qoldi"
+    assert listed[1]["teachers"] == 1
+
+    # Boshqa tuman ro'yxatida ko'rinmaydi
+    other = client.get("/api/schools", params={"region": "Samarqand viloyati", "district": "Jomboy tumani"},
+                       headers=as_user(703)).json()
+    assert other == []
+
+    # "Ilm maktabi"ni tanlab, boshqa maktabning (to'g'ri) kodi bilan kira olmaydi
+    wrong = client.post("/api/schools/join", json={"code": second["code"], "school_id": first["id"]}, headers=as_user(703))
+    assert wrong.status_code == 403, wrong.text
+    ok = client.post("/api/schools/join", json={"code": first["code"], "school_id": first["id"]}, headers=as_user(703))
+    assert ok.status_code == 200 and ok.json()["school"]["name"] == "Ilm maktabi", ok.text
+
+
+def test_maktab_kodini_taxmin_qilib_topish_toxtatiladi():
+    reset_database()
+    main._school_code_failures.clear()
+    _set_name(701, "Aziza", "Karimova")
+    _set_name(709, "Begona", "Odam")
+    school = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                               "name": "Maktab"}, headers=as_user(701)).json()["school"]
+
+    for attempt in range(5):
+        response = client.post("/api/schools/join", json={"code": f"WRONG{attempt:03d}", "school_id": school["id"]},
+                               headers=as_user(709))
+        assert response.status_code == 403, response.text
+
+    # 6-urinish — hatto to'g'ri kod bilan ham vaqtincha to'xtatiladi
+    blocked = client.post("/api/schools/join", json={"code": school["code"], "school_id": school["id"]}, headers=as_user(709))
+    assert blocked.status_code == 429, blocked.text
+    main._school_code_failures.clear()
 
 
 def test_maktab_notogri_joylashuv_va_ismsiz_ochilmaydi():
