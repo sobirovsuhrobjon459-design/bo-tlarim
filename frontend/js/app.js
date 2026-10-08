@@ -668,7 +668,7 @@ function hideBottomNav() {
 }
 
 function pageHeader(title) {
-  // Chapdagi "←" bosh sahifaga — o'quvchi/o'qituvchi tanlash ekraniga qaytaradi
+  // Chapdagi "←" — "Testlar" papkasiga (o'quvchi/o'qituvchi tanlash) qaytaradi
   return `
     <div class="page-header">
       <button class="back-button" type="button" data-action="back" style="margin:0">←</button>
@@ -680,7 +680,7 @@ function wireTeacherChrome(activeTab) {
   document.querySelector('[data-action="back"]')?.addEventListener(
     "click",
     guarded(async () => {
-      if (await confirmLeave()) await loadHome();
+      if (await confirmLeave()) renderTestFolder();
     })
   );
   showBottomNav(activeTab);
@@ -767,6 +767,15 @@ const ROLE_ICONS = {
   admin: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
     stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v5c0 5 3.4 8.6 8 10 4.6-1.4 8-5 8-10V6l-8-3Z"/>
     <path d="m9 12 2 2 4-4"/></svg>`,
+  folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+    stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>
+    <path d="M8 13h8"/></svg>`,
+  school: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+    stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V10l7-5 7 5v11"/>
+    <path d="M10 21v-5h4v5M9 11h.01M15 11h.01"/></svg>`,
+  parents: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+    stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="7" r="3"/><circle cx="17" cy="9" r="2.3"/>
+    <path d="M2.5 20c0-3.3 2.5-6 5.5-6s5.5 2.7 5.5 6M13.5 20c.3-2.6 1.8-4.6 3.5-4.6s3.4 2 3.6 4.6"/></svg>`,
 };
 
 function roleCard(action, icon, title, description) {
@@ -787,24 +796,20 @@ function renderHome(userName, backendOk) {
     <h1 class="fade-up">${greeting}</h1>
     <p class="subtitle fade-up">Bilimingizni sinang va natijangizni kuzating.</p>
 
-    ${roleCard("student", ROLE_ICONS.student, "O'QUVCHI", "Testlarni topish va ishlash")}
-    ${roleCard("teacher", ROLE_ICONS.teacher, "O'QITUVCHI", "Test yaratish va natijalarni boshqarish")}
+    ${roleCard("tests", ROLE_ICONS.folder, "TESTLAR", "O'quvchi va o'qituvchi bo'limlari")}
+    ${roleCard("school", ROLE_ICONS.school, "MAKTAB", "Maktab bo'limi")}
+    ${roleCard("parents", ROLE_ICONS.parents, "OTA-ONA", "Ota-onalar bo'limi")}
     ${isAdmin ? roleCard("admin", ROLE_ICONS.admin, "ADMIN", "Umumiy statistika va boshqaruv") : ""}
 
     ${statusHtml}
   `);
 
-  document.querySelector('[data-action="student"]').addEventListener(
-    "click",
-    guarded(async () => {
-      await renderStudentHome();
-    })
+  document.querySelector('[data-action="tests"]').addEventListener("click", renderTestFolder);
+  document.querySelector('[data-action="school"]').addEventListener("click", () =>
+    renderComingSoon("Maktab", ROLE_ICONS.school)
   );
-  document.querySelector('[data-action="teacher"]').addEventListener(
-    "click",
-    guarded(async () => {
-      await enterTeacherArea();
-    })
+  document.querySelector('[data-action="parents"]').addEventListener("click", () =>
+    renderComingSoon("Ota-ona", ROLE_ICONS.parents)
   );
   document.querySelector('[data-action="admin"]')?.addEventListener(
     "click",
@@ -812,6 +817,46 @@ function renderHome(userName, backendOk) {
       await renderAdminDashboard();
     })
   );
+}
+
+/*
+  "Testlar" papkasi — o'quvchi va o'qituvchi bo'limlari shu yerda. Ularning
+  ichidagi "←" tugmalari ham shu papkaga qaytaradi (bosh sahifaga emas).
+*/
+function renderTestFolder() {
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="home" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">Testlar</h2>
+    </div>
+    <p class="subtitle fade-up">Kim sifatida kirasiz?</p>
+
+    ${roleCard("student", ROLE_ICONS.student, "O'QUVCHI", "Testlarni topish va ishlash")}
+    ${roleCard("teacher", ROLE_ICONS.teacher, "O'QITUVCHI", "Test yaratish va natijalarni boshqarish")}
+  `);
+
+  document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
+  document.querySelector('[data-action="student"]').addEventListener("click", guarded(renderStudentHome));
+  document.querySelector('[data-action="teacher"]').addEventListener("click", guarded(enterTeacherArea));
+}
+
+function renderComingSoon(title, icon) {
+  // Maktab va Ota-ona bo'limlari — mazmuni keyinroq qo'shiladi
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="home" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">${escapeHtml(title)}</h2>
+    </div>
+    <div class="card" style="cursor:default">
+      <div class="card-icon">${icon}</div>
+      <div class="card-body">
+        <h3>Tez orada</h3>
+        <p>Bu bo'lim ustida ishlanmoqda va yaqin orada ishga tushadi.</p>
+      </div>
+    </div>
+  `);
+
+  document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
 }
 
 async function loadHome() {
@@ -1101,7 +1146,7 @@ async function renderStudentHome() {
     ${completedRows}
   `);
 
-  document.querySelector('[data-action="back"]')?.addEventListener("click", loadHome);
+  document.querySelector('[data-action="back"]')?.addEventListener("click", renderTestFolder);
   document.getElementById("find-test-button").addEventListener("click", renderTestCodeSearch);
   document.getElementById("edit-name-button").addEventListener(
     "click",
@@ -1727,7 +1772,7 @@ function renderTeacherRegister() {
     <button class="btn" id="submit-register-button">✅ Ro'yxatdan o'tish</button>
   `);
 
-  document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
+  document.querySelector('[data-action="home"]').addEventListener("click", renderTestFolder);
   document.getElementById("submit-register-button").addEventListener("click", guarded(submitTeacherRegister));
 }
 
