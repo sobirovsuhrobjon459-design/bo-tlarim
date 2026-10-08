@@ -966,7 +966,7 @@ function renderCreateClass() {
     <button class="btn" id="create-class-button" style="margin-top:14px">➕ Yaratish</button>
   `);
 
-  document.querySelector('[data-action="back-profile"]').addEventListener("click", () => renderSchoolProfile(currentSchool));
+  document.querySelector('[data-action="back-profile"]').addEventListener("click", () => renderSchoolClasses(currentSchool));
   document.getElementById("create-class-button").addEventListener(
     "click",
     guarded(async () => {
@@ -992,7 +992,7 @@ async function renderClass(classOrId) {
     ${roleCard("attendance-history", "🗂", `DAVOMAT TARIXI (${schoolClass.attendances.length})`, "Ko'rish, tahrirlash va yuborish")}
   `);
 
-  document.querySelector('[data-action="back-profile"]').addEventListener("click", () => renderSchoolProfile(currentSchool));
+  document.querySelector('[data-action="back-profile"]').addEventListener("click", () => renderSchoolClasses(currentSchool));
   document.querySelector('[data-action="take-attendance"]').addEventListener("click", () => {
     if (!schoolClass.students.length) {
       showToast("Avval sinfga o'quvchilarni qo'shing");
@@ -1853,6 +1853,7 @@ function shareSchoolInvite(school) {
 const SCHOOL_TABS = [
   { id: "school", icon: "🏫", label: "Maktab" },
   { id: "teachers", icon: "👥", label: "O'qituvchilar" },
+  { id: "classes", icon: "📚", label: "Sinflarim" },
   { id: "profile", icon: "👤", label: "Profil" },
 ];
 
@@ -1891,6 +1892,7 @@ function showSchoolNav(activeTab) {
 
 function openSchoolTab(tab) {
   if (tab === "teachers") renderSchoolTeachers(currentSchool);
+  else if (tab === "classes") renderSchoolClasses(currentSchool);
   else if (tab === "profile") renderSchoolProfile(currentSchool);
   else renderMySchool(currentSchool);
 }
@@ -2012,6 +2014,23 @@ function renderSchoolTeachers(school) {
   refreshSchoolInBackground("teachers");
 }
 
+// 📚 Sinflarim tabi — o'qituvchi faqat o'zi dars beradigan sinf/guruhlari
+function renderSchoolClasses(school) {
+  currentSchool = school;
+
+  showPage(`
+    <div data-school-tab="classes">
+      ${schoolTabHeader("Sinflarim")}
+      <button class="btn" id="create-class-button" style="margin-top:4px">➕ Sinf yaratish</button>
+      <div id="my-classes" style="margin-top:14px"><p class="subtitle" style="margin:6px 0 0">⏳ Yuklanmoqda...</p></div>
+    </div>
+  `);
+
+  wireSchoolTab("classes");
+  document.getElementById("create-class-button").addEventListener("click", renderCreateClass);
+  loadMyClassesInto(document.getElementById("my-classes"));
+}
+
 // 👤 Profil tabi: ma'lumotlar, tahrirlash va maktabdan chiqish
 function renderSchoolProfile(school) {
   currentSchool = school;
@@ -2034,20 +2053,12 @@ function renderSchoolProfile(school) {
         <div class="row-between"><span class="subtitle" style="margin:0">Joylashuv</span><b>${escapeHtml(school.district)}</b></div>
       </div>
 
-      <div class="row-between" style="margin:20px 0 6px">
-        <span class="section-label" style="margin:0">SINFLARIM</span>
-        <button type="button" class="btn btn-ghost" id="create-class-button" style="width:auto;margin:0;padding:8px 14px">➕ Sinf yaratish</button>
-      </div>
-      <div id="my-classes"><p class="subtitle" style="margin:6px 0 0">⏳ Yuklanmoqda...</p></div>
-
       <button class="btn" id="edit-school-profile" style="margin-top:20px">✏️ Profilni tahrirlash</button>
       <button class="btn btn-ghost" id="leave-school-button" style="margin-top:10px">🚪 Maktabdan chiqish</button>
     </div>
   `);
 
   wireSchoolTab("profile");
-  document.getElementById("create-class-button").addEventListener("click", renderCreateClass);
-  loadMyClassesInto(document.getElementById("my-classes"));
   document.getElementById("edit-school-profile").addEventListener("click", guarded(() => renderSchoolProfileEdit(school)));
   document.getElementById("leave-school-button").addEventListener("click", () => renderLeaveSchool(school));
 }
