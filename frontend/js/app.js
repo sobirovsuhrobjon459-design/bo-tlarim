@@ -1069,58 +1069,108 @@ async function renderJoinBrowser() {
   });
 }
 
-function subjectChipsHtml(selected = []) {
-  const options = [...schoolSubjectOptions()];
-  // Profilda ro'yxatda yo'q fan bo'lsa (o'zi yozgan), u ham ko'rinsin
-  selected.forEach((subject) => {
-    if (!options.includes(subject)) options.push(subject);
-  });
+/*
+  O'qituvchi fanlari — ixcham ochiluvchi ro'yxat(lar).
+
+  Birinchi ro'yxatda "Fan o'qituvchisi emasman" ham bor (direktor, o'quv
+  ishlari bo'yicha mas'ul va h.k.). Bir nechta fandan dars beradigan
+  "＋ Yana fan qo'shish" bilan yana bitta ro'yxat qo'shadi. Ro'yxatda yo'q fan
+  uchun "Boshqa fan..." tanlansa, nomini yozadigan maydon chiqadi.
+*/
+const NOT_SUBJECT_TEACHER = "__not_teacher__";
+const OTHER_SUBJECT = "__other__";
+
+function subjectSelectRowHtml(value = "", isFirst = false) {
+  const known = schoolSubjectOptions();
+  const isCustom = value && value !== NOT_SUBJECT_TEACHER && !known.includes(value);
 
   return `
-    <div class="subject-chips" id="subject-chips">
-      ${options
-        .map(
-          (subject) =>
-            `<button type="button" class="subject-chip ${selected.includes(subject) ? "selected" : ""}"
-                     data-subject="${escapeHtml(subject)}">${escapeHtml(subject)}</button>`
-        )
-        .join("")}
-    </div>
-    <div class="row-between" style="gap:8px;margin-top:8px">
-      <input class="input" id="custom-subject-input" placeholder="Boshqa fan nomi" style="margin:0" />
-      <button type="button" class="btn btn-ghost" id="add-subject-button" style="width:auto;margin:0;padding:12px 14px">＋</button>
+    <div class="subject-row">
+      <div class="subject-row-main">
+        <select class="subject-select">
+          <option value="">Fanni tanlang</option>
+          ${known.map((subject) => `<option value="${escapeHtml(subject)}" ${subject === value ? "selected" : ""}>${escapeHtml(subject)}</option>`).join("")}
+          <option value="${OTHER_SUBJECT}" ${isCustom ? "selected" : ""}>Boshqa fan...</option>
+          ${isFirst ? `<option value="${NOT_SUBJECT_TEACHER}" ${value === NOT_SUBJECT_TEACHER ? "selected" : ""}>Fan o'qituvchisi emasman</option>` : ""}
+        </select>
+        ${isFirst ? "" : `<button type="button" class="subject-remove" aria-label="Olib tashlash">✕</button>`}
+      </div>
+      <input class="input subject-custom" placeholder="Fan nomini yozing" value="${isCustom ? escapeHtml(value) : ""}"
+             ${isCustom ? "" : "hidden"} />
     </div>`;
 }
 
+// `selected` — profildagi fanlar; bo'sh ro'yxat va `notTeacher` — "fan o'qituvchisi emas"
+function subjectChipsHtml(selected = [], { notTeacher = false } = {}) {
+  const values = notTeacher ? [NOT_SUBJECT_TEACHER] : selected.length ? selected : [""];
+  return `
+    <div id="subject-selects">
+      ${values.map((value, index) => subjectSelectRowHtml(value, index === 0)).join("")}
+    </div>
+    <button type="button" class="btn btn-ghost" id="add-subject-button" style="margin:6px 0 0"
+            ${notTeacher ? "hidden" : ""}>＋ Yana fan qo'shish</button>`;
+}
+
 function wireSubjectChips() {
-  const container = document.getElementById("subject-chips");
-  container.addEventListener("click", (event) => {
-    const chip = event.target.closest(".subject-chip");
-    if (chip) chip.classList.toggle("selected");
-  });
+  const container = document.getElementById("subject-selects");
+  const addButton = document.getElementById("add-subject-button");
 
-  document.getElementById("add-subject-button").addEventListener("click", () => {
-    const input = document.getElementById("custom-subject-input");
-    const value = input.value.trim().replace(/\s+/g, " ");
-    if (value.length < 2) return;
+  const refresh = () => {
+    const rows = [...container.querySelectorAll(".subject-row")];
+    const notTeacher = rows[0]?.querySelector(".subject-select").value === NOT_SUBJECT_TEACHER;
+    // "Fan o'qituvchisi emasman" tanlansa — boshqa fanlar kerak emas
+    rows.slice(1).forEach((row) => (row.hidden = notTeacher));
+    addButton.hidden = notTeacher;
+    rows.forEach((row) => {
+      const custom = row.querySelector(".subject-custom");
+      custom.hidden = row.querySelector(".subject-select").value !== OTHER_SUBJECT;
+    });
+  };
 
-    const existing = [...container.querySelectorAll(".subject-chip")].find(
-      (chip) => chip.dataset.subject.toLowerCase() === value.toLowerCase()
-    );
-    if (existing) {
-      existing.classList.add("selected");
-    } else {
-      container.insertAdjacentHTML(
-        "beforeend",
-        `<button type="button" class="subject-chip selected" data-subject="${escapeHtml(value)}">${escapeHtml(value)}</button>`
-      );
+  container.addEventListener("change", (event) => {
+    if (event.target.classList.contains("subject-select")) {
+      refresh();
+      if (event.target.value === OTHER_SUBJECT) event.target.closest(".subject-row").querySelector(".subject-custom").focus();
     }
-    input.value = "";
   });
+  container.addEventListener("click", (event) => {
+    const remove = event.target.closest(".subject-remove");
+    if (remove) {
+      remove.closest(".subject-row").remove();
+      markUnsaved();
+    }
+  });
+  addButton.addEventListener("click", () => {
+    container.insertAdjacentHTML("beforeend", subjectSelectRowHtml());
+    markUnsaved();
+  });
+
+  refresh();
+}
+
+function isNotSubjectTeacher() {
+  return document.querySelector("#subject-selects .subject-select")?.value === NOT_SUBJECT_TEACHER;
 }
 
 function readSelectedSubjects() {
-  return [...document.querySelectorAll("#subject-chips .subject-chip.selected")].map((chip) => chip.dataset.subject);
+  if (isNotSubjectTeacher()) return [];
+
+  const subjects = [];
+  document.querySelectorAll("#subject-selects .subject-row").forEach((row) => {
+    const choice = row.querySelector(".subject-select").value;
+    const value = choice === OTHER_SUBJECT ? row.querySelector(".subject-custom").value.trim().replace(/\s+/g, " ") : choice;
+    if (value && !subjects.some((item) => item.toLowerCase() === value.toLowerCase())) subjects.push(value);
+  });
+  return subjects;
+}
+
+// Saqlashdan oldin: fan tanlangan yoki "Fan o'qituvchisi emasman" belgilangan bo'lsin
+function readSubjectsOrThrow() {
+  const subjects = readSelectedSubjects();
+  if (!subjects.length && !isNotSubjectTeacher()) {
+    throw new Error("Fanni tanlang (yoki \"Fan o'qituvchisi emasman\"ni belgilang)");
+  }
+  return subjects;
 }
 
 async function profileNameFieldsHtml() {
@@ -1144,9 +1194,7 @@ async function saveProfileName() {
 function protectSchoolForm() {
   const page = appElement.querySelector(".page");
   page.addEventListener("input", markUnsaved);
-  page.addEventListener("click", (event) => {
-    if (event.target.closest(".subject-chip")) markUnsaved();
-  });
+  page.addEventListener("change", markUnsaved);
 }
 
 // 📝 Maktabni ro'yxatdan o'tkazish — hammasi bitta formada
@@ -1209,8 +1257,7 @@ async function renderCreateSchool() {
       if (!district) throw new Error("Tumanni tanlang");
       const name = document.getElementById("school-name-input").value.trim();
       if (name.length < 2) throw new Error("Maktab nomini kiriting");
-      const subjects = readSelectedSubjects();
-      if (!subjects.length) throw new Error("Kamida bitta fanni tanlang");
+      const subjects = readSubjectsOrThrow();
 
       await saveProfileName();
       const { school } = await api("/api/schools", {
@@ -1297,8 +1344,7 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
     guarded(async () => {
       const code = document.getElementById("school-code-input").value.trim().toUpperCase();
       if (code.length < 4) throw new Error("Maktab kodini kiriting");
-      const subjects = readSelectedSubjects();
-      if (!subjects.length) throw new Error("Kamida bitta fanni tanlang");
+      const subjects = readSubjectsOrThrow();
 
       const confirmed = await askConfirm(
         "Maktabga qo'shilasizmi? Siz shu maktabda qolasiz — chiqish uchun ham maktab kodi kerak bo'ladi."
@@ -1318,7 +1364,7 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
 
 function renderMySchool(school) {
   const me = school.members.find((member) => member.is_me);
-  const subjectsText = (subjects) => (subjects.length ? subjects.map(escapeHtml).join(", ") : "Fan kiritilmagan");
+  const subjectsText = (subjects) => (subjects.length ? subjects.map(escapeHtml).join(", ") : "Fan o'qituvchisi emas");
 
   const memberRows = school.members
     .map(
@@ -1375,7 +1421,7 @@ async function renderSchoolProfileEdit(school) {
     ${schoolPageHeader("Profilim", "back-school")}
     ${nameFields}
     <label class="field-label">Qaysi fanlardan dars berasiz?</label>
-    ${subjectChipsHtml(school.my_subjects)}
+    ${subjectChipsHtml(school.my_subjects, { notTeacher: !school.my_subjects.length })}
     <button class="btn" id="save-school-profile" style="margin-top:18px">💾 Saqlash</button>
   `);
 
@@ -1391,8 +1437,7 @@ async function renderSchoolProfileEdit(school) {
   document.getElementById("save-school-profile").addEventListener(
     "click",
     guarded(async () => {
-      const subjects = readSelectedSubjects();
-      if (!subjects.length) throw new Error("Kamida bitta fanni tanlang");
+      const subjects = readSubjectsOrThrow();
 
       await saveProfileName();
       const { school: updated } = await api("/api/schools/me/profile", { method: "PUT", body: { subjects } });
