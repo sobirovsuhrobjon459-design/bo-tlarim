@@ -26,6 +26,43 @@ if (telegram) {
   telegram.ready();
   telegram.expand();
   telegram.onEvent("themeChanged", applyTheme);
+
+  // Sahifani pastga aylantirayotganda Mini App tasodifan yopilib ketmasin
+  // (ayniqsa test ishlayotganda). Yopish faqat tepadagi "×" tugmasi orqali.
+  try {
+    telegram.disableVerticalSwipes?.();
+  } catch (_) {
+    /* eski Telegram versiyasida bu imkoniyat yo'q */
+  }
+}
+
+/*
+  Tasodifan chiqib ketishdan himoya.
+
+  Test ishlanayotganda yoki saqlanmagan forma ochiq turganda Mini App
+  yopilmoqchi bo'lsa, Telegram "Rostdan yopasizmi?" deb so'raydi. Boshqa
+  sahifalarda bu so'rov chiqmaydi (har safar so'rash zeriktirardi).
+*/
+let unsavedChanges = false;
+
+function setExitProtection(enabled) {
+  try {
+    if (enabled) telegram?.enableClosingConfirmation?.();
+    else telegram?.disableClosingConfirmation?.();
+  } catch (_) {
+    /* Telegram'dan tashqarida — e'tiborsiz */
+  }
+}
+
+function markUnsaved() {
+  if (unsavedChanges) return;
+  unsavedChanges = true;
+  setExitProtection(true);
+}
+
+async function confirmLeave() {
+  if (!unsavedChanges) return true;
+  return askConfirm("Saqlanmagan ma'lumotlar yo'qoladi. Baribir chiqasizmi?");
 }
 
 applyTheme();
@@ -142,6 +179,8 @@ function showPage(html) {
   // Menyu avval yashiriladi — kerak bo'lsa, sahifa o'zi qaytadan ko'rsatadi.
   // Ikkalasi bitta qadamda bo'lgani uchun ekranda miltillash sezilmaydi.
   hideBottomNav();
+  unsavedChanges = false;
+  setExitProtection(false);
   // Ochiq matematik klaviatura yangi sahifa ustida qolib ketmasin
   if (activeMathField || window.mathVirtualKeyboard?.visible) closeMathKeyboard();
   appElement.innerHTML = `<div class="page">${html}</div>`;
@@ -596,6 +635,7 @@ function showBottomNav(activeTab) {
       guarded(async (event) => {
         const button = event.target.closest("[data-nav]");
         if (!button || button.classList.contains("active")) return;
+        if (!(await confirmLeave())) return;
 
         // Avval tugma darhol belgilanadi — bosilgani shu zahoti bilinadi
         const tab = button.dataset.nav;
@@ -637,7 +677,12 @@ function pageHeader(title) {
 }
 
 function wireTeacherChrome(activeTab) {
-  document.querySelector('[data-action="back"]')?.addEventListener("click", loadHome);
+  document.querySelector('[data-action="back"]')?.addEventListener(
+    "click",
+    guarded(async () => {
+      if (await confirmLeave()) await loadHome();
+    })
+  );
   showBottomNav(activeTab);
 }
 
@@ -655,12 +700,31 @@ function testBadges(test) {
   return `${enrollment}${status}`;
 }
 
+// Hozir bajarilayotgan tugmalar — ikkinchi bosish e'tiborsiz qoldiriladi
+const busyElements = new WeakSet();
+
 function guarded(handler) {
+  /*
+    Xatoni chiroyli xabar qilib ko'rsatadi va IKKI MARTA BOSISHDAN himoya
+    qiladi: amal tugaguncha o'sha tugma qayta ishlamaydi. Ilgari sekin
+    internetda tugma ikki marta bosilsa, so'rov (to'lov, yakunlash, pul
+    yechish) ikki marta ketishi mumkin edi.
+  */
   return async (...args) => {
+    // currentTarget birinchi "await"gacha olinishi shart — keyin u null bo'ladi
+    const target = args[0]?.currentTarget || null;
+    if (target && busyElements.has(target)) return;
+    if (target) busyElements.add(target);
+    const isButton = target instanceof HTMLButtonElement;
+    if (isButton) target.disabled = true;
+
     try {
       await handler(...args);
     } catch (error) {
       showToast(error.message || "Xatolik yuz berdi");
+    } finally {
+      if (target) busyElements.delete(target);
+      if (isButton) target.disabled = false;
     }
   };
 }
@@ -921,6 +985,7 @@ async function renderAdminDashboard() {
     card.querySelector('[data-action="approve"]').addEventListener(
       "click",
       guarded(async () => {
+        if (!(await askConfirm("Pulni o'qituvchining kartasiga o'tkazdingizmi? \"To'landi\" deb belgilanadi."))) return;
         await api(`/api/admin/withdrawal-requests/${requestId}/approve`, { method: "POST", body: {} });
         showToast("✅ To'landi deb belgilandi");
         await renderAdminDashboard();
@@ -929,6 +994,7 @@ async function renderAdminDashboard() {
     card.querySelector('[data-action="reject"]').addEventListener(
       "click",
       guarded(async () => {
+        if (!(await askConfirm("Pul yechish so'rovini rad etasizmi?"))) return;
         await api(`/api/admin/withdrawal-requests/${requestId}/reject`, { method: "POST", body: {} });
         showToast("❌ Rad etildi");
         await renderAdminDashboard();
@@ -1391,6 +1457,8 @@ function renderFullQuizQuestion() {
     <button class="btn" id="next-button">${isLast ? "🏁 TESTNI YAKUNLASH" : "Keyingi →"}</button>
   `);
 
+  setExitProtection(true); // test paytida Mini App tasodifan yopilmasin
+
   document.querySelectorAll("#options-container .option").forEach((optionEl) => {
     optionEl.addEventListener("click", () => {
       quizState.answers[question.id] = optionEl.dataset.letter;
@@ -1404,6 +1472,8 @@ function renderFullQuizQuestion() {
     "click",
     guarded(async () => {
       if (isLast) {
+        if (!(await askConfirm("Testni yakunlaysizmi? Yakunlangach javoblarni o'zgartirib bo'lmaydi."))) return;
+        saveAnswersNow();
         await finishQuiz();
       } else {
         // Keyingi savolga o'tishdan oldin javoblar serverga yetib boradi —
@@ -1502,6 +1572,7 @@ function renderKeyQuizQuestion() {
   `);
 
   updateAnsweredCounter();
+  setExitProtection(true); // test paytida Mini App tasodifan yopilmasin
 
   // Bitta tinglovchi butun varaq uchun — 45 ta savolda ham tez ishlaydi
   appElement.querySelector(".answer-sheet").addEventListener("click", (event) => {
@@ -1540,13 +1611,13 @@ function renderKeyQuizQuestion() {
   document.getElementById("finish-quiz-button").addEventListener(
     "click",
     guarded(async () => {
+      // Har doim so'raladi — tasodifan bosib yuborilsa test yopilib qolmasin
       const { answered, total } = updateAnsweredCounter();
-      if (answered < total) {
-        const confirmed = await askConfirm(
-          `${total - answered} ta savolga javob belgilanmagan. Baribir testni yakunlaysizmi?`
-        );
-        if (!confirmed) return;
-      }
+      const question =
+        answered < total
+          ? `${total - answered} ta savolga javob belgilanmagan. Baribir testni yakunlaysizmi?`
+          : "Testni yakunlaysizmi? Yakunlangach javoblarni o'zgartirib bo'lmaydi.";
+      if (!(await askConfirm(question))) return;
       saveAnswersNow();
       await finishQuiz();
     })
@@ -1789,7 +1860,8 @@ function renderTeacherTestList(tests) {
         const testId = Number(button.dataset.deleteTest);
         const test = tests.find((item) => item.id === testId);
 
-        if (!(await askConfirm(`"${test.title}" testi va uning barcha natijalari o'chirilsinmi?`))) {
+        const results = test.students ? ` Unda ${test.students} ta o'quvchi natijasi bor.` : "";
+        if (!(await askConfirm(`"${test.title}" testi o'chirilsinmi?${results}`))) {
           return;
         }
 
@@ -1854,6 +1926,11 @@ async function renderWithdrawalForm() {
         return;
       }
 
+      const confirmed = await askConfirm(
+        `${formatNumber(amount)} so'm ${cardNumber} kartasiga yechib olinsinmi? Karta raqami to'g'riligini tekshiring.`
+      );
+      if (!confirmed) return;
+
       await api("/api/teacher/withdrawal-requests", { method: "POST", body: { amount, card_number: cardNumber } });
       showToast("✅ So'rov yuborildi, admin tasdiqlashini kuting");
       await renderWithdrawalForm();
@@ -1878,6 +1955,7 @@ async function renderCreditPurchaseForm() {
     pending: "⏳ Tekshirilmoqda",
     paid: "✅ Qabul qilindi",
     cancelled: "❌ Rad etildi",
+    failed: "⚠️ Chek yetib bormadi",
   };
   const methodIcons = { card: "💳", payme: "🅿️" };
 
@@ -2012,6 +2090,7 @@ async function renderCreditPurchaseForm() {
     guarded(async () => {
       const credits = readCredits();
       if (!receiptData) throw new Error("Avval chek rasmini tanlang");
+      if (!(await askConfirm(`${credits} ta kredit uchun chek yuborilsinmi?`))) return;
 
       const button = document.getElementById("send-receipt-button");
       button.disabled = true;
@@ -2284,6 +2363,12 @@ function renderNewTestForm(testType, draft = {}) {
   `);
 
   wireTeacherChrome("create");
+
+  // Forma to'ldirila boshlansa — tasodifan chiqib ketishdan himoya yoqiladi
+  // (sahifaning o'ziga ulanadi: #app boshqa sahifalarda ham qoladi)
+  const formPage = appElement.querySelector(".page");
+  formPage.addEventListener("input", markUnsaved);
+  formPage.addEventListener("change", markUnsaved);
 
   // "Boshqa fan" tanlanmagan bo'lsa ham, avvalgi qiymat ro'yxatda bo'lmasligi mumkin
   const subjectSelect = document.getElementById("field-subject");

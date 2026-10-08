@@ -781,6 +781,113 @@ def test_pdf_hisobot_kirill_ismlar_va_yopilgan_test():
     assert client.get(f"/api/teacher/tests/{empty['id']}/pdf", headers=as_user(555)).status_code == 200
 
 
+def test_ochirilgan_test_arxivda_qoladi_tolov_va_natijalar_saqlanadi():
+    """
+    Ilgari test o'chirilsa, uning to'lovlari va o'quvchilar natijalari bazadan
+    butunlay yo'qolardi. Endi test faqat yashiriladi — hamma narsa saqlanadi.
+    """
+    reset_database()
+    register_teacher()
+    created = create_test()
+
+    sent, restore_notices = _capture_result_notices()
+    try:
+        started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
+        client.post(f"/api/attempts/{started['attempt_id']}/finish", json={"answers": {"1": "B"}}, headers=as_user(901))
+    finally:
+        restore_notices()
+
+    session = SessionLocal()
+    try:
+        from backend.database import Payment, StudentAnswer, User
+
+        user = session.scalar(main.select(User).where(User.tg_id == 901))
+        session.add(Payment(user_id=user.id, test_id=created["id"], amount=5000, status="paid"))
+        session.commit()
+    finally:
+        session.close()
+
+    assert client.delete(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).status_code == 200
+
+    # Hamma joydan yashirindi
+    listed = client.get("/api/teacher/tests", headers=as_user(555)).json()
+    assert all(test["id"] != created["id"] for test in listed), listed
+    assert client.get(f"/api/tests/{created['code']}", headers=as_user(902)).status_code == 404
+    assert client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(902)).status_code == 404
+    assert client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).status_code == 404
+
+    # ...lekin bazada hammasi turibdi
+    session = SessionLocal()
+    try:
+        test = session.get(main.Test, created["id"])
+        assert test is not None and test.deleted_at is not None
+        assert session.scalar(main.select(main.func.count()).select_from(Payment)) == 1
+        assert session.scalar(main.select(main.func.count()).select_from(Attempt)) == 1
+        assert session.scalar(main.select(main.func.count()).select_from(StudentAnswer)) > 0
+    finally:
+        session.close()
+
+
+def test_zaxira_nusxadan_toliq_tiklanadi():
+    """Admin'ga keladigan zaxira nusxadan bo'sh bazaga hamma narsa qaytadi."""
+    from backend.restore_backup import restore
+
+    reset_database()
+    register_teacher()
+    client.post("/api/me/name", json={"first_name": "Фаррух", "last_name": "Комилжонов"}, headers=as_user(901))
+    created = create_test()
+    sent, restore_notices = _capture_result_notices()
+    try:
+        started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
+        client.post(f"/api/attempts/{started['attempt_id']}/finish", json={"answers": {"1": "B"}}, headers=as_user(901))
+    finally:
+        restore_notices()
+
+    session = SessionLocal()
+    try:
+        backup = json.loads(main.export_database(session))
+    finally:
+        session.close()
+    before = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
+
+    # Bo'sh bo'lmagan bazaga yozishdan bosh tortadi
+    try:
+        restore(backup)
+        raise AssertionError("to'la bazaga tiklashga ruxsat berildi")
+    except RuntimeError:
+        pass
+
+    reset_database()
+    restored = restore(backup)
+    assert restored["users"] >= 2 and restored["tests"] == 1, restored
+
+    after = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
+    assert after["rows"] == before["rows"], (before["rows"], after["rows"])
+    assert after["rows"][0]["name"] == "Фаррух Комилжонов"
+
+    # Tiklangandan keyin yangi yozuvlar ham qo'shila oladi (id to'qnashmaydi)
+    assert create_test()["id"] != created["id"]
+
+
+def test_oquvchini_ochirish_javoblarni_yoqotmaydi():
+    reset_database()
+    register_teacher()
+    created = create_test(enrollment_type="closed")
+    client.post(f"/api/teacher/tests/{created['id']}/students", json={"names": ["Ali Valiyev"]}, headers=as_user(555))
+    detail = client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()
+    attempt_id = detail["students"][0]["attempt_id"] if "attempt_id" in detail["students"][0] else detail["students"][0]["id"]
+
+    assert client.delete(f"/api/teacher/tests/{created['id']}/students/{attempt_id}", headers=as_user(555)).status_code == 200
+    session = SessionLocal()
+    try:
+        attempt = session.get(Attempt, attempt_id)
+        assert attempt is not None and attempt.status == "deleted"
+    finally:
+        session.close()
+    detail = client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()
+    assert not detail["students"], detail["students"]
+
+
 def test_testni_qayta_ishlab_bolmaydi():
     """Tugatilgan testni qayta boshlashga yo'l qo'yilmaydi (reyting soxtalashmasin)."""
     reset_database()
@@ -1622,8 +1729,12 @@ def test_rasm_bolmagan_fayl_qabul_qilinmaydi():
     assert client.get("/api/teacher/credit-purchases", headers=as_user(555)).json() == []
 
 
-def test_chek_adminga_yetib_bormasa_sorov_saqlanmaydi():
-    """Admin ko'rmagan so'rov hech qachon tasdiqlanmaydi — uni qoldirib bo'lmaydi."""
+def test_chek_adminga_yetib_bormasa_sorov_kutilmaydi_lekin_izi_qoladi():
+    """
+    Admin ko'rmagan so'rov hech qachon tasdiqlanmaydi — u "kutilmoqda" bo'lib
+    qolmasligi kerak. Lekin yozuv o'chirilmaydi: pul bilan bog'liq har bir
+    harakatning izi saqlanadi ("failed" holatida).
+    """
     reset_database()
     register_teacher()
 
@@ -1631,7 +1742,9 @@ def test_chek_adminga_yetib_bormasa_sorov_saqlanmaydi():
         response = send_card_topup()
 
     assert response.status_code == 502, response.text
-    assert client.get("/api/teacher/credit-purchases", headers=as_user(555)).json() == []
+    purchases = client.get("/api/teacher/credit-purchases", headers=as_user(555)).json()
+    assert [purchase["status"] for purchase in purchases] == ["failed"], purchases
+    assert client.get("/api/teacher/balance", headers=as_user(555)).json()["credits"] == 75  # kredit yozilmadi
 
     # Qayta urinish to'sib qo'yilmagan
     with TelegramStub():

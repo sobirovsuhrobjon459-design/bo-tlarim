@@ -22,6 +22,7 @@ import hmac
 import io
 import json
 import logging
+import os
 import random
 import re
 import threading
@@ -68,6 +69,7 @@ from .database import (
     CardTopUpIn,
     CreditPurchaseIn,
     FinishIn,
+    IS_SQLITE,
     KeyQuestion,
     NameUpdateIn,
     Payment,
@@ -109,6 +111,7 @@ def _add_missing_columns() -> None:
             "status": "VARCHAR(10) DEFAULT 'active'",
             "required_channel": "VARCHAR(100)",
             "results_sent_at": "TIMESTAMP",
+            "deleted_at": "TIMESTAMP",
         },
         "test_attempts": {"offline_name": "VARCHAR(200)", "saved_answers": "TEXT"},
         "key_questions": {"label": "VARCHAR(20)"},
@@ -145,6 +148,7 @@ _add_missing_columns()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Server ishga tushganda botni va kunlik zaxira nusxa vazifasini ishga tushiradi."""
+    _warn_if_storage_is_temporary()
     bot_task = asyncio.create_task(run_bot())
     backup_task = asyncio.create_task(_daily_backup_loop())
     finish_task = asyncio.create_task(_finish_expired_tests_loop())
@@ -323,6 +327,7 @@ def _finish_expired_tests_once() -> None:
                 Test.end_time.is_not(None),
                 Test.end_time <= utcnow(),
                 Test.results_sent_at.is_(None),
+                Test.deleted_at.is_(None),
             )
         ).all()
 
@@ -334,11 +339,47 @@ def _finish_expired_tests_once() -> None:
         session.close()
 
 
-async def _daily_backup_loop() -> None:
-    """Har 24 soatda zaxira nusxani admin'ga yuboradi."""
+BACKUP_INTERVAL_SECONDS = 6 * 60 * 60  # kuniga 4 marta
+FIRST_BACKUP_DELAY_SECONDS = 10 * 60   # server ishga tushgandan 10 daqiqa keyin
 
+
+def _warn_if_storage_is_temporary() -> None:
+    """
+    Render'da SQLite bilan ishlash — eng katta xavf: har deploy va uyqudan
+    uyg'onishda butun baza (pullar, ballar) o'chib ketadi. Bunday holatda
+    admin'ga darhol, baland ovozda xabar beramiz.
+    """
+
+    if not (IS_SQLITE and os.getenv("RENDER")):
+        return
+
+    message = (
+        "🚨 DIQQAT: server vaqtinchalik SQLite bazasida ishlayapti!\n\n"
+        "Render'da bu baza har deploy va uyqudan uyg'onishda O'CHIB KETADI — "
+        "o'qituvchilar, kreditlar, to'lovlar va ballar yo'qoladi.\n\n"
+        "Render → Environment bo'limida DATABASE_URL ga doimiy PostgreSQL manzilini qo'ying."
+    )
+    logging.getLogger("backend").error(message)
+    if ADMIN_ID and BOT_TOKEN:
+        try:
+            httpx.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                       json={"chat_id": ADMIN_ID, "text": message}, timeout=10)
+        except Exception:
+            logging.getLogger("backend").warning("Ogohlantirish yuborilmadi", exc_info=True)
+
+
+async def _daily_backup_loop() -> None:
+    """
+    Zaxira nusxani admin'ga yuboradi: server ishga tushgach (har deploydan
+    keyin) 10 daqiqada bir marta, keyin har 6 soatda. Bu botda pul va
+    o'quvchilar ballari aylanadi — eng ko'pi bilan bir necha soatlik
+    ma'lumot xavf ostida qolsin.
+    """
+
+    delay = FIRST_BACKUP_DELAY_SECONDS
     while True:
-        await asyncio.sleep(24 * 60 * 60)
+        await asyncio.sleep(delay)
+        delay = BACKUP_INTERVAL_SECONDS
 
         try:
             # Zaxira nusxa ham alohida ipda — butun bazani JSON qilib Telegram'ga
@@ -1240,13 +1281,13 @@ def _question_count(test: Test) -> int:
 def _get_own_test(db: Session, teacher: Teacher, test_id: int) -> Test:
     """Test shu o'qituvchiga tegishli ekanini tekshiradi, bo'lmasa 404 qaytaradi."""
     test = db.get(Test, test_id)
-    if not test or test.teacher_id != teacher.id:
+    if not test or test.teacher_id != teacher.id or test.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Test topilmadi")
     return test
 
 
 def _get_test_by_code(db: Session, code: str) -> Test:
-    test = db.scalar(select(Test).where(Test.code == code.strip().upper()))
+    test = db.scalar(select(Test).where(Test.code == code.strip().upper(), Test.deleted_at.is_(None)))
     if not test:
         raise HTTPException(status_code=404, detail="Test topilmadi")
     return test
@@ -1955,7 +1996,7 @@ def my_attempts(user: User = Depends(get_current_user), db: Session = Depends(ge
 
     for attempt in attempts:
         test = db.get(Test, attempt.test_id)
-        if not test:
+        if not test or test.deleted_at is not None:
             continue
 
         if attempt.status == "in_progress":
@@ -2001,7 +2042,7 @@ def register_teacher(
 def teacher_overview(teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
     """Dashboard'dagi umumiy statistika kartalari uchun."""
 
-    test_ids = [test.id for test in teacher.tests]
+    test_ids = [test.id for test in teacher.tests if test.deleted_at is None]
     attempts = (
         db.scalars(select(Attempt).where(Attempt.test_id.in_(test_ids), Attempt.status == "done")).all()
         if test_ids
@@ -2311,7 +2352,7 @@ def create_card_topup(
         # Admin chekni ko'rmasa, so'rov hech qachon tasdiqlanmaydi — shuning
         # uchun uni saqlab qo'ymaymiz va o'qituvchiga qayta urinishni aytamiz.
         logging.getLogger("backend").warning("Chek admin'ga yuborilmadi", exc_info=True)
-        db.delete(purchase)
+        purchase.status = "failed"  # yozuv iz sifatida qoladi
         db.commit()
         raise HTTPException(status_code=502, detail="Chek yuborilmadi, bir ozdan keyin qayta urinib ko'ring")
 
@@ -2346,7 +2387,7 @@ def list_tests(teacher: Teacher = Depends(get_current_teacher), db: Session = De
 
     tests = db.scalars(
         select(Test)
-        .where(Test.teacher_id == teacher.id)
+        .where(Test.teacher_id == teacher.id, Test.deleted_at.is_(None))
         .options(selectinload(Test.key_questions), selectinload(Test.questions))
         .order_by(Test.id.desc())
     ).all()
@@ -2484,18 +2525,23 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
 
 @app.delete("/api/teacher/tests/{test_id}")
 def delete_test(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
-    """Testni butunlay o'chiradi: savollari, o'quvchilari va javoblari bilan birga."""
+    """
+    Testni o'qituvchining ro'yxatidan o'chiradi.
+
+    MUHIM: bazadan BUTUNLAY o'chirilmaydi. Ilgari test bilan birga uning
+    to'lovlari (Payment) ham o'chib ketardi — pul hisobi buzilardi — va
+    o'quvchilar natijalari qaytarib bo'lmas darajada yo'qolardi. Endi test
+    faqat yashiriladi: o'quvchilar uni ochib/boshlay olmaydi, o'qituvchi
+    ro'yxatida ko'rinmaydi, lekin hamma ma'lumot zaxira nusxada ham, bazada
+    ham turadi va admin uni qayta tiklay oladi.
+    """
 
     test = _get_own_test(db, teacher, test_id)
-
-    attempt_ids = db.scalars(select(Attempt.id).where(Attempt.test_id == test.id)).all()
-    if attempt_ids:
-        db.execute(delete(StudentAnswer).where(StudentAnswer.attempt_id.in_(attempt_ids)))
-    db.execute(delete(Attempt).where(Attempt.test_id == test.id))
-    db.execute(delete(Payment).where(Payment.test_id == test.id))
-
-    db.delete(test)  # savollar cascade orqali o'chadi
+    test.deleted_at = utcnow()
+    test.status = "closed"
     db.commit()
+
+    logging.getLogger("backend").info("Test arxivga o'tkazildi: id=%s kod=%s o'qituvchi=%s", test.id, test.code, teacher.id)
     return {"ok": True}
 
 
@@ -2537,8 +2583,9 @@ def delete_student(
     if not attempt or attempt.test_id != test.id or attempt.user_id is not None:
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
 
-    db.execute(delete(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id))
-    db.delete(attempt)
+    # Butunlay o'chirilmaydi — "deleted" holati ro'yxat va natijalardan
+    # chiqaradi, lekin javoblar bazada qoladi (adashib o'chirilsa tiklanadi).
+    attempt.status = "deleted"
     db.commit()
     return {"ok": True}
 
@@ -3186,6 +3233,11 @@ def _payme_find_order_by_account(params: dict, db: Session):
         # Payme) ikki marta kredit olishi mumkin edi.
         if isinstance(order, CreditPurchase) and order.method != "payme":
             return None
+        # O'chirilgan (arxivlangan) testga yangi to'lov qabul qilinmaydi
+        if isinstance(order, Payment):
+            test = db.get(Test, order.test_id)
+            if not test or test.deleted_at is not None:
+                return None
         return order
 
     return None

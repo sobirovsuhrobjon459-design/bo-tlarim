@@ -166,6 +166,10 @@ class Test(Base):
     required_channel: Mapped[str | None] = mapped_column(String(100), default=None)
 
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    # O'qituvchi "o'chirgan" test. Bazadan butunlay o'chirilmaydi: unga bog'liq
+    # to'lovlar (pul hisobi) va o'quvchilar natijalari saqlanib qoladi, test esa
+    # hamma joydan yashiriladi. Kerak bo'lsa admin uni qayta tiklay oladi.
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
 
     teacher: Mapped["Teacher"] = relationship(back_populates="tests")
     questions: Mapped[list["Question"]] = relationship(
