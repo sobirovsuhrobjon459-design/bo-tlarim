@@ -80,7 +80,17 @@ let teacherTestsTab = "active";
 
 /* ---------- 1) Yordamchi funksiyalar ---------- */
 
+/*
+  Sahifalar uchun eslangan ma'lumot ("oldin ko'rsat, keyin yangila").
+  Bo'limga kirish darhol bo'lishi uchun oxirgi ma'lumot shu yerda turadi;
+  har qanday o'zgartiruvchi so'rovdan (POST/PUT/DELETE) keyin tozalanadi —
+  eski holat ko'rinib qolmasin.
+*/
+const pageDataCache = new Map();
+
 async function api(path, { method = "GET", body, keepalive = false } = {}) {
+  if (method !== "GET") pageDataCache.clear();
+
   // Alohida o'qituvchi tokeni yo'q — Telegram initData o'zi kifoya,
   // "o'qituvchi" ekanligi backend'da shu odamga tegishli Teacher yozuvi
   // borligi orqali aniqlanadi.
@@ -2393,9 +2403,48 @@ async function fetchProtectedImage(path) {
 
 /* ---------- 3) O'quvchi oqimi ---------- */
 
-async function renderStudentHome() {
-  const [me, attempts] = await Promise.all([api("/api/me"), api("/api/me/attempts")]);
+/*
+  Sahifani eslangan ma'lumot bilan darhol chizadi, keyin fonda yangisini
+  so'raydi; o'zgargan bo'lsa va foydalanuvchi hali shu sahifada bo'lsa
+  (marker element bor) — jimgina qayta chizadi. Birinchi marta esa odatdagidek
+  kutib, keyin chizadi.
+*/
+async function renderWithCache(key, fetcher, draw, marker) {
+  const cached = pageDataCache.get(key);
+  if (cached) {
+    draw(cached);
+    fetcher()
+      .then((fresh) => {
+        const changed = JSON.stringify(fresh) !== JSON.stringify(cached);
+        pageDataCache.set(key, fresh);
+        if (changed && document.querySelector(marker)) draw(fresh);
+      })
+      .catch(() => {});
+    return;
+  }
 
+  const data = await fetcher();
+  pageDataCache.set(key, data);
+  draw(data);
+}
+
+// Ilova ochilgach fonda: bo'limlarga kirish birinchi martadayoq darhol bo'lsin
+function prefetchSectionData() {
+  fetchStudentHomeData().then((data) => pageDataCache.set("student-home", data)).catch(() => {});
+  if (homeSnapshot?.is_teacher) {
+    fetchTeacherDashboardData().then((data) => pageDataCache.set("teacher-dashboard", data)).catch(() => {});
+  }
+}
+
+function fetchStudentHomeData() {
+  return Promise.all([api("/api/me"), api("/api/me/attempts")]);
+}
+
+async function renderStudentHome() {
+  await renderWithCache("student-home", fetchStudentHomeData, (data) => drawStudentHome(...data), "#find-test-button");
+}
+
+function drawStudentHome(me, attempts) {
   const inProgressRows =
     attempts.in_progress
       .map(
@@ -3044,6 +3093,13 @@ async function enterTeacherArea() {
   // Serverdan qayta so'raymiz: agar internet uzilgan bo'lsa, "ro'yxatdan o'ting"
   // degan ekranni ko'rsatib yubormaslik uchun. Ro'yxatdan o'tgan o'qituvchidan
   // hech qachon qayta ism-familiya so'ralmaydi.
+  // Bosh sahifada allaqachon bilingan bo'lsa — qayta so'ramaymiz (darhol kirish)
+  if (homeSnapshot && homeSnapshot.is_teacher) {
+    isTeacher = true;
+    await renderTeacherDashboard();
+    return;
+  }
+
   const me = await api("/api/me");
   isTeacher = Boolean(me.is_teacher);
 
@@ -3080,18 +3136,25 @@ async function submitTeacherRegister() {
   await renderTeacherDashboard();
 }
 
-async function renderTeacherDashboard() {
-  let me;
-  let stats;
-  let tests;
+function fetchTeacherDashboardData() {
+  return Promise.all([api("/api/me"), api("/api/teacher/stats"), api("/api/teacher/tests")]);
+}
 
+async function renderTeacherDashboard() {
   try {
-    [me, stats, tests] = await Promise.all([api("/api/me"), api("/api/teacher/stats"), api("/api/teacher/tests")]);
+    await renderWithCache(
+      "teacher-dashboard",
+      fetchTeacherDashboardData,
+      (data) => drawTeacherDashboard(...data),
+      "#new-test-button"
+    );
   } catch (error) {
     isTeacher = false;
     throw error;
   }
+}
 
+function drawTeacherDashboard(me, stats, tests) {
   showPage(`
     ${pageHeader("Testlar")}
     <div class="card" style="cursor:default">
@@ -4656,4 +4719,4 @@ async function openPendingSchoolInvite() {
 
 loadHome()
   .then(openPendingSchoolInvite)
-  .then(prefetchSchoolData);
+  .then(() => Promise.all([prefetchSchoolData(), prefetchSectionData()]));
