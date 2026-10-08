@@ -29,7 +29,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from xml.sax.saxutils import escape as xml_escape
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -66,7 +66,12 @@ from .database import (
     PLATFORM_COMMISSION_PERCENT,
     WELCOME_CREDITS,
     Attempt,
+    Attendance,
+    AttendanceIn,
+    AttendanceMark,
     Base,
+    ClassIn,
+    ClassStudent,
     CreditPurchase,
     CardTopUpIn,
     CreditPurchaseIn,
@@ -81,7 +86,9 @@ from .database import (
     SchoolCodeIn,
     SchoolCreateIn,
     SchoolMember,
+    SchoolClass,
     SchoolProfileIn,
+    StudentIn,
     SessionLocal,
     StudentAnswer,
     StudentAnswersIn,
@@ -3556,6 +3563,454 @@ def leave_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db:
 
     db.commit()
     return {"ok": True}
+
+
+# ========== 6.6) Sinflar va davomat ==========
+#
+# O'qituvchi o'z sinf/guruhlarini yaratadi, o'quvchilarni qo'shadi va har
+# darsda davomat oladi. Davomat serverda saqlanadi (birinchi olingan vaqt
+# o'zgarmaydi, tahrir vaqti alohida) va matn, rasm yoki PDF ko'rinishida
+# ota-onalar guruhiga yuborish uchun tayyorlanadi. Hech narsa butunlay
+# o'chirilmaydi: sinf va o'quvchi faqat belgilanadi, davomat tarixi qoladi.
+
+ATTENDANCE_LABELS = {
+    "present": ("Bor", "✅"),
+    "absent": ("Yo'q", "❌"),
+    "excused": ("Sababli", "🟡"),
+    "late": ("Kechikdi", "⏰"),
+}
+TASHKENT_OFFSET = timedelta(hours=5)
+
+
+def _local_time(moment: datetime | None) -> str:
+    """UTC vaqtni Toshkent vaqtida "08.10.2026 09:05" ko'rinishida yozadi."""
+    return (moment + TASHKENT_OFFSET).strftime("%d.%m.%Y %H:%M") if moment else ""
+
+
+def _require_school_member(db: Session, user: User) -> SchoolMember:
+    member = _active_membership(db, user)
+    if not member:
+        raise HTTPException(status_code=403, detail="Avval maktabga a'zo bo'ling")
+    return member
+
+
+def _own_class(db: Session, user: User, class_id: int) -> SchoolClass:
+    school_class = db.get(SchoolClass, class_id)
+    if not school_class or school_class.deleted_at is not None or school_class.teacher_user_id != user.id:
+        raise HTTPException(status_code=404, detail="Sinf topilmadi")
+    return school_class
+
+
+def _own_attendance(db: Session, user: User, attendance_id: int) -> Attendance:
+    attendance = db.get(Attendance, attendance_id)
+    if not attendance or attendance.teacher_user_id != user.id:
+        raise HTTPException(status_code=404, detail="Davomat topilmadi")
+    _own_class(db, user, attendance.class_id)
+    return attendance
+
+
+def _active_students(school_class: SchoolClass) -> list[ClassStudent]:
+    return [student for student in school_class.students if student.removed_at is None]
+
+
+def _attendance_counts(attendance: Attendance) -> dict[str, int]:
+    counts = {status: 0 for status in ATTENDANCE_LABELS}
+    for mark in attendance.marks:
+        counts[mark.status] = counts.get(mark.status, 0) + 1
+    return counts
+
+
+def _attendance_view(attendance: Attendance) -> dict:
+    return {
+        "id": attendance.id,
+        "class_id": attendance.class_id,
+        "subject": attendance.subject,
+        "taken_at": attendance.taken_at,
+        "updated_at": attendance.updated_at,
+        "counts": _attendance_counts(attendance),
+        "marks": [
+            {"student_id": mark.student_id, "name": mark.student_name, "status": mark.status}
+            for mark in attendance.marks
+        ],
+    }
+
+
+def _class_view(db: Session, school_class: SchoolClass, with_details: bool = False) -> dict:
+    students = _active_students(school_class)
+    view = {
+        "id": school_class.id,
+        "name": school_class.name,
+        "students_count": len(students),
+        "created_at": school_class.created_at,
+    }
+    if with_details:
+        view["students"] = [
+            {"id": student.id, "full_name": student.full_name, "birth_date": student.birth_date}
+            for student in students
+        ]
+        recent = db.scalars(
+            select(Attendance)
+            .where(Attendance.class_id == school_class.id)
+            .order_by(Attendance.taken_at.desc())
+            .limit(50)
+        ).all()
+        view["attendances"] = [
+            {
+                "id": item.id,
+                "subject": item.subject,
+                "taken_at": item.taken_at,
+                "updated_at": item.updated_at,
+                "counts": _attendance_counts(item),
+            }
+            for item in recent
+        ]
+    return view
+
+
+@app.get("/api/classes")
+def my_classes(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """O'qituvchining shu maktabdagi sinflari."""
+
+    member = _require_school_member(db, user)
+    classes = db.scalars(
+        select(SchoolClass)
+        .where(
+            SchoolClass.teacher_user_id == user.id,
+            SchoolClass.school_id == member.school_id,
+            SchoolClass.deleted_at.is_(None),
+        )
+        .order_by(SchoolClass.name)
+    ).all()
+    return [_class_view(db, item) for item in classes]
+
+
+@app.post("/api/classes")
+def create_class(body: ClassIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    member = _require_school_member(db, user)
+
+    duplicate = db.scalar(
+        select(SchoolClass.id).where(
+            SchoolClass.teacher_user_id == user.id,
+            SchoolClass.school_id == member.school_id,
+            SchoolClass.deleted_at.is_(None),
+            func.lower(SchoolClass.name) == body.name.lower(),
+        )
+    )
+    if duplicate:
+        raise HTTPException(status_code=409, detail=f"«{body.name}» nomli sinfingiz allaqachon bor")
+
+    school_class = SchoolClass(school_id=member.school_id, teacher_user_id=user.id, name=body.name)
+    db.add(school_class)
+    db.commit()
+    db.refresh(school_class)
+    return _class_view(db, school_class, with_details=True)
+
+
+@app.get("/api/classes/{class_id}")
+def class_detail(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return _class_view(db, _own_class(db, user, class_id), with_details=True)
+
+
+@app.put("/api/classes/{class_id}")
+def rename_class(class_id: int, body: ClassIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    school_class = _own_class(db, user, class_id)
+    school_class.name = body.name
+    db.commit()
+    return _class_view(db, school_class, with_details=True)
+
+
+@app.delete("/api/classes/{class_id}")
+def delete_class(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Sinf ro'yxatdan olinadi; o'quvchilar va davomat tarixi bazada qoladi."""
+    school_class = _own_class(db, user, class_id)
+    school_class.deleted_at = utcnow()
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/classes/{class_id}/students")
+def add_student(class_id: int, body: StudentIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    school_class = _own_class(db, user, class_id)
+    db.add(ClassStudent(class_id=school_class.id, full_name=body.full_name, birth_date=body.birth_date))
+    db.commit()
+    db.refresh(school_class)
+    return _class_view(db, school_class, with_details=True)
+
+
+@app.put("/api/classes/{class_id}/students/{student_id}")
+def edit_student(
+    class_id: int, student_id: int, body: StudentIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    school_class = _own_class(db, user, class_id)
+    student = db.get(ClassStudent, student_id)
+    if not student or student.class_id != school_class.id or student.removed_at is not None:
+        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    student.full_name = body.full_name
+    student.birth_date = body.birth_date
+    db.commit()
+    db.refresh(school_class)
+    return _class_view(db, school_class, with_details=True)
+
+
+@app.delete("/api/classes/{class_id}/students/{student_id}")
+def remove_student(class_id: int, student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """O'quvchi sinfdan chiqariladi; eski davomatlarda u ko'rinib turadi."""
+    school_class = _own_class(db, user, class_id)
+    student = db.get(ClassStudent, student_id)
+    if not student or student.class_id != school_class.id or student.removed_at is not None:
+        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    student.removed_at = utcnow()
+    db.commit()
+    db.refresh(school_class)
+    return _class_view(db, school_class, with_details=True)
+
+
+@app.post("/api/classes/{class_id}/attendance")
+def take_attendance(class_id: int, body: AttendanceIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Davomatni saqlaydi. Ro'yxatda belgilanmagan o'quvchi "bor" hisoblanadi
+    (davomat oynasida hamma oldindan "bor" turadi).
+    """
+
+    school_class = _own_class(db, user, class_id)
+    students = _active_students(school_class)
+    if not students:
+        raise HTTPException(status_code=400, detail="Sinfda hali o'quvchi yo'q — avval o'quvchilarni qo'shing")
+
+    attendance = Attendance(class_id=school_class.id, teacher_user_id=user.id, subject=body.subject)
+    db.add(attendance)
+    db.flush()
+    for student in students:
+        db.add(
+            AttendanceMark(
+                attendance_id=attendance.id,
+                student_id=student.id,
+                student_name=student.full_name,
+                status=body.marks.get(student.id, "present"),
+            )
+        )
+    db.commit()
+    db.refresh(attendance)
+    return _attendance_view(attendance)
+
+
+@app.get("/api/attendance/{attendance_id}")
+def attendance_detail(attendance_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return _attendance_view(_own_attendance(db, user, attendance_id))
+
+
+@app.put("/api/attendance/{attendance_id}")
+def edit_attendance(
+    attendance_id: int, body: AttendanceIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """Davomatni tahrirlaydi: birinchi olingan vaqt saqlanadi, tahrir vaqti alohida yoziladi."""
+
+    attendance = _own_attendance(db, user, attendance_id)
+    changed = False
+    for mark in attendance.marks:
+        new_status = body.marks.get(mark.student_id)
+        if new_status and new_status != mark.status:
+            mark.status = new_status
+            changed = True
+    if body.subject and body.subject != attendance.subject:
+        attendance.subject = body.subject
+        changed = True
+
+    if changed:
+        attendance.updated_at = utcnow()
+    db.commit()
+    db.refresh(attendance)
+    return _attendance_view(attendance)
+
+
+def _attendance_context(db: Session, attendance: Attendance) -> dict:
+    school_class = db.get(SchoolClass, attendance.class_id)
+    school = db.get(PrivateSchool, school_class.school_id)
+    teacher = db.get(User, attendance.teacher_user_id)
+    return {
+        "class_name": school_class.name,
+        "school_name": school.name if school else "",
+        "teacher_name": teacher.full_name if teacher else "",
+        "subject": attendance.subject or "—",
+        "taken_at": _local_time(attendance.taken_at),
+        "updated_at": _local_time(attendance.updated_at),
+        "counts": _attendance_counts(attendance),
+        "marks": [(mark.student_name, mark.status) for mark in attendance.marks],
+    }
+
+
+def attendance_text(context: dict) -> str:
+    """Ota-onalar guruhiga yuboriladigan matn ko'rinishi."""
+
+    counts = context["counts"]
+    lines = [
+        f"📋 Davomat — {context['class_name']}",
+        f"🏫 {context['school_name']}",
+        f"📚 Fan: {context['subject']}",
+        f"👤 O'qituvchi: {context['teacher_name']}",
+        f"🕘 Olingan: {context['taken_at']}",
+    ]
+    if context["updated_at"]:
+        lines.append(f"✏️ Tahrirlangan: {context['updated_at']}")
+    lines += [
+        "",
+        " · ".join(f"{ATTENDANCE_LABELS[s][1]} {ATTENDANCE_LABELS[s][0]}: {counts.get(s, 0)}" for s in ATTENDANCE_LABELS),
+        "",
+    ]
+    for index, (name, status) in enumerate(context["marks"], start=1):
+        label, icon = ATTENDANCE_LABELS.get(status, ("?", "•"))
+        lines.append(f"{index}. {name} — {icon} {label}")
+    return "\n".join(lines)
+
+
+ATTENDANCE_COLORS = {"present": "#1e7b34", "absent": "#c00000", "excused": "#b8860b", "late": "#2e75b6"}
+
+
+def attendance_pdf(context: dict) -> bytes:
+    """Printerga va ota-onalarga — PDF ko'rinishi."""
+
+    styles = _report_styles()
+    buffer = io.BytesIO()
+    document = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=40, rightMargin=40, topMargin=36, bottomMargin=36,
+                                 title=f"Davomat — {context['class_name']}")
+    width = document.width
+
+    meta = f"🏫 {context['school_name']}  ·  Fan: {context['subject']}  ·  O'qituvchi: {context['teacher_name']}"
+    times = f"Olingan: {context['taken_at']}" + (f"  ·  Tahrirlangan: {context['updated_at']}" if context["updated_at"] else "")
+    counts = context["counts"]
+    summary = "   ".join(f"{ATTENDANCE_LABELS[s][0]}: {counts.get(s, 0)}" for s in ATTENDANCE_LABELS)
+
+    data = [[Paragraph(f"<font color='white'>{xml_escape(text)}</font>", styles["cell_bold"]) for text in ("№", "F.I.Sh.", "Holat")]]
+    for index, (name, status) in enumerate(context["marks"], start=1):
+        label = ATTENDANCE_LABELS.get(status, ("?", ""))[0]
+        color = ATTENDANCE_COLORS.get(status, "#111827")
+        data.append([
+            Paragraph(str(index), styles["cell"]),
+            Paragraph(xml_escape(name), styles["cell"]),
+            Paragraph(f"<font color='{color}'><b>{xml_escape(label)}</b></font>", styles["cell"]),
+        ])
+    table = Table(data, colWidths=[width * 0.08, width * 0.64, width * 0.28], repeatRows=1)
+    commands = [("BACKGROUND", (0, 0), (-1, 0), REPORT_BLUE), ("LINEBELOW", (0, 0), (-1, -1), 0.4, REPORT_GRID),
+                ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]
+    for row in range(2, len(data), 2):
+        commands.append(("BACKGROUND", (0, row), (-1, row), REPORT_TILE_BG))
+    table.setStyle(TableStyle(commands))
+
+    document.build([
+        Paragraph(xml_escape(f"Davomat — {context['class_name']}"), styles["title"]),
+        Paragraph(xml_escape(meta.replace("🏫 ", "")), styles["meta"]),
+        Paragraph(xml_escape(times), styles["meta"]),
+        Spacer(1, 8),
+        Paragraph(xml_escape(summary), styles["cell_bold"]),
+        Spacer(1, 10),
+        table,
+    ])
+    return buffer.getvalue()
+
+
+def attendance_image(context: dict) -> bytes:
+    """Ota-onalar guruhiga — rasm (PNG) ko'rinishi."""
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    def font(name: str, size: int):
+        try:
+            return ImageFont.truetype(str(FONTS_DIR / name), size)
+        except OSError:
+            return ImageFont.load_default()
+
+    title_font, text_font, bold_font = font("DejaVuSerif-Bold.ttf", 46), font("DejaVuSerif.ttf", 30), font("DejaVuSerif-Bold.ttf", 30)
+    width, row_height, top = 1080, 62, 300
+    marks = context["marks"]
+    height = top + row_height * (len(marks) + 1) + 60
+
+    image = Image.new("RGB", (width, height), "#ffffff")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle([0, 0, width, 12], fill="#1f4e79")
+    draw.text((50, 40), f"Davomat — {context['class_name']}", font=title_font, fill="#1f4e79")
+    draw.text((50, 110), f"{context['school_name']}  ·  {context['subject']}", font=text_font, fill="#374151")
+    draw.text((50, 152), f"O'qituvchi: {context['teacher_name']}", font=text_font, fill="#374151")
+    times = f"Olingan: {context['taken_at']}" + (f"   Tahrir: {context['updated_at']}" if context["updated_at"] else "")
+    draw.text((50, 194), times, font=text_font, fill="#6b7280")
+
+    counts = context["counts"]
+    x = 50
+    for status in ATTENDANCE_LABELS:
+        text = f"{ATTENDANCE_LABELS[status][0]}: {counts.get(status, 0)}"
+        draw.text((x, 240), text, font=bold_font, fill=ATTENDANCE_COLORS[status])
+        x += draw.textlength(text, font=bold_font) + 40
+
+    y = top
+    draw.rectangle([40, y, width - 40, y + row_height], fill="#1f4e79")
+    draw.text((60, y + 14), "№", font=bold_font, fill="#ffffff")
+    draw.text((140, y + 14), "F.I.Sh.", font=bold_font, fill="#ffffff")
+    draw.text((width - 300, y + 14), "Holat", font=bold_font, fill="#ffffff")
+    for index, (name, status) in enumerate(marks, start=1):
+        y += row_height
+        if index % 2 == 0:
+            draw.rectangle([40, y, width - 40, y + row_height], fill="#f0f3f7")
+        draw.text((60, y + 14), str(index), font=text_font, fill="#111827")
+        draw.text((140, y + 14), name[:38], font=text_font, fill="#111827")
+        draw.text((width - 300, y + 14), ATTENDANCE_LABELS.get(status, ("?", ""))[0], font=bold_font,
+                  fill=ATTENDANCE_COLORS.get(status, "#111827"))
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()
+
+
+def _send_photo_to_telegram(chat_id: int, file_name: str, image_bytes: bytes, caption: str = "") -> None:
+    response = httpx.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+        data={"chat_id": chat_id, "caption": caption} if caption else {"chat_id": chat_id},
+        files={"photo": (file_name, image_bytes, "image/png")},
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="Rasm yuborilmadi (botga /start bosganmisiz?)")
+
+
+@app.get("/api/attendance/{attendance_id}/file")
+def attendance_file(
+    attendance_id: int, format: str = "pdf", user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """Davomatni PDF yoki rasm qilib yuklab beradi (oddiy brauzer uchun)."""
+
+    context = _attendance_context(db, _own_attendance(db, user, attendance_id))
+    if format == "image":
+        return StreamingResponse(io.BytesIO(attendance_image(context)), media_type="image/png",
+                                 headers={"Content-Disposition": 'attachment; filename="davomat.png"'})
+    return StreamingResponse(io.BytesIO(attendance_pdf(context)), media_type="application/pdf",
+                             headers={"Content-Disposition": 'attachment; filename="davomat.pdf"'})
+
+
+@app.post("/api/attendance/{attendance_id}/send")
+def send_attendance(
+    attendance_id: int, format: str = "pdf", user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """
+    Davomatni bot orqali o'qituvchining o'z chatiga yuboradi — u yerdan
+    ota-onalar guruhiga "Uzatish" (forward) qilinadi yoki printerga chiqariladi.
+    """
+
+    context = _attendance_context(db, _own_attendance(db, user, attendance_id))
+    caption = f"📋 Davomat — {context['class_name']} ({context['taken_at']}). Ota-onalar guruhiga uzating."
+
+    if format == "text":
+        if not _send_bot_text(user.tg_id, attendance_text(context)):
+            raise HTTPException(status_code=502, detail="Xabar yuborilmadi (botga /start bosganmisiz?)")
+    elif format == "image":
+        _send_photo_to_telegram(user.tg_id, "davomat.png", attendance_image(context), caption)
+    else:
+        _send_pdf_to_telegram(user.tg_id, f"davomat_{context['class_name']}.pdf".replace("/", "-"),
+                              attendance_pdf(context), caption)
+    return {"ok": True}
+
+
+@app.get("/api/attendance/{attendance_id}/text")
+def attendance_text_view(attendance_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Matn ko'rinishi — Mini App uni to'g'ridan-to'g'ri guruhga ulashadi."""
+    return {"text": attendance_text(_attendance_context(db, _own_attendance(db, user, attendance_id)))}
 
 
 # ========== 7) Payme webhook (Merchant API) ==========

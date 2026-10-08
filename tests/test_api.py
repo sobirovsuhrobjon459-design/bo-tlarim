@@ -1059,6 +1059,121 @@ def test_kod_sorash_asoschiga_va_sorovchiga_bot_xabari():
     assert "@aziza_teacher" in by_chat[702] and "Maktabga kirish" in by_chat[702]
 
 
+def _school_with_class(tg_id: int = 701) -> dict:
+    _set_name(tg_id, "Aziza", "Karimova")
+    client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                      "name": f"Maktab {tg_id}", "subjects": ["Matematika"]}, headers=as_user(tg_id))
+    created = client.post("/api/classes", json={"name": "10/2"}, headers=as_user(tg_id))
+    assert created.status_code == 200, created.text
+    return created.json()
+
+
+def test_sinf_yaratish_va_oquvchilar():
+    reset_database()
+    # Maktabga a'zo bo'lmasa sinf ochib bo'lmaydi
+    _set_name(709, "Begona", "Odam")
+    assert client.post("/api/classes", json={"name": "5-A"}, headers=as_user(709)).status_code == 403
+
+    school_class = _school_with_class()
+    assert school_class["name"] == "10/2" and school_class["students"] == []
+    assert client.post("/api/classes", json={"name": " 10/2 "}, headers=as_user(701)).status_code == 409
+
+    cid = school_class["id"]
+    client.post(f"/api/classes/{cid}/students", json={"full_name": "Islom  Karimov", "birth_date": "2010-05-14"},
+                headers=as_user(701))
+    detail = client.post(f"/api/classes/{cid}/students", json={"full_name": "Фаррух Комилжонов"}, headers=as_user(701)).json()
+    assert [s["full_name"] for s in detail["students"]] == ["Islom Karimov", "Фаррух Комилжонов"], detail
+    assert detail["students"][0]["birth_date"] == "2010-05-14" and detail["students"][1]["birth_date"] is None
+
+    listed = client.get("/api/classes", headers=as_user(701)).json()
+    assert listed[0]["students_count"] == 2, listed
+
+    # Boshqa o'qituvchi bu sinfni ko'ra olmaydi
+    client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                      "name": "Boshqa maktab"}, headers=as_user(709))
+    assert client.get(f"/api/classes/{cid}", headers=as_user(709)).status_code == 404
+
+
+def test_davomat_olish_tahrirlash_va_vaqtlar():
+    reset_database()
+    school_class = _school_with_class()
+    cid = school_class["id"]
+
+    # O'quvchisiz sinfda davomat olinmaydi
+    assert client.post(f"/api/classes/{cid}/attendance", json={"subject": "Matematika"}, headers=as_user(701)).status_code == 400
+
+    for name in ("Islom Karimov", "Ali Valiyev", "Dilnoza Aliyeva", "Sardor Raximov"):
+        detail = client.post(f"/api/classes/{cid}/students", json={"full_name": name}, headers=as_user(701)).json()
+    ids = {s["full_name"]: s["id"] for s in detail["students"]}
+
+    # Faqat yo'q/sababli belgilanadi — qolgani avtomatik "bor"
+    taken = client.post(
+        f"/api/classes/{cid}/attendance",
+        json={"subject": "Matematika", "marks": {ids["Ali Valiyev"]: "absent", ids["Dilnoza Aliyeva"]: "excused"}},
+        headers=as_user(701),
+    )
+    assert taken.status_code == 200, taken.text
+    attendance = taken.json()
+    assert attendance["counts"] == {"present": 2, "absent": 1, "excused": 1, "late": 0}, attendance["counts"]
+    assert attendance["updated_at"] is None
+
+    # Noto'g'ri holat qabul qilinmaydi
+    bad = client.post(f"/api/classes/{cid}/attendance", json={"marks": {ids["Ali Valiyev"]: "kasal"}}, headers=as_user(701))
+    assert bad.status_code == 422
+
+    # Tahrir: Ali yarim darsda keldi — "kechikdi". Olingan vaqt o'zgarmaydi, tahrir vaqti yoziladi
+    edited = client.put(f"/api/attendance/{attendance['id']}", json={"marks": {ids["Ali Valiyev"]: "late"}},
+                        headers=as_user(701)).json()
+    assert edited["taken_at"] == attendance["taken_at"], (edited["taken_at"], attendance["taken_at"])
+    assert edited["updated_at"] is not None
+    assert edited["counts"]["late"] == 1 and edited["counts"]["absent"] == 0
+
+    # O'quvchi sinfdan chiqarilsa ham eski davomatda turadi
+    client.delete(f"/api/classes/{cid}/students/{ids['Sardor Raximov']}", headers=as_user(701))
+    again = client.get(f"/api/attendance/{attendance['id']}", headers=as_user(701)).json()
+    assert any(mark["name"] == "Sardor Raximov" for mark in again["marks"])
+
+    # Tarix sinf sahifasida
+    history = client.get(f"/api/classes/{cid}", headers=as_user(701)).json()["attendances"]
+    assert len(history) == 1 and history[0]["subject"] == "Matematika"
+
+    # Begona o'qituvchi ko'ra olmaydi
+    _set_name(709, "Begona", "Odam")
+    assert client.get(f"/api/attendance/{attendance['id']}", headers=as_user(709)).status_code == 404
+
+
+def test_davomat_matn_rasm_va_pdf():
+    reset_database()
+    school_class = _school_with_class()
+    cid = school_class["id"]
+    detail = client.post(f"/api/classes/{cid}/students", json={"full_name": "Фаррух Комилжонов"}, headers=as_user(701)).json()
+    sid = detail["students"][0]["id"]
+    attendance = client.post(f"/api/classes/{cid}/attendance", json={"subject": "Ingliz tili", "marks": {sid: "absent"}},
+                             headers=as_user(701)).json()
+
+    text = client.get(f"/api/attendance/{attendance['id']}/text", headers=as_user(701)).json()["text"]
+    assert "10/2" in text and "Ingliz tili" in text and "Фаррух Комилжонов — ❌ Yo'q" in text and "Aziza Karimova" in text, text
+
+    pdf = client.get(f"/api/attendance/{attendance['id']}/file", params={"format": "pdf"}, headers=as_user(701))
+    assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
+    image = client.get(f"/api/attendance/{attendance['id']}/file", params={"format": "image"}, headers=as_user(701))
+    assert image.status_code == 200 and image.content.startswith(b"\x89PNG")
+
+    # Bot orqali yuborish (Telegram o'rniga yozib olamiz)
+    sent = []
+    originals = (main._send_bot_text, main._send_pdf_to_telegram, main._send_photo_to_telegram)
+    main._send_bot_text = lambda chat_id, body: sent.append(("text", chat_id)) or True
+    main._send_pdf_to_telegram = lambda chat_id, name, data, caption="": sent.append(("pdf", chat_id))
+    main._send_photo_to_telegram = lambda chat_id, name, data, caption="": sent.append(("image", chat_id))
+    try:
+        for fmt in ("text", "image", "pdf"):
+            assert client.post(f"/api/attendance/{attendance['id']}/send", params={"format": fmt},
+                               headers=as_user(701)).status_code == 200
+    finally:
+        main._send_bot_text, main._send_pdf_to_telegram, main._send_photo_to_telegram = originals
+    assert sent == [("text", 701), ("image", 701), ("pdf", 701)], sent
+
+
 def test_maktab_kodini_taxmin_qilib_topish_toxtatiladi():
     reset_database()
     main._school_code_failures.clear()

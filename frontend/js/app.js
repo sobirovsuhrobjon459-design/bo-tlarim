@@ -871,6 +871,410 @@ function renderTestFolder() {
   document.querySelector('[data-action="teacher"]').addEventListener("click", guarded(enterTeacherArea));
 }
 
+/* ---------- Sinflar va davomat ---------- */
+
+// Davomat holatlari: bosilganda shu tartibda almashadi
+const ATTENDANCE_STATES = [
+  { id: "present", label: "Bor", icon: "✅" },
+  { id: "absent", label: "Yo'q", icon: "❌" },
+  { id: "excused", label: "Sababli", icon: "🟡" },
+  { id: "late", label: "Kechikdi", icon: "⏰" },
+];
+const ATTENDANCE_STATE_BY_ID = Object.fromEntries(ATTENDANCE_STATES.map((state) => [state.id, state]));
+
+function nextAttendanceState(current) {
+  const index = ATTENDANCE_STATES.findIndex((state) => state.id === current);
+  return ATTENDANCE_STATES[(index + 1) % ATTENDANCE_STATES.length].id;
+}
+
+function attendanceCountsHtml(counts) {
+  return `
+    <div class="att-counts">
+      ${ATTENDANCE_STATES.map(
+        (state) => `<span class="att-count ${state.id}">${state.icon} ${state.label}: <b>${counts[state.id] || 0}</b></span>`
+      ).join("")}
+    </div>`;
+}
+
+function formatBirthDate(value) {
+  if (!value) return "";
+  const [year, month, day] = String(value).split("-");
+  return `${day}.${month}.${year}`;
+}
+
+// Profil tabidagi "Sinflarim" bo'limi — eslangan ro'yxat darhol, yangisi fonda
+let myClassesCache = null;
+
+function classListHtml(classes) {
+  if (!classes.length) {
+    return `<p class="subtitle" style="margin:6px 0 0">Hali sinf yaratmagansiz. Faqat o'zingiz dars beradigan sinf yoki guruhni qo'shing.</p>`;
+  }
+  return `
+    <div class="panel pick-list">
+      ${classes
+        .map(
+          (item) => `
+            <button type="button" class="pick-item" data-class-id="${item.id}">
+              <span class="pick-title">📚 ${escapeHtml(item.name)}<small>${item.students_count} ta o'quvchi</small></span>
+              <span>›</span>
+            </button>`
+        )
+        .join("")}
+    </div>`;
+}
+
+function wireClassList(container) {
+  container.querySelectorAll("[data-class-id]").forEach((item) => {
+    item.addEventListener("click", guarded(() => renderClass(Number(item.dataset.classId))));
+  });
+}
+
+async function loadMyClassesInto(container) {
+  if (myClassesCache) {
+    container.innerHTML = classListHtml(myClassesCache);
+    wireClassList(container);
+  }
+  try {
+    const classes = await api("/api/classes");
+    const changed = JSON.stringify(classes) !== JSON.stringify(myClassesCache);
+    myClassesCache = classes;
+    if (changed && container.isConnected) {
+      container.innerHTML = classListHtml(classes);
+      wireClassList(container);
+    }
+  } catch (error) {
+    if (!myClassesCache && container.isConnected) container.innerHTML = `<p class="subtitle">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderCreateClass() {
+  showPage(`
+    ${schoolPageHeader("Sinf yaratish", "back-profile")}
+    <p class="subtitle">Faqat o'zingiz dars beradigan sinf yoki guruhni qo'shing.</p>
+    <label class="field-label" for="class-name-input">Sinf / guruh nomi</label>
+    <input class="input" id="class-name-input" maxlength="100" placeholder="Masalan: 10/2, Iqtisod guruhi, Filologiya guruhi" />
+    <button class="btn" id="create-class-button" style="margin-top:14px">➕ Yaratish</button>
+  `);
+
+  document.querySelector('[data-action="back-profile"]').addEventListener("click", () => renderSchoolProfile(currentSchool));
+  document.getElementById("create-class-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const name = document.getElementById("class-name-input").value.trim();
+      if (!name) throw new Error("Sinf nomini kiriting");
+      const created = await api("/api/classes", { method: "POST", body: { name } });
+      myClassesCache = null;
+      showToast(`✅ «${created.name}» yaratildi — endi o'quvchilarni qo'shing`);
+      renderClassStudents(created);
+    })
+  );
+}
+
+// Sinf sahifasi: davomat olish, o'quvchilar, davomat tarixi
+async function renderClass(classOrId) {
+  const schoolClass = typeof classOrId === "object" ? classOrId : await api(`/api/classes/${classOrId}`);
+
+  showPage(`
+    ${schoolPageHeader(schoolClass.name, "back-profile")}
+    <p class="subtitle" style="margin-top:0">👨‍🎓 ${schoolClass.students.length} ta o'quvchi</p>
+    ${roleCard("take-attendance", "📋", "DAVOMAT OLISH", "Bugungi dars uchun bor-yo'qlama")}
+    ${roleCard("class-students", "👨‍🎓", `O'QUVCHILAR (${schoolClass.students.length})`, "Qo'shish va ro'yxatni boshqarish")}
+    ${roleCard("attendance-history", "🗂", `DAVOMAT TARIXI (${schoolClass.attendances.length})`, "Ko'rish, tahrirlash va yuborish")}
+  `);
+
+  document.querySelector('[data-action="back-profile"]').addEventListener("click", () => renderSchoolProfile(currentSchool));
+  document.querySelector('[data-action="take-attendance"]').addEventListener("click", () => {
+    if (!schoolClass.students.length) {
+      showToast("Avval sinfga o'quvchilarni qo'shing");
+      renderClassStudents(schoolClass);
+      return;
+    }
+    renderAttendanceForm(schoolClass);
+  });
+  document.querySelector('[data-action="class-students"]').addEventListener("click", () => renderClassStudents(schoolClass));
+  document.querySelector('[data-action="attendance-history"]').addEventListener("click", () => renderAttendanceHistory(schoolClass));
+}
+
+function renderClassStudents(schoolClass) {
+  const rows = schoolClass.students.length
+    ? schoolClass.students
+        .map(
+          (student, index) => `
+            <div class="member-line">
+              <div class="member-avatar">${index + 1}</div>
+              <div class="member-info">
+                <b>${escapeHtml(student.full_name)}</b>
+                ${student.birth_date ? `<small>🎂 ${formatBirthDate(student.birth_date)}</small>` : ""}
+              </div>
+              <button type="button" class="subject-remove" data-remove-student="${student.id}" aria-label="Chiqarish">✕</button>
+            </div>`
+        )
+        .join("")
+    : `<p class="subtitle" style="padding:12px 14px;margin:0">Hali o'quvchi qo'shilmagan.</p>`;
+
+  showPage(`
+    ${schoolPageHeader(`${schoolClass.name} — o'quvchilar`, "back-class")}
+    <div class="card" style="cursor:default;display:block">
+      <label class="field-label" for="student-name-input" style="margin-top:0">Ism-familiya</label>
+      <input class="input" id="student-name-input" maxlength="200" placeholder="Masalan: Islom Karimov" />
+      <label class="field-label" for="student-birth-input">Tug'ilgan sana (ixtiyoriy)</label>
+      <input class="input" id="student-birth-input" type="date" />
+      <button class="btn" id="add-student-button" style="margin-top:10px">➕ O'quvchi qo'shish</button>
+    </div>
+    <p class="section-label" style="margin-top:18px">RO'YXAT (${schoolClass.students.length})</p>
+    <div class="panel" style="padding:4px 0">${rows}</div>
+  `);
+
+  document.querySelector('[data-action="back-class"]').addEventListener("click", () => renderClass(schoolClass));
+  const nameInput = document.getElementById("student-name-input");
+  nameInput.focus();
+
+  const add = guarded(async () => {
+    const fullName = nameInput.value.trim();
+    if (fullName.length < 2) throw new Error("O'quvchining ism-familiyasini kiriting");
+    const birthDate = document.getElementById("student-birth-input").value || null;
+    const updated = await api(`/api/classes/${schoolClass.id}/students`, {
+      method: "POST",
+      body: { full_name: fullName, birth_date: birthDate },
+    });
+    myClassesCache = null;
+    showToast(`✅ ${fullName} qo'shildi`);
+    renderClassStudents(updated);
+  });
+  document.getElementById("add-student-button").addEventListener("click", add);
+  nameInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") add(event);
+  });
+
+  document.querySelectorAll("[data-remove-student]").forEach((button) => {
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        const student = schoolClass.students.find((item) => item.id === Number(button.dataset.removeStudent));
+        if (!(await askConfirm(`${student.full_name} sinfdan chiqarilsinmi? Eski davomatlarda u saqlanib qoladi.`))) return;
+        const updated = await api(`/api/classes/${schoolClass.id}/students/${student.id}`, { method: "DELETE" });
+        myClassesCache = null;
+        renderClassStudents(updated);
+      })
+    );
+  });
+}
+
+function attendanceSubjectFieldHtml(current = "") {
+  const subjects = currentSchool?.my_subjects || [];
+  if (!subjects.length) {
+    return `
+      <label class="field-label" for="attendance-subject">Fan / dars (ixtiyoriy)</label>
+      <input class="input" id="attendance-subject" maxlength="100" value="${escapeHtml(current)}" placeholder="Masalan: Matematika" />`;
+  }
+  const options = subjects.includes(current) || !current ? subjects : [current, ...subjects];
+  return `
+    <label class="field-label" for="attendance-subject">Fan</label>
+    <select id="attendance-subject">
+      ${options.map((subject) => `<option value="${escapeHtml(subject)}" ${subject === current ? "selected" : ""}>${escapeHtml(subject)}</option>`).join("")}
+    </select>`;
+}
+
+/*
+  Davomat oynasi. Yangi davomatda hamma oldindan "Bor"; tahrirda saqlangan
+  holatlar. O'quvchi qatori bosilganda holat almashadi:
+  Bor → Yo'q → Sababli → Kechikdi → Bor.
+*/
+function renderAttendanceForm(schoolClass, existing = null) {
+  const rows = existing
+    ? existing.marks.map((mark) => ({ id: mark.student_id, name: mark.name, status: mark.status }))
+    : schoolClass.students.map((student) => ({ id: student.id, name: student.full_name, status: "present" }));
+
+  const counts = () =>
+    rows.reduce((result, row) => ({ ...result, [row.status]: (result[row.status] || 0) + 1 }), {});
+
+  const timesHtml = existing
+    ? `<p class="subtitle" style="margin:0">🕘 Olingan: ${formatDateTime(existing.taken_at)}${
+        existing.updated_at ? ` · ✏️ Tahrirlangan: ${formatDateTime(existing.updated_at)}` : ""
+      }</p>`
+    : `<p class="subtitle" style="margin:0">🕘 ${formatDateTime(new Date().toISOString().slice(0, 19))}</p>`;
+
+  showPage(`
+    ${schoolPageHeader(existing ? "Davomatni tahrirlash" : `Davomat — ${schoolClass.name}`, "back-class")}
+    ${timesHtml}
+    ${attendanceSubjectFieldHtml(existing ? existing.subject : "")}
+    <div id="att-counts-host">${attendanceCountsHtml(counts())}</div>
+    <p class="subtitle" style="margin:4px 0 8px">O'quvchini bosing: Bor → Yo'q → Sababli → Kechikdi</p>
+    <div class="panel" style="padding:4px 0">
+      ${rows
+        .map(
+          (row, index) => `
+            <button type="button" class="att-row" data-row="${index}">
+              <span class="att-number">${index + 1}</span>
+              <span class="att-name">${escapeHtml(row.name)}</span>
+              <span class="att-status ${row.status}">${ATTENDANCE_STATE_BY_ID[row.status].icon} ${ATTENDANCE_STATE_BY_ID[row.status].label}</span>
+            </button>`
+        )
+        .join("")}
+    </div>
+    <div class="att-save-bar">
+      <button class="btn" id="save-attendance-button" style="margin:0">💾 Saqlash</button>
+    </div>
+  `);
+
+  markUnsaved(); // davomat saqlanmaguncha tasodifan chiqib ketishdan himoya
+  document.querySelector('[data-action="back-class"]').addEventListener(
+    "click",
+    guarded(async () => {
+      if (!(await confirmLeave())) return;
+      if (existing) await renderAttendanceDetail(existing.id, schoolClass);
+      else await renderClass(schoolClass.id);
+    })
+  );
+
+  document.querySelectorAll(".att-row").forEach((button) => {
+    button.addEventListener("click", () => {
+      const row = rows[Number(button.dataset.row)];
+      row.status = nextAttendanceState(row.status);
+      const state = ATTENDANCE_STATE_BY_ID[row.status];
+      const pill = button.querySelector(".att-status");
+      pill.className = `att-status ${row.status}`;
+      pill.textContent = `${state.icon} ${state.label}`;
+      document.getElementById("att-counts-host").innerHTML = attendanceCountsHtml(counts());
+      telegram?.HapticFeedback?.selectionChanged?.();
+    });
+  });
+
+  document.getElementById("save-attendance-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const subject = document.getElementById("attendance-subject").value.trim();
+      const marks = Object.fromEntries(rows.map((row) => [row.id, row.status]));
+      const saved = existing
+        ? await api(`/api/attendance/${existing.id}`, { method: "PUT", body: { subject, marks } })
+        : await api(`/api/classes/${schoolClass.id}/attendance`, { method: "POST", body: { subject, marks } });
+
+      unsavedChanges = false;
+      setExitProtection(false);
+      renderAttendanceShare(saved, schoolClass, { justSaved: true });
+    })
+  );
+}
+
+async function downloadFile(path, fileName) {
+  const response = await fetch(path, { headers: { "X-Init-Data": telegram?.initData || "", "X-Dev-User": DEV_USER_ID } });
+  if (!response.ok) throw new Error("Faylni yuklab bo'lmadi");
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(await response.blob());
+  link.download = fileName;
+  link.click();
+}
+
+async function sendAttendance(attendance, format) {
+  if (format === "text") {
+    // Matn — Telegram'ning ulashish oynasi orqali to'g'ridan-to'g'ri ota-onalar guruhiga
+    const { text } = await api(`/api/attendance/${attendance.id}/text`);
+    if (telegram?.openTelegramLink) {
+      openExternalLink(`https://t.me/share/url?url=${encodeURIComponent(" ")}&text=${encodeURIComponent(text)}`);
+    } else {
+      await copyToClipboard(text, "📋 Davomat matni nusxalandi — guruhga joylang");
+    }
+    return;
+  }
+
+  // Rasm va PDF — bot sizning chatingizga yuboradi, u yerdan guruhga "Uzatish" qilasiz
+  if (telegram?.initData) {
+    await api(`/api/attendance/${attendance.id}/send?format=${format}`, { method: "POST", body: {} });
+    showToast(`✅ ${format === "image" ? "Rasm" : "PDF"} bot chatiga yuborildi — ota-onalar guruhiga uzating`);
+  } else {
+    await downloadFile(`/api/attendance/${attendance.id}/file?format=${format}`, format === "image" ? "davomat.png" : "davomat.pdf");
+  }
+}
+
+function renderAttendanceShare(attendance, schoolClass, { justSaved = false } = {}) {
+  showPage(`
+    ${schoolPageHeader(justSaved ? "Davomat saqlandi" : "Davomatni yuborish", "back-class")}
+    ${justSaved ? `<div class="result-number pop">✅</div>` : ""}
+    <div class="card" style="cursor:default;display:block">
+      <b>${escapeHtml(schoolClass.name)}${attendance.subject ? ` · ${escapeHtml(attendance.subject)}` : ""}</b>
+      <p class="subtitle" style="margin:4px 0 0">🕘 ${formatDateTime(attendance.taken_at)}${
+        attendance.updated_at ? ` · ✏️ ${formatDateTime(attendance.updated_at)}` : ""
+      }</p>
+      ${attendanceCountsHtml(attendance.counts)}
+    </div>
+    <p class="section-label" style="margin-top:18px">OTA-ONALAR GURUHIGA QANDAY YUBORASIZ?</p>
+    ${roleCard("send-image", "🖼", "RASM", "Chiroyli jadval ko'rinishida")}
+    ${roleCard("send-text", "📝", "MATN", "Guruhga oddiy xabar qilib")}
+    ${roleCard("send-pdf", "📄", "PDF", "Printerga chiqarish uchun ham qulay")}
+    <button class="btn btn-ghost" id="share-later" style="margin-top:12px">Keyinroq</button>
+  `);
+
+  const back = () => renderClass(schoolClass.id);
+  document.querySelector('[data-action="back-class"]').addEventListener("click", guarded(back));
+  document.getElementById("share-later").addEventListener("click", guarded(back));
+  [["send-image", "image"], ["send-text", "text"], ["send-pdf", "pdf"]].forEach(([action, format]) => {
+    document.querySelector(`[data-action="${action}"]`).addEventListener("click", guarded(() => sendAttendance(attendance, format)));
+  });
+}
+
+function renderAttendanceHistory(schoolClass) {
+  const rows = schoolClass.attendances.length
+    ? schoolClass.attendances
+        .map(
+          (item) => `
+            <button type="button" class="pick-item" data-attendance-id="${item.id}">
+              <span class="pick-title">🗓 ${formatDateTime(item.taken_at)}${item.subject ? ` · ${escapeHtml(item.subject)}` : ""}
+                <small>✅ ${item.counts.present} · ❌ ${item.counts.absent} · 🟡 ${item.counts.excused} · ⏰ ${item.counts.late}${
+                  item.updated_at ? " · ✏️ tahrirlangan" : ""
+                }</small>
+              </span>
+              <span>›</span>
+            </button>`
+        )
+        .join("")
+    : `<p class="subtitle" style="padding:12px 14px;margin:0">Hali davomat olinmagan.</p>`;
+
+  showPage(`
+    ${schoolPageHeader(`${schoolClass.name} — tarix`, "back-class")}
+    <div class="panel pick-list">${rows}</div>
+  `);
+
+  document.querySelector('[data-action="back-class"]').addEventListener("click", () => renderClass(schoolClass));
+  document.querySelectorAll("[data-attendance-id]").forEach((item) => {
+    item.addEventListener("click", guarded(() => renderAttendanceDetail(Number(item.dataset.attendanceId), schoolClass)));
+  });
+}
+
+async function renderAttendanceDetail(attendanceId, schoolClass) {
+  const attendance = await api(`/api/attendance/${attendanceId}`);
+
+  showPage(`
+    ${schoolPageHeader(`Davomat — ${schoolClass.name}`, "back-history")}
+    <div class="card" style="cursor:default;display:block">
+      <b>${attendance.subject ? escapeHtml(attendance.subject) : "Fan ko'rsatilmagan"}</b>
+      <p class="subtitle" style="margin:4px 0 0">🕘 Olingan: ${formatDateTime(attendance.taken_at)}</p>
+      ${attendance.updated_at ? `<p class="subtitle" style="margin:2px 0 0">✏️ Tahrirlangan: ${formatDateTime(attendance.updated_at)}</p>` : ""}
+      ${attendanceCountsHtml(attendance.counts)}
+    </div>
+    <div class="panel" style="padding:4px 0">
+      ${attendance.marks
+        .map(
+          (mark, index) => `
+            <div class="att-row" style="cursor:default">
+              <span class="att-number">${index + 1}</span>
+              <span class="att-name">${escapeHtml(mark.name)}</span>
+              <span class="att-status ${mark.status}">${ATTENDANCE_STATE_BY_ID[mark.status].icon} ${ATTENDANCE_STATE_BY_ID[mark.status].label}</span>
+            </div>`
+        )
+        .join("")}
+    </div>
+    <button class="btn" id="edit-attendance-button" style="margin-top:14px">✏️ Tahrirlash</button>
+    <button class="btn btn-ghost" id="share-attendance-button" style="margin-top:10px">📤 Ota-onalarga yuborish</button>
+  `);
+
+  document.querySelector('[data-action="back-history"]').addEventListener(
+    "click",
+    guarded(async () => renderAttendanceHistory(await api(`/api/classes/${schoolClass.id}`)))
+  );
+  document.getElementById("edit-attendance-button").addEventListener("click", () => renderAttendanceForm(schoolClass, attendance));
+  document.getElementById("share-attendance-button").addEventListener("click", () => renderAttendanceShare(attendance, schoolClass));
+}
+
 function renderComingSoon(title, icon) {
   // Ta'lim muassasalari bo'limlari — mazmuni keyinroq qo'shiladi
   showPage(`
@@ -1599,12 +2003,20 @@ function renderSchoolProfile(school) {
         <div class="row-between"><span class="subtitle" style="margin:0">Joylashuv</span><b>${escapeHtml(school.district)}</b></div>
       </div>
 
-      <button class="btn" id="edit-school-profile" style="margin-top:16px">✏️ Profilni tahrirlash</button>
+      <div class="row-between" style="margin:20px 0 6px">
+        <span class="section-label" style="margin:0">SINFLARIM</span>
+        <button type="button" class="btn btn-ghost" id="create-class-button" style="width:auto;margin:0;padding:8px 14px">➕ Sinf yaratish</button>
+      </div>
+      <div id="my-classes"><p class="subtitle" style="margin:6px 0 0">⏳ Yuklanmoqda...</p></div>
+
+      <button class="btn" id="edit-school-profile" style="margin-top:20px">✏️ Profilni tahrirlash</button>
       <button class="btn btn-ghost" id="leave-school-button" style="margin-top:10px">🚪 Maktabdan chiqish</button>
     </div>
   `);
 
   wireSchoolTab("profile");
+  document.getElementById("create-class-button").addEventListener("click", renderCreateClass);
+  loadMyClassesInto(document.getElementById("my-classes"));
   document.getElementById("edit-school-profile").addEventListener("click", guarded(() => renderSchoolProfileEdit(school)));
   document.getElementById("leave-school-button").addEventListener("click", () => renderLeaveSchool(school));
 }

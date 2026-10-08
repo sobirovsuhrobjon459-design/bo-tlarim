@@ -4,7 +4,7 @@ Ma'lumotlar bazasi fayli: .env sozlamalari, bazaga ulanish, barcha jadvallar
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -409,6 +409,75 @@ class SchoolMember(Base):
     user: Mapped["User"] = relationship()
 
 
+class SchoolClass(Base):
+    """
+    O'qituvchining sinfi yoki guruhi (masalan "10/2", "Iqtisod guruhi").
+    Faqat uni yaratgan o'qituvchi boshqaradi. O'chirilganda bazada qoladi.
+    """
+
+    __tablename__ = "school_classes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    teacher_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+
+    students: Mapped[list["ClassStudent"]] = relationship(back_populates="school_class", order_by="ClassStudent.id")
+
+
+class ClassStudent(Base):
+    """Sinfdagi o'quvchi. Chiqarilganda o'chirilmaydi — removed_at belgilanadi (davomat tarixi saqlanadi)."""
+
+    __tablename__ = "class_students"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    class_id: Mapped[int] = mapped_column(ForeignKey("school_classes.id"), index=True)
+    full_name: Mapped[str] = mapped_column(String(200))
+    birth_date: Mapped[date | None] = mapped_column(default=None)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    removed_at: Mapped[datetime | None] = mapped_column(default=None)
+
+    school_class: Mapped["SchoolClass"] = relationship(back_populates="students")
+
+
+class Attendance(Base):
+    """
+    Bitta dars davomati. taken_at — birinchi olingan vaqt (hech qachon
+    o'zgarmaydi), updated_at — oxirgi tahrir vaqti (tahrirlanmagan bo'lsa bo'sh).
+    """
+
+    __tablename__ = "attendances"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    class_id: Mapped[int] = mapped_column(ForeignKey("school_classes.id"), index=True)
+    teacher_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    subject: Mapped[str] = mapped_column(String(100), default="")
+    taken_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime | None] = mapped_column(default=None)
+
+    marks: Mapped[list["AttendanceMark"]] = relationship(back_populates="attendance", order_by="AttendanceMark.id")
+
+
+class AttendanceMark(Base):
+    """
+    O'quvchining shu darsdagi holati: present (bor), absent (yo'q),
+    excused (sababli), late (kechikdi). Ism nusxasi ham saqlanadi — o'quvchi
+    keyin o'zgartirilsa yoki chiqarilsa ham eski davomat to'g'ri ko'rinadi.
+    """
+
+    __tablename__ = "attendance_marks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    attendance_id: Mapped[int] = mapped_column(ForeignKey("attendances.id"), index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("class_students.id"), index=True)
+    student_name: Mapped[str] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(10), default="present")
+
+    attendance: Mapped["Attendance"] = relationship(back_populates="marks")
+
+
 # ========== 4) API so'rov sxemalari (Pydantic) ==========
 
 
@@ -596,4 +665,45 @@ class SchoolProfileIn(BaseModel):
     @model_validator(mode="after")
     def normalize(self) -> "SchoolProfileIn":
         self.subjects = _clean_subjects(self.subjects)
+        return self
+
+
+ATTENDANCE_STATUSES = ("present", "absent", "excused", "late")
+
+
+class ClassIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def normalize(self) -> "ClassIn":
+        self.name = " ".join(self.name.split())
+        if not self.name:
+            raise ValueError("Sinf nomini kiriting")
+        return self
+
+
+class StudentIn(BaseModel):
+    full_name: str = Field(min_length=2, max_length=200)
+    birth_date: date | None = None
+
+    @model_validator(mode="after")
+    def normalize(self) -> "StudentIn":
+        self.full_name = " ".join(self.full_name.split())
+        if len(self.full_name) < 2:
+            raise ValueError("O'quvchining ism-familiyasini kiriting")
+        return self
+
+
+class AttendanceIn(BaseModel):
+    """Davomat: fan va har bir o'quvchining holati {o'quvchi_id: "present"|"absent"|"excused"|"late"}."""
+
+    subject: str = Field(default="", max_length=100)
+    marks: dict[int, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_marks(self) -> "AttendanceIn":
+        self.subject = " ".join(self.subject.split())
+        for status in self.marks.values():
+            if status not in ATTENDANCE_STATUSES:
+                raise ValueError(f"Noto'g'ri holat: {status}")
         return self
