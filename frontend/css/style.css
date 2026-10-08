@@ -1572,3 +1572,25 @@ select option {
 .profile-facts b {
   text-align: right;
 }
+
+/* Sarlavha burchagidagi kichik tugma (masalan, maktabni ulashish) */
+.icon-button {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-family: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.icon-button:active {
+  transform: scale(0.92);
+}

@@ -664,8 +664,11 @@ function showBottomNav(activeTab) {
 }
 
 function hideBottomNav() {
-  const host = document.getElementById("bottom-nav-host");
-  if (host) host.hidden = true;
+  // O'qituvchi bo'limi va maktab bo'limi menyulari — ikkalasi ham yashiriladi
+  ["bottom-nav-host", "school-nav-host"].forEach((id) => {
+    const host = document.getElementById(id);
+    if (host) host.hidden = true;
+  });
 }
 
 function pageHeader(title) {
@@ -909,10 +912,49 @@ function schoolPageHeader(title, action) {
     </div>`;
 }
 
+/*
+  "Xususiy maktab"ga kirish darhol bo'lsin (orqaga chiqish kabi tez).
+
+  Ilgari har bosishda server "maktabim bormi?" deb so'ralardi va sahifa 1–2
+  soniya kechikardi. Endi bu ma'lumot ilova ochilishi bilan fonda oldindan
+  yuklanadi va eslab qolinadi: bosilganda sahifa shu zahoti chiziladi,
+  tekshiruv esa fonda — holat o'zgargan bo'lsa (masalan, boshqa qurilmada
+  qo'shilgan), sahifa jimgina yangilanadi.
+*/
+let schoolMembershipKnown = false;
+
+async function prefetchSchoolData() {
+  try {
+    const { school } = await api("/api/schools/me");
+    currentSchool = school;
+    schoolMembershipKnown = true;
+  } catch (_) {
+    /* fonda — bo'lmasa, kirishda odatdagidek so'raladi */
+  }
+  loadRegions().catch(() => {}); // viloyatlar ro'yxati ham tayyor tursin
+}
+
 async function enterPrivateSchool() {
-  // A'zo bo'lgan o'qituvchi to'g'ridan-to'g'ri o'z maktabiga tushadi
+  if (schoolMembershipKnown) {
+    // Darhol — eslangan holat bo'yicha
+    if (currentSchool) renderMySchool(currentSchool);
+    else {
+      renderPrivateSchoolStart();
+      // Fonda tekshiramiz: boshqa joyda maktabga qo'shilgan bo'lishi mumkin
+      api("/api/schools/me")
+        .then(({ school }) => {
+          if (school && document.querySelector('[data-action="school-register"]')) renderMySchool(school, { refresh: false });
+        })
+        .catch(() => {});
+    }
+    return;
+  }
+
+  // Birinchi marta (oldindan yuklash ulgurmagan bo'lsa)
   const { school } = await api("/api/schools/me");
-  if (school) renderMySchool(school);
+  currentSchool = school;
+  schoolMembershipKnown = true;
+  if (school) renderMySchool(school, { refresh: false });
   else renderPrivateSchoolStart();
 }
 
@@ -1371,6 +1413,10 @@ function roleBadge(role) {
   return role === "owner" ? `<span class="badge badge-purple">👑 Admin</span>` : "";
 }
 
+function avatarLetter(name) {
+  return escapeHtml((name || "?").trim().charAt(0).toUpperCase());
+}
+
 function shareSchoolInvite(school) {
   // Telegram'ning "ulashish" oynasi: istalgan guruh yoki chatni tanlab yuboradi
   const text =
@@ -1388,14 +1434,129 @@ function shareSchoolInvite(school) {
   openExternalLink(shareUrl);
 }
 
-function renderMySchool(school) {
-  const me = school.members.find((member) => member.is_me);
+/* ---------- Maktab bo'limi: pastki menyu (Maktab · O'qituvchilar · Profil) ---------- */
+
+const SCHOOL_TABS = [
+  { id: "school", icon: "🏫", label: "Maktab" },
+  { id: "teachers", icon: "👥", label: "O'qituvchilar" },
+  { id: "profile", icon: "👤", label: "Profil" },
+];
+
+// Oxirgi yuklangan maktab — tablar orasida darhol almashish uchun
+let currentSchool = null;
+
+function showSchoolNav(activeTab) {
+  // O'qituvchi bo'limidagi menyu kabi: sahifadan tashqarida turadi va qayta chizilmaydi
+  let host = document.getElementById("school-nav-host");
+
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "school-nav-host";
+    host.className = "bottom-nav";
+    host.innerHTML = SCHOOL_TABS.map(
+      (tab) => `
+        <button class="nav-item" type="button" data-school-nav="${tab.id}">
+          <span class="nav-icon">${tab.icon}</span>
+          <span>${tab.label}</span>
+        </button>`
+    ).join("");
+    document.body.appendChild(host);
+
+    host.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-school-nav]");
+      if (!button || button.classList.contains("active") || !currentSchool) return;
+      openSchoolTab(button.dataset.schoolNav);
+    });
+  }
+
+  host.hidden = false;
+  host.querySelectorAll(".nav-item").forEach((button) => {
+    button.classList.toggle("active", button.dataset.schoolNav === activeTab);
+  });
+}
+
+function openSchoolTab(tab) {
+  if (tab === "teachers") renderSchoolTeachers(currentSchool);
+  else if (tab === "profile") renderSchoolProfile(currentSchool);
+  else renderMySchool(currentSchool);
+}
+
+/*
+  Tab darhol eslangan ma'lumot bilan chiziladi, keyin maktab fonda qayta
+  so'raladi (yangi o'qituvchi qo'shilgan bo'lishi mumkin). O'zgargan bo'lsa
+  va foydalanuvchi hali shu tabda bo'lsa — jimgina yangilanadi.
+*/
+async function refreshSchoolInBackground(tab) {
+  try {
+    const { school } = await api("/api/schools/me");
+    if (!school) return;
+    const changed = JSON.stringify(school) !== JSON.stringify(currentSchool);
+    currentSchool = school;
+    const stillHere = document.querySelector(`[data-school-tab="${tab}"]`);
+    if (changed && stillHere) openSchoolTab(tab);
+  } catch (_) {
+    /* fonda — xato bo'lsa eslangan ma'lumot qoladi */
+  }
+}
+
+function schoolTabHeader(title, { share = false } = {}) {
+  return `
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-folder" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">${escapeHtml(title)}</h2>
+      ${share ? `<button type="button" class="icon-button" id="share-school-button" aria-label="Guruhlarga ulashish" title="Guruhlarga ulashish">📤</button>` : ""}
+    </div>`;
+}
+
+function wireSchoolTab(tab) {
+  showSchoolNav(tab);
+  document.querySelector('[data-action="back-folder"]').addEventListener("click", renderSchoolFolder);
+  document.getElementById("share-school-button")?.addEventListener("click", () => shareSchoolInvite(currentSchool));
+}
+
+// 🏫 Maktab tabi: ma'lumot va kirish kodi (ulashish — tepada kichik tugma)
+function renderMySchool(school, { refresh = true } = {}) {
+  currentSchool = school;
+  schoolMembershipKnown = true;
+
+  showPage(`
+    <div data-school-tab="school">
+      ${schoolTabHeader(school.name, { share: true })}
+      <div class="card" style="cursor:default">
+        <div class="card-icon">🏫</div>
+        <div class="card-body">
+          <h3 style="margin:0">${escapeHtml(school.name)}</h3>
+          <p style="margin:4px 0 0">📍 ${escapeHtml(school.region)}, ${escapeHtml(school.district)}</p>
+          <p class="subtitle" style="margin:4px 0 0">👥 ${school.members.length} ta o'qituvchi</p>
+        </div>
+      </div>
+
+      <p class="section-label" style="margin-top:18px">O'QITUVCHILAR UCHUN KIRISH KODI</p>
+      <div class="card" style="cursor:default">
+        <div class="card-body" style="width:100%">
+          ${copyCodeChip(school.code)}
+          <p class="subtitle" style="margin:8px 0 0">
+            Maktabingiz o'qituvchilari shu kod bilan qo'shiladi. Tepadagi 📤 tugmasi bilan taklifni
+            guruhga ulashing — ko'rgan o'qituvchilar o'zini shu maktabda ro'yxatdan o'tkazadi.
+          </p>
+        </div>
+      </div>
+    </div>
+  `);
+
+  wireSchoolTab("school");
+  if (refresh) refreshSchoolInBackground("school");
+}
+
+// 👥 O'qituvchilar tabi — hammasi bitta ekranda
+function renderSchoolTeachers(school) {
+  currentSchool = school;
 
   const memberRows = school.members
     .map(
       (member) => `
         <div class="member-line">
-          <div class="member-avatar">${escapeHtml((member.name || "?").trim().charAt(0).toUpperCase())}</div>
+          <div class="member-avatar">${avatarLetter(member.name)}</div>
           <div class="member-info">
             <b>${escapeHtml(member.name)}${member.is_me ? " (siz)" : ""}</b>
             <small>${subjectsText(member.subjects)}</small>
@@ -1406,66 +1567,44 @@ function renderMySchool(school) {
     .join("");
 
   showPage(`
-    ${schoolPageHeader(school.name, "back-folder")}
-    <p class="subtitle" style="margin-top:0">📍 ${escapeHtml(school.region)}, ${escapeHtml(school.district)}</p>
-
-    <div class="card" data-action="open-profile">
-      <div class="member-avatar">${escapeHtml(((me && me.name) || "?").trim().charAt(0).toUpperCase())}</div>
-      <div class="card-body" style="width:100%">
-        <h3 style="margin:0">${escapeHtml(me ? me.name : "")} ${roleBadge(school.my_role)}</h3>
-        <p style="margin:4px 0 0">${subjectsText(school.my_subjects)}</p>
-      </div>
-      <span style="color:var(--color-text-muted);font-size:22px">›</span>
-    </div>
-
-    <p class="section-label" style="margin-top:18px">O'QITUVCHILAR (${school.members.length})</p>
-    <div class="panel" style="padding:4px 0">${memberRows}</div>
-
-    <p class="section-label" style="margin-top:22px">O'QITUVCHILAR UCHUN KIRISH KODI</p>
-    <div class="card" style="cursor:default">
-      <div class="card-body" style="width:100%">
-        <div class="row-between">${copyCodeChip(school.code)}</div>
-        <p class="subtitle" style="margin:8px 0 0">
-          Maktabingiz o'qituvchilari shu kod bilan qo'shiladi. Taklifni guruhga ulashing — ko'rgan
-          o'qituvchilar havolani bosib, o'zini shu maktabda ro'yxatdan o'tkazadi.
-        </p>
-        <button class="btn" id="share-school-button" style="margin:12px 0 0">📤 Guruhlarga ulashish</button>
-      </div>
+    <div data-school-tab="teachers">
+      ${schoolTabHeader(`O'qituvchilar (${school.members.length})`, { share: true })}
+      <div class="panel" style="padding:4px 0">${memberRows}</div>
     </div>
   `);
 
-  document.querySelector('[data-action="back-folder"]').addEventListener("click", renderSchoolFolder);
-  document.querySelector('[data-action="open-profile"]').addEventListener("click", () => renderSchoolProfile(school));
-  document.getElementById("share-school-button").addEventListener("click", () => shareSchoolInvite(school));
+  wireSchoolTab("teachers");
+  refreshSchoolInBackground("teachers");
 }
 
-// Alohida profil sahifasi: ma'lumotlar, tahrirlash va maktabdan chiqish
+// 👤 Profil tabi: ma'lumotlar, tahrirlash va maktabdan chiqish
 function renderSchoolProfile(school) {
+  currentSchool = school;
   const me = school.members.find((member) => member.is_me);
 
   showPage(`
-    ${schoolPageHeader("Profilim", "back-school")}
-    <div class="card" style="cursor:default">
-      <div class="member-avatar" style="width:52px;height:52px;font-size:20px">
-        ${escapeHtml(((me && me.name) || "?").trim().charAt(0).toUpperCase())}
+    <div data-school-tab="profile">
+      ${schoolTabHeader("Profilim")}
+      <div class="card" style="cursor:default">
+        <div class="member-avatar" style="width:52px;height:52px;font-size:20px">${avatarLetter(me && me.name)}</div>
+        <div class="card-body" style="width:100%">
+          <h3 style="margin:0">${escapeHtml(me ? me.name : "")}</h3>
+          <p style="margin:6px 0 0">${roleBadge(school.my_role) || `<span class="badge badge-blue">O'qituvchi</span>`}</p>
+        </div>
       </div>
-      <div class="card-body" style="width:100%">
-        <h3 style="margin:0">${escapeHtml(me ? me.name : "")}</h3>
-        <p style="margin:6px 0 0">${roleBadge(school.my_role) || `<span class="badge badge-blue">O'qituvchi</span>`}</p>
+
+      <div class="panel profile-facts">
+        <div class="row-between"><span class="subtitle" style="margin:0">Maktab</span><b>${escapeHtml(school.name)}</b></div>
+        <div class="row-between"><span class="subtitle" style="margin:0">Fanlar</span><b>${subjectsText(school.my_subjects)}</b></div>
+        <div class="row-between"><span class="subtitle" style="margin:0">Joylashuv</span><b>${escapeHtml(school.district)}</b></div>
       </div>
-    </div>
 
-    <div class="panel profile-facts">
-      <div class="row-between"><span class="subtitle" style="margin:0">Maktab</span><b>${escapeHtml(school.name)}</b></div>
-      <div class="row-between"><span class="subtitle" style="margin:0">Fanlar</span><b>${subjectsText(school.my_subjects)}</b></div>
-      <div class="row-between"><span class="subtitle" style="margin:0">Joylashuv</span><b>${escapeHtml(school.district)}</b></div>
+      <button class="btn" id="edit-school-profile" style="margin-top:16px">✏️ Profilni tahrirlash</button>
+      <button class="btn btn-ghost" id="leave-school-button" style="margin-top:10px">🚪 Maktabdan chiqish</button>
     </div>
-
-    <button class="btn" id="edit-school-profile" style="margin-top:16px">✏️ Profilni tahrirlash</button>
-    <button class="btn btn-ghost" id="leave-school-button" style="margin-top:10px">🚪 Maktabdan chiqish</button>
   `);
 
-  document.querySelector('[data-action="back-school"]').addEventListener("click", () => renderMySchool(school));
+  wireSchoolTab("profile");
   document.getElementById("edit-school-profile").addEventListener("click", guarded(() => renderSchoolProfileEdit(school)));
   document.getElementById("leave-school-button").addEventListener("click", () => renderLeaveSchool(school));
 }
@@ -1498,7 +1637,7 @@ async function renderSchoolProfileEdit(school) {
       await saveProfileName();
       const { school: updated } = await api("/api/schools/me/profile", { method: "PUT", body: { subjects } });
       showToast("✅ Profil saqlandi");
-      renderMySchool(updated);
+      renderSchoolProfile(updated);
     })
   );
 }
@@ -1532,6 +1671,8 @@ function renderLeaveSchool(school) {
       if (!(await askConfirm(`"${school.name}" maktabidan chiqasizmi?`))) return;
 
       await api("/api/schools/leave", { method: "POST", body: { code } });
+      currentSchool = null;
+      schoolMembershipKnown = true;
       showToast("Maktabdan chiqdingiz");
       renderPrivateSchoolStart();
     })
@@ -4080,4 +4221,6 @@ async function openPendingSchoolInvite() {
   }
 }
 
-loadHome().then(openPendingSchoolInvite);
+loadHome()
+  .then(openPendingSchoolInvite)
+  .then(prefetchSchoolData);
