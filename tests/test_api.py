@@ -60,6 +60,7 @@ def reset_database() -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     main._school_code_failures.clear()  # noto'g'ri kod urinishlari hisobi ham tozalanadi
+    main._code_requests.clear()
 
 
 def as_user(tg_id: int) -> dict:
@@ -999,6 +1000,59 @@ def test_tumandagi_maktablar_royxati_va_tanlangan_maktabga_faqat_uning_kodi_bila
     assert wrong.status_code == 403, wrong.text
     ok = client.post("/api/schools/join", json={"code": first["code"], "school_id": first["id"]}, headers=as_user(703))
     assert ok.status_code == 200 and ok.json()["school"]["name"] == "Ilm maktabi", ok.text
+
+
+def test_kod_sorash_asoschiga_va_sorovchiga_bot_xabari():
+    """
+    Maktabga kirmoqchi bo'lgan o'qituvchi asoschining Telegram manzilini ko'radi
+    va "Kod so'rash" bosadi: bot asoschiga kodni (va berish qoidasini), so'rovchiga
+    esa nima qilishni yozadi. Kodning o'zi so'rovchiga HECH QACHON yuborilmaydi.
+    """
+    reset_database()
+    main._code_requests.clear()
+    _set_name(701, "Aziza", "Karimova")
+    _set_name(702, "Bobur", "Aliyev")
+
+    session = SessionLocal()
+    try:
+        from backend.database import User
+
+        founder = session.scalar(main.select(User).where(User.tg_id == 701))
+        founder.username = "aziza_teacher"
+        session.commit()
+    finally:
+        session.close()
+
+    school = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                               "name": "Kelajak"}, headers=as_user(701)).json()["school"]
+
+    # Butun viloyat bo'yicha ro'yxat (tumansiz) — asoschi manzili bilan, kodsiz
+    listed = client.get("/api/schools", params={"region": "Toshkent shahri"}, headers=as_user(702)).json()
+    assert len(listed) == 1 and listed[0]["district"] == "Chilonzor tumani", listed
+    assert listed[0]["founder"]["link"] == "https://t.me/aziza_teacher", listed[0]["founder"]
+    assert "code" not in listed[0]
+
+    sent: list[tuple[int, str]] = []
+    original = main._send_bot_text
+    main._send_bot_text = lambda chat_id, text: sent.append((chat_id, text)) or True
+    try:
+        response = client.post(f"/api/schools/{school['id']}/request-code", headers=as_user(702))
+        assert response.status_code == 200 and response.json()["delivered"] is True, response.text
+
+        # Ketma-ket qayta so'rash — asoschini bezor qilmaslik uchun to'xtatiladi
+        again = client.post(f"/api/schools/{school['id']}/request-code", headers=as_user(702))
+        assert again.status_code == 429, again.text
+
+        # Asoschi o'z maktabiga kod so'ramaydi
+        assert client.post(f"/api/schools/{school['id']}/request-code", headers=as_user(701)).status_code == 400
+    finally:
+        main._send_bot_text = original
+
+    by_chat = dict(sent)
+    assert set(by_chat) == {701, 702}, sent
+    assert school["code"] in by_chat[701] and "Bobur Aliyev" in by_chat[701] and "BERMANG" in by_chat[701]
+    assert school["code"] not in by_chat[702], "kod so'rovchiga yuborilib qoldi!"
+    assert "@aziza_teacher" in by_chat[702] and "Maktabga kirish" in by_chat[702]
 
 
 def test_maktab_kodini_taxmin_qilib_topish_toxtatiladi():

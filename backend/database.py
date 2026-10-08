@@ -102,6 +102,9 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(200), default="")
+    # Telegram username (@siz) — masalan, maktab asoschisiga yozish havolasi uchun.
+    # Har kirishda yangilanadi: foydalanuvchi uni o'zgartirishi yoki o'chirishi mumkin.
+    username: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 

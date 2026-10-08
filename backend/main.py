@@ -121,6 +121,7 @@ def _add_missing_columns() -> None:
             "deleted_at": "TIMESTAMP",
         },
         "test_attempts": {"offline_name": "VARCHAR(200)", "saved_answers": "TEXT"},
+        "users": {"username": "VARCHAR(64)"},
         "key_questions": {"label": "VARCHAR(20)"},
         "payments": {
             "payme_transaction_id": "VARCHAR(50)",
@@ -3268,32 +3269,123 @@ def list_regions():
     return [{"name": name, "districts": districts} for name, districts in REGIONS.items()]
 
 
+def _founder_contact(db: Session, school: PrivateSchool) -> dict:
+    """Maktab asoschisi va unga Telegram'da yozish havolasi (kod so'rash uchun)."""
+
+    founder = db.get(User, school.owner_user_id)
+    if not founder:
+        return {"name": "", "username": None, "link": None}
+    link = f"https://t.me/{founder.username}" if founder.username else f"tg://user?id={founder.tg_id}"
+    return {"name": founder.full_name, "username": founder.username, "link": link}
+
+
 @app.get("/api/schools")
-def schools_in_district(
-    region: str, district: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+def list_schools(
+    region: str,
+    district: str | None = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
-    Tanlangan tumandagi mavjud maktablar — o'qituvchi yangi ochish o'rniga
-    o'z maktabini tanlab, kod bilan kirishi uchun. Kod bu yerda BERILMAYDI.
+    Viloyatdagi (yoki tumandagi) ochilgan maktablar — o'qituvchi o'z maktabini
+    topib, asoschidan kod so'rab qo'shilishi uchun. Kod bu yerda BERILMAYDI.
     """
 
-    if not is_valid_location(region, district):
+    if region not in REGIONS or (district and not is_valid_location(region, district)):
         raise HTTPException(status_code=422, detail="Viloyat yoki tuman noto'g'ri tanlangan")
 
-    schools = db.scalars(
-        select(PrivateSchool)
-        .where(PrivateSchool.region == region, PrivateSchool.district == district)
-        .order_by(PrivateSchool.name)
-    ).all()
+    query = select(PrivateSchool).where(PrivateSchool.region == region)
+    if district:
+        query = query.where(PrivateSchool.district == district)
+    schools = db.scalars(query.order_by(PrivateSchool.district, PrivateSchool.name)).all()
 
     return [
         {
             "id": school.id,
             "name": school.name,
+            "region": school.region,
+            "district": school.district,
             "teachers": sum(1 for member in school.members if member.left_at is None),
+            "founder": _founder_contact(db, school),
         }
         for school in schools
     ]
+
+
+# Bir foydalanuvchi bitta maktabdan 10 daqiqada bir martadan ko'p kod so'ray
+# olmaydi — asoschini xabarlar bilan bezor qilmaslik uchun.
+CODE_REQUEST_INTERVAL_SECONDS = 10 * 60
+_code_requests: dict[tuple[int, int], float] = {}
+
+
+def _send_bot_text(chat_id: int, text: str) -> bool:
+    if not BOT_TOKEN:
+        return False
+    try:
+        response = httpx.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
+            timeout=10,
+        )
+        return bool(response.json().get("ok"))
+    except Exception:
+        logging.getLogger("backend").warning("Bot xabari yuborilmadi", exc_info=True)
+        return False
+
+
+@app.post("/api/schools/{school_id}/request-code")
+def request_school_code(school_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Maktab kodini asoschidan so'rash. Bot ikkala tomonga ham tushuntiradi:
+      • asoschiga — kim so'rayapti, kodni (faqat o'z o'qituvchisiga) berish;
+      • so'rovchiga — kodni olgach nima qilish kerak.
+    Kodning o'zi so'rovchiga hech qachon to'g'ridan-to'g'ri yuborilmaydi.
+    """
+
+    _require_profile_name(user)
+    school = db.get(PrivateSchool, school_id)
+    if not school:
+        raise HTTPException(status_code=404, detail="Maktab topilmadi")
+    if school.owner_user_id == user.id:
+        raise HTTPException(status_code=400, detail="Bu maktabni o'zingiz ochgansiz")
+
+    key = (user.id, school.id)
+    now = time.monotonic()
+    if now - _code_requests.get(key, -CODE_REQUEST_INTERVAL_SECONDS) < CODE_REQUEST_INTERVAL_SECONDS:
+        raise HTTPException(
+            status_code=429,
+            detail="So'rov allaqachon yuborilgan. Asoschi javobini kuting (10 daqiqadan keyin qayta so'rash mumkin).",
+        )
+
+    founder = db.get(User, school.owner_user_id)
+    contact = _founder_contact(db, school)
+    # Oddiy matnda tg:// havola bosilmaydi — username bo'lmasa, Telegram ID yoziladi
+    requester_link = f"@{user.username}" if user.username else f"Telegram ID: {user.tg_id}"
+
+    founder_text = (
+        f"🔑 Maktab kodi so'raldi\n\n"
+        f"👤 {user.full_name} ({requester_link})\n"
+        f"«{school.name}» maktabingizga o'qituvchi sifatida qo'shilmoqchi.\n\n"
+        f"✅ Agar u haqiqatan maktabingiz o'qituvchisi bo'lsa — unga Telegram orqali maktab kodini yuboring:\n"
+        f"{school.code}\n\n"
+        f"⛔️ Tanimasangiz yoki boshqa maktabdan bo'lsa — kodni BERMANG. Kod bilan har kim "
+        f"maktabingizga kira oladi."
+    )
+    delivered = _send_bot_text(founder.tg_id, founder_text) if founder else False
+
+    founder_ref = f"@{contact['username']}" if contact["username"] else contact["name"]
+    requester_text = (
+        f"📨 Kod so'rovingiz yuborildi\n\n"
+        f"«{school.name}» maktabi asoschisi — {contact['name']} ({founder_ref}).\n"
+        f"U sizga maktab kodini Telegram orqali yuboradi. Tezroq bo'lishi uchun unga o'zingiz ham yozishingiz mumkin.\n\n"
+        f"Kodni olgach: Ta'lim muassasalari → Xususiy maktab → Maktabga kirish → maktabingizni tanlang → kodni kiriting.\n\n"
+        f"Kodni hech kimga bermang — u faqat maktabingiz o'qituvchilari uchun."
+    )
+    if delivered:
+        _send_bot_text(user.tg_id, requester_text)
+        _code_requests[key] = now
+
+    return {"delivered": delivered, "founder": contact}
 
 
 @app.get("/api/schools/me")
