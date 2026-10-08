@@ -1908,14 +1908,14 @@ function schoolTabHeader(title, { share = false } = {}) {
     <div class="page-header">
       <button class="back-button" type="button" data-action="back-folder" style="margin:0">←</button>
       <h2 style="margin:0;flex:1">${escapeHtml(title)}</h2>
-      ${share ? `<button type="button" class="icon-button" id="share-school-button" aria-label="Guruhlarga ulashish" title="Guruhlarga ulashish">📤</button>` : ""}
+      ${share ? `<button type="button" class="share-pill" id="share-school-button">📤 Ulashish</button>` : ""}
     </div>`;
 }
 
 function wireSchoolTab(tab) {
   showSchoolNav(tab);
   document.querySelector('[data-action="back-folder"]').addEventListener("click", renderSchoolFolder);
-  document.getElementById("share-school-button")?.addEventListener("click", () => shareSchoolInvite(currentSchool));
+  document.getElementById("share-school-button")?.addEventListener("click", () => renderSchoolInvite(currentSchool, tab));
 }
 
 // 🏫 Maktab tabi: ma'lumot va kirish kodi (ulashish — tepada kichik tugma)
@@ -1935,21 +1935,42 @@ function renderMySchool(school, { refresh = true } = {}) {
         </div>
       </div>
 
-      <p class="section-label" style="margin-top:18px">O'QITUVCHILAR UCHUN KIRISH KODI</p>
-      <div class="card" style="cursor:default">
-        <div class="card-body" style="width:100%">
-          ${copyCodeChip(school.code)}
-          <p class="subtitle" style="margin:8px 0 0">
-            Maktabingiz o'qituvchilari shu kod bilan qo'shiladi. Tepadagi 📤 tugmasi bilan taklifni
-            guruhga ulashing — ko'rgan o'qituvchilar o'zini shu maktabda ro'yxatdan o'tkazadi.
-          </p>
-        </div>
-      </div>
     </div>
   `);
 
   wireSchoolTab("school");
   if (refresh) refreshSchoolInBackground("school");
+}
+
+/*
+  "Ulashish" ekrani — maktabga o'qituvchilarga kirish huquqini berish:
+  kodni nusxalash va taklifni guruhga yuborish shu yerda.
+*/
+function renderSchoolInvite(school, fromTab = "school") {
+  showPage(`
+    ${schoolPageHeader("Kirish huquqini berish", "back-tab")}
+    <p class="subtitle" style="margin-top:0">
+      Maktabingiz o'qituvchilari shu kod bilan qo'shiladi. Kodni nusxalab yuboring yoki taklifni
+      guruhga ulashing — ko'rgan o'qituvchilar o'zini shu maktabda ro'yxatdan o'tkazadi.
+    </p>
+
+    <p class="section-label" style="margin-top:14px">O'QITUVCHILAR UCHUN KIRISH KODI</p>
+    <div class="card" style="cursor:default">
+      <div class="card-body" style="width:100%">
+        ${copyCodeChip(school.code)}
+        <p class="subtitle" style="margin:8px 0 0">Kodni bosing — nusxalanadi.</p>
+      </div>
+    </div>
+
+    <button class="btn" id="send-invite-button" style="margin-top:16px">📤 Guruhlarga yuborish</button>
+    <p class="subtitle" style="margin:8px 0 0">
+      Telegram'da guruh yoki chatni tanlaysiz. Havolani bosgan o'qituvchiga bot maktab nomi va kodni
+      yozib, "Maktabga qo'shilish" tugmasini beradi.
+    </p>
+  `);
+
+  document.querySelector('[data-action="back-tab"]').addEventListener("click", () => openSchoolTab(fromTab));
+  document.getElementById("send-invite-button").addEventListener("click", () => shareSchoolInvite(school));
 }
 
 // 👥 O'qituvchilar tabi — hammasi bitta ekranda
