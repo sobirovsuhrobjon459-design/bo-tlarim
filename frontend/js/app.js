@@ -519,7 +519,7 @@ window.customElements?.whenDefined?.("math-field").then(() => {
   }, 0);
 });
 
-async function copyToClipboard(text) {
+async function copyToClipboard(text, message = null) {
   try {
     await navigator.clipboard.writeText(text);
   } catch (_) {
@@ -535,7 +535,8 @@ async function copyToClipboard(text) {
   }
 
   telegram?.HapticFeedback?.notificationOccurred?.("success");
-  showToast(`📋 Nusxalandi: ${text}`);
+  // Uzun matnni (masalan, taklif xabari) butunlay ko'rsatmaslik uchun o'z xabari berilishi mumkin
+  showToast(message || `📋 Nusxalandi: ${text}`);
 }
 
 // Kod yozilgan joyni bir bosish bilan nusxalash. Tinglovchi "capture"
@@ -918,7 +919,7 @@ async function enterPrivateSchool() {
 /*
   Xususiy maktab — ikki yo'l:
     🔑 Maktabga kirish — maktab allaqachon ochilgan: viloyat → maktab → kod
-       (kodni asoschidan so'raladi, bot ikkala tomonga tushuntiradi);
+       (kodni admindan so'raladi, bot ikkala tomonga tushuntiradi);
     📝 Maktabni ro'yxatdan o'tkazish — viloyat → (shu viloyatdagi maktablar
        ko'rinib turadi, o'ziniki bo'lsa qo'shiladi) → tuman → maktab ochish.
 */
@@ -1271,7 +1272,7 @@ async function renderCreateSchool() {
   );
 }
 
-async function renderJoinSchool({ school: target = null, onBack = renderPrivateSchoolStart } = {}) {
+async function renderJoinSchool({ school: target = null, onBack = renderPrivateSchoolStart, prefillCode = "" } = {}) {
   const nameFields = await profileNameFieldsHtml();
   const founder = target?.founder;
 
@@ -1283,27 +1284,27 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
              <div class="card-body" style="width:100%">
                <h3 style="margin:0">🏫 ${escapeHtml(target.name)}</h3>
                <p class="subtitle" style="margin:4px 0 0">📍 ${escapeHtml(target.region)}, ${escapeHtml(target.district)}</p>
-               <p style="margin:10px 0 0">👤 Asoschi: <b>${escapeHtml(founder?.name || "—")}</b>
+               <p style="margin:10px 0 0">👤 Admin: <b>${escapeHtml(founder?.name || "—")}</b>
                  ${founder?.username ? `<span class="subtitle">@${escapeHtml(founder.username)}</span>` : ""}</p>
                <p class="subtitle" style="margin:8px 0 0">
-                 Maktab kodini asoschidan oling. "Kod so'rash"ni bossangiz, bot asoschiga xabar yuboradi
+                 Maktab kodini admindan oling. "Kod so'rash"ni bossangiz, bot adminga xabar yuboradi
                  va sizga ham nima qilishni tushuntiradi.
                </p>
                <div class="row-between" style="gap:8px;margin-top:10px">
                  ${
                    founder?.username
-                     ? `<button type="button" class="btn btn-ghost" id="write-founder" style="margin:0">✉️ Asoschiga yozish</button>`
+                     ? `<button type="button" class="btn btn-ghost" id="write-founder" style="margin:0">✉️ Adminga yozish</button>`
                      : ""
                  }
                  <button type="button" class="btn btn-ghost" id="request-code" style="margin:0">🔔 Kod so'rash</button>
                </div>
              </div>
            </div>`
-        : `<p class="subtitle">Maktab kodini maktabingiz asoschisi yoki o'qituvchisidan oling.</p>`
+        : `<p class="subtitle">Maktab kodini maktabingiz admini yoki o'qituvchisidan oling.</p>`
     }
 
     <label class="field-label" for="school-code-input">Maktab kodi</label>
-    <input class="input" id="school-code-input" placeholder="Maktab kodi (8 belgi)" maxlength="12"
+    <input class="input" id="school-code-input" placeholder="Maktab kodi (8 belgi)" maxlength="12" value="${escapeHtml(prefillCode)}"
            style="text-transform:uppercase;letter-spacing:3px;text-align:center;font-size:18px" />
 
     <p class="section-label" style="margin-top:18px">SIZNING PROFILINGIZ</p>
@@ -1332,9 +1333,9 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
       await saveProfileName();
       const result = await api(`/api/schools/${target.id}/request-code`, { method: "POST", body: {} });
       if (result.delivered) {
-        showToast("📨 So'rov asoschiga yuborildi. Bot sizga ham xabar yozdi.");
+        showToast("📨 So'rov adminga yuborildi. Bot sizga ham xabar yozdi.");
       } else {
-        showToast("Asoschiga xabar yetmadi — unga to'g'ridan-to'g'ri yozing");
+        showToast("Adminga xabar yetmadi — unga to'g'ridan-to'g'ri yozing");
       }
     })
   );
@@ -1362,9 +1363,33 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
   );
 }
 
+function subjectsText(subjects) {
+  return subjects.length ? subjects.map(escapeHtml).join(", ") : "Fan o'qituvchisi emas";
+}
+
+function roleBadge(role) {
+  return role === "owner" ? `<span class="badge badge-purple">👑 Admin</span>` : "";
+}
+
+function shareSchoolInvite(school) {
+  // Telegram'ning "ulashish" oynasi: istalgan guruh yoki chatni tanlab yuboradi
+  const text =
+    `🏫 «${school.name}» xususiy maktabi\n📍 ${school.region}, ${school.district}\n\n` +
+    `O'qituvchilar uchun kirish kodi: ${school.code}\n\n` +
+    `Shu maktab o'qituvchisi bo'lsangiz, havolani bosib ro'yxatdan o'ting 👇`;
+
+  if (!school.invite_link) {
+    // Bot havolasi aniqlanmasa — hech bo'lmasa matnni nusxalab olsin
+    copyToClipboard(text, "📋 Taklif matni nusxalandi — guruhga joylang");
+    return;
+  }
+
+  const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(school.invite_link)}&text=${encodeURIComponent(text)}`;
+  openExternalLink(shareUrl);
+}
+
 function renderMySchool(school) {
   const me = school.members.find((member) => member.is_me);
-  const subjectsText = (subjects) => (subjects.length ? subjects.map(escapeHtml).join(", ") : "Fan o'qituvchisi emas");
 
   const memberRows = school.members
     .map(
@@ -1375,41 +1400,72 @@ function renderMySchool(school) {
             <b>${escapeHtml(member.name)}${member.is_me ? " (siz)" : ""}</b>
             <small>${subjectsText(member.subjects)}</small>
           </div>
-          ${member.role === "owner" ? `<span class="badge badge-purple">👑 Asoschi</span>` : ""}
+          ${roleBadge(member.role)}
         </div>`
     )
     .join("");
 
   showPage(`
     ${schoolPageHeader(school.name, "back-folder")}
-    <div class="card" style="cursor:default">
-      <div class="card-body" style="width:100%">
-        <p style="margin:0">📍 ${escapeHtml(school.region)}, ${escapeHtml(school.district)}</p>
-        <p style="margin:8px 0 0">Maktab kodi: ${copyCodeChip(school.code)}</p>
-        <p class="subtitle" style="margin:6px 0 0">
-          Boshqa o'qituvchilar shu kod bilan qo'shiladi. Maktabdan chiqish uchun ham shu kod kerak.
-        </p>
-      </div>
-    </div>
+    <p class="subtitle" style="margin-top:0">📍 ${escapeHtml(school.region)}, ${escapeHtml(school.district)}</p>
 
-    <p class="section-label" style="margin-top:18px">MENING PROFILIM</p>
-    <div class="card" style="cursor:default">
+    <div class="card" data-action="open-profile">
+      <div class="member-avatar">${escapeHtml(((me && me.name) || "?").trim().charAt(0).toUpperCase())}</div>
       <div class="card-body" style="width:100%">
-        <div class="row-between">
-          <b>${escapeHtml(me ? me.name : "")}</b>
-          <button class="btn btn-ghost" id="edit-school-profile" style="width:auto;padding:6px 12px;margin:0">✏️</button>
-        </div>
-        <p class="subtitle" style="margin:4px 0 0">${subjectsText(school.my_subjects)}</p>
+        <h3 style="margin:0">${escapeHtml(me ? me.name : "")} ${roleBadge(school.my_role)}</h3>
+        <p style="margin:4px 0 0">${subjectsText(school.my_subjects)}</p>
       </div>
+      <span style="color:var(--color-text-muted);font-size:22px">›</span>
     </div>
 
     <p class="section-label" style="margin-top:18px">O'QITUVCHILAR (${school.members.length})</p>
     <div class="panel" style="padding:4px 0">${memberRows}</div>
 
-    <button class="btn btn-ghost" id="leave-school-button" style="margin-top:22px">🚪 Maktabdan chiqish</button>
+    <p class="section-label" style="margin-top:22px">O'QITUVCHILAR UCHUN KIRISH KODI</p>
+    <div class="card" style="cursor:default">
+      <div class="card-body" style="width:100%">
+        <div class="row-between">${copyCodeChip(school.code)}</div>
+        <p class="subtitle" style="margin:8px 0 0">
+          Maktabingiz o'qituvchilari shu kod bilan qo'shiladi. Taklifni guruhga ulashing — ko'rgan
+          o'qituvchilar havolani bosib, o'zini shu maktabda ro'yxatdan o'tkazadi.
+        </p>
+        <button class="btn" id="share-school-button" style="margin:12px 0 0">📤 Guruhlarga ulashish</button>
+      </div>
+    </div>
   `);
 
   document.querySelector('[data-action="back-folder"]').addEventListener("click", renderSchoolFolder);
+  document.querySelector('[data-action="open-profile"]').addEventListener("click", () => renderSchoolProfile(school));
+  document.getElementById("share-school-button").addEventListener("click", () => shareSchoolInvite(school));
+}
+
+// Alohida profil sahifasi: ma'lumotlar, tahrirlash va maktabdan chiqish
+function renderSchoolProfile(school) {
+  const me = school.members.find((member) => member.is_me);
+
+  showPage(`
+    ${schoolPageHeader("Profilim", "back-school")}
+    <div class="card" style="cursor:default">
+      <div class="member-avatar" style="width:52px;height:52px;font-size:20px">
+        ${escapeHtml(((me && me.name) || "?").trim().charAt(0).toUpperCase())}
+      </div>
+      <div class="card-body" style="width:100%">
+        <h3 style="margin:0">${escapeHtml(me ? me.name : "")}</h3>
+        <p style="margin:6px 0 0">${roleBadge(school.my_role) || `<span class="badge badge-blue">O'qituvchi</span>`}</p>
+      </div>
+    </div>
+
+    <div class="panel profile-facts">
+      <div class="row-between"><span class="subtitle" style="margin:0">Maktab</span><b>${escapeHtml(school.name)}</b></div>
+      <div class="row-between"><span class="subtitle" style="margin:0">Fanlar</span><b>${subjectsText(school.my_subjects)}</b></div>
+      <div class="row-between"><span class="subtitle" style="margin:0">Joylashuv</span><b>${escapeHtml(school.district)}</b></div>
+    </div>
+
+    <button class="btn" id="edit-school-profile" style="margin-top:16px">✏️ Profilni tahrirlash</button>
+    <button class="btn btn-ghost" id="leave-school-button" style="margin-top:10px">🚪 Maktabdan chiqish</button>
+  `);
+
+  document.querySelector('[data-action="back-school"]').addEventListener("click", () => renderMySchool(school));
   document.getElementById("edit-school-profile").addEventListener("click", guarded(() => renderSchoolProfileEdit(school)));
   document.getElementById("leave-school-button").addEventListener("click", () => renderLeaveSchool(school));
 }
@@ -1430,7 +1486,7 @@ async function renderSchoolProfileEdit(school) {
   document.querySelector('[data-action="back-school"]').addEventListener(
     "click",
     guarded(async () => {
-      if (await confirmLeave()) renderMySchool(school);
+      if (await confirmLeave()) renderSchoolProfile(school);
     })
   );
 
@@ -1457,7 +1513,7 @@ function renderLeaveSchool(school) {
         </p>
         ${
           school.my_role === "owner"
-            ? `<p class="subtitle" style="margin:8px 0 0">Siz maktab asoschisisiz — chiqsangiz, asoschilik maktabdagi keyingi o'qituvchiga o'tadi.</p>`
+            ? `<p class="subtitle" style="margin:8px 0 0">Siz maktab adminisiz — chiqsangiz, adminlik maktabdagi keyingi o'qituvchiga o'tadi.</p>`
             : ""
         }
       </div>
@@ -1467,7 +1523,7 @@ function renderLeaveSchool(school) {
     <button class="btn" id="confirm-leave-button" style="margin-top:12px">🚪 Chiqish</button>
   `);
 
-  document.querySelector('[data-action="back-school"]').addEventListener("click", () => renderMySchool(school));
+  document.querySelector('[data-action="back-school"]').addEventListener("click", () => renderSchoolProfile(school));
   document.getElementById("confirm-leave-button").addEventListener(
     "click",
     guarded(async () => {
@@ -4000,4 +4056,28 @@ async function deliverPdf(basePath, fileName, sentMessage) {
 
 /* ---------- Ishga tushirish ---------- */
 
-loadHome();
+/*
+  Guruhda ulashilgan maktab taklifidan kelgan o'qituvchi: bot Mini App'ni
+  "?school_code=KOD" bilan ochadi — qo'shilish formasi kod bilan tayyor turadi.
+  Allaqachon maktabga a'zo bo'lsa, o'z maktabi ochiladi.
+*/
+async function openPendingSchoolInvite() {
+  const params = new URLSearchParams(window.location.search);
+  const code = (params.get("school_code") || "").trim().toUpperCase();
+  if (!/^[A-Z0-9]{4,20}$/.test(code)) return;
+
+  // Bir martalik — sahifa yangilansa qayta ochilmasin
+  params.delete("school_code");
+  const query = params.toString();
+  history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : "") + window.location.hash);
+
+  try {
+    const { school } = await api("/api/schools/me");
+    if (school) renderMySchool(school);
+    else await renderJoinSchool({ prefillCode: code, onBack: renderPrivateSchoolStart });
+  } catch (error) {
+    showToast(error.message || "Taklifni ochib bo'lmadi");
+  }
+}
+
+loadHome().then(openPendingSchoolInvite);

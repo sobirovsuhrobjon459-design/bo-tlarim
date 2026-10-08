@@ -17,8 +17,16 @@ import logging
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramUnauthorizedError
-from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, MenuButtonWebApp, Message, ReplyKeyboardRemove, WebAppInfo
+from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    MenuButtonWebApp,
+    Message,
+    ReplyKeyboardRemove,
+    WebAppInfo,
+)
 
 from .config import BOT_TOKEN, WEBAPP_URL
 
@@ -48,9 +56,63 @@ bot = Bot(token=BOT_TOKEN) if TOKEN_IS_SET else None
 dispatcher = Dispatcher()
 
 
+def _find_school(code: str):
+    """Taklif havolasidagi kod bo'yicha maktab (nomi va joylashuvi) — alohida ipda chaqiriladi."""
+
+    from backend.database import PrivateSchool, SessionLocal
+    from sqlalchemy import select
+
+    with SessionLocal() as session:
+        school = session.scalar(select(PrivateSchool).where(PrivateSchool.code == code))
+        return (school.name, school.region, school.district) if school else None
+
+
+async def _handle_school_invite(message: Message, code: str) -> None:
+    """
+    Guruhda ulashilgan maktab taklifi bosildi (t.me/bot?start=school_KOD).
+    Bot maktabni va nima qilishni tushuntiradi; tugma Mini App'ni kod bilan
+    tayyor holda ochadi — o'qituvchi faqat ismi va fanlarini kiritadi.
+    """
+
+    school = await asyncio.to_thread(_find_school, code)
+    if not school:
+        await message.answer("❗️ Bu taklif havolasi eskirgan yoki noto'g'ri. Maktab admini'dan yangisini so'rang.")
+        return
+
+    name, region, district = school
+    text = (
+        f"🏫 <b>{name}</b>\n📍 {region}, {district}\n\n"
+        "Sizni shu xususiy maktab o'qituvchilari qatoriga taklif qilishdi.\n"
+        f"🔑 Maktab kodi: <code>{code}</code>\n\n"
+        "Ro'yxatdan o'tish uchun pastdagi tugmani bosing — ismingiz va dars beradigan fanlaringizni kiriting.\n\n"
+        "⚠️ Agar siz bu maktab o'qituvchisi bo'lmasangiz, qo'shilmang."
+    )
+
+    if WEBAPP_URL.startswith("https://"):
+        separator = "&" if "?" in WEBAPP_URL else "?"
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="🏫 Maktabga qo'shilish",
+                    web_app=WebAppInfo(url=f"{WEBAPP_URL}{separator}school_code={code}"),
+                )
+            ]]
+        )
+        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        await message.answer(text, parse_mode="HTML")
+
+
 @dispatcher.message(CommandStart())
-async def handle_start(message: Message) -> None:
-    """Foydalanuvchi botga /start yuborganda ishlaydi."""
+async def handle_start(message: Message, command: CommandObject) -> None:
+    """Foydalanuvchi botga /start yuborganda ishlaydi (taklif havolasi bilan ham)."""
+
+    payload = (command.args or "").strip()
+    if payload.startswith("school_"):
+        code = payload[len("school_"):].upper()
+        if code.isalnum() and 4 <= len(code) <= 20:
+            await _handle_school_invite(message, code)
+            return
 
     welcome_text = (
         f"Assalomu alaykum, {message.from_user.first_name}! 👋\n\n"

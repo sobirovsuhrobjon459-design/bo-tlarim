@@ -1559,3 +1559,16 @@ select option {
 .btn[hidden] {
   display: none;
 }
+
+/* Profil sahifasidagi ma'lumotlar qatori */
+.profile-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  margin-top: 12px;
+}
+
+.profile-facts b {
+  text-align: right;
+}

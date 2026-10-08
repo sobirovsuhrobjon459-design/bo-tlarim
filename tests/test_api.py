@@ -61,6 +61,7 @@ def reset_database() -> None:
     Base.metadata.create_all(engine)
     main._school_code_failures.clear()  # noto'g'ri kod urinishlari hisobi ham tozalanadi
     main._code_requests.clear()
+    main._bot_username_cache = "test_platform_bot"  # Telegram'ga so'rov ketmasin
 
 
 def as_user(tg_id: int) -> dict:
@@ -931,6 +932,9 @@ def test_xususiy_maktab_yaratish_va_kod_bilan_qoshilish():
     # Profil (fanlar) yangilanadi
     updated = client.put("/api/schools/me/profile", json={"subjects": ["Kimyo", "Biologiya"]}, headers=as_user(702))
     assert updated.json()["school"]["my_subjects"] == ["Kimyo", "Biologiya"]
+
+    # Guruhlarga ulashish havolasi — bot orqali kod bilan
+    assert joined.json()["school"]["invite_link"] == f"https://t.me/test_platform_bot?start=school_{school['code']}"
 
     # Maktab saqlanib qoladi — qayta kirganda ham o'sha maktab
     assert client.get("/api/schools/me", headers=as_user(702)).json()["school"]["id"] == school["id"]

@@ -3235,6 +3235,37 @@ def _require_profile_name(user: User) -> None:
         raise HTTPException(status_code=422, detail="Avval ism-familiyangizni kiriting")
 
 
+_bot_username_cache: str | None = None
+_bot_username_checked_at = -1e9
+
+
+def _bot_username() -> str | None:
+    """Botning @username'i (taklif havolasi uchun). Bir marta so'raladi va eslab qolinadi."""
+
+    global _bot_username_cache, _bot_username_checked_at
+    if _bot_username_cache or not BOT_TOKEN:
+        return _bot_username_cache
+    # Muvaffaqiyatsiz bo'lsa, har sahifada qayta so'rab (10 s gacha) kuttirmaslik uchun
+    if time.monotonic() - _bot_username_checked_at < 10 * 60:
+        return None
+    _bot_username_checked_at = time.monotonic()
+    try:
+        data = httpx.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe", timeout=10).json()
+        _bot_username_cache = (data.get("result") or {}).get("username") or None
+    except Exception:
+        logging.getLogger("backend").warning("Bot username'ini olib bo'lmadi", exc_info=True)
+    return _bot_username_cache
+
+
+def school_invite_link(code: str) -> str | None:
+    """
+    Guruhlarga ulashiladigan havola: bosilganda bot maktab nomi va kodni yozib,
+    "Maktabga qo'shilish" tugmasini beradi (kod Mini App'da tayyor turadi).
+    """
+    username = _bot_username()
+    return f"https://t.me/{username}?start=school_{code}" if username else None
+
+
 def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
     school = member.school
     members = [item for item in school.members if item.left_at is None]
@@ -3250,6 +3281,7 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         "created_at": school.created_at,
         "my_role": member.role,
         "my_subjects": _read_subjects(member),
+        "invite_link": school_invite_link(school.code),
         "members": [
             {
                 "name": item.user.full_name if item.user else "Noma'lum",
@@ -3354,7 +3386,7 @@ def request_school_code(school_id: int, user: User = Depends(get_current_user), 
     if now - _code_requests.get(key, -CODE_REQUEST_INTERVAL_SECONDS) < CODE_REQUEST_INTERVAL_SECONDS:
         raise HTTPException(
             status_code=429,
-            detail="So'rov allaqachon yuborilgan. Asoschi javobini kuting (10 daqiqadan keyin qayta so'rash mumkin).",
+            detail="So'rov allaqachon yuborilgan. Admin javobini kuting (10 daqiqadan keyin qayta so'rash mumkin).",
         )
 
     founder = db.get(User, school.owner_user_id)
@@ -3376,7 +3408,7 @@ def request_school_code(school_id: int, user: User = Depends(get_current_user), 
     founder_ref = f"@{contact['username']}" if contact["username"] else contact["name"]
     requester_text = (
         f"📨 Kod so'rovingiz yuborildi\n\n"
-        f"«{school.name}» maktabi asoschisi — {contact['name']} ({founder_ref}).\n"
+        f"«{school.name}» maktabi admini — {contact['name']} ({founder_ref}).\n"
         f"U sizga maktab kodini Telegram orqali yuboradi. Tezroq bo'lishi uchun unga o'zingiz ham yozishingiz mumkin.\n\n"
         f"Kodni olgach: Ta'lim muassasalari → Xususiy maktab → Maktabga kirish → maktabingizni tanlang → kodni kiriting.\n\n"
         f"Kodni hech kimga bermang — u faqat maktabingiz o'qituvchilari uchun."
