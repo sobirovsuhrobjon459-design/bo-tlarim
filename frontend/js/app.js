@@ -773,9 +773,15 @@ const ROLE_ICONS = {
   school: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
     stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V10l7-5 7 5v11"/>
     <path d="M10 21v-5h4v5M9 11h.01M15 11h.01"/></svg>`,
-  parents: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-    stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="7" r="3"/><circle cx="17" cy="9" r="2.3"/>
-    <path d="M2.5 20c0-3.3 2.5-6 5.5-6s5.5 2.7 5.5 6M13.5 20c.3-2.6 1.8-4.6 3.5-4.6s3.4 2 3.6 4.6"/></svg>`,
+  privateSchool: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+    stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V11l7-5 7 5v10"/>
+    <path d="m12 9.5.9 1.8 2 .3-1.45 1.4.35 2-1.8-.95-1.8.95.35-2-1.45-1.4 2-.3.9-1.8Z"/><path d="M10 21v-3h4v3"/></svg>`,
+  course: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+    stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5v-15Z"/>
+    <path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5M9 8h7M9 11.5h5"/></svg>`,
+  club: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+    stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/>
+    <path d="M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18M3.5 9h17M3.5 15h17"/></svg>`,
 };
 
 function roleCard(action, icon, title, description) {
@@ -796,7 +802,7 @@ function renderHome(userName, backendOk) {
     <h1 class="fade-up">${greeting}</h1>
     <p class="subtitle fade-up">Bilimingizni sinang va natijangizni kuzating.</p>
 
-    ${roleCard("school-folder", ROLE_ICONS.school, "MAKTAB VA OTA-ONA", "Maktab va ota-onalar bo'limlari")}
+    ${roleCard("school-folder", ROLE_ICONS.school, "TA'LIM MUASSASALARI", "Maktab, xususiy maktab, kurslar, to'garaklar")}
     ${roleCard("tests", ROLE_ICONS.folder, "TEST MARKAZI", "O'quvchi va o'qituvchilar uchun testlar")}
     ${isAdmin ? roleCard("admin", ROLE_ICONS.admin, "ADMIN", "Umumiy statistika va boshqaruv") : ""}
 
@@ -815,29 +821,35 @@ function renderHome(userName, backendOk) {
 
 /*
   Bosh sahifada ikkita papka bor:
-    • "Maktab va ota-ona" — Maktab va Ota-ona bo'limlari;
+    • "Ta'lim muassasalari" — Maktab, Xususiy maktab, O'quv kurslari, To'garaklar;
     • "Test markazi" — O'quvchi va O'qituvchi bo'limlari.
   Bo'limlar ichidagi "←" tugmalari o'z papkasiga qaytaradi (bosh sahifaga emas).
 */
 function renderSchoolFolder() {
+  // Bo'limlar ro'yxati — yangisini qo'shish uchun shu yerga bitta qator yetadi
+  const sections = [
+    ["school", ROLE_ICONS.school, "MAKTAB", "Davlat maktablari", "Maktab"],
+    ["private-school", ROLE_ICONS.privateSchool, "XUSUSIY MAKTAB", "Xususiy maktablar", "Xususiy maktab"],
+    ["course", ROLE_ICONS.course, "O'QUV KURSLARI", "O'quv markazlari va kurslar", "O'quv kurslari"],
+    ["club", ROLE_ICONS.club, "TO'GARAKLAR", "Sport, san'at va boshqa to'garaklar", "To'garaklar"],
+  ];
+
   showPage(`
     <div class="page-header">
       <button class="back-button" type="button" data-action="home" style="margin:0">←</button>
-      <h2 style="margin:0;flex:1">Maktab va ota-ona</h2>
+      <h2 style="margin:0;flex:1">Ta'lim muassasalari</h2>
     </div>
     <p class="subtitle fade-up">Bo'limni tanlang</p>
 
-    ${roleCard("school", ROLE_ICONS.school, "MAKTAB", "Maktab bo'limi")}
-    ${roleCard("parents", ROLE_ICONS.parents, "OTA-ONA", "Ota-onalar bo'limi")}
+    ${sections.map(([action, icon, title, description]) => roleCard(action, icon, title, description)).join("")}
   `);
 
   document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
-  document.querySelector('[data-action="school"]').addEventListener("click", () =>
-    renderComingSoon("Maktab", ROLE_ICONS.school)
-  );
-  document.querySelector('[data-action="parents"]').addEventListener("click", () =>
-    renderComingSoon("Ota-ona", ROLE_ICONS.parents)
-  );
+  sections.forEach(([action, icon, , , pageTitle]) => {
+    document.querySelector(`[data-action="${action}"]`).addEventListener("click", () =>
+      renderComingSoon(pageTitle, icon)
+    );
+  });
 }
 
 function renderTestFolder() {
@@ -858,7 +870,7 @@ function renderTestFolder() {
 }
 
 function renderComingSoon(title, icon) {
-  // Maktab va Ota-ona bo'limlari — mazmuni keyinroq qo'shiladi
+  // Ta'lim muassasalari bo'limlari — mazmuni keyinroq qo'shiladi
   showPage(`
     <div class="page-header">
       <button class="back-button" type="button" data-action="home" style="margin:0">←</button>
