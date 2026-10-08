@@ -802,7 +802,7 @@ function renderHome(userName, backendOk) {
     <h1 class="fade-up">${greeting}</h1>
     <p class="subtitle fade-up">Bilimingizni sinang va natijangizni kuzating.</p>
 
-    ${roleCard("school-folder", ROLE_ICONS.school, "TA'LIM MUASSASALARI", "Maktab, xususiy maktab, kurslar, to'garaklar")}
+    ${roleCard("school-folder", ROLE_ICONS.school, "TA'LIM MUASSASALARI", "Xususiy maktab, kurslar, to'garaklar")}
     ${roleCard("tests", ROLE_ICONS.folder, "TEST MARKAZI", "O'quvchi va o'qituvchilar uchun testlar")}
     ${isAdmin ? roleCard("admin", ROLE_ICONS.admin, "ADMIN", "Umumiy statistika va boshqaruv") : ""}
 
@@ -821,17 +821,17 @@ function renderHome(userName, backendOk) {
 
 /*
   Bosh sahifada ikkita papka bor:
-    • "Ta'lim muassasalari" — Maktab, Xususiy maktab, O'quv kurslari, To'garaklar;
+    • "Ta'lim muassasalari" — Xususiy maktab, O'quv kurslari, To'garaklar;
     • "Test markazi" — O'quvchi va O'qituvchi bo'limlari.
   Bo'limlar ichidagi "←" tugmalari o'z papkasiga qaytaradi (bosh sahifaga emas).
 */
 function renderSchoolFolder() {
   // Bo'limlar ro'yxati — yangisini qo'shish uchun shu yerga bitta qator yetadi
+  // Oxirgi ustun — bo'lim ochilganda nima bo'lishi (hozircha tayyorlari kam)
   const sections = [
-    ["school", ROLE_ICONS.school, "MAKTAB", "Davlat maktablari", "Maktab"],
-    ["private-school", ROLE_ICONS.privateSchool, "XUSUSIY MAKTAB", "Xususiy maktablar", "Xususiy maktab"],
-    ["course", ROLE_ICONS.course, "O'QUV KURSLARI", "O'quv markazlari va kurslar", "O'quv kurslari"],
-    ["club", ROLE_ICONS.club, "TO'GARAKLAR", "Sport, san'at va boshqa to'garaklar", "To'garaklar"],
+    ["private-school", ROLE_ICONS.privateSchool, "XUSUSIY MAKTAB", "Maktab oching yoki kod bilan qo'shiling", enterPrivateSchool],
+    ["course", ROLE_ICONS.course, "O'QUV KURSLARI", "O'quv markazlari va kurslar", () => renderComingSoon("O'quv kurslari", ROLE_ICONS.course)],
+    ["club", ROLE_ICONS.club, "TO'GARAKLAR", "Sport, san'at va boshqa to'garaklar", () => renderComingSoon("To'garaklar", ROLE_ICONS.club)],
   ];
 
   showPage(`
@@ -845,10 +845,8 @@ function renderSchoolFolder() {
   `);
 
   document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
-  sections.forEach(([action, icon, , , pageTitle]) => {
-    document.querySelector(`[data-action="${action}"]`).addEventListener("click", () =>
-      renderComingSoon(pageTitle, icon)
-    );
+  sections.forEach(([action, , , , open]) => {
+    document.querySelector(`[data-action="${action}"]`).addEventListener("click", guarded(open));
   });
 }
 
@@ -886,6 +884,378 @@ function renderComingSoon(title, icon) {
   `);
 
   document.querySelector('[data-action="home"]').addEventListener("click", renderSchoolFolder);
+}
+
+/* ---------- Xususiy maktab ---------- */
+
+// Maktab profilida tanlanadigan fanlar (test fanlari ro'yxatidan, "Boshqa fan"siz)
+function schoolSubjectOptions() {
+  return SUBJECTS.filter((subject) => subject !== "Boshqa fan");
+}
+
+let cachedRegions = null;
+
+async function loadRegions() {
+  if (!cachedRegions) cachedRegions = await api("/api/regions");
+  return cachedRegions;
+}
+
+function schoolPageHeader(title, action) {
+  return `
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="${action}" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">${escapeHtml(title)}</h2>
+    </div>`;
+}
+
+async function enterPrivateSchool() {
+  // A'zo bo'lgan o'qituvchi to'g'ridan-to'g'ri o'z maktabiga tushadi
+  const { school } = await api("/api/schools/me");
+  if (school) renderMySchool(school);
+  else await renderRegionPicker();
+}
+
+async function renderRegionPicker() {
+  const regions = await loadRegions();
+
+  showPage(`
+    ${schoolPageHeader("Xususiy maktab", "back-folder")}
+    <div class="card" data-action="join-school">
+      <div class="card-icon">🔑</div>
+      <div class="card-body">
+        <h3>Maktabingiz ochilganmi?</h3>
+        <p>Maktab kodi bilan qo'shiling</p>
+      </div>
+    </div>
+    <p class="section-label" style="margin-top:18px">YANGI MAKTAB OCHISH — VILOYATNI TANLANG</p>
+    <div class="panel pick-list">
+      ${regions
+        .map((region, index) => `<button type="button" class="pick-item" data-region="${index}">${escapeHtml(region.name)}<span>›</span></button>`)
+        .join("")}
+    </div>
+  `);
+
+  document.querySelector('[data-action="back-folder"]').addEventListener("click", renderSchoolFolder);
+  document.querySelector('[data-action="join-school"]').addEventListener("click", guarded(renderJoinSchool));
+  document.querySelectorAll("[data-region]").forEach((item) => {
+    item.addEventListener("click", () => renderDistrictPicker(regions[Number(item.dataset.region)]));
+  });
+}
+
+function renderDistrictPicker(region) {
+  showPage(`
+    ${schoolPageHeader(region.name, "back-regions")}
+    <p class="section-label">TUMAN YOKI SHAHARNI TANLANG</p>
+    <div class="panel pick-list">
+      ${region.districts
+        .map((district, index) => `<button type="button" class="pick-item" data-district="${index}">${escapeHtml(district)}<span>›</span></button>`)
+        .join("")}
+    </div>
+  `);
+
+  document.querySelector('[data-action="back-regions"]').addEventListener("click", guarded(renderRegionPicker));
+  document.querySelectorAll("[data-district]").forEach((item) => {
+    item.addEventListener("click", guarded(() => renderCreateSchool(region, region.districts[Number(item.dataset.district)])));
+  });
+}
+
+function subjectChipsHtml(selected = []) {
+  const options = [...schoolSubjectOptions()];
+  // Profilda ro'yxatda yo'q fan bo'lsa (o'zi yozgan), u ham ko'rinsin
+  selected.forEach((subject) => {
+    if (!options.includes(subject)) options.push(subject);
+  });
+
+  return `
+    <div class="subject-chips" id="subject-chips">
+      ${options
+        .map(
+          (subject) =>
+            `<button type="button" class="subject-chip ${selected.includes(subject) ? "selected" : ""}"
+                     data-subject="${escapeHtml(subject)}">${escapeHtml(subject)}</button>`
+        )
+        .join("")}
+    </div>
+    <div class="row-between" style="gap:8px;margin-top:8px">
+      <input class="input" id="custom-subject-input" placeholder="Boshqa fan nomi" style="margin:0" />
+      <button type="button" class="btn btn-ghost" id="add-subject-button" style="width:auto;margin:0;padding:12px 14px">＋</button>
+    </div>`;
+}
+
+function wireSubjectChips() {
+  const container = document.getElementById("subject-chips");
+  container.addEventListener("click", (event) => {
+    const chip = event.target.closest(".subject-chip");
+    if (chip) chip.classList.toggle("selected");
+  });
+
+  document.getElementById("add-subject-button").addEventListener("click", () => {
+    const input = document.getElementById("custom-subject-input");
+    const value = input.value.trim().replace(/\s+/g, " ");
+    if (value.length < 2) return;
+
+    const existing = [...container.querySelectorAll(".subject-chip")].find(
+      (chip) => chip.dataset.subject.toLowerCase() === value.toLowerCase()
+    );
+    if (existing) {
+      existing.classList.add("selected");
+    } else {
+      container.insertAdjacentHTML(
+        "beforeend",
+        `<button type="button" class="subject-chip selected" data-subject="${escapeHtml(value)}">${escapeHtml(value)}</button>`
+      );
+    }
+    input.value = "";
+  });
+}
+
+function readSelectedSubjects() {
+  return [...document.querySelectorAll("#subject-chips .subject-chip.selected")].map((chip) => chip.dataset.subject);
+}
+
+async function profileNameFieldsHtml() {
+  const me = await api("/api/me");
+  const [first = "", ...rest] = String(me.full_name || "").split(" ");
+  return `
+    <label class="field-label" for="profile-first-name">Ismingiz</label>
+    <input class="input" id="profile-first-name" placeholder="Ism" value="${escapeHtml(first)}" />
+    <label class="field-label" for="profile-last-name">Familiyangiz</label>
+    <input class="input" id="profile-last-name" placeholder="Familiya" value="${escapeHtml(rest.join(" "))}" />`;
+}
+
+async function saveProfileName() {
+  const firstName = document.getElementById("profile-first-name").value.trim();
+  const lastName = document.getElementById("profile-last-name").value.trim();
+  if (firstName.length < 2 || lastName.length < 2) throw new Error("Ism va familiyangizni to'liq kiriting");
+  await api("/api/me/name", { method: "POST", body: { first_name: firstName, last_name: lastName } });
+}
+
+function protectSchoolForm() {
+  const page = appElement.querySelector(".page");
+  page.addEventListener("input", markUnsaved);
+  page.addEventListener("click", (event) => {
+    if (event.target.closest(".subject-chip")) markUnsaved();
+  });
+}
+
+async function renderCreateSchool(region, district) {
+  const nameFields = await profileNameFieldsHtml();
+
+  showPage(`
+    ${schoolPageHeader("Maktab ochish", "back-districts")}
+    <div class="card" style="cursor:default">
+      <div class="card-body">
+        <p style="margin:0">📍 <b>${escapeHtml(region.name)}</b>, ${escapeHtml(district)}</p>
+      </div>
+    </div>
+
+    <label class="field-label" for="school-name-input">Maktab nomi</label>
+    <input class="input" id="school-name-input" placeholder="Masalan: Kelajak xususiy maktabi" />
+
+    <p class="section-label" style="margin-top:18px">SIZNING PROFILINGIZ</p>
+    ${nameFields}
+    <label class="field-label">Qaysi fanlardan dars berasiz?</label>
+    ${subjectChipsHtml()}
+
+    <button class="btn" id="create-school-button" style="margin-top:18px">🏫 Maktabni ochish</button>
+  `);
+
+  protectSchoolForm();
+  wireSubjectChips();
+  document.querySelector('[data-action="back-districts"]').addEventListener(
+    "click",
+    guarded(async () => {
+      if (await confirmLeave()) renderDistrictPicker(region);
+    })
+  );
+
+  document.getElementById("create-school-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const name = document.getElementById("school-name-input").value.trim();
+      if (name.length < 2) throw new Error("Maktab nomini kiriting");
+      const subjects = readSelectedSubjects();
+      if (!subjects.length) throw new Error("Kamida bitta fanni tanlang");
+
+      await saveProfileName();
+      const { school } = await api("/api/schools", {
+        method: "POST",
+        body: { region: region.name, district, name, subjects },
+      });
+
+      showToast(`✅ Maktab ochildi! Kodi: ${school.code}`);
+      renderMySchool(school);
+    })
+  );
+}
+
+async function renderJoinSchool() {
+  const nameFields = await profileNameFieldsHtml();
+
+  showPage(`
+    ${schoolPageHeader("Maktabga qo'shilish", "back-regions")}
+    <label class="field-label" for="school-code-input">Maktab kodi</label>
+    <input class="input" id="school-code-input" placeholder="Masalan: K7M2QX" maxlength="12"
+           style="text-transform:uppercase;letter-spacing:3px;text-align:center;font-size:18px" />
+    <p class="subtitle" style="margin:4px 0 0">Kodni maktabingizdagi o'qituvchidan oling.</p>
+
+    <p class="section-label" style="margin-top:18px">SIZNING PROFILINGIZ</p>
+    ${nameFields}
+    <label class="field-label">Qaysi fanlardan dars berasiz?</label>
+    ${subjectChipsHtml()}
+
+    <button class="btn" id="join-school-button" style="margin-top:18px">🔑 Maktabga qo'shilish</button>
+  `);
+
+  protectSchoolForm();
+  wireSubjectChips();
+  document.querySelector('[data-action="back-regions"]').addEventListener(
+    "click",
+    guarded(async () => {
+      if (await confirmLeave()) await renderRegionPicker();
+    })
+  );
+
+  document.getElementById("join-school-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const code = document.getElementById("school-code-input").value.trim().toUpperCase();
+      if (code.length < 4) throw new Error("Maktab kodini kiriting");
+      const subjects = readSelectedSubjects();
+      if (!subjects.length) throw new Error("Kamida bitta fanni tanlang");
+
+      const confirmed = await askConfirm(
+        "Maktabga qo'shilasizmi? Siz shu maktabda qolasiz — chiqish uchun ham maktab kodi kerak bo'ladi."
+      );
+      if (!confirmed) return;
+
+      await saveProfileName();
+      const { school } = await api("/api/schools/join", { method: "POST", body: { code, subjects } });
+      showToast(`✅ "${school.name}" maktabiga qo'shildingiz`);
+      renderMySchool(school);
+    })
+  );
+}
+
+function renderMySchool(school) {
+  const me = school.members.find((member) => member.is_me);
+  const subjectsText = (subjects) => (subjects.length ? subjects.map(escapeHtml).join(", ") : "Fan kiritilmagan");
+
+  const memberRows = school.members
+    .map(
+      (member) => `
+        <div class="member-line">
+          <div class="member-avatar">${escapeHtml((member.name || "?").trim().charAt(0).toUpperCase())}</div>
+          <div class="member-info">
+            <b>${escapeHtml(member.name)}${member.is_me ? " (siz)" : ""}</b>
+            <small>${subjectsText(member.subjects)}</small>
+          </div>
+          ${member.role === "owner" ? `<span class="badge badge-purple">👑 Asoschi</span>` : ""}
+        </div>`
+    )
+    .join("");
+
+  showPage(`
+    ${schoolPageHeader(school.name, "back-folder")}
+    <div class="card" style="cursor:default">
+      <div class="card-body" style="width:100%">
+        <p style="margin:0">📍 ${escapeHtml(school.region)}, ${escapeHtml(school.district)}</p>
+        <p style="margin:8px 0 0">Maktab kodi: ${copyCodeChip(school.code)}</p>
+        <p class="subtitle" style="margin:6px 0 0">
+          Boshqa o'qituvchilar shu kod bilan qo'shiladi. Maktabdan chiqish uchun ham shu kod kerak.
+        </p>
+      </div>
+    </div>
+
+    <p class="section-label" style="margin-top:18px">MENING PROFILIM</p>
+    <div class="card" style="cursor:default">
+      <div class="card-body" style="width:100%">
+        <div class="row-between">
+          <b>${escapeHtml(me ? me.name : "")}</b>
+          <button class="btn btn-ghost" id="edit-school-profile" style="width:auto;padding:6px 12px;margin:0">✏️</button>
+        </div>
+        <p class="subtitle" style="margin:4px 0 0">${subjectsText(school.my_subjects)}</p>
+      </div>
+    </div>
+
+    <p class="section-label" style="margin-top:18px">O'QITUVCHILAR (${school.members.length})</p>
+    <div class="panel" style="padding:4px 0">${memberRows}</div>
+
+    <button class="btn btn-ghost" id="leave-school-button" style="margin-top:22px">🚪 Maktabdan chiqish</button>
+  `);
+
+  document.querySelector('[data-action="back-folder"]').addEventListener("click", renderSchoolFolder);
+  document.getElementById("edit-school-profile").addEventListener("click", guarded(() => renderSchoolProfileEdit(school)));
+  document.getElementById("leave-school-button").addEventListener("click", () => renderLeaveSchool(school));
+}
+
+async function renderSchoolProfileEdit(school) {
+  const nameFields = await profileNameFieldsHtml();
+
+  showPage(`
+    ${schoolPageHeader("Profilim", "back-school")}
+    ${nameFields}
+    <label class="field-label">Qaysi fanlardan dars berasiz?</label>
+    ${subjectChipsHtml(school.my_subjects)}
+    <button class="btn" id="save-school-profile" style="margin-top:18px">💾 Saqlash</button>
+  `);
+
+  protectSchoolForm();
+  wireSubjectChips();
+  document.querySelector('[data-action="back-school"]').addEventListener(
+    "click",
+    guarded(async () => {
+      if (await confirmLeave()) renderMySchool(school);
+    })
+  );
+
+  document.getElementById("save-school-profile").addEventListener(
+    "click",
+    guarded(async () => {
+      const subjects = readSelectedSubjects();
+      if (!subjects.length) throw new Error("Kamida bitta fanni tanlang");
+
+      await saveProfileName();
+      const { school: updated } = await api("/api/schools/me/profile", { method: "PUT", body: { subjects } });
+      showToast("✅ Profil saqlandi");
+      renderMySchool(updated);
+    })
+  );
+}
+
+function renderLeaveSchool(school) {
+  showPage(`
+    ${schoolPageHeader("Maktabdan chiqish", "back-school")}
+    <div class="card" style="cursor:default">
+      <div class="card-body">
+        <p style="margin:0">
+          "${escapeHtml(school.name)}" maktabidan chiqish uchun <b>maktab kodini</b> kiriting.
+        </p>
+        ${
+          school.my_role === "owner"
+            ? `<p class="subtitle" style="margin:8px 0 0">Siz maktab asoschisisiz — chiqsangiz, asoschilik maktabdagi keyingi o'qituvchiga o'tadi.</p>`
+            : ""
+        }
+      </div>
+    </div>
+    <input class="input" id="leave-code-input" placeholder="Maktab kodi" maxlength="12"
+           style="text-transform:uppercase;letter-spacing:3px;text-align:center;font-size:18px" />
+    <button class="btn" id="confirm-leave-button" style="margin-top:12px">🚪 Chiqish</button>
+  `);
+
+  document.querySelector('[data-action="back-school"]').addEventListener("click", () => renderMySchool(school));
+  document.getElementById("confirm-leave-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const code = document.getElementById("leave-code-input").value.trim().toUpperCase();
+      if (code.length < 4) throw new Error("Maktab kodini kiriting");
+      if (!(await askConfirm(`"${school.name}" maktabidan chiqasizmi?`))) return;
+
+      await api("/api/schools/leave", { method: "POST", body: { code } });
+      showToast("Maktabdan chiqdingiz");
+      renderSchoolFolder();
+    })
+  );
 }
 
 async function loadHome() {

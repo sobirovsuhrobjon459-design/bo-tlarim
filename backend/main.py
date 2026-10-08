@@ -49,6 +49,7 @@ from sqlalchemy import String, case, cast, delete, distinct, func, inspect, sele
 from sqlalchemy.orm import Session, selectinload
 
 from .rasch import grade_for, rasch_scores
+from .regions import REGIONS, is_valid_location
 from .auth import (
     get_current_admin,
     get_current_teacher,
@@ -74,7 +75,12 @@ from .database import (
     NameUpdateIn,
     Payment,
     PriceUpdate,
+    PrivateSchool,
     Question,
+    SchoolCodeIn,
+    SchoolCreateIn,
+    SchoolMember,
+    SchoolProfileIn,
     SessionLocal,
     StudentAnswer,
     StudentAnswersIn,
@@ -3163,6 +3169,186 @@ def test_rating(code: str, user: User = Depends(get_current_user), db: Session =
         raise HTTPException(status_code=403, detail="Natijalarni faqat o'qituvchi ko'radi")
 
     return [{"name": name, "percent": attempt.percent} for attempt, name in best_attempts(db, test)[:50]]
+
+
+# ========== 6.5) Xususiy maktablar ==========
+#
+# O'qituvchi viloyat va tumanni tanlab maktab yaratadi (u maktab egasi bo'ladi)
+# yoki maktab kodi bilan mavjud maktabga qo'shiladi. O'qituvchi bir vaqtda faqat
+# bitta maktabda bo'ladi va u yerda doimiy qoladi — chiqish uchun ham maktab
+# kodini kiritish kerak (tasodifan yoki begona odam chiqarib yubormasligi uchun).
+
+SCHOOL_CODE_LENGTH = 6
+
+
+def _active_membership(db: Session, user: User) -> SchoolMember | None:
+    return db.scalar(
+        select(SchoolMember)
+        .where(SchoolMember.user_id == user.id, SchoolMember.left_at.is_(None))
+        .order_by(SchoolMember.id.desc())
+    )
+
+
+def _new_school_code(db: Session) -> str:
+    while True:
+        code = "".join(random.choice(TEST_CODE_ALPHABET) for _ in range(SCHOOL_CODE_LENGTH))
+        if not db.scalar(select(PrivateSchool.id).where(PrivateSchool.code == code)):
+            return code
+
+
+def _read_subjects(member: SchoolMember) -> list[str]:
+    try:
+        subjects = json.loads(member.subjects or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [str(subject) for subject in subjects] if isinstance(subjects, list) else []
+
+
+def _require_profile_name(user: User) -> None:
+    if len((user.full_name or "").strip()) < 3:
+        raise HTTPException(status_code=422, detail="Avval ism-familiyangizni kiriting")
+
+
+def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
+    school = member.school
+    members = [item for item in school.members if item.left_at is None]
+    # Avval egasi, keyin qo'shilish tartibida
+    members.sort(key=lambda item: (item.role != "owner", item.joined_at, item.id))
+
+    return {
+        "id": school.id,
+        "name": school.name,
+        "region": school.region,
+        "district": school.district,
+        "code": school.code,
+        "created_at": school.created_at,
+        "my_role": member.role,
+        "my_subjects": _read_subjects(member),
+        "members": [
+            {
+                "name": item.user.full_name if item.user else "Noma'lum",
+                "subjects": _read_subjects(item),
+                "role": item.role,
+                "joined_at": item.joined_at,
+                "is_me": item.user_id == user.id,
+            }
+            for item in members
+        ],
+    }
+
+
+@app.get("/api/regions")
+def list_regions():
+    """O'zbekiston viloyatlari va ularning tumanlari/shaharlari."""
+    return [{"name": name, "districts": districts} for name, districts in REGIONS.items()]
+
+
+@app.get("/api/schools/me")
+def my_school(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """O'qituvchi a'zo bo'lgan maktab (bo'lmasa — null)."""
+
+    member = _active_membership(db, user)
+    return {"school": _school_view(db, member, user) if member else None}
+
+
+@app.post("/api/schools")
+def create_school(body: SchoolCreateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Yangi xususiy maktab ochadi; yaratgan o'qituvchi uning egasi bo'ladi."""
+
+    _require_profile_name(user)
+    if _active_membership(db, user):
+        raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
+    if not is_valid_location(body.region, body.district):
+        raise HTTPException(status_code=422, detail="Viloyat yoki tuman noto'g'ri tanlangan")
+
+    school = PrivateSchool(
+        name=body.name,
+        region=body.region,
+        district=body.district,
+        code=_new_school_code(db),
+        owner_user_id=user.id,
+    )
+    db.add(school)
+    db.flush()
+
+    member = SchoolMember(
+        school_id=school.id, user_id=user.id, role="owner", subjects=json.dumps(body.subjects, ensure_ascii=False)
+    )
+    db.add(member)
+    db.commit()
+    db.refresh(member)
+
+    logging.getLogger("backend").info("Xususiy maktab ochildi: id=%s kod=%s", school.id, school.code)
+    return {"school": _school_view(db, member, user)}
+
+
+@app.post("/api/schools/join")
+def join_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Maktab kodi bilan maktabga qo'shiladi."""
+
+    _require_profile_name(user)
+    if _active_membership(db, user):
+        raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
+
+    school = db.scalar(select(PrivateSchool).where(PrivateSchool.code == body.code))
+    if not school:
+        raise HTTPException(status_code=404, detail="Bunday kodli maktab topilmadi. Kodni tekshirib qayta kiriting.")
+
+    member = SchoolMember(
+        school_id=school.id, user_id=user.id, role="teacher", subjects=json.dumps(body.subjects, ensure_ascii=False)
+    )
+    db.add(member)
+    db.commit()
+    db.refresh(member)
+    return {"school": _school_view(db, member, user)}
+
+
+@app.put("/api/schools/me/profile")
+def update_school_profile(body: SchoolProfileIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """O'qituvchi maktabdagi profilini (fanlarini) yangilaydi."""
+
+    member = _active_membership(db, user)
+    if not member:
+        raise HTTPException(status_code=404, detail="Siz hech qaysi maktabga a'zo emassiz")
+
+    member.subjects = json.dumps(body.subjects, ensure_ascii=False)
+    db.commit()
+    return {"school": _school_view(db, member, user)}
+
+
+@app.post("/api/schools/leave")
+def leave_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Maktabdan chiqish — faqat maktab kodi to'g'ri kiritilsa.
+
+    A'zolik yozuvi o'chirilmaydi (left_at belgilanadi). Egasi chiqsa, egalik
+    maktabda eng oldin qo'shilgan o'qituvchiga o'tadi; hech kim qolmasa,
+    maktab ma'lumotlari baribir saqlanib turadi.
+    """
+
+    member = _active_membership(db, user)
+    if not member:
+        raise HTTPException(status_code=404, detail="Siz hech qaysi maktabga a'zo emassiz")
+
+    school = member.school
+    if not hmac.compare_digest(body.code, school.code):
+        raise HTTPException(status_code=403, detail="Maktab kodi noto'g'ri. Chiqish uchun maktab kodini kiriting.")
+
+    member.left_at = utcnow()
+
+    if member.role == "owner":
+        member.role = "teacher"
+        successor = db.scalar(
+            select(SchoolMember)
+            .where(SchoolMember.school_id == school.id, SchoolMember.left_at.is_(None), SchoolMember.id != member.id)
+            .order_by(SchoolMember.joined_at, SchoolMember.id)
+        )
+        if successor:
+            successor.role = "owner"
+            school.owner_user_id = successor.user_id
+
+    db.commit()
+    return {"ok": True}
 
 
 # ========== 7) Payme webhook (Merchant API) ==========

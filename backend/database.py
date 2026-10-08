@@ -364,6 +364,48 @@ class CreditPurchase(Base):
     teacher: Mapped["Teacher"] = relationship()
 
 
+class PrivateSchool(Base):
+    """
+    Xususiy maktab. Uni birinchi o'qituvchi (egasi) viloyat va tumanni tanlab
+    yaratadi; qolgan o'qituvchilar maktabning maxsus kodi bilan qo'shiladi.
+    """
+
+    __tablename__ = "private_schools"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    region: Mapped[str] = mapped_column(String(100))
+    district: Mapped[str] = mapped_column(String(100))
+    code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    owner_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+    members: Mapped[list["SchoolMember"]] = relationship(back_populates="school", order_by="SchoolMember.id")
+
+
+class SchoolMember(Base):
+    """
+    O'qituvchining maktabdagi a'zoligi va profili (fanlari).
+
+    O'qituvchi bir vaqtda faqat BITTA maktabda bo'ladi va u yerda doimiy
+    qoladi; chiqish uchun maktab kodini kiritishi kerak. Chiqqanda yozuv
+    o'chirilmaydi — left_at belgilanadi (tarix saqlanadi).
+    """
+
+    __tablename__ = "school_members"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    role: Mapped[str] = mapped_column(String(20), default="teacher")  # owner | teacher
+    subjects: Mapped[str] = mapped_column(Text, default="[]")  # JSON ro'yxat: ["Matematika", ...]
+    joined_at: Mapped[datetime] = mapped_column(default=utcnow)
+    left_at: Mapped[datetime | None] = mapped_column(default=None)
+
+    school: Mapped["PrivateSchool"] = relationship(back_populates="members")
+    user: Mapped["User"] = relationship()
+
+
 # ========== 4) API so'rov sxemalari (Pydantic) ==========
 
 
@@ -501,3 +543,52 @@ class StudentAnswersIn(BaseModel):
     """O'qituvchi ro'yxatdagi o'quvchining javoblarini kiritganda yuboriladi: {savol_ref: "A"}."""
 
     answers: dict[str, str] = {}
+
+
+def _clean_subjects(subjects: list[str]) -> list[str]:
+    """Fanlar ro'yxatini tozalaydi: bo'sh va takrorlanganlari olib tashlanadi."""
+    cleaned: list[str] = []
+    for subject in subjects:
+        value = " ".join(str(subject).split())[:60]
+        if value and value.lower() not in {item.lower() for item in cleaned}:
+            cleaned.append(value)
+    return cleaned
+
+
+class SchoolCreateIn(BaseModel):
+    """Xususiy maktab yaratish: joylashuvi, nomi va yaratuvchining fanlari."""
+
+    region: str = Field(min_length=2, max_length=100)
+    district: str = Field(min_length=2, max_length=100)
+    name: str = Field(min_length=2, max_length=200)
+    subjects: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def normalize(self) -> "SchoolCreateIn":
+        self.name = " ".join(self.name.split())
+        self.subjects = _clean_subjects(self.subjects)
+        return self
+
+
+class SchoolCodeIn(BaseModel):
+    """Maktabga kirish yoki undan chiqish uchun maktab kodi."""
+
+    code: str = Field(min_length=4, max_length=20)
+    subjects: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def normalize(self) -> "SchoolCodeIn":
+        self.code = self.code.strip().upper().replace(" ", "")
+        self.subjects = _clean_subjects(self.subjects)
+        return self
+
+
+class SchoolProfileIn(BaseModel):
+    """O'qituvchining maktabdagi profili: fanlari."""
+
+    subjects: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def normalize(self) -> "SchoolProfileIn":
+        self.subjects = _clean_subjects(self.subjects)
+        return self

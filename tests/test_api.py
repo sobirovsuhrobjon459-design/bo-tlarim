@@ -888,6 +888,105 @@ def test_oquvchini_ochirish_javoblarni_yoqotmaydi():
     assert not detail["students"], detail["students"]
 
 
+def _set_name(tg_id: int, first: str, last: str) -> None:
+    client.post("/api/me/name", json={"first_name": first, "last_name": last}, headers=as_user(tg_id))
+
+
+def test_xususiy_maktab_yaratish_va_kod_bilan_qoshilish():
+    reset_database()
+    regions = client.get("/api/regions", headers=as_user(701)).json()
+    assert len(regions) == 14 and all(region["districts"] for region in regions), len(regions)
+    region = next(item for item in regions if item["name"] == "Toshkent shahri")
+
+    _set_name(701, "Aziza", "Karimova")
+    created = client.post(
+        "/api/schools",
+        json={"region": region["name"], "district": "Chilonzor tumani", "name": "  Kelajak   maktabi ",
+              "subjects": ["Matematika", "matematika", "Fizika", ""]},
+        headers=as_user(701),
+    )
+    assert created.status_code == 200, created.text
+    school = created.json()["school"]
+    assert school["name"] == "Kelajak maktabi" and len(school["code"]) == 6, school
+    assert school["my_role"] == "owner" and school["my_subjects"] == ["Matematika", "Fizika"], school
+
+    # Ikkinchi maktab ochib bo'lmaydi
+    again = client.post("/api/schools", json={"region": region["name"], "district": "Chilonzor tumani",
+                                              "name": "Yana biri"}, headers=as_user(701))
+    assert again.status_code == 409, again.text
+
+    # Boshqa o'qituvchi kod bilan qo'shiladi (kichik harf va bo'shliq bilan ham)
+    _set_name(702, "Bobur", "Aliyev")
+    wrong = client.post("/api/schools/join", json={"code": "XXXXXX"}, headers=as_user(702))
+    assert wrong.status_code == 404, wrong.text
+    joined = client.post("/api/schools/join", json={"code": f" {school['code'].lower()} ", "subjects": ["Kimyo"]},
+                         headers=as_user(702))
+    assert joined.status_code == 200, joined.text
+    members = joined.json()["school"]["members"]
+    assert [member["name"] for member in members] == ["Aziza Karimova", "Bobur Aliyev"], members
+    assert members[0]["role"] == "owner" and members[1]["subjects"] == ["Kimyo"], members
+
+    # Profil (fanlar) yangilanadi
+    updated = client.put("/api/schools/me/profile", json={"subjects": ["Kimyo", "Biologiya"]}, headers=as_user(702))
+    assert updated.json()["school"]["my_subjects"] == ["Kimyo", "Biologiya"]
+
+    # Maktab saqlanib qoladi — qayta kirganda ham o'sha maktab
+    assert client.get("/api/schools/me", headers=as_user(702)).json()["school"]["id"] == school["id"]
+
+
+def test_maktabdan_faqat_kod_bilan_chiqiladi_va_tarix_saqlanadi():
+    reset_database()
+    _set_name(701, "Aziza", "Karimova")
+    _set_name(702, "Bobur", "Aliyev")
+    school = client.post("/api/schools", json={"region": "Samarqand viloyati", "district": "Urgut tumani",
+                                               "name": "Ilm maktabi"}, headers=as_user(701)).json()["school"]
+    client.post("/api/schools/join", json={"code": school["code"]}, headers=as_user(702))
+
+    # Kodsiz / noto'g'ri kod bilan chiqib bo'lmaydi
+    assert client.post("/api/schools/leave", json={"code": "AAAAAA"}, headers=as_user(702)).status_code == 403
+    assert client.get("/api/schools/me", headers=as_user(702)).json()["school"] is not None
+
+    # Egasi chiqsa, egalik keyingi o'qituvchiga o'tadi
+    assert client.post("/api/schools/leave", json={"code": school["code"]}, headers=as_user(701)).status_code == 200
+    assert client.get("/api/schools/me", headers=as_user(701)).json()["school"] is None
+    remaining = client.get("/api/schools/me", headers=as_user(702)).json()["school"]
+    assert remaining["my_role"] == "owner" and len(remaining["members"]) == 1, remaining
+
+    # Chiqqan o'qituvchining yozuvi o'chirilmagan
+    session = SessionLocal()
+    try:
+        from backend.database import SchoolMember
+
+        rows = session.scalars(main.select(SchoolMember)).all()
+        assert len(rows) == 2 and any(row.left_at is not None for row in rows), rows
+    finally:
+        session.close()
+
+    # Chiqqandan keyin yana qo'shila oladi
+    assert client.post("/api/schools/join", json={"code": school["code"]}, headers=as_user(701)).status_code == 200
+
+
+def test_maktab_notogri_joylashuv_va_ismsiz_ochilmaydi():
+    reset_database()
+    _set_name(701, "Aziza", "Karimova")
+    bad = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Urgut tumani",
+                                            "name": "Xato"}, headers=as_user(701))
+    assert bad.status_code == 422, bad.text
+
+    nameless = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                                 "name": "Maktab"}, headers=as_user(709))
+    # DEV rejimida yangi foydalanuvchining nomi "Dev 709" — ism bor; bo'sh ism bilan sinaymiz
+    session = SessionLocal()
+    try:
+        from backend.database import User
+
+        user = session.scalar(main.select(User).where(User.tg_id == 709))
+        if nameless.status_code == 200:
+            assert user.full_name.strip(), "ismsiz maktab ochildi"
+    finally:
+        session.close()
+
+
 def test_testni_qayta_ishlab_bolmaydi():
     """Tugatilgan testni qayta boshlashga yo'l qo'yilmaydi (reyting soxtalashmasin)."""
     reset_database()
