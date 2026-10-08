@@ -3923,26 +3923,44 @@ def _attendance_context(db: Session, attendance: Attendance) -> dict:
     }
 
 
-def attendance_text(context: dict) -> str:
-    """Ota-onalar guruhiga yuboriladigan matn ko'rinishi."""
+def attendance_caption(context: dict) -> str:
+    """Rasm/PDF ostidagi qisqa izoh: guruh, o'qituvchi, sana-soat."""
 
-    counts = context["counts"]
     lines = [
-        f"📋 {context['class_name']} — {context['lesson']} davomati",
-        f"🏫 {context['school_name']}",
-        f"👤 O'qituvchi: {context['teacher_name']}",
-        f"🕘 Olingan: {context['taken_at']}",
+        f"📋 {context['class_name']} — {context['lesson']}",
+        f"👤 {context['teacher_name']}",
+        f"🕘 {context['taken_at']}",
     ]
     if context["updated_at"]:
         lines.append(f"✏️ Tahrirlangan: {context['updated_at']}")
-    lines += [
+    return "\n".join(lines)
+
+
+def attendance_text(context: dict) -> str:
+    """
+    Matn ko'rinishi — faqat darsda BO'LMAGANLAR (yo'q, sababli, kechikkan).
+    To'liq ro'yxat (borlar bilan) rasm va PDF'da bo'ladi.
+    """
+
+    counts = context["counts"]
+    lines = [
+        attendance_caption(context),
         "",
         " · ".join(f"{ATTENDANCE_LABELS[s][1]} {ATTENDANCE_LABELS[s][0]}: {counts.get(s, 0)}" for s in ATTENDANCE_LABELS),
-        "",
     ]
-    for index, (name, status) in enumerate(context["marks"], start=1):
-        label, icon = ATTENDANCE_LABELS.get(status, ("?", "•"))
-        lines.append(f"{index}. {name} — {icon} {label}")
+
+    missing_any = False
+    for status in ("absent", "excused", "late"):
+        names = [name for name, mark_status in context["marks"] if mark_status == status]
+        if not names:
+            continue
+        missing_any = True
+        label, icon = ATTENDANCE_LABELS[status]
+        lines += ["", f"{icon} {label}:"]
+        lines += [f"{index}. {name}" for index, name in enumerate(names, start=1)]
+
+    if not missing_any:
+        lines += ["", "✅ Hamma o'quvchi darsda."]
     return "\n".join(lines)
 
 
@@ -4077,7 +4095,7 @@ def send_attendance(
     """
 
     context = _attendance_context(db, _own_attendance(db, user, attendance_id))
-    caption = f"📋 {context['class_name']} — {context['lesson']} davomati ({context['taken_at']}). Ota-onalar guruhiga uzating."
+    caption = attendance_caption(context)
 
     if format == "text":
         if not _send_bot_text(user.tg_id, attendance_text(context)):

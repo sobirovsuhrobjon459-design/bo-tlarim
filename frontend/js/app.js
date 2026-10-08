@@ -1601,7 +1601,7 @@ async function sendAttendance(attendance, format) {
     if (telegram?.openTelegramLink) {
       openExternalLink(`https://t.me/share/url?url=${encodeURIComponent(" ")}&text=${encodeURIComponent(text)}`);
     } else {
-      await copyToClipboard(text, "📋 Davomat matni nusxalandi — guruhga joylang");
+      await copyToClipboard(text, "📋 Davomat matni nusxalandi");
     }
     return;
   }
@@ -1609,7 +1609,7 @@ async function sendAttendance(attendance, format) {
   // Rasm va PDF — bot sizning chatingizga yuboradi, u yerdan guruhga "Uzatish" qilasiz
   if (telegram?.initData) {
     await api(`/api/attendance/${attendance.id}/send?format=${format}`, { method: "POST", body: {} });
-    showToast(`✅ ${format === "image" ? "Rasm" : "PDF"} bot chatiga yuborildi — ota-onalar guruhiga uzating`);
+    showToast(`✅ ${format === "image" ? "Rasm" : "PDF"} bot chatiga yuborildi`);
   } else {
     await downloadFile(`/api/attendance/${attendance.id}/file?format=${format}`, format === "image" ? "davomat.png" : "davomat.pdf");
   }
@@ -1626,10 +1626,10 @@ function renderAttendanceShare(attendance, schoolClass, { justSaved = false } = 
       }</p>
       ${attendanceCountsHtml(attendance.counts)}
     </div>
-    <p class="section-label" style="margin-top:18px">OTA-ONALAR GURUHIGA QANDAY YUBORASIZ?</p>
-    ${roleCard("send-image", "🖼", "RASM", "Chiroyli jadval ko'rinishida")}
-    ${roleCard("send-text", "📝", "MATN", "Guruhga oddiy xabar qilib")}
-    ${roleCard("send-pdf", "📄", "PDF", "Printerga chiqarish uchun ham qulay")}
+    <p class="section-label" style="margin-top:18px">QANDAY YUBORASIZ?</p>
+    ${roleCard("send-image", "🖼", "RASM", "Barcha o'quvchilar — jadval ko'rinishida")}
+    ${roleCard("send-text", "📝", "MATN", "Faqat yo'q, sababli va kechikkanlar")}
+    ${roleCard("send-pdf", "📄", "PDF", "Barcha o'quvchilar — printerga ham qulay")}
     <button class="btn btn-ghost" id="share-later" style="margin-top:12px">Keyinroq</button>
   `);
 
@@ -1665,7 +1665,7 @@ async function renderAttendanceDetail(attendanceId, schoolClass) {
         .join("")}
     </div>
     <button class="btn" id="edit-attendance-button" style="margin-top:14px">✏️ Tahrirlash</button>
-    <button class="btn btn-ghost" id="share-attendance-button" style="margin-top:10px">📤 Ota-onalarga yuborish</button>
+    <button class="btn btn-ghost" id="share-attendance-button" style="margin-top:10px">📤 Yuborish</button>
   `);
 
   document.querySelector('[data-action="back-history"]').addEventListener(

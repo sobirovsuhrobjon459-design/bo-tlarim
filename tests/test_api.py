@@ -1173,7 +1173,9 @@ def test_davomat_matn_rasm_va_pdf():
                              headers=as_user(701)).json()
 
     text = client.get(f"/api/attendance/{attendance['id']}/text", headers=as_user(701)).json()["text"]
-    assert "10/2 — Ingliz tili darsi davomati" in text and "Фаррух Комилжонов — ❌ Yo'q" in text and "Aziza Karimova" in text, text
+    assert "10/2 — Ingliz tili darsi" in text and "Aziza Karimova" in text, text
+    assert "❌ Yo'q:\n1. Фаррух Комилжонов" in text, text
+    assert "Ota-onalar" not in text
 
     pdf = client.get(f"/api/attendance/{attendance['id']}/file", params={"format": "pdf"}, headers=as_user(701))
     assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
