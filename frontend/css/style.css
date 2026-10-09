@@ -2315,7 +2315,9 @@ body.keyboard-open .fab {
 
 /* Sinflar ro'yxati: chapda o'quvchilar soni, o'rtada nom va kurator */
 .class-list {
-  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .class-row {
@@ -2323,19 +2325,16 @@ body.keyboard-open .fab {
   align-items: center;
   gap: 12px;
   width: 100%;
-  padding: 12px 14px;
+  padding: 14px;
   font-family: inherit;
   text-align: left;
   color: var(--color-text);
-  background: none;
-  border: 0;
-  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 16px);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.16);
   cursor: pointer;
   touch-action: manipulation;
-}
-
-.class-row:last-child {
-  border-bottom: 0;
 }
 
 .class-row:active {

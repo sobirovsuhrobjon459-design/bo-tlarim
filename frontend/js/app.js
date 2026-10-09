@@ -87,9 +87,15 @@ let teacherTestsTab = "active";
   eski holat ko'rinib qolmasin.
 */
 const pageDataCache = new Map();
+// Sinf tafsilotlari (id → sinf) — qayta kirganda darhol ochish uchun
+const classDetailCache = new Map();
 
 async function api(path, { method = "GET", body, keepalive = false } = {}) {
-  if (method !== "GET") pageDataCache.clear();
+  if (method !== "GET") {
+    pageDataCache.clear();
+    // O'zgartirishdan keyin sinf eskirgan ma'lumot bilan ochilmasin
+    classDetailCache.clear();
+  }
 
   // Alohida o'qituvchi tokeni yo'q — Telegram initData o'zi kifoya,
   // "o'qituvchi" ekanligi backend'da shu odamga tegishli Teacher yozuvi
@@ -1000,7 +1006,7 @@ function classListHtml(classes, scope = "mine") {
     }</p>`;
   }
   return `
-    <div class="panel class-list">
+    <div class="class-list">
       ${classes
         .map(
           (item) => `
@@ -1028,6 +1034,7 @@ async function loadMyClassesInto(container, scope = "mine") {
   const draw = (classes) => {
     container.innerHTML = classListHtml(pick(classes), scope);
     wireClassList(container);
+    prefetchClassDetails(pick(classes));
   };
   if (myClassesCache) draw(myClassesCache);
   try {
@@ -1119,6 +1126,7 @@ async function refreshClassInBackground(tab) {
   try {
     const fresh = await api(`/api/classes/${before.id}`);
     const stillHere = document.querySelector(`[data-class-tab="${tab}"]`) && currentClass?.id === fresh.id;
+    classDetailCache.set(fresh.id, fresh);
     if (stillHere && JSON.stringify(fresh) !== JSON.stringify(currentClass)) openClassTab(fresh, tab);
     else if (currentClass?.id === fresh.id) currentClass = fresh;
   } catch (_) {
@@ -1126,8 +1134,14 @@ async function refreshClassInBackground(tab) {
   }
 }
 
+/*
+  Sinf ma'lumoti eslab qolinadi: qayta kirganda sinf DARHOL ochiladi (serverni
+  kutmasdan), yangisi esa fonda so'raladi. Har qanday o'zgartirishdan keyin
+  (POST/PUT/DELETE) eslab qolingani tozalanadi.
+*/
 function openClassTab(schoolClass, tab) {
   currentClass = schoolClass;
+  classDetailCache.set(schoolClass.id, schoolClass);
   if (tab === "students") renderClassStudentsTab(schoolClass);
   else if (tab === "results") renderClassResultsTab(schoolClass);
   else renderClassAttendanceTab(schoolClass);
@@ -1136,8 +1150,26 @@ function openClassTab(schoolClass, tab) {
 // Sinfni (yangi ma'lumot bilan) ochadi. Eski chaqiruvlar ham shu orqali ishlaydi.
 async function renderClass(classOrId, tab = "attendance") {
   const id = typeof classOrId === "object" ? classOrId.id : classOrId;
+  const cached = classDetailCache.get(id);
+  if (cached) {
+    openClassTab(cached, tab);
+    refreshClassInBackground(tab);
+    return;
+  }
   const fresh = await api(`/api/classes/${id}`);
   openClassTab(fresh, tab);
+}
+
+// Ro'yxatdagi sinflar fonda oldindan yuklanadi — bosilganda darhol ochiladi
+function prefetchClassDetails(classes) {
+  classes
+    .filter((item) => !classDetailCache.has(item.id))
+    .slice(0, 12)
+    .forEach((item) => {
+      api(`/api/classes/${item.id}`)
+        .then((detail) => classDetailCache.set(detail.id, detail))
+        .catch(() => {});
+    });
 }
 
 function classHeader(schoolClass, action = "") {
