@@ -2734,7 +2734,7 @@ function renderMySchool(school, { refresh = true } = {}) {
       }
 
       <p class="section-label" style="margin-top:18px">SINFLAR VA O'QITUVCHILAR</p>
-      <div class="panel pick-list school-menu">
+      <div class="school-tiles">
         ${schoolMenuItem("classes-mine", "⭐", "Mening sinflarim", '<i class="menu-count" data-count="mine">…</i>')}
         ${schoolMenuItem("classes-others", "📚", "Boshqa sinflar", '<i class="menu-count" data-count="others">…</i>')}
         ${schoolMenuItem("teachers", "👥", "O'qituvchilar", `${school.members.length} ta o'qituvchi`)}
@@ -2743,10 +2743,10 @@ function renderMySchool(school, { refresh = true } = {}) {
       ${
         isLeader(school)
           ? `<p class="section-label" style="margin-top:18px">BOSHQARUV</p>
-             <div class="panel pick-list school-menu">
-               ${school.can_create_classes ? schoolMenuItem("create-class", "➕", "Sinf yaratish", "Yangi sinf ochib, kurator tayinlang") : ""}
-               ${schoolMenuItem("invite-teacher", "👤", "O'qituvchi qo'shish", "Bir martalik havola — kodsiz qo'shiladi")}
-               ${isOwner(school) ? schoolMenuItem("teachers", "🎖", "Lavozim berish", "Direktor va zam direktor tayinlash") : ""}
+             <div class="school-tiles">
+               ${school.can_create_classes ? schoolMenuItem("create-class", "➕", "Sinf yaratish", "Kurator bilan") : ""}
+               ${schoolMenuItem("invite-teacher", "👤", "O'qituvchi qo'shish", "Kodsiz havola")}
+               ${isOwner(school) ? schoolMenuItem("teachers", "🎖", "Lavozim berish", "Direktor, zam") : ""}
              </div>`
           : ""
       }
@@ -2770,11 +2770,13 @@ function renderMySchool(school, { refresh = true } = {}) {
   if (refresh) refreshSchoolInBackground("school");
 }
 
+// Maktab ekranidagi alohida kartochka (yonma-yon turadi)
 function schoolMenuItem(target, icon, title, note) {
   return `
-    <button type="button" class="pick-item" data-school-menu="${target}">
-      <span class="pick-title">${icon} ${title}<small>${note}</small></span>
-      <span>›</span>
+    <button type="button" class="school-tile" data-school-menu="${target}">
+      <span class="school-tile-icon">${icon}</span>
+      <b>${title}</b>
+      <small>${note}</small>
     </button>`;
 }
 
@@ -2784,8 +2786,8 @@ async function fillClassCounts() {
     const mine = classes.filter((item) => item.is_curator).length;
     const mineNode = document.querySelector('[data-count="mine"]');
     const othersNode = document.querySelector('[data-count="others"]');
-    if (mineNode) mineNode.textContent = mine ? `${mine} ta sinf — kuratori siz` : "Siz kurator bo'lgan sinf yo'q";
-    if (othersNode) othersNode.textContent = `${classes.length - mine} ta sinf — davomat olasiz`;
+    if (mineNode) mineNode.textContent = mine ? `${mine} ta sinf` : "Hali yo'q";
+    if (othersNode) othersNode.textContent = `${classes.length - mine} ta sinf`;
   };
   if (myClassesCache) show(myClassesCache);
   try {

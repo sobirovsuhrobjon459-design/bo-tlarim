@@ -2408,3 +2408,47 @@ body.keyboard-open .fab {
 .menu-count {
   font-style: normal;
 }
+
+/* Maktab ekrani: bo'limlar alohida kartochkalarda, yonma-yon */
+.school-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.school-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-height: 112px;
+  padding: 14px 6px 12px;
+  font-family: inherit;
+  text-align: center;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 16px);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform 0.12s ease;
+}
+
+.school-tile:active {
+  transform: scale(0.95);
+}
+
+.school-tile-icon {
+  font-size: 26px;
+  line-height: 1.2;
+}
+
+.school-tile b {
+  font-size: 13.5px;
+  line-height: 1.25;
+}
+
+.school-tile small {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
