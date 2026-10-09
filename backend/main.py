@@ -78,6 +78,11 @@ from .database import (
     ClassTest,
     ClassTestIn,
     ClassTestScore,
+    DiscountIn,
+    FeeIn,
+    PaymentCancelIn,
+    PaymentIn,
+    TuitionPayment,
     CuratorIn,
     CreditPurchase,
     CardTopUpIn,
@@ -149,6 +154,8 @@ def _add_missing_columns() -> None:
         "test_attempts": {"offline_name": "VARCHAR(200)", "saved_answers": "TEXT"},
         "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)"},
         "school_classes": {"curator_user_id": "INTEGER"},
+        "private_schools": {"monthly_fee": "INTEGER DEFAULT 0"},
+        "class_students": {"discount_percent": "INTEGER DEFAULT 0"},
         "school_members": {"position": "VARCHAR(20)", "phone": "VARCHAR(20)", "birth_date": "DATE", "passport": "VARCHAR(20)"},
         "attendances": {
             "lesson_start": "VARCHAR(5)",
@@ -3416,6 +3423,9 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         "can_create_classes": _can_delete_classes(member),
         "my_subjects": _read_subjects(member),
         "invite_link": school_invite_link(school.code) if member.role == "owner" else None,
+        # Oylik to'lov — summani admin/direktor belgilaydi; to'lovlarni ular va kuratorlar kiritadi
+        "monthly_fee": school.monthly_fee,
+        "can_set_fee": _can_delete_classes(member),
         "can_remove_members": _can_delete_classes(member),
         "members": [
             {
@@ -4089,11 +4099,18 @@ def _director_class(db: Session, user: User, class_id: int) -> SchoolClass:
     return school_class
 
 
+def _sees_all_attendance(school_class: SchoolClass, member: SchoolMember | None) -> bool:
+    """Sinfning barcha davomatlarini — rahbariyat va sinf kuratori ko'radi; fan o'qituvchisi faqat o'zinikini."""
+    return bool(member and (_is_director(member) or school_class.curator_user_id == member.user_id))
+
+
 def _school_attendance(db: Session, user: User, attendance_id: int) -> tuple[Attendance, SchoolMember]:
     attendance = db.get(Attendance, attendance_id)
     if not attendance or attendance.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Davomat topilmadi")
-    _, member = _school_class(db, user, attendance.class_id)
+    school_class, member = _school_class(db, user, attendance.class_id)
+    if attendance.teacher_user_id != user.id and not _sees_all_attendance(school_class, member):
+        raise HTTPException(status_code=403, detail="Bu davomatni boshqa o'qituvchi olgan")
     return attendance, member
 
 
@@ -4173,12 +4190,11 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
             }
             for student in students
         ]
-        recent = db.scalars(
-            select(Attendance)
-            .where(Attendance.class_id == school_class.id, Attendance.deleted_at.is_(None))
-            .order_by(Attendance.taken_at.desc())
-            .limit(50)
-        ).all()
+        query = select(Attendance).where(Attendance.class_id == school_class.id, Attendance.deleted_at.is_(None))
+        if not _sees_all_attendance(school_class, member):
+            # Fan o'qituvchisi faqat o'zi olgan davomatlarni ko'radi
+            query = query.where(Attendance.teacher_user_id == (member.user_id if member else -1))
+        recent = db.scalars(query.order_by(Attendance.taken_at.desc()).limit(50)).all()
         takers = {
             user.id: user.full_name
             for user in db.scalars(select(User).where(User.id.in_({item.teacher_user_id for item in recent}))).all()
@@ -4674,6 +4690,397 @@ def delete_class_test(test_id: int, user: User = Depends(get_current_user), db: 
     test.deleted_at = utcnow()
     db.commit()
     return {"ok": True}
+
+
+# ---------- O'qish to'lovlari ----------
+#
+# Oylik summa — maktab bo'yicha bitta (admin/direktor belgilaydi), o'quvchiga
+# foizda chegirma berilishi mumkin. To'lovni admin, direktor va o'sha sinf
+# kuratori kiritadi. Pul bilan bog'liq hech narsa o'chirilmaydi: xato to'lov
+# sababi bilan bekor qilinadi va tarixda qoladi.
+
+MONTH_NAMES = ["Yanvar", "Fevral", "Mart", "Aprel", "May", "Iyun",
+               "Iyul", "Avgust", "Sentabr", "Oktabr", "Noyabr", "Dekabr"]
+PAYMENT_METHODS = {"cash": "Naqd", "card": "Karta", "transfer": "O'tkazma"}
+
+
+def _month_label(month: str) -> str:
+    year, number = month.split("-")
+    return f"{MONTH_NAMES[int(number) - 1]} {year}"
+
+
+def _current_month() -> str:
+    return (utcnow() + TASHKENT_OFFSET).strftime("%Y-%m")
+
+
+def _shift_month(month: str, delta: int) -> str:
+    year, number = map(int, month.split("-"))
+    index = year * 12 + number - 1 + delta
+    return f"{index // 12:04d}-{index % 12 + 1:02d}"
+
+
+def _student_months(student: ClassStudent, limit: int = 24) -> list[str]:
+    """O'quvchi qo'shilgan oydan joriy oygacha (eng yangisi birinchi)."""
+    start = (student.created_at + TASHKENT_OFFSET).strftime("%Y-%m")
+    month, months = _current_month(), []
+    while month >= start and len(months) < limit:
+        months.append(month)
+        month = _shift_month(month, -1)
+    return months
+
+
+def _student_due(school: PrivateSchool, student: ClassStudent) -> int:
+    """Chegirma hisobga olingan oylik summa."""
+    return round(school.monthly_fee * (100 - (student.discount_percent or 0)) / 100)
+
+
+def _paid_sums(db: Session, student_ids: list[int], months: list[str] | None = None) -> dict[tuple[int, str], int]:
+    if not student_ids:
+        return {}
+    query = (
+        select(TuitionPayment.student_id, TuitionPayment.month, func.sum(TuitionPayment.amount))
+        .where(TuitionPayment.student_id.in_(student_ids), TuitionPayment.cancelled_at.is_(None))
+        .group_by(TuitionPayment.student_id, TuitionPayment.month)
+    )
+    if months:
+        query = query.where(TuitionPayment.month.in_(months))
+    return {(sid, month): int(total or 0) for sid, month, total in db.execute(query)}
+
+
+def _month_status(due: int, paid: int) -> dict:
+    remaining = max(due - paid, 0)
+    if due == 0:
+        status = "free"
+    elif paid >= due:
+        status = "paid"
+    elif paid > 0:
+        status = "partial"
+    else:
+        status = "unpaid"
+    return {"due": due, "paid": paid, "remaining": remaining, "status": status}
+
+
+def _payments_class(db: Session, user: User, class_id: int) -> tuple[SchoolClass, SchoolMember, PrivateSchool]:
+    """To'lovlar bilan ishlash — admin, direktor yoki shu sinfning kuratori."""
+    school_class, member = _school_class(db, user, class_id)
+    if not _can_manage_class(school_class, member):
+        raise HTTPException(status_code=403, detail="To'lovlarni admin, direktor yoki sinf kuratori ko'radi")
+    return school_class, member, db.get(PrivateSchool, school_class.school_id)
+
+
+def _payments_student(db: Session, user: User, class_id: int, student_id: int):
+    school_class, member, school = _payments_class(db, user, class_id)
+    student = db.get(ClassStudent, student_id)
+    if not student or student.class_id != school_class.id:
+        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    return school_class, member, school, student
+
+
+def _payment_view(db: Session, payment: TuitionPayment) -> dict:
+    taker = db.get(User, payment.created_by)
+    return {
+        "id": payment.id,
+        "receipt_no": payment.receipt_no,
+        "month": payment.month,
+        "month_label": _month_label(payment.month),
+        "amount": payment.amount,
+        "method": payment.method,
+        "method_label": PAYMENT_METHODS.get(payment.method, payment.method),
+        "paid_on": payment.paid_on,
+        "note": payment.note,
+        "created_by": taker.full_name if taker else "",
+        "created_at": payment.created_at,
+        "cancelled": payment.cancelled_at is not None,
+        "cancel_reason": payment.cancel_reason,
+    }
+
+
+@app.put("/api/schools/fee")
+def set_monthly_fee(body: FeeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Oylik o'qish to'lovini admin yoki direktor belgilaydi (barcha o'quvchilar uchun)."""
+    member = _require_school_member(db, user)
+    if not _can_delete_classes(member):
+        raise HTTPException(status_code=403, detail="Oylik to'lovni faqat admin yoki direktor belgilaydi")
+    member.school.monthly_fee = body.monthly_fee
+    db.commit()
+    logging.getLogger("backend").info("Oylik to'lov o'zgardi: school=%s fee=%s user=%s", member.school_id, body.monthly_fee, user.id)
+    return {"school": _school_view(db, member, user)}
+
+
+@app.get("/api/classes/{class_id}/payments")
+def class_payments(class_id: int, month: str | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Sinf o'quvchilarining shu oydagi to'lov holati (qarzdorlar tepada)."""
+    school_class, _, school = _payments_class(db, user, class_id)
+    month = month if month and re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month) else _current_month()
+    students = _active_students(school_class)
+    paid = _paid_sums(db, [student.id for student in students], [month])
+    order = {"unpaid": 0, "partial": 1, "paid": 2, "free": 3}
+    rows = []
+    for student in students:
+        info = _month_status(_student_due(school, student), paid.get((student.id, month), 0))
+        rows.append({"id": student.id, "name": student.full_name, "discount": student.discount_percent or 0, **info})
+    rows.sort(key=lambda row: (order[row["status"]], row["name"].lower()))
+    return {
+        "month": month,
+        "month_label": _month_label(month),
+        "monthly_fee": school.monthly_fee,
+        "class_name": school_class.name,
+        "students": rows,
+        "totals": {
+            "due": sum(row["due"] for row in rows),
+            "paid": sum(min(row["paid"], row["due"]) for row in rows),
+            "remaining": sum(row["remaining"] for row in rows),
+            "debtors": sum(1 for row in rows if row["status"] in ("unpaid", "partial")),
+        },
+    }
+
+
+@app.get("/api/classes/{class_id}/students/{student_id}/payments")
+def student_payments(class_id: int, student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """O'quvchining oylar bo'yicha to'lovlari, umumiy qarzi va to'lovlar tarixi."""
+    school_class, _, school, student = _payments_student(db, user, class_id, student_id)
+    months = _student_months(student)
+    due = _student_due(school, student)
+    paid = _paid_sums(db, [student.id])
+    month_rows = [{"month": month, "label": _month_label(month), **_month_status(due, paid.get((student.id, month), 0))} for month in months]
+    payments = db.scalars(
+        select(TuitionPayment).where(TuitionPayment.student_id == student.id).order_by(TuitionPayment.id.desc())
+    ).all()
+    return {
+        "student": {"id": student.id, "name": student.full_name, "class_name": school_class.name},
+        "monthly_fee": school.monthly_fee,
+        "discount": student.discount_percent or 0,
+        "due": due,
+        "months": month_rows,
+        "total_debt": sum(row["remaining"] for row in month_rows),
+        "payments": [_payment_view(db, payment) for payment in payments],
+    }
+
+
+@app.put("/api/classes/{class_id}/students/{student_id}/discount")
+def set_discount(class_id: int, student_id: int, body: DiscountIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _, _, _, student = _payments_student(db, user, class_id, student_id)
+    student.discount_percent = body.percent
+    db.commit()
+    logging.getLogger("backend").info("Chegirma: student=%s percent=%s user=%s", student.id, body.percent, user.id)
+    return student_payments(class_id, student_id, user, db)
+
+
+@app.post("/api/classes/{class_id}/students/{student_id}/payments")
+def add_payment(class_id: int, student_id: int, body: PaymentIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Pul qabul qilindi — chek raqami bilan yoziladi. Oy uchun qolgan summadan oshmaydi."""
+    school_class, _, school, student = _payments_student(db, user, class_id, student_id)
+    if student.removed_at is not None:
+        raise HTTPException(status_code=422, detail="Bu o'quvchi sinfdan chiqarilgan")
+    if school.monthly_fee <= 0:
+        raise HTTPException(status_code=422, detail="Avval maktabning oylik to'lov summasini belgilang (admin yoki direktor)")
+    if body.month > _shift_month(_current_month(), 3):
+        raise HTTPException(status_code=422, detail="Faqat 3 oygacha oldindan to'lov qabul qilinadi")
+
+    due = _student_due(school, student)
+    already = _paid_sums(db, [student.id], [body.month]).get((student.id, body.month), 0)
+    remaining = max(due - already, 0)
+    if remaining == 0:
+        raise HTTPException(status_code=409, detail=f"{_month_label(body.month)} oyi uchun to'lov to'liq qilingan")
+    if body.amount > remaining:
+        raise HTTPException(status_code=422, detail=f"{_month_label(body.month)} uchun qolgan summa: {remaining:,} so'm".replace(",", " "))
+
+    last_no = db.scalar(select(func.max(TuitionPayment.receipt_no)).where(TuitionPayment.school_id == school.id)) or 0
+    payment = TuitionPayment(
+        school_id=school.id,
+        class_id=school_class.id,
+        student_id=student.id,
+        student_name=student.full_name,
+        month=body.month,
+        amount=body.amount,
+        method=body.method,
+        paid_on=body.paid_on,
+        note=body.note,
+        receipt_no=last_no + 1,
+        created_by=user.id,
+    )
+    db.add(payment)
+    db.commit()
+    db.refresh(payment)
+    logging.getLogger("backend").info("To'lov qabul qilindi: id=%s student=%s %s so'm user=%s", payment.id, student.id, body.amount, user.id)
+    return {"payment": _payment_view(db, payment), **student_payments(class_id, student_id, user, db)}
+
+
+def _school_payment(db: Session, user: User, payment_id: int) -> tuple[TuitionPayment, SchoolMember]:
+    payment = db.get(TuitionPayment, payment_id)
+    if not payment:
+        raise HTTPException(status_code=404, detail="To'lov topilmadi")
+    _, member, _ = _payments_class(db, user, payment.class_id)
+    return payment, member
+
+
+@app.post("/api/payments/{payment_id}/cancel")
+def cancel_payment(payment_id: int, body: PaymentCancelIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Xato kiritilgan to'lovni bekor qilish — o'chirilmaydi, sababi bilan tarixda qoladi."""
+    payment, _ = _school_payment(db, user, payment_id)
+    if payment.cancelled_at is not None:
+        raise HTTPException(status_code=409, detail="Bu to'lov allaqachon bekor qilingan")
+    payment.cancelled_at = utcnow()
+    payment.cancelled_by = user.id
+    payment.cancel_reason = " ".join(body.reason.split())
+    db.commit()
+    logging.getLogger("backend").warning("To'lov bekor qilindi: id=%s user=%s sabab=%s", payment.id, user.id, payment.cancel_reason)
+    return student_payments(payment.class_id, payment.student_id, user, db)
+
+
+def _receipt_context(db: Session, payment: TuitionPayment) -> dict:
+    school = db.get(PrivateSchool, payment.school_id)
+    school_class = db.get(SchoolClass, payment.class_id)
+    student = db.get(ClassStudent, payment.student_id)
+    due = _student_due(school, student)
+    paid = _paid_sums(db, [student.id], [payment.month]).get((student.id, payment.month), 0)
+    taker = db.get(User, payment.created_by)
+    return {
+        "school": school.name,
+        "class_name": school_class.name,
+        "student": payment.student_name,
+        "receipt_no": payment.receipt_no,
+        "month": _month_label(payment.month),
+        "amount": payment.amount,
+        "method": PAYMENT_METHODS.get(payment.method, payment.method),
+        "paid_on": payment.paid_on.strftime("%d.%m.%Y"),
+        "taker": taker.full_name if taker else "",
+        "remaining": max(due - paid, 0),
+        "cancelled": payment.cancelled_at is not None,
+    }
+
+
+def _money(value: int) -> str:
+    return f"{value:,}".replace(",", " ") + " so'm"
+
+
+def receipt_image(context: dict) -> bytes:
+    """To'lov cheki (PNG) — ota-onaga yuborish uchun."""
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    def font(name: str, size: int):
+        try:
+            return ImageFont.truetype(str(FONTS_DIR / name), size)
+        except OSError:
+            return ImageFont.load_default()
+
+    title_font, text_font, bold_font, big_font = (font("DejaVuSerif-Bold.ttf", 42), font("DejaVuSerif.ttf", 30),
+                                                  font("DejaVuSerif-Bold.ttf", 30), font("DejaVuSerif-Bold.ttf", 56))
+    width, height = 900, 860
+    image = Image.new("RGB", (width, height), "#ffffff")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle([0, 0, width, 14], fill="#1e7b34")
+    draw.text((50, 44), "TO'LOV CHEKI", font=title_font, fill="#1e7b34")
+    draw.text((width - 50, 52), f"№ {context['receipt_no']}", font=bold_font, fill="#374151", anchor="ra")
+    draw.text((50, 104), context["school"], font=text_font, fill="#374151")
+    draw.line([50, 160, width - 50, 160], fill="#e5e7eb", width=3)
+
+    rows = [
+        ("O'quvchi", context["student"]),
+        ("Sinf", context["class_name"]),
+        ("Oy", context["month"]),
+        ("To'lov usuli", context["method"]),
+        ("Sana", context["paid_on"]),
+        ("Qabul qildi", context["taker"]),
+    ]
+    y = 190
+    for label, value in rows:
+        draw.text((50, y), label, font=text_font, fill="#6b7280")
+        draw.text((width - 50, y), str(value)[:34], font=bold_font, fill="#111827", anchor="ra")
+        y += 58
+    draw.line([50, y + 6, width - 50, y + 6], fill="#e5e7eb", width=3)
+    draw.text((50, y + 40), "To'landi:", font=bold_font, fill="#111827")
+    draw.text((width - 50, y + 26), _money(context["amount"]), font=big_font, fill="#1e7b34", anchor="ra")
+    note = "✓ Shu oy uchun to'liq to'landi" if context["remaining"] == 0 else f"Shu oy uchun qoldi: {_money(context['remaining'])}"
+    draw.text((50, y + 120), note, font=text_font, fill="#1e7b34" if context["remaining"] == 0 else "#b45309")
+    if context["cancelled"]:
+        draw.text((width // 2, height // 2), "BEKOR QILINGAN", font=big_font, fill="#dc2626", anchor="mm")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()
+
+
+@app.get("/api/payments/{payment_id}/receipt")
+def payment_receipt(payment_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    payment, _ = _school_payment(db, user, payment_id)
+    return StreamingResponse(io.BytesIO(receipt_image(_receipt_context(db, payment))), media_type="image/png",
+                             headers={"Content-Disposition": f'attachment; filename="chek_{payment.receipt_no}.png"'})
+
+
+@app.post("/api/payments/{payment_id}/send")
+def send_receipt(payment_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Chekni bot orqali foydalanuvchining o'z chatiga yuboradi — u yerdan ota-onaga uzatiladi."""
+    payment, _ = _school_payment(db, user, payment_id)
+    context = _receipt_context(db, payment)
+    caption = f"🧾 Chek № {context['receipt_no']} — {context['student']}, {context['month']}: {_money(context['amount'])}"
+    _send_photo_to_telegram(user.tg_id, f"chek_{payment.receipt_no}.png", receipt_image(context), caption)
+    return {"ok": True}
+
+
+@app.get("/api/classes/{class_id}/students/{student_id}/reminder")
+def payment_reminder(class_id: int, student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Ota-onaga hurmat bilan yozilgan to'lov eslatmasi (matn) — qarzi bo'lgan oylar bilan."""
+    school_class, _, school, student = _payments_student(db, user, class_id, student_id)
+    info = student_payments(class_id, student_id, user, db)
+    debts = [row for row in info["months"] if row["remaining"] > 0]
+    if not debts:
+        raise HTTPException(status_code=409, detail="Bu o'quvchining qarzi yo'q")
+    lines = [
+        "Assalomu alaykum, hurmatli ota-ona!",
+        "",
+        f"«{school.name}» {school_class.name} sinf o'quvchisi {student.full_name}ning o'qish to'lovi bo'yicha eslatma:",
+        "",
+    ]
+    lines += [f"• {row['label']}: {_money(row['remaining'])}" for row in reversed(debts)]
+    lines += [
+        "",
+        f"Jami: {_money(info['total_debt'])}",
+        "",
+        "To'lovni imkon qadar tezroq amalga oshirishingizni hurmat bilan so'raymiz.",
+        "Savollaringiz bo'lsa, maktab ma'muriyatiga murojaat qiling.",
+        "",
+        f"Hurmat bilan, «{school.name}» ma'muriyati",
+    ]
+    return {"text": "\n".join(lines)}
+
+
+@app.get("/api/classes/{class_id}/debtors")
+def class_debtors_text(class_id: int, month: str | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Sinf qarzdorlari ro'yxati (matn) — rahbariyatga yoki guruhga yuborish uchun."""
+    info = class_payments(class_id, month, user, db)
+    debtors = [row for row in info["students"] if row["status"] in ("unpaid", "partial")]
+    lines = [f"💰 {info['class_name']} — {info['month_label']} oyi to'lovlari", ""]
+    if not debtors:
+        lines.append("✅ Hamma o'quvchi to'lagan.")
+    else:
+        lines.append(f"Qarzdorlar ({len(debtors)} ta):")
+        lines += [f"{index}. {row['name']} — {_money(row['remaining'])}" for index, row in enumerate(debtors, start=1)]
+        lines += ["", f"Jami qarz: {_money(info['totals']['remaining'])}"]
+    return {"text": "\n".join(lines)}
+
+
+@app.get("/api/schools/payments/summary")
+def payments_summary(month: str | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Oylik hisobot (admin va direktor): har sinf bo'yicha kutilgan, tushgan va qarz."""
+    member = _require_school_member(db, user)
+    if not _can_delete_classes(member):
+        raise HTTPException(status_code=403, detail="Umumiy hisobotni admin yoki direktor ko'radi")
+    month = month if month and re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month) else _current_month()
+    classes = db.scalars(
+        select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None)).order_by(SchoolClass.name)
+    ).all()
+    rows = []
+    for school_class in classes:
+        info = class_payments(school_class.id, month, user, db)
+        rows.append({"id": school_class.id, "name": school_class.name, "students": len(info["students"]), **info["totals"]})
+    return {
+        "month": month,
+        "month_label": _month_label(month),
+        "monthly_fee": member.school.monthly_fee,
+        "classes": rows,
+        "totals": {key: sum(row[key] for row in rows) for key in ("due", "paid", "remaining", "debtors")},
+    }
 
 
 def _attendance_context(db: Session, attendance: Attendance) -> dict:

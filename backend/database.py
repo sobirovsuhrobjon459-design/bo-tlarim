@@ -386,6 +386,8 @@ class PrivateSchool(Base):
     code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     owner_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    # Oylik o'qish to'lovi (so'm) — barcha o'quvchilar uchun bitta summa
+    monthly_fee: Mapped[int] = mapped_column(default=0)
 
     members: Mapped[list["SchoolMember"]] = relationship(back_populates="school", order_by="SchoolMember.id")
 
@@ -474,6 +476,8 @@ class ClassStudent(Base):
     birth_date: Mapped[date | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     removed_at: Mapped[datetime | None] = mapped_column(default=None)
+    # O'qish to'lovidan chegirma (foiz): 30 — oylik summaning 70% i to'lanadi
+    discount_percent: Mapped[int] = mapped_column(default=0)
 
     school_class: Mapped["SchoolClass"] = relationship(back_populates="students")
 
@@ -555,6 +559,32 @@ class ClassTestScore(Base):
     score: Mapped[float | None] = mapped_column(default=None)
 
     test: Mapped["ClassTest"] = relationship(back_populates="scores")
+
+
+class TuitionPayment(Base):
+    """
+    O'qish to'lovi (pul qabul qilindi). HECH QACHON o'chirilmaydi: xato
+    kiritilgan bo'lsa — sababi bilan bekor qilinadi (cancelled_at).
+    """
+
+    __tablename__ = "tuition_payments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    class_id: Mapped[int] = mapped_column(ForeignKey("school_classes.id"), index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("class_students.id"), index=True)
+    student_name: Mapped[str] = mapped_column(String(200))
+    month: Mapped[str] = mapped_column(String(7), index=True)  # "2026-10"
+    amount: Mapped[int] = mapped_column()
+    method: Mapped[str] = mapped_column(String(10), default="cash")  # cash | card | transfer
+    paid_on: Mapped[date] = mapped_column()
+    note: Mapped[str] = mapped_column(String(300), default="")
+    receipt_no: Mapped[int] = mapped_column()  # maktab ichida tartib raqami
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    cancelled_at: Mapped[datetime | None] = mapped_column(default=None)
+    cancelled_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
+    cancel_reason: Mapped[str] = mapped_column(String(300), default="")
 
 
 # ========== 4) API so'rov sxemalari (Pydantic) ==========
@@ -837,6 +867,35 @@ class StudentIn(BaseModel):
         if len(self.full_name) < 2:
             raise ValueError("O'quvchining ism-familiyasini kiriting")
         return self
+
+
+class FeeIn(BaseModel):
+    monthly_fee: int = Field(ge=0, le=100_000_000)
+
+
+class DiscountIn(BaseModel):
+    percent: int = Field(ge=0, le=100)
+
+
+class PaymentIn(BaseModel):
+    """To'lov: qaysi oy uchun, qancha, qanday (naqd/karta/o'tkazma)."""
+
+    month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    amount: int = Field(gt=0, le=1_000_000_000)
+    method: Literal["cash", "card", "transfer"] = "cash"
+    paid_on: date = Field(default_factory=date.today)
+    note: str = Field(default="", max_length=300)
+
+    @model_validator(mode="after")
+    def normalize(self) -> "PaymentIn":
+        self.note = " ".join(self.note.split())
+        if self.paid_on > date.today():
+            raise ValueError("To'lov sanasi kelajakda bo'lishi mumkin emas")
+        return self
+
+
+class PaymentCancelIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=300)
 
 
 class ClassTestIn(BaseModel):

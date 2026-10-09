@@ -1618,6 +1618,84 @@ def test_sinf_test_natijalari():
     assert client.get(f"/api/classes/{cid}/tests", headers=as_user(701)).json() == []
 
 
+def test_fan_oqituvchisi_faqat_ozi_olgan_davomatni_koradi():
+    """Biologiya o'qituvchisi matematika o'qituvchisining davomatini ko'rmaydi; kurator va admin hammasini ko'radi."""
+    reset_database()
+    school_class = _school_with_class()
+    cid = school_class["id"]
+    client.post(f"/api/classes/{cid}/students", json={"full_name": "Ali Valiyev"}, headers=as_user(701))
+    school = client.get("/api/schools/me", headers=as_user(701)).json()["school"]
+    for tg_id, subject in ((702, "Matematika"), (703, "Biologiya"), (704, "Kimyo")):
+        _set_name(tg_id, "Ustoz", subject)
+        client.post("/api/schools/join", json={"phone": "901234567", "code": current_code(school), "subjects": [subject]},
+                    headers=as_user(tg_id))
+    members = {m["name"]: m["user_id"] for m in client.get("/api/schools/me", headers=as_user(701)).json()["school"]["members"]}
+    client.put(f"/api/classes/{cid}/curator", json={"user_id": members["Ustoz Kimyo"]}, headers=as_user(701))
+
+    math = client.post(f"/api/classes/{cid}/attendance", json={"subject": "Matematika"}, headers=as_user(702)).json()
+    bio = client.post(f"/api/classes/{cid}/attendance", json={"subject": "Biologiya"}, headers=as_user(703)).json()
+
+    seen = lambda tg: {a["id"] for a in client.get(f"/api/classes/{cid}", headers=as_user(tg)).json()["attendances"]}
+    assert seen(703) == {bio["id"]}, seen(703)
+    assert seen(702) == {math["id"]}
+    assert seen(704) == {math["id"], bio["id"]}  # kurator
+    assert seen(701) == {math["id"], bio["id"]}  # admin
+    assert client.get(f"/api/attendance/{math['id']}", headers=as_user(703)).status_code == 403
+    assert client.get(f"/api/attendance/{math['id']}", headers=as_user(704)).status_code == 200
+
+
+def test_oqish_tolovlari():
+    """Oylik summa, chegirma, qisman to'lov, ortiqcha to'lovni rad etish, bekor qilish (o'chirilmaydi), ruxsatlar."""
+    reset_database()
+    school_class = _school_with_class()
+    cid = school_class["id"]
+    sid = client.post(f"/api/classes/{cid}/students", json={"full_name": "Ali Valiyev"}, headers=as_user(701)).json()["students"][0]["id"]
+    school = client.get("/api/schools/me", headers=as_user(701)).json()["school"]
+    _set_name(702, "Oddiy", "Ustoz")
+    client.post("/api/schools/join", json={"phone": "901234567", "code": current_code(school), "subjects": ["Fizika"]}, headers=as_user(702))
+    month = main._current_month()
+
+    # Summa belgilanmaguncha to'lov qabul qilinmaydi; summani oddiy o'qituvchi belgilay olmaydi
+    assert client.post(f"/api/classes/{cid}/students/{sid}/payments", json={"month": month, "amount": 1000},
+                       headers=as_user(701)).status_code == 422
+    assert client.put("/api/schools/fee", json={"monthly_fee": 1_000_000}, headers=as_user(702)).status_code == 403
+    assert client.put("/api/schools/fee", json={"monthly_fee": 1_000_000}, headers=as_user(701)).json()["school"]["monthly_fee"] == 1_000_000
+
+    # Oddiy o'qituvchi to'lovlarni ko'rmaydi
+    assert client.get(f"/api/classes/{cid}/payments", headers=as_user(702)).status_code == 403
+
+    # 30% chegirma → 700 000; qisman to'lov va qoldiq
+    info = client.put(f"/api/classes/{cid}/students/{sid}/discount", json={"percent": 30}, headers=as_user(701)).json()
+    assert info["due"] == 700_000, info
+    first = client.post(f"/api/classes/{cid}/students/{sid}/payments", json={"month": month, "amount": 350_000, "method": "card"},
+                        headers=as_user(701)).json()
+    assert first["payment"]["receipt_no"] == 1 and first["months"][0]["remaining"] == 350_000, first
+    too_much = client.post(f"/api/classes/{cid}/students/{sid}/payments", json={"month": month, "amount": 400_000}, headers=as_user(701))
+    assert too_much.status_code == 422 and "350 000" in too_much.text, too_much.text
+
+    status = client.get(f"/api/classes/{cid}/payments", headers=as_user(701)).json()
+    assert status["students"][0]["status"] == "partial" and status["totals"]["debtors"] == 1, status
+    reminder = client.get(f"/api/classes/{cid}/students/{sid}/reminder", headers=as_user(701)).json()["text"]
+    assert "hurmatli ota-ona" in reminder and "350 000 so'm" in reminder, reminder
+    debtors = client.get(f"/api/classes/{cid}/debtors", headers=as_user(701)).json()["text"]
+    assert "Ali Valiyev — 350 000 so'm" in debtors, debtors
+
+    second = client.post(f"/api/classes/{cid}/students/{sid}/payments", json={"month": month, "amount": 350_000},
+                         headers=as_user(701)).json()
+    assert second["payment"]["receipt_no"] == 2 and second["months"][0]["status"] == "paid", second
+    receipt = client.get(f"/api/payments/{second['payment']['id']}/receipt", headers=as_user(701))
+    assert receipt.status_code == 200 and receipt.content[1:4] == b"PNG"
+
+    # Bekor qilish: to'lov tarixda qoladi, qarz qaytadi
+    cancelled = client.post(f"/api/payments/{second['payment']['id']}/cancel", json={"reason": "Xato kiritildi"},
+                            headers=as_user(701)).json()
+    assert cancelled["months"][0]["remaining"] == 350_000 and len(cancelled["payments"]) == 2, cancelled
+    assert cancelled["payments"][0]["cancelled"] and cancelled["payments"][0]["cancel_reason"] == "Xato kiritildi"
+    summary = client.get("/api/schools/payments/summary", headers=as_user(701)).json()
+    assert summary["totals"]["paid"] == 350_000 and summary["totals"]["remaining"] == 350_000, summary
+    assert client.get("/api/schools/payments/summary", headers=as_user(702)).status_code == 403
+
+
 def test_davomat_matn_rasm_va_pdf():
     reset_database()
     school_class = _school_with_class()
