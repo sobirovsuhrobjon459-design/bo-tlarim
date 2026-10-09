@@ -3932,33 +3932,6 @@ async function refreshHomeInBackground() {
   }
 }
 
-// 🎁 Promo kod — o'qituvchi kiritadi va kredit oladi
-function openPromoSheet() {
-  const { sheet, close } = openSheet(`
-    <h3 style="margin:0 0 6px">🎁 Promo kod</h3>
-    <p class="subtitle" style="margin:0 0 10px">Kodni kiriting — kredit hisobingizga qo'shiladi.</p>
-    <input class="input" id="promo-code-input" placeholder="Promo kod" maxlength="40" autocomplete="off"
-           style="text-transform:uppercase;letter-spacing:2px;text-align:center;font-size:18px" />
-    <button class="btn" id="promo-code-submit" style="margin-top:12px">✅ Faollashtirish</button>
-    <button class="btn btn-ghost" data-sheet-close>Yopish</button>
-  `);
-  const input = sheet.querySelector("#promo-code-input");
-  setTimeout(() => input.focus(), 250);
-  const submit = guarded(async () => {
-    const code = input.value.trim();
-    if (code.length < 3) throw new Error("Promo kodni kiriting");
-    const result = await api("/api/teacher/promo", { method: "POST", body: { code } });
-    close();
-    showToast(`🎉 +${formatNumber(result.credits_added)} kredit! Hozir: ${formatNumber(result.credits)} ta`);
-    telegram?.HapticFeedback?.notificationOccurred?.("success");
-    renderTeacherDashboard();
-  });
-  sheet.querySelector("#promo-code-submit").addEventListener("click", submit);
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") submit(event);
-  });
-}
-
 async function renderAdminDashboard() {
   const [stats, topStudents, withdrawalRequests, teachers, cardTopUps, promoCodes] = await Promise.all([
     api("/api/admin/stats"),
@@ -4114,6 +4087,7 @@ async function renderAdminDashboard() {
       <div class="card-body" style="width:100%">
         <p style="margin:0 0 8px">Kod yarating — o'qituvchi kiritsa, kredit oladi (har kim bir marta).</p>
         <input class="input" id="promo-new-code" placeholder="Kod, masalan BAHOR2026" maxlength="40" style="text-transform:uppercase" />
+        <p class="subtitle" style="margin:4px 0 8px">O'qituvchi kodni «Kredit sotib olish» dagi son maydoniga yozadi. Faqat raqamli kod kamida 7 xonali bo'lsin.</p>
         <div class="two-fields">
           <input class="input" id="promo-new-credits" type="number" min="1" value="3000" placeholder="Kredit" />
           <input class="input" id="promo-new-limit" type="number" min="1" placeholder="Necha kishi (cheksiz)" />
@@ -5115,7 +5089,6 @@ function drawTeacherDashboard(me, stats, tests) {
         <div class="row-between"><span>🎫 Kredit balansi</span><b>${stats.credits} ta</b></div>
         <p>Har bir o'quvchi natijasi uchun 1 kredit sarflanadi (bepul testlarda)</p>
         <button class="btn btn-ghost" id="buy-credit-button">🛒 Kredit sotib olish</button>
-        <button class="btn btn-ghost" id="promo-code-button">🎁 Promo kod kiritish</button>
       </div>
     </div>
     <button class="btn" id="new-test-button" style="margin-top:18px">➕ Yangi test yaratish</button>
@@ -5133,7 +5106,6 @@ function drawTeacherDashboard(me, stats, tests) {
   );
   document.getElementById("withdraw-button").addEventListener("click", guarded(renderWithdrawalForm));
   document.getElementById("buy-credit-button").addEventListener("click", guarded(renderCreditPurchaseForm));
-  document.getElementById("promo-code-button").addEventListener("click", openPromoSheet);
   document.getElementById("new-test-button").addEventListener("click", () => renderNewTestForm("rash"));
 
   // Tab almashganda faqat ro'yxat qayta chiziladi — testlar allaqachon
@@ -5353,8 +5325,10 @@ async function renderCreditPurchaseForm() {
     <button class="back-button" data-action="dashboard">←</button>
     <h2>Kredit sotib olish</h2>
     <p class="subtitle">Joriy kredit: <b>${formatNumber(balanceInfo.credits)} ta</b>. Necha dona sotib olmoqchisiz?</p>
-    <input class="input" id="credit-count-input" type="number" min="1" placeholder="Kredit miqdori" value="50" />
-    <p class="subtitle">Jami narx: <b id="credit-price-preview">—</b></p>
+    <input class="input" id="credit-count-input" type="text" inputmode="numeric" autocomplete="off"
+           placeholder="Kredit miqdori" value="50" />
+    <p class="subtitle" id="credit-price-line">Jami narx: <b id="credit-price-preview">—</b></p>
+    <button class="btn" id="redeem-promo-button" style="margin:4px 0 14px" hidden>🎁 Kodni faollashtirish</button>
     <div class="card" style="cursor:default">
       <div class="card-body">
         <h3>Narxlash tizimi</h3>
@@ -5375,7 +5349,33 @@ async function renderCreditPurchaseForm() {
   const pricePreview = document.getElementById("credit-price-preview");
   const cardAmount = document.getElementById("card-amount");
 
+  /*
+    Shu maydonga promo kod ham yoziladi: harf qatnashsa yoki 7 xonadan uzun
+    bo'lsa — bu miqdor emas (eng ko'pi 100 000), promo kod deb olinadi.
+  */
+  const promoButton = document.getElementById("redeem-promo-button");
+  const priceLine = document.getElementById("credit-price-line");
+  const looksLikePromo = (value) => /[a-z]/i.test(value) || value.replace(/\s/g, "").length >= 7;
+  const redeemPromo = guarded(async () => {
+    const code = creditInput.value.trim();
+    const result = await api("/api/teacher/promo", { method: "POST", body: { code } });
+    telegram?.HapticFeedback?.notificationOccurred?.("success");
+    showToast(`🎉 +${formatNumber(result.credits_added)} kredit! Hozir: ${formatNumber(result.credits)} ta`);
+    await renderCreditPurchaseForm();
+  });
+  promoButton.addEventListener("click", redeemPromo);
+  creditInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && looksLikePromo(creditInput.value)) redeemPromo(event);
+  });
+
   const updatePricePreview = guarded(async () => {
+    const isPromo = looksLikePromo(creditInput.value);
+    promoButton.hidden = !isPromo;
+    priceLine.hidden = isPromo;
+    if (isPromo) {
+      if (cardAmount) cardAmount.textContent = "—";
+      return;
+    }
     const credits = Number(creditInput.value) || 0;
     if (credits < 1) {
       pricePreview.textContent = "—";
@@ -5393,6 +5393,7 @@ async function renderCreditPurchaseForm() {
   updatePricePreview();
 
   const readCredits = () => {
+    if (looksLikePromo(creditInput.value)) throw new Error("Bu promo kod — «Kodni faollashtirish» ni bosing");
     const credits = Number(creditInput.value) || 0;
     if (credits < 1) throw new Error("Kredit sonini kiriting");
     return credits;

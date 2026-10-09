@@ -1313,6 +1313,10 @@ def test_promo_kod():
     assert client.post("/api/teacher/promo", json={"code": "BAHOR2026"}, headers=as_user(777)).status_code == 409
     assert credits_of(777) == start + 3000
 
+    # Faqat raqamli qisqa kod — miqdor bilan adashmasligi uchun rad etiladi
+    assert client.post("/api/admin/promo-codes", json={"code": "2026"}, headers=as_user(4242)).status_code == 422
+    assert client.post("/api/admin/promo-codes", json={"code": "2026123"}, headers=as_user(4242)).status_code == 200
+
     # Chegaralangan kod: 1 kishilik
     client.post("/api/admin/promo-codes", json={"code": "BIRTA", "credits": 500, "max_uses": 1}, headers=as_user(4242))
     register_teacher(tg_id=778)

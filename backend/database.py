@@ -919,6 +919,9 @@ class PromoCreateIn(BaseModel):
         self.code = re.sub(r"\s", "", self.code).upper()
         if not re.fullmatch(r"[A-Z0-9_-]{4,40}", self.code):
             raise ValueError("Kod faqat harf, raqam, - va _ dan iborat bo'lsin (4-40 belgi)")
+        # Kod kredit miqdori maydoniga yoziladi: faqat raqamli kod miqdor bilan adashmasligi kerak
+        if self.code.isdigit() and len(self.code) < 7:
+            raise ValueError("Faqat raqamdan iborat kod kamida 7 xonali bo'lsin (yoki harf qo'shing)")
         return self
 
 
