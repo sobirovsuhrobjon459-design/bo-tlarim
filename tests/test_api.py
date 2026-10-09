@@ -1140,6 +1140,40 @@ def test_xodimlar_telefon_raqami():
     assert client.put("/api/schools/me/profile", json={"subjects": []}, headers=as_user(703)).status_code == 422
 
 
+def test_xodim_tugilgan_sana_va_pasport():
+    """Tug'ilgan sana va pasport saqlanadi; faqat rahbariyat ko'radi; yuborilmagan maydon o'chmaydi."""
+    reset_database()
+    _set_name(701, "Maktab", "Admini")
+    school = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                               "name": "Pasport maktabi", "phone": "901112233"}, headers=as_user(701)).json()["school"]
+    _set_name(702, "Ustoz", "Birinchi")
+    _set_name(703, "Ustoz", "Ikkinchi")
+    bad = client.post("/api/schools/join", json={"phone": "901234567", "code": current_code(school), "subjects": ["Fizika"],
+                                                 "passport": "12345"}, headers=as_user(702))
+    assert bad.status_code == 422, bad.text
+    joined = client.post("/api/schools/join", json={"phone": "901234567", "code": current_code(school), "subjects": ["Fizika"],
+                                                    "birth_date": "1990-05-17", "passport": "aa 1234567"}, headers=as_user(702))
+    assert joined.status_code == 200, joined.text
+    me = joined.json()["school"]
+    assert me["my_birth_date"] == "1990-05-17" and me["my_passport"] == "AA1234567", me
+    client.post("/api/schools/join", json={"phone": "901234568", "code": current_code(school), "subjects": ["Fizika"]}, headers=as_user(703))
+
+    # Oddiy o'qituvchi boshqaning sanasi/pasportini ko'rmaydi
+    others = {m["name"]: m for m in client.get("/api/schools/me", headers=as_user(703)).json()["school"]["members"]}
+    assert others["Ustoz Birinchi"]["passport"] is None and others["Ustoz Birinchi"]["birth_date"] is None
+    # Admin ko'radi
+    seen = {m["name"]: m for m in client.get("/api/schools/me", headers=as_user(701)).json()["school"]["members"]}
+    assert seen["Ustoz Birinchi"]["passport"] == "AA1234567" and seen["Ustoz Birinchi"]["birth_date"] == "1990-05-17"
+
+    # Profilni faqat fan bilan saqlash pasportni o'chirmaydi; aniq bo'sh yuborilsa — o'chadi
+    kept = client.put("/api/schools/me/profile", json={"subjects": ["Fizika"]}, headers=as_user(702)).json()["school"]
+    assert kept["my_passport"] == "AA1234567", kept
+    cleared = client.put("/api/schools/me/profile", json={"subjects": ["Fizika"], "passport": ""}, headers=as_user(702)).json()["school"]
+    assert cleared["my_passport"] is None, cleared
+    future = client.put("/api/schools/me/profile", json={"subjects": ["Fizika"], "birth_date": "2999-01-01"}, headers=as_user(702))
+    assert future.status_code == 422
+
+
 def test_xodimni_faqat_admin_chiqaradi():
     """Admin/direktor xodimni chiqaradi (yozuv qoladi, kuratorlik bo'shaydi); oddiy o'qituvchi chiqara olmaydi."""
     reset_database()

@@ -123,15 +123,19 @@ def get_current_user(
     user = db.scalar(select(User).where(User.tg_id == telegram_user["id"]))
 
     username = (telegram_user.get("username") or "").strip() or None
+    photo_url = (telegram_user.get("photo_url") or "").strip()[:500] or None
 
     if not user:
         full_name = f'{telegram_user.get("first_name", "")} {telegram_user.get("last_name", "")}'.strip()
-        user = User(tg_id=telegram_user["id"], full_name=full_name, username=username)
+        user = User(tg_id=telegram_user["id"], full_name=full_name, username=username, photo_url=photo_url)
         db.add(user)
         db.commit()
         db.refresh(user)
-    elif x_init_data and user.username != username:
+    elif x_init_data and (user.username != username or (photo_url and user.photo_url != photo_url)):
+        # Username va profil rasmi har kirishda yangilanadi
         user.username = username
+        if photo_url:
+            user.photo_url = photo_url
         db.commit()
 
     return user

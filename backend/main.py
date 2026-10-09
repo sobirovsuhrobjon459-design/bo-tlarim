@@ -144,9 +144,9 @@ def _add_missing_columns() -> None:
             "deleted_at": "TIMESTAMP",
         },
         "test_attempts": {"offline_name": "VARCHAR(200)", "saved_answers": "TEXT"},
-        "users": {"username": "VARCHAR(64)"},
+        "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)"},
         "school_classes": {"curator_user_id": "INTEGER"},
-        "school_members": {"position": "VARCHAR(20)", "phone": "VARCHAR(20)"},
+        "school_members": {"position": "VARCHAR(20)", "phone": "VARCHAR(20)", "birth_date": "DATE", "passport": "VARCHAR(20)"},
         "attendances": {
             "lesson_start": "VARCHAR(5)",
             "lesson_end": "VARCHAR(5)",
@@ -3380,6 +3380,15 @@ def school_invite_link(code: str) -> str | None:
 def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
     school = member.school
     members = [item for item in school.members if item.left_at is None]
+    leader = _is_director(member)
+    # Kim qaysi sinfning kuratori — xodim ma'lumotida ko'rsatish uchun
+    curator_of: dict[int, list[str]] = {}
+    for class_name, curator_id in db.execute(
+        select(SchoolClass.name, SchoolClass.curator_user_id).where(
+            SchoolClass.school_id == school.id, SchoolClass.deleted_at.is_(None), SchoolClass.curator_user_id.is_not(None)
+        )
+    ):
+        curator_of.setdefault(curator_id, []).append(class_name)
     # Avval egasi, keyin qo'shilish tartibida
     # Avval admin, keyin direktor, zam direktor, so'ng qo'shilish tartibida
     rank = {"director": 1, "deputy": 2}
@@ -3396,6 +3405,8 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         "my_role": member.role,
         "my_position": member.position,
         "my_phone": member.phone,
+        "my_birth_date": member.birth_date,
+        "my_passport": member.passport,
         # Xodimlarning telefon raqamlarini faqat rahbariyat ko'radi
         "can_see_phones": _is_director(member),
         "is_leader": _is_director(member),
@@ -3410,7 +3421,13 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
                 "subjects": _read_subjects(item),
                 "role": item.role,
                 "position": item.position,
-                "phone": item.phone if (_is_director(member) or item.user_id == user.id) else None,
+                # Shaxsiy ma'lumotlar — faqat rahbariyatga (va xodimning o'ziga)
+                "phone": item.phone if (leader or item.user_id == user.id) else None,
+                "birth_date": item.birth_date if (leader or item.user_id == user.id) else None,
+                "passport": item.passport if (leader or item.user_id == user.id) else None,
+                "photo_url": item.user.photo_url if item.user else None,
+                "username": item.user.username if item.user else None,
+                "curator_of": curator_of.get(item.user_id, []),
                 "joined_at": item.joined_at,
                 "is_me": item.user_id == user.id,
             }
@@ -3634,7 +3651,15 @@ def create_school(body: SchoolCreateIn, user: User = Depends(get_current_user), 
     db.flush()
 
     # Maktabni ochgan — DIREKTOR. U fan o'qituvchisi emas, fanlari bo'lmaydi.
-    member = SchoolMember(school_id=school.id, user_id=user.id, role="owner", subjects="[]", phone=body.phone)
+    member = SchoolMember(
+        school_id=school.id,
+        user_id=user.id,
+        role="owner",
+        subjects="[]",
+        phone=body.phone,
+        birth_date=body.birth_date,
+        passport=body.passport,
+    )
     db.add(member)
     db.commit()
     db.refresh(member)
@@ -3713,6 +3738,8 @@ def _join_as_teacher(db: Session, user: User, school: PrivateSchool, body) -> Sc
         role="teacher",
         subjects=json.dumps(body.subjects, ensure_ascii=False),
         phone=body.phone,
+        birth_date=body.birth_date,
+        passport=body.passport,
     )
     db.add(member)
     if curator_class:
@@ -3913,6 +3940,11 @@ def update_school_profile(body: SchoolProfileIn, user: User = Depends(get_curren
         member.phone = body.phone
     elif not member.phone:
         raise HTTPException(status_code=422, detail="Telefon raqamingizni kiriting — bu majburiy")
+    # Faqat yuborilgan maydonlar o'zgaradi (yuborilmagani o'chib ketmasin)
+    if "birth_date" in body.model_fields_set:
+        member.birth_date = body.birth_date
+    if "passport" in body.model_fields_set:
+        member.passport = body.passport
 
     member.subjects = json.dumps(body.subjects, ensure_ascii=False)
     db.commit()

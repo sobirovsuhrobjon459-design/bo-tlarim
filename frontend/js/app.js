@@ -2374,16 +2374,43 @@ async function profileNameFieldsHtml() {
   Telefon raqam — har bir xodim uchun majburiy (rahbariyat ko'radi).
   Telegram'dan bitta bosishda olish ham mumkin.
 */
-function phoneFieldHtml(value = "") {
+function phoneFieldHtml(value = "", { birthDate = "", passport = "" } = {}) {
   return `
     <label class="field-label" for="profile-phone">Telefon raqamingiz <span class="required-mark">*</span></label>
     <div class="phone-field">
       <input class="input" id="profile-phone" type="tel" inputmode="tel" placeholder="+998 90 123 45 67"
-             value="${escapeHtml(value ? formatPhone(value) : "")}" />
+             value="${escapeHtml(value ? formatPhone(value) : "+998 ")}" />
       ${telegram?.requestContact ? `<button type="button" class="share-pill" id="phone-from-telegram">📱 Telegram'dan</button>` : ""}
     </div>
-    <p class="subtitle" style="margin:4px 0 0">Raqamingizni faqat maktab rahbariyati ko'radi.</p>`;
+
+    <label class="field-label" for="profile-birth-date">Tug'ilgan sanangiz <span class="required-mark">*</span></label>
+    <input class="input" id="profile-birth-date" type="date" min="1930-01-01" max="${new Date().toISOString().slice(0, 10)}"
+           value="${escapeHtml(birthDate || "")}" />
+
+    <label class="field-label" for="profile-passport">Pasport seriya va raqami <span class="subtitle">(ixtiyoriy, lekin kerakli)</span></label>
+    <input class="input" id="profile-passport" placeholder="AA1234567" maxlength="11"
+           style="text-transform:uppercase;letter-spacing:1px" value="${escapeHtml(passport || "")}" />
+    <p class="subtitle" style="margin:4px 0 0">🔒 Telefon, tug'ilgan sana va pasportni faqat maktab rahbariyati ko'radi.</p>`;
 }
+
+// Telefon, tug'ilgan sana va pasport — formadan o'qib, tekshiradi
+function readStaffFieldsOrThrow() {
+  const phone = readPhoneOrThrow();
+  const birthDate = document.getElementById("profile-birth-date")?.value || "";
+  if (!birthDate) throw new Error("Tug'ilgan sanangizni kiriting");
+  const passport = (document.getElementById("profile-passport")?.value || "").replace(/\s/g, "").toUpperCase();
+  if (passport && !/^[A-Z]{2}\d{7}$/.test(passport)) throw new Error("Pasport seriya va raqami noto'g'ri (masalan AA1234567)");
+  return { phone, birth_date: birthDate, passport };
+}
+
+// "+998 " o'chirib yuborilsa — qaytadan qo'yiladi
+// Kursor oxirga qo'yiladi — raqam "+998" dan keyin yoziladi
+document.addEventListener("focusin", (event) => {
+  const input = event.target;
+  if (input.id !== "profile-phone") return;
+  if (!input.value.trim()) input.value = "+998 ";
+  setTimeout(() => input.setSelectionRange(input.value.length, input.value.length), 0);
+});
 
 function formatPhone(phone) {
   const digits = String(phone || "").replace(/\D/g, "");
@@ -2491,11 +2518,11 @@ async function renderCreateSchool() {
       if (!district) throw new Error("Tumanni tanlang");
       const name = document.getElementById("school-name-input").value.trim();
       if (name.length < 2) throw new Error("Maktab nomini kiriting");
-      const phone = readPhoneOrThrow();
+      const staff = readStaffFieldsOrThrow();
       await saveProfileName();
       const { school } = await api("/api/schools", {
         method: "POST",
-        body: { region, district, name, subjects: [], phone },
+        body: { region, district, name, subjects: [], ...staff },
       });
 
       showToast(`✅ Maktab ochildi! Kodi: ${school.code}`);
@@ -2673,7 +2700,7 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
       const classSelect = document.getElementById("curator-class-select");
       const curatorClassId = isCurator && classSelect ? Number(classSelect.value) || null : null;
       if (isCurator && classSelect && !curatorClassId) throw new Error("Qaysi sinfning kuratori ekaningizni tanlang");
-      const phone = readPhoneOrThrow();
+      const staff = readStaffFieldsOrThrow();
 
       const confirmed = await askConfirm(
         "Maktabga qo'shilasizmi? Siz shu maktabda qolasiz — chiqish uchun ham maktab kodi kerak bo'ladi."
@@ -2683,7 +2710,7 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
       await saveProfileName();
       const { school } = await api("/api/schools/join", {
         method: "POST",
-        body: { code, subjects, phone, school_id: target ? target.id : null, is_curator: isCurator, curator_class_id: curatorClassId },
+        body: { code, subjects, ...staff, school_id: target ? target.id : null, is_curator: isCurator, curator_class_id: curatorClassId },
       });
       showToast(`✅ "${school.name}" maktabiga qo'shildingiz`);
       renderMySchool(school);
@@ -2717,6 +2744,16 @@ function isLeader(school) {
 
 function avatarLetter(name) {
   return escapeHtml((name || "?").trim().charAt(0).toUpperCase());
+}
+
+// Xodim rasmi (Telegram profil rasmi) yoki bosh harfi
+function memberAvatarHtml(member, size = 38) {
+  const style = `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.4)}px`;
+  if (member?.photo_url) {
+    return `<div class="member-avatar" style="${style}"><img src="${escapeHtml(member.photo_url)}" alt="" loading="lazy"
+              onerror="this.replaceWith(document.createTextNode('${avatarLetter(member.name)}'))" /></div>`;
+  }
+  return `<div class="member-avatar" style="${style}">${avatarLetter(member?.name)}</div>`;
 }
 
 /* ---------- Maktab bo'limi: pastki menyu (Maktab · Profil) ---------- */
@@ -2919,8 +2956,8 @@ function renderSchoolTeachers(school) {
   const memberRows = school.members
     .map(
       (member) => `
-        <div class="member-line${canManage && member.role !== "owner" && !member.is_me ? " is-tappable" : ""}" data-member-id="${member.user_id}">
-          <div class="member-avatar">${avatarLetter(member.name)}</div>
+        <div class="member-line is-tappable" data-member-id="${member.user_id}">
+          ${memberAvatarHtml(member)}
           <div class="member-info">
             <b>${escapeHtml(member.name)}${member.is_me ? " (siz)" : ""}</b>
             <small>${member.role === "owner" ? "Maktab admini" : subjectsText(member.subjects)}</small>
@@ -2943,9 +2980,9 @@ function renderSchoolTeachers(school) {
       <div class="panel" style="padding:4px 0">${memberRows}</div>
       ${
         canManage && school.members.length > 1
-          ? `<p class="subtitle" style="margin:8px 4px 0">${
-              canAssign ? "Xodimni bosib, lavozim bering yoki maktabdan chiqaring." : "Xodimni bosib, maktabdan chiqarishingiz mumkin."
-            }</p>`
+          ? `<p class="subtitle" style="margin:8px 4px 0">Xodimni bosing — ma'lumotlari va bog'lanish${
+              canAssign ? ", lavozim berish" : ""
+            }.</p>`
           : ""
       }
       ${
@@ -2962,16 +2999,80 @@ function renderSchoolTeachers(school) {
 
   wireSchoolSubPage();
   document.getElementById("invite-teacher-button")?.addEventListener("click", guarded(inviteTeacher));
-  if (canManage) {
+  {
     document.querySelectorAll(".member-line.is-tappable").forEach((line) => {
       const member = school.members.find((item) => item.user_id === Number(line.dataset.memberId));
       line.addEventListener("click", (event) => {
         if (event.target.closest(".member-phone")) return; // raqam bosilsa — qo'ng'iroq
-        openPositionSheet(member, { canAssign });
+        renderStaffDetail(member);
       });
     });
   }
   refreshSchoolInBackground("teachers");
+}
+
+/*
+  Xodim haqida to'liq ma'lumot: rasm, lavozim, fanlar, kurator sinfi va
+  (rahbariyatga) telefon, tug'ilgan sana, pasport. Pastda — bog'lanish:
+  qo'ng'iroq va Telegram. Admin/direktor shu yerdan lavozim beradi va chiqaradi.
+*/
+function renderStaffDetail(member) {
+  const school = currentSchool;
+  const canAssign = isOwner(school) && member.role !== "owner" && !member.is_me;
+  const canRemove = (isOwner(school) || school.can_remove_members) && member.role !== "owner" && !member.is_me;
+  const showPrivate = school.can_see_phones || member.is_me;
+  const role = member.role === "owner" ? "Maktab admini" : { director: "Direktor", deputy: "Zam direktor" }[member.position] || "O'qituvchi";
+  const telegramLink = member.username ? `https://t.me/${member.username}` : member.phone ? `https://t.me/${member.phone}` : "";
+  const row = (label, value) =>
+    `<div class="row-between"><span class="subtitle" style="margin:0">${label}</span><b style="text-align:right">${value}</b></div>`;
+  const missing = `<span class="muted-value">Kiritilmagan</span>`;
+
+  showPage(`
+    ${schoolPageHeader("Xodim", "back-staff")}
+    <div class="staff-hero">
+      ${memberAvatarHtml(member, 84)}
+      <h2 style="margin:10px 0 4px">${escapeHtml(member.name)}${member.is_me ? " (siz)" : ""}</h2>
+      ${roleBadge(member.role, member.position) || `<span class="badge badge-blue">O'qituvchi</span>`}
+    </div>
+
+    <div class="panel profile-facts">
+      ${row("Lavozim", role)}
+      ${member.role === "owner" ? "" : row("Fanlar", subjectsText(member.subjects))}
+      ${member.curator_of?.length ? row("Kurator", member.curator_of.map(escapeHtml).join(", ")) : ""}
+      ${
+        showPrivate
+          ? `${row("Telefon", member.phone ? escapeHtml(formatPhone(member.phone)) : missing)}
+             ${row("Tug'ilgan sana", member.birth_date ? formatDate(member.birth_date) : missing)}
+             ${row("Pasport", member.passport ? escapeHtml(member.passport) : missing)}`
+          : ""
+      }
+      ${row("Qo'shilgan", formatDate(member.joined_at))}
+    </div>
+    ${showPrivate ? "" : `<p class="subtitle" style="margin:8px 4px 0">🔒 Shaxsiy ma'lumotlarni faqat maktab rahbariyati ko'radi.</p>`}
+
+    ${
+      member.is_me
+        ? ""
+        : `<p class="section-label" style="margin-top:18px">BOG'LANISH</p>
+           <div class="contact-actions">
+             ${showPrivate && member.phone ? `<a class="btn" href="tel:${escapeHtml(member.phone)}">📞 Qo'ng'iroq</a>` : ""}
+             ${telegramLink ? `<button class="btn btn-ghost" id="staff-telegram">✈️ Telegram'da yozish</button>` : ""}
+           </div>
+           ${!telegramLink && !(showPrivate && member.phone) ? `<p class="subtitle" style="margin:0">Bog'lanish ma'lumoti yo'q.</p>` : ""}`
+    }
+
+    ${canAssign || canRemove ? `<button class="btn btn-ghost" id="staff-manage" style="margin-top:16px">⚙️ ${canAssign ? "Lavozim va boshqaruv" : "Boshqaruv"}</button>` : ""}
+  `);
+
+  document.querySelector('[data-action="back-staff"]').addEventListener("click", () => renderSchoolTeachers(currentSchool));
+  document.getElementById("staff-telegram")?.addEventListener("click", () => openExternalLink(telegramLink));
+  document.getElementById("staff-manage")?.addEventListener("click", () => openPositionSheet(member, { canAssign }));
+}
+
+function formatDate(isoDate) {
+  if (!isoDate) return "";
+  const [year, month, day] = String(isoDate).slice(0, 10).split("-");
+  return `${day}.${month}.${year}`;
 }
 
 /*
@@ -3165,12 +3266,12 @@ async function renderInviteJoin(token) {
       const classSelect = document.getElementById("curator-class-select");
       const curatorClassId = isCurator && classSelect ? Number(classSelect.value) || null : null;
       if (isCurator && classSelect && !curatorClassId) throw new Error("Qaysi sinfning kuratori ekaningizni tanlang");
-      const phone = readPhoneOrThrow();
+      const staff = readStaffFieldsOrThrow();
 
       await saveProfileName();
       const { school } = await api(`/api/schools/invites/${encodeURIComponent(token)}/accept`, {
         method: "POST",
-        body: { subjects, phone, is_curator: isCurator, curator_class_id: curatorClassId },
+        body: { subjects, ...staff, is_curator: isCurator, curator_class_id: curatorClassId },
       });
       showToast(`✅ «${school.name}» maktabiga qo'shildingiz`);
       renderMySchool(school);
@@ -3186,7 +3287,7 @@ function renderSchoolProfile(school) {
     <div data-school-tab="profile">
       ${schoolTabHeader("Profilim")}
       <div class="card" style="cursor:default">
-        <div class="member-avatar" style="width:52px;height:52px;font-size:20px">${avatarLetter(me && me.name)}</div>
+        ${memberAvatarHtml(me, 52)}
         <div class="card-body" style="width:100%">
           <h3 style="margin:0">${escapeHtml(me ? me.name : "")}</h3>
           <p style="margin:6px 0 0">${roleBadge(school.my_role, school.my_position) || `<span class="badge badge-blue">O'qituvchi</span>`}</p>
@@ -3197,6 +3298,8 @@ function renderSchoolProfile(school) {
         <div class="row-between"><span class="subtitle" style="margin:0">Maktab</span><b>${escapeHtml(school.name)}</b></div>
         <div class="row-between"><span class="subtitle" style="margin:0">${isOwner(school) ? "Lavozim" : "Fanlar"}</span><b>${isOwner(school) ? "Maktab admini" : subjectsText(school.my_subjects)}</b></div>
         <div class="row-between"><span class="subtitle" style="margin:0">Telefon</span><b>${school.my_phone ? escapeHtml(formatPhone(school.my_phone)) : "⚠️ Kiritilmagan"}</b></div>
+        <div class="row-between"><span class="subtitle" style="margin:0">Tug'ilgan sana</span><b>${school.my_birth_date ? formatDate(school.my_birth_date) : "⚠️ Kiritilmagan"}</b></div>
+        <div class="row-between"><span class="subtitle" style="margin:0">Pasport</span><b>${school.my_passport ? escapeHtml(school.my_passport) : "Kiritilmagan"}</b></div>
         <div class="row-between"><span class="subtitle" style="margin:0">Joylashuv</span><b>${escapeHtml(school.district)}</b></div>
       </div>
 
@@ -3232,7 +3335,7 @@ async function renderSchoolProfileEdit(school) {
   showPage(`
     ${schoolPageHeader("Profilim", "back-school")}
     ${nameFields}
-    ${phoneFieldHtml(school.my_phone || "")}
+    ${phoneFieldHtml(school.my_phone || "", { birthDate: school.my_birth_date, passport: school.my_passport })}
     ${
       isOwner(school)
         ? ""
@@ -3255,10 +3358,10 @@ async function renderSchoolProfileEdit(school) {
     "click",
     guarded(async () => {
       const subjects = isOwner(school) ? [] : readSubjectsOrThrow();
-      const phone = readPhoneOrThrow();
+      const staff = readStaffFieldsOrThrow();
 
       await saveProfileName();
-      const { school: updated } = await api("/api/schools/me/profile", { method: "PUT", body: { subjects, phone } });
+      const { school: updated } = await api("/api/schools/me/profile", { method: "PUT", body: { subjects, ...staff } });
       showToast("✅ Profil saqlandi");
       renderSchoolProfile(updated);
     })
