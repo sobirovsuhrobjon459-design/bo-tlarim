@@ -195,6 +195,60 @@ function localTimeToUtcIso(value) {
   return value ? new Date(value).toISOString().slice(0, 19) : null;
 }
 
+/*
+  Ro'yxatdagi kartochkalar (xodimlar, sinflar, o'quvchilar) aylantirilganda
+  ekranga kirib kelishi bilan pastdan silliq chiqadi. Birinchi ko'ringanlar
+  ketma-ket (biroz kechikish bilan) chiqadi.
+*/
+const REVEAL_SELECTOR = ".member-cards .member-line, .class-list .class-row, .student-list .student-card, .school-tiles .school-tile";
+let revealObserver = null;
+let revealBatch = 0; // bir vaqtda ko'ringanlar ketma-ket chiqishi uchun
+
+function revealListItems() {
+  const items = document.querySelectorAll(REVEAL_SELECTOR);
+  if (!items.length) return;
+  if (!("IntersectionObserver" in window) || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  // Bitta kuzatuvchi — qayta chizilganda ham pastdagi kartochkalar "yo'qolib" qolmaydi
+  revealObserver = revealObserver || new IntersectionObserver(
+    (entries) => {
+      entries
+        .filter((entry) => entry.isIntersecting)
+        .forEach((entry) => {
+          const item = entry.target;
+          revealObserver.unobserve(item);
+          item.classList.remove("reveal");
+          // Web Animations — CSS holatiga bog'liq emas, har doim silliq chiqadi
+          item.animate(
+            [
+              { opacity: 0, transform: "translateY(14px) scale(0.98)" },
+              { opacity: 1, transform: "none" },
+            ],
+            { duration: 380, delay: Math.min(revealBatch, 6) * 45, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "backwards" }
+          );
+          revealBatch += 1;
+        });
+      setTimeout(() => {
+        revealBatch = 0;
+      }, 120);
+    },
+    { rootMargin: "0px 0px -20px 0px", threshold: 0.05 }
+  );
+  items.forEach((item) => {
+    if (item.dataset.revealed) return;
+    item.dataset.revealed = "1";
+    item.classList.add("reveal"); // ko'ringuncha yashirin
+    revealObserver.observe(item);
+  });
+}
+
+// Sahifa yoki ro'yxat qayta chizilganda — yangi kartochkalar kuzatiladi
+new MutationObserver(() => {
+  if (document.querySelector(REVEAL_SELECTOR.split(", ").map((s) => `${s}:not([data-revealed])`).join(", "))) {
+    requestAnimationFrame(revealListItems);
+  }
+}).observe(appElement, { childList: true, subtree: true });
+
 function showPage(html) {
   // Menyu avval yashiriladi — kerak bo'lsa, sahifa o'zi qaytadan ko'rsatadi.
   // Ikkalasi bitta qadamda bo'lgani uchun ekranda miltillash sezilmaydi.
@@ -3380,7 +3434,7 @@ function renderSchoolTeachers(school) {
   showPage(`
     <div data-school-tab="teachers">
       ${schoolSubHeader(`Xodimlar (${school.members.length})`)}
-      <div class="panel" style="padding:4px 0">${memberRows}</div>
+      <div class="member-cards">${memberRows}</div>
       ${
         canManage && school.members.length > 1
           ? `<p class="subtitle" style="margin:8px 4px 0">Xodimni bosing — ma'lumotlari va bog'lanish${
