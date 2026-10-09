@@ -1206,7 +1206,12 @@ def test_lavozimlar_direktor_va_zam_direktor():
     created = client.post("/api/classes", json={"name": "1-A"}, headers=as_user(702)).json()
     assert created["is_director"] is True and created["can_delete"] is True, created
     as_deputy = client.get(f"/api/classes/{created['id']}", headers=as_user(703)).json()
-    assert as_deputy["is_director"] is False and as_deputy["can_manage"] is True, as_deputy
+    assert as_deputy["is_director"] is False and as_deputy["can_manage"] is False, as_deputy
+    # O'quvchilarni zam direktor emas — admin, direktor va kurator qo'shadi
+    assert client.post(f"/api/classes/{created['id']}/students", json={"full_name": "Ali Valiyev"},
+                       headers=as_user(703)).status_code == 403
+    assert client.post(f"/api/classes/{created['id']}/students", json={"full_name": "Ali Valiyev"},
+                       headers=as_user(702)).status_code == 200
     assert client.put(f"/api/classes/{created['id']}/curator", json={"user_id": uid[704]}, headers=as_user(703)).status_code == 403
     assert client.post("/api/schools/invites", json={}, headers=as_user(703)).status_code == 200
     assert client.delete(f"/api/classes/{created['id']}", headers=as_user(703)).status_code == 403

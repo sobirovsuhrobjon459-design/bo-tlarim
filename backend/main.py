@@ -4025,8 +4025,8 @@ def _require_head(member: SchoolMember) -> None:
 
 
 def _can_manage_class(school_class: SchoolClass, member: SchoolMember) -> bool:
-    """O'quvchilarni qo'shish/tahrirlash — sinf kuratori yoki admin."""
-    return _is_director(member) or school_class.curator_user_id == member.user_id
+    """O'quvchilarni qo'shish/tahrirlash — admin, direktor yoki o'sha sinfning kuratori."""
+    return _can_delete_classes(member) or school_class.curator_user_id == member.user_id
 
 
 def _require_director(member: SchoolMember) -> None:
@@ -4037,7 +4037,7 @@ def _require_director(member: SchoolMember) -> None:
 def _managed_class(db: Session, user: User, class_id: int) -> SchoolClass:
     school_class, member = _school_class(db, user, class_id)
     if not _can_manage_class(school_class, member):
-        raise HTTPException(status_code=403, detail="O'quvchilarni faqat sinf kuratori qo'sha oladi")
+        raise HTTPException(status_code=403, detail="O'quvchilarni faqat admin, direktor yoki sinf kuratori qo'sha oladi")
     return school_class
 
 

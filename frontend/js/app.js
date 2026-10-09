@@ -906,7 +906,7 @@ function renderSchoolFolder() {
   // Bo'limlar ro'yxati — yangisini qo'shish uchun shu yerga bitta qator yetadi
   // Oxirgi ustun — bo'lim ochilganda nima bo'lishi (hozircha tayyorlari kam)
   const sections = [
-    ["private-school", ROLE_ICONS.privateSchool, "XUSUSIY MAKTAB", "Maktab oching yoki kod bilan qo'shiling", enterPrivateSchool],
+    ["private-school", ROLE_ICONS.privateSchool, "XUSUSIY MAKTAB", "Maktab oching yoki taklif bilan qo'shiling", enterPrivateSchool],
     ["course", ROLE_ICONS.course, "O'QUV KURSLARI", "O'quv markazlari va kurslar", () => renderComingSoon("O'quv kurslari", ROLE_ICONS.course)],
     ["club", ROLE_ICONS.club, "TO'GARAKLAR", "Sport, san'at va boshqa to'garaklar", () => renderComingSoon("To'garaklar", ROLE_ICONS.club)],
   ];
@@ -2947,12 +2947,13 @@ function renderSchoolTeachers(school) {
 /*
   Lavozim tayinlash (faqat admin): Direktor — bitta; Zam direktor — bir nechta.
   Sinf ochish, kurator tayinlash va sinfni o'chirish — faqat admin va direktor;
-  zam direktor o'qituvchi qo'shadi, o'quvchilar va davomatni boshqaradi.
+  zam direktor o'qituvchi qo'shadi va davomatlarni tahrirlaydi. O'quvchilarni
+  admin, direktor va o'sha sinfning kuratori qo'shadi.
 */
 function openPositionSheet(member, { canAssign = true } = {}) {
   const options = [
     { id: "", icon: "👤", title: "O'qituvchi", note: "Davomat oladi, kurator bo'lsa sinfini boshqaradi" },
-    { id: "deputy", icon: "🎖", title: "Zam direktor", note: "O'qituvchi qo'shadi, o'quvchilar va davomatni boshqaradi" },
+    { id: "deputy", icon: "🎖", title: "Zam direktor", note: "O'qituvchi qo'shadi, davomatlarni tahrirlaydi" },
     { id: "director", icon: "🎓", title: "Direktor", note: "Admin ishlari: sinf ochadi, kurator tayinlaydi, sinfni o'chiradi" },
   ];
   const current = member.position || "";
