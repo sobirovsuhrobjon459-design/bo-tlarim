@@ -2511,8 +2511,8 @@ body.keyboard-open .fab {
   color: #d97706;
 }
 
-/* Davomat ichidagi qatnashish foizi */
-.rate-badge {
+/* Davomat va test natijasi ichidagi katta foiz (o'quvchi kartasidagi kichik .rate-badge'ga tegmaydi) */
+.rate-badge-lg {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -2525,21 +2525,21 @@ body.keyboard-open .fab {
   color: #fff;
 }
 
-.rate-badge small {
+.rate-badge-lg small {
   font-size: 11px;
   font-weight: 500;
   opacity: 0.9;
 }
 
-.rate-badge.good {
+.rate-badge-lg.good {
   background: #16a34a;
 }
 
-.rate-badge.mid {
+.rate-badge-lg.mid {
   background: #d97706;
 }
 
-.rate-badge.low {
+.rate-badge-lg.low {
   background: #dc2626;
 }
 

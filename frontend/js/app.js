@@ -1954,7 +1954,7 @@ async function renderClassTestDetail(testId, schoolClass, onBack = null) {
           <p class="subtitle" style="margin:2px 0 0">👤 Kiritgan: <b>${escapeHtml(test.teacher_name)}</b></p>
           <p class="subtitle" style="margin:2px 0 0">👥 Qatnashdi: ${test.participants} / ${test.total}</p>
         </div>
-        <div class="rate-badge ${(test.average_percent ?? 0) >= 86 ? "good" : (test.average_percent ?? 0) >= 56 ? "mid" : "low"}">${test.average_percent ?? 0}%<small>o'rtacha</small></div>
+        <div class="rate-badge-lg ${(test.average_percent ?? 0) >= 86 ? "good" : (test.average_percent ?? 0) >= 56 ? "mid" : "low"}">${test.average_percent ?? 0}%<small>o'rtacha</small></div>
       </div>
     </div>
 
@@ -2410,7 +2410,7 @@ async function renderAttendanceDetail(attendanceId, schoolClass) {
           ${attendance.teacher_name ? `<p class="subtitle" style="margin:2px 0 0">👤 O'qituvchi: <b>${escapeHtml(attendance.teacher_name)}</b></p>` : ""}
           ${attendance.updated_at ? `<p class="subtitle" style="margin:2px 0 0">✏️ Tahrirlangan: ${formatDateTime(attendance.updated_at)}</p>` : ""}
         </div>
-        <div class="rate-badge ${rate >= 90 ? "good" : rate >= 70 ? "mid" : "low"}">${rate}%<small>qatnashdi</small></div>
+        <div class="rate-badge-lg ${rate >= 90 ? "good" : rate >= 70 ? "mid" : "low"}">${rate}%<small>qatnashdi</small></div>
       </div>
       ${attendanceCountsHtml(attendance.counts)}
     </div>
