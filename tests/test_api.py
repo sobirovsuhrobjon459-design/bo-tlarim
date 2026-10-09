@@ -63,6 +63,7 @@ def reset_database() -> None:
     main._school_code_failures.clear()  # noto'g'ri kod urinishlari hisobi ham tozalanadi
     main._code_requests.clear()
     main._bot_username_cache = "test_platform_bot"  # Telegram'ga so'rov ketmasin
+    main.DEFAULT_REQUIRED_CHANNELS = []  # adminlar kanali — alohida testda tekshiriladi
 
 
 def as_user(tg_id: int) -> dict:
@@ -1909,6 +1910,47 @@ def test_majburiy_obuna_obunasizni_toxtatadi():
         assert client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).status_code == 200
     finally:
         main._ask_telegram_chat_member = original
+
+
+def test_adminlar_kanali_har_bir_testda_majburiy():
+    """@sukhrobmath (adminlar kanali) har bir testda majburiy; o'qituvchi kanali qo'shilsa — ikkalasi ham."""
+    reset_database()
+    register_teacher()
+    main.DEFAULT_REQUIRED_CHANNELS = ["@sukhrobmath"]
+    subscribed = set()
+
+    def fake_member(channel, tg_id):
+        if tg_id == BOT_USER_ID:
+            return {"status": "administrator"}
+        return {"status": "member" if channel in subscribed else "left"}
+
+    original = main._ask_telegram_chat_member
+    main._ask_telegram_chat_member = fake_member
+    try:
+        plain = create_test()
+        own = create_test(required_channel="@ustoz_kanali")
+        same = create_test(required_channel="@SukhrobMath")  # takrorlanmaydi
+
+        assert client.get(f"/api/tests/{plain['code']}", headers=as_user(901)).json()["required_channels"] == ["@sukhrobmath"]
+        assert client.get(f"/api/tests/{own['code']}", headers=as_user(901)).json()["required_channels"] == ["@sukhrobmath", "@ustoz_kanali"]
+        assert client.get(f"/api/tests/{same['code']}", headers=as_user(901)).json()["required_channels"] == ["@sukhrobmath"]
+        assert client.get("/api/me", headers=as_user(901)).json()["default_channels"] == ["@sukhrobmath"]
+
+        # Kanal qo'shilmagan testda ham adminlar kanaliga obuna shart
+        blocked = client.post(f"/api/tests/{plain['code']}/start", json={}, headers=as_user(901))
+        assert blocked.status_code == 451 and "@sukhrobmath" in blocked.json()["detail"], blocked.text
+
+        subscribed.add("@sukhrobmath")
+        assert client.post(f"/api/tests/{plain['code']}/start", json={}, headers=as_user(901)).status_code == 200
+        # O'qituvchi kanaliga obuna bo'lmaguncha — to'xtatiladi, xabarda faqat yetishmagani
+        blocked = client.post(f"/api/tests/{own['code']}/start", json={}, headers=as_user(901))
+        assert blocked.status_code == 451 and "@ustoz_kanali" in blocked.json()["detail"], blocked.text
+        assert "@sukhrobmath" not in blocked.json()["detail"], blocked.text
+        subscribed.add("@ustoz_kanali")
+        assert client.post(f"/api/tests/{own['code']}/start", json={}, headers=as_user(901)).status_code == 200
+    finally:
+        main._ask_telegram_chat_member = original
+        main.DEFAULT_REQUIRED_CHANNELS = []
 
 
 def test_majburiy_obuna_bot_kira_olmasa_oquvchi_otkazilmaydi():

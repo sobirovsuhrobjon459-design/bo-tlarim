@@ -3551,9 +3551,9 @@ function renderTestFound(test) {
         <p>⏱️ ${test.duration} daqiqa</p>
         <p>💰 ${priceLabel}</p>
         ${
-          test.required_channel
-            ? `<p>📢 Obuna shart: <b>${escapeHtml(test.required_channel)}</b></p>
-               ${channelLink(test.required_channel) ? `<button class="btn btn-ghost" id="subscribe-button">Obuna bo'lish</button>` : ""}`
+          testChannels(test).length
+            ? `<p>📢 Obuna shart: <b>${testChannels(test).map(escapeHtml).join(", ")}</b></p>
+               ${subscribeButtonsHtml(testChannels(test), "btn btn-ghost")}`
             : ""
         }
         ${blockedMessage ? `<p style="color:var(--color-primary);font-weight:600">${blockedMessage}</p>` : ""}
@@ -3610,8 +3610,24 @@ function renderTestFound(test) {
       renderTestFound(fresh);
     })
   );
-  document.getElementById("subscribe-button")?.addEventListener("click", () => {
-    openExternalLink(channelLink(test.required_channel));
+  wireSubscribeButtons();
+}
+
+// Testdagi barcha majburiy kanallar (adminlar kanali + o'qituvchi kanali)
+function testChannels(test) {
+  return test.required_channels || (test.required_channel ? [test.required_channel] : []);
+}
+
+function subscribeButtonsHtml(channels, className = "btn") {
+  return channels
+    .filter((channel) => channelLink(channel))
+    .map((channel) => `<button class="${className}" data-subscribe="${escapeHtml(channel)}" style="margin-top:8px">📢 ${escapeHtml(channel)} — obuna bo'lish</button>`)
+    .join("");
+}
+
+function wireSubscribeButtons() {
+  document.querySelectorAll("[data-subscribe]").forEach((button) => {
+    button.addEventListener("click", () => openExternalLink(channelLink(button.dataset.subscribe)));
   });
 }
 
@@ -3629,7 +3645,7 @@ function renderSubscriptionRequired(test, message, isMisconfigured) {
     - o'quvchi hali obuna bo'lmagan (451) — o'zi hal qila oladi
     - bot kanalda admin emas (424) — buni faqat O'QITUVCHI hal qiladi
   */
-  const channel = test.required_channel || "";
+  const channels = testChannels(test);
 
   showPage(`
     <button class="back-button" data-action="back">←</button>
@@ -3643,17 +3659,15 @@ function renderSubscriptionRequired(test, message, isMisconfigured) {
     ${
       isMisconfigured
         ? ""
-        : `${channelLink(channel) ? `<button class="btn" id="go-subscribe">📢 ${escapeHtml(channel)} — obuna bo'lish</button>` : ""}
-           <button class="btn btn-ghost" id="recheck-subscribe">✅ Obuna bo'ldim, tekshirish</button>`
+        : `${subscribeButtonsHtml(channels)}
+           <button class="btn btn-ghost" id="recheck-subscribe" style="margin-top:12px">✅ Obuna bo'ldim, tekshirish</button>`
     }
     ${isMisconfigured ? supportCardHtml("Muammo hal bo'lmasa — adminlarga yozing") : ""}
   `);
 
   document.querySelector('[data-action="back"]').addEventListener("click", guarded(() => renderTestFound(test)));
 
-  document.getElementById("go-subscribe")?.addEventListener("click", () => {
-    openExternalLink(channelLink(channel));
-  });
+  wireSubscribeButtons();
 
   document.getElementById("recheck-subscribe")?.addEventListener(
     "click",
@@ -4671,14 +4685,14 @@ function renderNewTestForm(testType, draft = {}) {
 
   const channelSettings = `
     <h3 style="margin-top:22px">Qo'shimcha sozlamalar</h3>
+    <p class="subtitle" id="default-channels-note" style="margin:0 0 10px"></p>
     <div class="setting-card">
       <label class="setting-row">
         <input type="checkbox" id="field-require-channel" ${draft.channel ? "checked" : ""} />
         <span>
-          <b>Kanal yoki guruhga majburiy obuna</b>
+          <b>O'z kanalingizga ham majburiy obuna</b>
           <p class="subtitle" style="margin:4px 0 0">
-            Yoqilgan bo'lsa, o'quvchi kanalingiz yoki guruhingizga obuna bo'lmaguncha testni boshlay olmaydi.
-            Yoqilmasa — hamma darhol boshlaydi.
+            Yoqilsa, o'quvchi sizning kanalingiz yoki guruhingizga ham obuna bo'lmaguncha testni boshlay olmaydi.
           </p>
         </span>
       </label>
@@ -4824,6 +4838,16 @@ function renderNewTestForm(testType, draft = {}) {
   channelCheckbox.addEventListener("change", () => {
     document.getElementById("channel-input-wrapper").style.display = channelCheckbox.checked ? "block" : "none";
   });
+
+  // Adminlar kanali har bir testda majburiy — o'qituvchi buni oldindan bilsin
+  api("/api/me")
+    .then((me) => {
+      const note = document.getElementById("default-channels-note");
+      if (note && me.default_channels?.length) {
+        note.innerHTML = `📢 Barcha testlarda majburiy obuna: <b>${me.default_channels.map(escapeHtml).join(", ")}</b>. Xohlasangiz, pastda o'z kanalingizni ham qo'shing.`;
+      }
+    })
+    .catch(() => {});
 
   document.getElementById("save-test-button").addEventListener("click", guarded(saveNewTest));
   document.getElementById("build-key-rows-button").addEventListener("click", () => buildKeyQuestionRows());
@@ -5115,8 +5139,8 @@ async function renderTestDetail(testId) {
       <span class="subtitle" style="margin:0">Kod: ${copyCodeChip(test.code)}</span>
     </div>
     ${
-      test.required_channel
-        ? `<p class="subtitle">📢 Majburiy obuna: <b>${escapeHtml(test.required_channel)}</b></p>`
+      testChannels(test).length
+        ? `<p class="subtitle">📢 Majburiy obuna: <b>${testChannels(test).map(escapeHtml).join(", ")}</b></p>`
         : ""
     }
 

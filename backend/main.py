@@ -1461,6 +1461,24 @@ def _normalize_channel(raw_channel: str | None) -> str | None:
     return f"@{channel}" if channel else None
 
 
+# Platforma adminlarining kanallari — HAR BIR testda majburiy (o'qituvchi
+# o'z kanalini qo'shsa, unga ham obuna shart). Bot bu kanallarda admin.
+DEFAULT_REQUIRED_CHANNELS = [
+    channel
+    for channel in (_normalize_channel(item) for item in os.getenv("DEFAULT_REQUIRED_CHANNELS", "@sukhrobmath").split(","))
+    if channel
+]
+
+
+def _required_channels(test: Test) -> list[str]:
+    """Testda obuna shart bo'lgan barcha kanallar: avval adminlarniki, keyin o'qituvchiniki."""
+
+    channels = list(DEFAULT_REQUIRED_CHANNELS)
+    if test.required_channel and test.required_channel.lower() not in {item.lower() for item in channels}:
+        channels.append(test.required_channel)
+    return channels
+
+
 class ChannelUnavailable(Exception):
     """Botning kanalga ruxsati yo'q — ya'ni obunani umuman tekshirib bo'lmaydi."""
 
@@ -1536,41 +1554,28 @@ def _ensure_bot_can_check_channel(channel: str) -> None:
         )
 
 
-def _check_channel_subscription(test: Test, user: User) -> None:
+def _is_subscribed(channel: str, user: User) -> bool:
     """
-    Majburiy obuna yoqilgan bo'lsa, o'quvchi kanalga obuna ekanini tekshiradi.
+    O'quvchi shu kanalga obunami? Tekshirib bo'lmasa — o'tkazib yubormaymiz:
 
-    Obuna tasdiqlanmaguncha test boshlanmaydi — har qanday holatda:
-
-    - 451 — o'quvchi obuna emas (o'zi obuna bo'lib, qayta tekshiradi);
-    - 424 — bot kanalda admin emas (buni faqat O'QITUVCHI tuzatadi);
+    - 424 — bot kanalda admin emas (buni o'qituvchi yoki admin tuzatadi);
     - 503 — Telegram javob bermadi (bir oz kutib qayta urinadi).
-
-    Kanal qo'shilmagan testda tekshiruv yo'q — o'quvchi darhol boshlaydi.
     """
-
-    if not test.required_channel:
-        return
 
     try:
-        member = _ask_telegram_chat_member(test.required_channel, user.tg_id)
+        member = _ask_telegram_chat_member(channel, user.tg_id)
     except ChannelUnavailable as error:
         # O'quvchi kanalda umuman bo'lmasa, Telegram ba'zan "user not found"
         # deb javob beradi — bu sozlama xatosi emas, shunchaki obuna yo'q.
         reason = str(error).lower()
         if any(marker in reason for marker in ("user not found", "participant_id_invalid", "member not found")):
-            raise HTTPException(
-                status_code=451,
-                detail=f"Testni boshlash uchun avval {test.required_channel} ga obuna bo'ling",
-            )
+            return False
 
-        logging.getLogger("backend").warning(
-            "Kanal obunasini tekshirib bo'lmadi (%s): %s", test.required_channel, error
-        )
+        logging.getLogger("backend").warning("Kanal obunasini tekshirib bo'lmadi (%s): %s", channel, error)
         raise HTTPException(
             status_code=424,
             detail=(
-                f"Bu testda {test.required_channel} ga obuna shart, lekin bot "
+                f"Bu testda {channel} ga obuna shart, lekin bot "
                 "obunani tekshira olmayapti. O'qituvchiga ayting: botni kanal yoki "
                 "guruhga administrator qilib qo'shish kerak."
             ),
@@ -1583,17 +1588,23 @@ def _check_channel_subscription(test: Test, user: User) -> None:
         )
 
     status = member.get("status")
-
     # "restricted" — kanalda, lekin cheklangan. U ham obunachi hisoblanadi,
     # faqat is_member rost bo'lsa. "left" va "kicked" — obuna emas.
-    is_subscribed = status in ("creator", "administrator", "member") or (
-        status == "restricted" and member.get("is_member")
-    )
+    return status in ("creator", "administrator", "member") or (status == "restricted" and bool(member.get("is_member")))
 
-    if not is_subscribed:
+
+def _check_channel_subscription(test: Test, user: User) -> None:
+    """
+    O'quvchi testdagi BARCHA majburiy kanallarga (adminlar kanali + o'qituvchi
+    kanali) obuna ekanini tekshiradi. Bittasiga obuna bo'lmasa ham test
+    boshlanmaydi: 451 — qaysi kanallarga obuna bo'lish kerakligi yoziladi.
+    """
+
+    missing = [channel for channel in _required_channels(test) if not _is_subscribed(channel, user)]
+    if missing:
         raise HTTPException(
-            status_code=451,  # frontend shu kodni ko'rib, "Obuna bo'lish" tugmasini chiqaradi
-            detail=f"Testni boshlash uchun avval {test.required_channel} kanaliga obuna bo'ling",
+            status_code=451,  # frontend shu kodni ko'rib, "Obuna bo'lish" tugmalarini chiqaradi
+            detail=f"Testni boshlash uchun avval obuna bo'ling: {', '.join(missing)}",
         )
 
 
@@ -2009,6 +2020,7 @@ def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)
         "tg_id": user.tg_id,
         "is_admin": bool(ADMIN_ID) and user.tg_id == ADMIN_ID,
         "is_teacher": is_teacher,
+        "default_channels": DEFAULT_REQUIRED_CHANNELS,
     }
 
 
@@ -2550,6 +2562,7 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
         "price": test.price,
         "enrollment_type": test.enrollment_type,
         "required_channel": test.required_channel,
+        "required_channels": _required_channels(test),
         "status": test.status,
         "created_at": test.created_at,
         "count": _question_count(test),
@@ -2971,6 +2984,7 @@ def get_test(code: str, user: User = Depends(get_current_user), db: Session = De
         "paid": _is_paid(db, user, test),
         "enrollment_type": test.enrollment_type,
         "required_channel": test.required_channel,
+        "required_channels": _required_channels(test),
         "start_time": test.start_time,
         "end_time": test.end_time,
     }
