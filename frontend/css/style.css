@@ -2168,3 +2168,32 @@ select option {
   height: 52px;
   font-size: 20px;
 }
+
+/* "Murojaat uchun" — kichikroq */
+.support-pill {
+  gap: 6px;
+  padding: 4px 11px 4px 4px;
+  font-size: 12px;
+}
+
+.support-avatar.support-mini {
+  width: 20px;
+  height: 20px;
+  font-size: 10px;
+}
+
+/* Bosh sahifada — ekranning eng pastida */
+.support-row-bottom {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  z-index: 5;
+  margin: 0;
+  pointer-events: none;
+}
+
+.support-row-bottom .support-pill {
+  pointer-events: auto;
+  opacity: 0.92;
+}

@@ -826,9 +826,9 @@ function supportAvatarHtml(username, size, className) {
 }
 
 // Kichkina "Murojaat uchun" tugmasi — bosilsa adminlar profillari chiqadi
-function supportCardHtml(note = "Savol, taklif yoki muammo bo'lsa — yozing") {
+function supportCardHtml(note = "Savol, taklif yoki muammo bo'lsa — yozing", { bottom = false } = {}) {
   return `
-    <div class="support-row">
+    <div class="support-row${bottom ? " support-row-bottom" : ""}">
       <button type="button" class="support-pill" data-open-support="${escapeHtml(note)}">
         <span class="support-avatars">
           ${SUPPORT_CONTACTS.map((username) => supportAvatarHtml(username, 160, "support-mini")).join("")}
@@ -883,7 +883,7 @@ function renderHome(userName, backendOk) {
     ${isAdmin ? roleCard("admin", ROLE_ICONS.admin, "ADMIN", "Umumiy statistika va boshqaruv") : ""}
 
     ${statusHtml}
-    ${supportCardHtml()}
+    ${supportCardHtml(undefined, { bottom: true })}
   `);
 
   document.querySelector('[data-action="school-folder"]').addEventListener("click", renderSchoolFolder);
@@ -2093,9 +2093,9 @@ function schoolListHtml(schools, emptyText) {
           (school, index) => `
             <button type="button" class="pick-item" data-school-index="${index}">
               <span class="pick-title">🏫 ${escapeHtml(school.name)}
-                <small>📍 ${escapeHtml(school.district)} · ${school.teachers} ta o'qituvchi</small>
+                <small>📍 ${escapeHtml(school.district)} · ${school.teachers} ta o'qituvchi${school.is_mine ? " · 👑 sizning maktabingiz" : ""}</small>
               </span>
-              <span>🔒</span>
+              <span>${school.is_mine ? "›" : "🔒"}</span>
             </button>`
         )
         .join("")}
@@ -2363,7 +2363,37 @@ async function renderCreateSchool() {
   );
 }
 
+// O'z maktabi (direktor) — kod kerak emas, bir bosishda kiradi
+function renderOwnSchoolReturn(school, onBack) {
+  showPage(`
+    ${schoolPageHeader("Maktabimga kirish", "back-join")}
+    <div class="card" style="cursor:default">
+      <div class="card-icon">🏫</div>
+      <div class="card-body">
+        <h3 style="margin:0">${escapeHtml(school.name)}</h3>
+        <p class="subtitle" style="margin:4px 0 0">📍 ${escapeHtml(school.region)}, ${escapeHtml(school.district)}</p>
+        <p style="margin:8px 0 0">👑 Bu sizning maktabingiz — siz uning direktorisiz. Kod kerak emas.</p>
+      </div>
+    </div>
+    <button class="btn" id="return-own-school" style="margin-top:16px">🏫 Maktabimga kirish</button>
+  `);
+
+  document.querySelector('[data-action="back-join"]').addEventListener("click", guarded(onBack));
+  document.getElementById("return-own-school").addEventListener(
+    "click",
+    guarded(async () => {
+      const { school: joined } = await api(`/api/schools/${school.id}/return`, { method: "POST", body: {} });
+      showToast(`✅ «${joined.name}» — xush kelibsiz!`);
+      renderMySchool(joined);
+    })
+  );
+}
+
 async function renderJoinSchool({ school: target = null, onBack = renderPrivateSchoolStart, prefillCode = "" } = {}) {
+  if (target?.is_mine) {
+    renderOwnSchoolReturn(target, onBack);
+    return;
+  }
   const nameFields = await profileNameFieldsHtml();
   const founder = target?.founder;
 

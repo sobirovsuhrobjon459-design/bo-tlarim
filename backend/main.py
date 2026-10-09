@@ -3368,6 +3368,7 @@ def list_schools(
             "district": school.district,
             "teachers": sum(1 for member in school.members if member.left_at is None),
             "founder": _founder_contact(db, school),
+            "is_mine": school.owner_user_id == user.id,
         }
         for school in schools
     ]
@@ -3394,6 +3395,42 @@ def _send_bot_text(chat_id: int, text: str) -> bool:
         return False
 
 
+def _rejoin_as_director(db: Session, user: User, school: PrivateSchool) -> SchoolMember:
+    """
+    Maktab direktori (egasi) a'zolikdan chiqib qolgan bo'lsa, kod so'ramasdan
+    o'z maktabiga DIREKTOR sifatida qaytadi. Avvalgi fanlari tiklanadi.
+    """
+
+    previous = db.scalar(
+        select(SchoolMember)
+        .where(SchoolMember.school_id == school.id, SchoolMember.user_id == user.id)
+        .order_by(SchoolMember.id.desc())
+    )
+    member = SchoolMember(
+        school_id=school.id, user_id=user.id, role="owner", subjects=previous.subjects if previous else "[]"
+    )
+    db.add(member)
+    db.commit()
+    db.refresh(member)
+    return member
+
+
+@app.post("/api/schools/{school_id}/return")
+def return_to_own_school(school_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Direktor o'z maktabiga kodsiz qaytadi."""
+
+    school = db.get(PrivateSchool, school_id)
+    if not school:
+        raise HTTPException(status_code=404, detail="Maktab topilmadi")
+    if school.owner_user_id != user.id:
+        raise HTTPException(status_code=403, detail="Bu maktab sizniki emas — kirish uchun maktab kodi kerak")
+    if _active_membership(db, user):
+        raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz")
+
+    member = _rejoin_as_director(db, user, school)
+    return {"school": _school_view(db, member, user)}
+
+
 @app.post("/api/schools/{school_id}/request-code")
 def request_school_code(school_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
@@ -3408,7 +3445,7 @@ def request_school_code(school_id: int, user: User = Depends(get_current_user), 
     if not school:
         raise HTTPException(status_code=404, detail="Maktab topilmadi")
     if school.owner_user_id == user.id:
-        raise HTTPException(status_code=400, detail="Bu maktabni o'zingiz ochgansiz")
+        raise HTTPException(status_code=400, detail="Bu sizning maktabingiz — kod kerak emas, «Maktabimga kirish»ni bosing")
 
     key = (user.id, school.id)
     now = time.monotonic()
@@ -3551,12 +3588,15 @@ def join_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db: 
     """
 
     _require_profile_name(user)
-    if not body.is_curator:
-        _require_subjects(body.subjects)
     if _active_membership(db, user):
         raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
 
     school = _school_by_code(db, user, body.code, body.school_id)
+    if school.owner_user_id == user.id:
+        member = _rejoin_as_director(db, user, school)
+        return {"school": _school_view(db, member, user)}
+    if not body.is_curator:
+        _require_subjects(body.subjects)
 
     curator_class = None
     if body.is_curator and body.curator_class_id:

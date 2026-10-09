@@ -1224,6 +1224,32 @@ def test_qoshilishda_kuratormisiz_savoli():
                        headers=as_user(704)).status_code == 200
 
 
+def test_direktor_oz_maktabiga_kodsiz_qaytadi():
+    """Yolg'iz direktor chiqib ketgan bo'lsa, o'z maktabiga kodsiz, direktor sifatida qaytadi."""
+    reset_database()
+    _set_name(701, "Direktor", "Karimov")
+    _set_name(702, "Begona", "Odam")
+    school = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                               "name": "Qaytish maktabi"}, headers=as_user(701)).json()["school"]
+    assert client.post("/api/schools/leave", json={"code": school["code"]}, headers=as_user(701)).status_code == 200
+
+    listed = client.get("/api/schools", params={"region": "Toshkent shahri"}, headers=as_user(701)).json()
+    assert listed[0]["is_mine"] is True
+    assert client.get("/api/schools", params={"region": "Toshkent shahri"}, headers=as_user(702)).json()[0]["is_mine"] is False
+
+    # Begona odam kodsiz kira olmaydi
+    assert client.post(f"/api/schools/{school['id']}/return", headers=as_user(702)).status_code == 403
+
+    back = client.post(f"/api/schools/{school['id']}/return", headers=as_user(701))
+    assert back.status_code == 200 and back.json()["school"]["my_role"] == "owner", back.text
+    assert client.post(f"/api/schools/{school['id']}/return", headers=as_user(701)).status_code == 409
+
+    # Kod bilan kirsa ham — direktor sifatida (fan so'ralmaydi)
+    client.post("/api/schools/leave", json={"code": school["code"]}, headers=as_user(701))
+    again = client.post("/api/schools/join", json={"code": school["code"]}, headers=as_user(701))
+    assert again.status_code == 200 and again.json()["school"]["my_role"] == "owner", again.text
+
+
 def test_davomat_olish_tahrirlash_va_vaqtlar():
     reset_database()
     school_class = _school_with_class()
