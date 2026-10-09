@@ -3695,7 +3695,11 @@ def _join_as_teacher(db: Session, user: User, school: PrivateSchool, body) -> Sc
 
 @app.post("/api/schools/join")
 def join_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Maktab kodi bilan maktabga qo'shiladi."""
+    """
+    Maktab kodi bilan maktabga qo'shiladi. Kod BIR MARTALIK: bitta o'qituvchi
+    qo'shilgach, maktabga yangi kod beriladi (eski kod endi ishlamaydi).
+    Yangi kod admin va o'qituvchilarning Profilida ko'rinadi.
+    """
 
     _require_profile_name(user)
     if _active_membership(db, user):
@@ -3703,6 +3707,9 @@ def join_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db: 
 
     school = _school_by_code(db, user, body.code, body.school_id)
     member = _join_as_teacher(db, user, school, body)
+    if member.role != "owner":
+        school.code = _new_school_code(db)
+        logging.getLogger("backend").info("Maktab kodi ishlatildi va yangilandi: id=%s", school.id)
     db.commit()
     db.refresh(member)
     return {"school": _school_view(db, member, user)}

@@ -2973,7 +2973,7 @@ function renderSchoolProfile(school) {
       <div class="card" style="cursor:default">
         <div class="card-body" style="width:100%">
           ${copyCodeChip(school.code)}
-          <p class="subtitle" style="margin:8px 0 0">Maktabdan chiqishda shu kod so'raladi. Bosing — nusxalanadi.</p>
+          <p class="subtitle" style="margin:8px 0 0">Kod bir martalik: u bilan bitta o'qituvchi qo'shilgach, yangi kod beriladi. Maktabdan chiqishda ham shu kod so'raladi. Bosing — nusxalanadi.</p>
         </div>
       </div>
 

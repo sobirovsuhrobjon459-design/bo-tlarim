@@ -67,6 +67,14 @@ def reset_database() -> None:
     main._subscription_confirmed.clear()
 
 
+def current_code(school: dict) -> str:
+    """Maktabning HOZIRGI kodi — kod bir martalik, har qo'shilishdan keyin yangilanadi."""
+    from backend.database import PrivateSchool, SessionLocal
+
+    with SessionLocal() as session:
+        return session.get(PrivateSchool, school["id"]).code
+
+
 def as_user(tg_id: int) -> dict:
     """DEV_MODE'dagi soxta foydalanuvchi header'i."""
     return {"X-Dev-User": str(tg_id)}
@@ -926,7 +934,7 @@ def test_xususiy_maktab_yaratish_va_kod_bilan_qoshilish():
     _set_name(702, "Bobur", "Aliyev")
     wrong = client.post("/api/schools/join", json={"subjects": ["Matematika"], "code": "XXXXXX"}, headers=as_user(702))
     assert wrong.status_code == 404, wrong.text
-    joined = client.post("/api/schools/join", json={"code": f" {school['code'].lower()} ", "subjects": ["Kimyo"]},
+    joined = client.post("/api/schools/join", json={"code": f" {current_code(school).lower()} ", "subjects": ["Kimyo"]},
                          headers=as_user(702))
     assert joined.status_code == 200, joined.text
     members = joined.json()["school"]["members"]
@@ -935,7 +943,7 @@ def test_xususiy_maktab_yaratish_va_kod_bilan_qoshilish():
 
     # Fan majburiy: fansiz qo'shilib yoki profilni bo'shatib bo'lmaydi
     _set_name(705, "Fansiz", "Odam")
-    assert client.post("/api/schools/join", json={"code": school["code"]}, headers=as_user(705)).status_code == 422
+    assert client.post("/api/schools/join", json={"code": current_code(school)}, headers=as_user(705)).status_code == 422
     assert client.put("/api/schools/me/profile", json={"subjects": []}, headers=as_user(702)).status_code == 422
 
     # Profil (fanlar) yangilanadi
@@ -943,7 +951,15 @@ def test_xususiy_maktab_yaratish_va_kod_bilan_qoshilish():
     assert updated.json()["school"]["my_subjects"] == ["Kimyo", "Biologiya"]
 
     # Guruhlarga ulashish havolasi — bot orqali kod bilan
-    assert joined.json()["school"]["invite_link"] == f"https://t.me/test_platform_bot?start=school_{school['code']}"
+    assert joined.json()["school"]["invite_link"] == f"https://t.me/test_platform_bot?start=school_{current_code(school)}"
+
+    # Kod bir martalik: ishlatilgan kod endi ishlamaydi, yangisi beriladi
+    assert current_code(school) != school["code"]
+    _set_name(706, "Kech", "Qolgan")
+    stale = client.post("/api/schools/join", json={"code": school["code"], "subjects": ["Fizika"]}, headers=as_user(706))
+    assert stale.status_code == 404, stale.text
+    assert client.post("/api/schools/join", json={"code": current_code(school), "subjects": ["Fizika"]},
+                       headers=as_user(706)).status_code == 200
 
     # Maktab saqlanib qoladi — qayta kirganda ham o'sha maktab
     assert client.get("/api/schools/me", headers=as_user(702)).json()["school"]["id"] == school["id"]
@@ -955,19 +971,19 @@ def test_maktabdan_faqat_kod_bilan_chiqiladi_va_tarix_saqlanadi():
     _set_name(702, "Bobur", "Aliyev")
     school = client.post("/api/schools", json={"subjects": ["Matematika"], "region": "Samarqand viloyati", "district": "Urgut tumani",
                                                "name": "Ilm maktabi"}, headers=as_user(701)).json()["school"]
-    client.post("/api/schools/join", json={"subjects": ["Matematika"], "code": school["code"]}, headers=as_user(702))
+    client.post("/api/schools/join", json={"subjects": ["Matematika"], "code": current_code(school)}, headers=as_user(702))
 
     # Kodsiz / noto'g'ri kod bilan chiqib bo'lmaydi
     assert client.post("/api/schools/leave", json={"code": "AAAAAA"}, headers=as_user(702)).status_code == 403
     assert client.get("/api/schools/me", headers=as_user(702)).json()["school"] is not None
 
     # Direktor o'rinbosar tanlamasdan chiqa olmaydi — maktab direktorsiz qolmasin
-    assert client.post("/api/schools/leave", json={"code": school["code"]}, headers=as_user(701)).status_code == 422
+    assert client.post("/api/schools/leave", json={"code": current_code(school)}, headers=as_user(701)).status_code == 422
     successor_id = next(m["user_id"] for m in client.get("/api/schools/me", headers=as_user(701)).json()["school"]["members"]
                         if m["name"] == "Bobur Aliyev")
-    assert client.post("/api/schools/leave", json={"code": school["code"], "successor_user_id": 999999},
+    assert client.post("/api/schools/leave", json={"code": current_code(school), "successor_user_id": 999999},
                        headers=as_user(701)).status_code == 422
-    assert client.post("/api/schools/leave", json={"code": school["code"], "successor_user_id": successor_id},
+    assert client.post("/api/schools/leave", json={"code": current_code(school), "successor_user_id": successor_id},
                        headers=as_user(701)).status_code == 200
     assert client.get("/api/schools/me", headers=as_user(701)).json()["school"] is None
     remaining = client.get("/api/schools/me", headers=as_user(702)).json()["school"]
@@ -984,7 +1000,7 @@ def test_maktabdan_faqat_kod_bilan_chiqiladi_va_tarix_saqlanadi():
         session.close()
 
     # Chiqqandan keyin yana qo'shila oladi
-    assert client.post("/api/schools/join", json={"subjects": ["Matematika"], "code": school["code"]}, headers=as_user(701)).status_code == 200
+    assert client.post("/api/schools/join", json={"subjects": ["Matematika"], "code": current_code(school)}, headers=as_user(701)).status_code == 200
 
 
 def test_tumandagi_maktablar_royxati_va_tanlangan_maktabga_faqat_uning_kodi_bilan():
@@ -1015,9 +1031,9 @@ def test_tumandagi_maktablar_royxati_va_tanlangan_maktabga_faqat_uning_kodi_bila
     assert other == []
 
     # "Ilm maktabi"ni tanlab, boshqa maktabning (to'g'ri) kodi bilan kira olmaydi
-    wrong = client.post("/api/schools/join", json={"subjects": ["Matematika"], "code": second["code"], "school_id": first["id"]}, headers=as_user(703))
+    wrong = client.post("/api/schools/join", json={"subjects": ["Matematika"], "code": current_code(second), "school_id": first["id"]}, headers=as_user(703))
     assert wrong.status_code == 403, wrong.text
-    ok = client.post("/api/schools/join", json={"subjects": ["Matematika"], "code": first["code"], "school_id": first["id"]}, headers=as_user(703))
+    ok = client.post("/api/schools/join", json={"subjects": ["Matematika"], "code": current_code(first), "school_id": first["id"]}, headers=as_user(703))
     assert ok.status_code == 200 and ok.json()["school"]["name"] == "Ilm maktabi", ok.text
 
 
@@ -1092,7 +1108,7 @@ def test_lavozimlar_direktor_va_zam_direktor():
                                                "name": "Lavozim maktabi"}, headers=as_user(701)).json()["school"]
     for tg_id in (702, 703, 704):
         _set_name(tg_id, "Ustoz", f"Nomer{tg_id}")
-        assert client.post("/api/schools/join", json={"code": school["code"], "subjects": ["Fizika"]},
+        assert client.post("/api/schools/join", json={"code": current_code(school), "subjects": ["Fizika"]},
                            headers=as_user(tg_id)).status_code == 200
     ids = {m["name"]: m["user_id"] for m in client.get("/api/schools/me", headers=as_user(701)).json()["school"]["members"]}
     uid = {tg: ids[f"Ustoz Nomer{tg}"] for tg in (702, 703, 704)}
@@ -1180,7 +1196,7 @@ def test_direktor_kurator_va_oqituvchi_huquqlari():
     school = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
                                                "name": "Rollar maktabi"}, headers=as_user(701)).json()["school"]
     for tg_id, subject in ((702, "Matematika"), (703, "Fizika")):
-        joined = client.post("/api/schools/join", json={"code": school["code"], "subjects": [subject]}, headers=as_user(tg_id))
+        joined = client.post("/api/schools/join", json={"code": current_code(school), "subjects": [subject]}, headers=as_user(tg_id))
         assert joined.status_code == 200, joined.text
 
     # Direktor fansiz profilini saqlay oladi, o'qituvchi esa yo'q
@@ -1254,27 +1270,27 @@ def test_qoshilishda_kuratormisiz_savoli():
     assert client.post("/api/schools/lookup", json={"code": "NOTOGRI1"}, headers=as_user(702)).status_code == 404
 
     # Kurator: sinf tanlamasa — so'raladi; tanlasa — fansiz ham qo'shiladi va kurator bo'ladi
-    no_class = client.post("/api/schools/join", json={"code": school["code"], "is_curator": True}, headers=as_user(702))
+    no_class = client.post("/api/schools/join", json={"code": current_code(school), "is_curator": True}, headers=as_user(702))
     assert no_class.status_code == 422, no_class.text
-    joined = client.post("/api/schools/join", json={"code": school["code"], "is_curator": True,
+    joined = client.post("/api/schools/join", json={"code": current_code(school), "is_curator": True,
                                                     "curator_class_id": first["id"]}, headers=as_user(702))
     assert joined.status_code == 200, joined.text
     detail = client.get(f"/api/classes/{first['id']}", headers=as_user(702)).json()
     assert detail["is_curator"] and detail["curator"]["name"] == "Kurator Aliyeva", detail
 
     # Band sinfni boshqa kurator tanlay olmaydi; ro'yxatda u endi yo'q
-    taken = client.post("/api/schools/join", json={"code": school["code"], "is_curator": True,
+    taken = client.post("/api/schools/join", json={"code": current_code(school), "is_curator": True,
                                                    "curator_class_id": first["id"]}, headers=as_user(703))
     assert taken.status_code == 409, taken.text
-    lookup = client.post("/api/schools/lookup", json={"code": school["code"]}, headers=as_user(703)).json()
+    lookup = client.post("/api/schools/lookup", json={"code": current_code(school)}, headers=as_user(703)).json()
     assert [c["name"] for c in lookup["open_classes"]] == ["5-B"]
 
     # Kurator profilini fansiz saqlay oladi
     assert client.put("/api/schools/me/profile", json={"subjects": []}, headers=as_user(702)).status_code == 200
 
     # Oddiy o'qituvchi: fansiz qo'shilmaydi
-    assert client.post("/api/schools/join", json={"code": school["code"]}, headers=as_user(704)).status_code == 422
-    assert client.post("/api/schools/join", json={"code": school["code"], "subjects": ["Fizika"]},
+    assert client.post("/api/schools/join", json={"code": current_code(school)}, headers=as_user(704)).status_code == 422
+    assert client.post("/api/schools/join", json={"code": current_code(school), "subjects": ["Fizika"]},
                        headers=as_user(704)).status_code == 200
 
 
@@ -1285,7 +1301,7 @@ def test_direktor_oz_maktabiga_kodsiz_qaytadi():
     _set_name(702, "Begona", "Odam")
     school = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
                                                "name": "Qaytish maktabi"}, headers=as_user(701)).json()["school"]
-    assert client.post("/api/schools/leave", json={"code": school["code"]}, headers=as_user(701)).status_code == 200
+    assert client.post("/api/schools/leave", json={"code": current_code(school)}, headers=as_user(701)).status_code == 200
 
     listed = client.get("/api/schools", params={"region": "Toshkent shahri"}, headers=as_user(701)).json()
     assert listed[0]["is_mine"] is True
@@ -1299,8 +1315,8 @@ def test_direktor_oz_maktabiga_kodsiz_qaytadi():
     assert client.post(f"/api/schools/{school['id']}/return", headers=as_user(701)).status_code == 409
 
     # Kod bilan kirsa ham — direktor sifatida (fan so'ralmaydi)
-    client.post("/api/schools/leave", json={"code": school["code"]}, headers=as_user(701))
-    again = client.post("/api/schools/join", json={"code": school["code"]}, headers=as_user(701))
+    client.post("/api/schools/leave", json={"code": current_code(school)}, headers=as_user(701))
+    again = client.post("/api/schools/join", json={"code": current_code(school)}, headers=as_user(701))
     assert again.status_code == 200 and again.json()["school"]["my_role"] == "owner", again.text
 
 
@@ -1531,7 +1547,7 @@ def test_maktab_kodini_taxmin_qilib_topish_toxtatiladi():
         assert response.status_code == 403, response.text
 
     # 6-urinish — hatto to'g'ri kod bilan ham vaqtincha to'xtatiladi
-    blocked = client.post("/api/schools/join", json={"subjects": ["Matematika"], "code": school["code"], "school_id": school["id"]}, headers=as_user(709))
+    blocked = client.post("/api/schools/join", json={"subjects": ["Matematika"], "code": current_code(school), "school_id": school["id"]}, headers=as_user(709))
     assert blocked.status_code == 429, blocked.text
     main._school_code_failures.clear()
 
