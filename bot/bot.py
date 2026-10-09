@@ -51,6 +51,11 @@ if TOKEN_IS_SET and not WEBAPP_URL.startswith("https://"):
         WEBAPP_URL,
     )
 
+# Murojaat uchun adminlar — savol, to'lov yoki muammo bo'lsa shularga yoziladi.
+# Almashtirish kerak bo'lsa, faqat shu ro'yxat o'zgartiriladi (Mini App'da ham shunday ro'yxat bor).
+SUPPORT_CONTACTS = ("saidjanovic", "Ulugbeck_dev")
+SUPPORT_TEXT = "💬 Murojaat uchun: " + ", ".join(f"@{name}" for name in SUPPORT_CONTACTS)
+
 # Token yo'q bo'lsa Bot() obyekti yaratilmaydi — aiogram tokenni darhol tekshiradi
 bot = Bot(token=BOT_TOKEN) if TOKEN_IS_SET else None
 dispatcher = Dispatcher()
@@ -118,7 +123,8 @@ async def handle_start(message: Message, command: CommandObject) -> None:
         f"Assalomu alaykum, {message.from_user.first_name}! 👋\n\n"
         "🎓 <b>Test Platformasiga xush kelibsiz!</b>\n\n"
         "Bilimingizni sinang, natijangizni kuzating va rivojlaning.\n\n"
-        "Boshlash uchun pastda, xabar yozish maydoni yonidagi <b>PLAY</b> tugmasini bosing."
+        "Boshlash uchun pastda, xabar yozish maydoni yonidagi <b>PLAY</b> tugmasini bosing.\n\n"
+        f"{SUPPORT_TEXT}"
     )
 
     # Eski reply-keyboard PLAY tugmasi qolib ketgan bo'lsa, uni tozalaydi —
@@ -134,7 +140,8 @@ async def handle_help(message: Message) -> None:
     await message.answer(
         "ℹ️ Bu bot Test Platformasi Mini App'ini ochadi.\n\n"
         "Pastdagi PLAY tugmasini bosib Mini App'ni oching — u yerda test ishlashingiz "
-        "yoki o'qituvchi sifatida test yaratishingiz mumkin."
+        "yoki o'qituvchi sifatida test yaratishingiz mumkin.\n\n"
+        f"{SUPPORT_TEXT}"
     )
 
 
@@ -144,7 +151,8 @@ async def handle_unknown(message: Message) -> None:
 
     await message.answer(
         "Buyruqni tushunmadim 🤔\nBoshlash uchun /start yuboring yoki pastdagi "
-        "PLAY tugmasini bosing."
+        "PLAY tugmasini bosing.\n\n"
+        f"Savolingiz bo'lsa — adminlarga yozing.\n{SUPPORT_TEXT}"
     )
 
 

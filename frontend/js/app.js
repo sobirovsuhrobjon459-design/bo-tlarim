@@ -807,6 +807,31 @@ function roleCard(action, icon, title, description) {
     </div>`;
 }
 
+/*
+  Murojaat uchun adminlar — savol, to'lov yoki muammo bo'lsa shularga yoziladi.
+  Almashtirish kerak bo'lsa, faqat shu ro'yxat o'zgartiriladi (botda ham shunday ro'yxat bor).
+*/
+const SUPPORT_CONTACTS = ["saidjanovic", "Ulugbeck_dev"];
+
+function supportCardHtml(note = "Savol, taklif yoki muammo bo'lsa — yozing") {
+  return `
+    <div class="support-card">
+      <div class="support-title">💬 Murojaat uchun</div>
+      <p class="subtitle" style="margin:2px 0 8px">${escapeHtml(note)}</p>
+      <div class="support-links">
+        ${SUPPORT_CONTACTS.map(
+          (username) => `<button type="button" class="support-link" data-support-user="${username}">@${username}</button>`
+        ).join("")}
+      </div>
+    </div>`;
+}
+
+// Bitta umumiy tinglovchi — kontakt tugmasi qaysi sahifada bo'lmasin ishlaydi
+document.addEventListener("click", (event) => {
+  const link = event.target.closest("[data-support-user]");
+  if (link) openExternalLink(`https://t.me/${link.dataset.supportUser}`);
+});
+
 function renderHome(userName, backendOk) {
   const greeting = userName ? `Xush kelibsiz,<br>${escapeHtml(userName)}` : "Test Platformasiga<br>xush kelibsiz";
 
@@ -822,6 +847,7 @@ function renderHome(userName, backendOk) {
     ${isAdmin ? roleCard("admin", ROLE_ICONS.admin, "ADMIN", "Umumiy statistika va boshqaruv") : ""}
 
     ${statusHtml}
+    ${supportCardHtml()}
   `);
 
   document.querySelector('[data-action="school-folder"]').addEventListener("click", renderSchoolFolder);
@@ -1803,6 +1829,7 @@ function renderComingSoon(title, icon) {
         <p>Bu bo'lim ustida ishlanmoqda va yaqin orada ishga tushadi.</p>
       </div>
     </div>
+    ${supportCardHtml("Bu bo'lim bo'yicha taklifingiz bo'lsa — yozing")}
   `);
 
   document.querySelector('[data-action="home"]').addEventListener("click", renderSchoolFolder);
@@ -3212,6 +3239,7 @@ function renderSubscriptionRequired(test, message, isMisconfigured) {
         : `${channelLink(channel) ? `<button class="btn" id="go-subscribe">📢 ${escapeHtml(channel)} — obuna bo'lish</button>` : ""}
            <button class="btn btn-ghost" id="recheck-subscribe">✅ Obuna bo'ldim, tekshirish</button>`
     }
+    ${isMisconfigured ? supportCardHtml("Muammo hal bo'lmasa — adminlarga yozing") : ""}
   `);
 
   document.querySelector('[data-action="back"]').addEventListener("click", guarded(() => renderTestFound(test)));
@@ -3838,6 +3866,7 @@ async function renderWithdrawalForm() {
     <button class="btn" id="submit-withdrawal-button">📨 So'rov yuborish</button>
     <h3>So'rovlar tarixi</h3>
     ${historyRows}
+    ${supportCardHtml("Pul yechish bo'yicha savol bo'lsa — yozing")}
   `);
 
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
@@ -3959,6 +3988,7 @@ async function renderCreditPurchaseForm() {
     ${noMethods}
     <h3>Buyurtmalar tarixi</h3>
     ${historyRows}
+    ${supportCardHtml("To'lov yoki kredit bo'yicha muammo bo'lsa — yozing")}
   `);
 
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
