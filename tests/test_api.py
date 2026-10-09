@@ -1267,6 +1267,27 @@ def test_lavozimlar_direktor_va_zam_direktor():
                       headers=as_user(701)).status_code == 422
 
 
+def test_sovga_kredit_faqat_bir_marta():
+    """Sovg'a kredit Telegram akkauntiga bir marta beriladi: qayta ro'yxatdan o'tish (bot/kesh tozalansa ham) bermaydi."""
+    reset_database()
+    register_teacher(tg_id=777)
+    assert credits_of(777) == int(main.WELCOME_CREDITS)
+
+    # Kredit sarflandi deb faraz qilamiz — qayta ro'yxatdan o'tish urinishi balansni tiklamasligi kerak
+    session = SessionLocal()
+    try:
+        from backend.database import Teacher, User as DbUser
+        teacher = session.scalar(main.select(Teacher).join(DbUser, DbUser.id == Teacher.user_id).where(DbUser.tg_id == 777))
+        teacher.credits = 3
+        session.commit()
+    finally:
+        session.close()
+
+    again = client.post("/api/teacher/register", json={"first_name": "Ali", "last_name": "Valiyev"}, headers=as_user(777))
+    assert again.status_code == 400, again.text
+    assert credits_of(777) == 3
+
+
 def test_sinf_yaratish_va_oquvchilar():
     reset_database()
     # Maktabga a'zo bo'lmasa sinf ochib bo'lmaydi
