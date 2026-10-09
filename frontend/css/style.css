@@ -206,7 +206,7 @@ h1 {
 }
 
 .btn {
-  display: inline-block;
+  display: block;
   width: 100%;
   padding: 14px;
   border: 0;
@@ -222,6 +222,11 @@ h1 {
 
 .btn:active {
   transform: scale(0.97);
+}
+
+/* Ketma-ket turgan tugmalar bir-biriga yopishib qolmasin */
+.btn + .btn {
+  margin-top: 10px;
 }
 
 .btn:disabled {
