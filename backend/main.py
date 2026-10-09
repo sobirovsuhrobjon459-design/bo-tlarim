@@ -144,6 +144,7 @@ def _add_missing_columns() -> None:
         "test_attempts": {"offline_name": "VARCHAR(200)", "saved_answers": "TEXT"},
         "users": {"username": "VARCHAR(64)"},
         "school_classes": {"curator_user_id": "INTEGER"},
+        "attendances": {"lesson_start": "VARCHAR(5)", "lesson_end": "VARCHAR(5)"},
         "key_questions": {"label": "VARCHAR(20)"},
         "payments": {
             "payme_transaction_id": "VARCHAR(50)",
@@ -3859,6 +3860,8 @@ def _attendance_view(attendance: Attendance) -> dict:
         "id": attendance.id,
         "class_id": attendance.class_id,
         "subject": attendance.subject,
+        "lesson_start": attendance.lesson_start,
+        "lesson_end": attendance.lesson_end,
         "taken_at": attendance.taken_at,
         "updated_at": attendance.updated_at,
         "counts": _attendance_counts(attendance),
@@ -3928,6 +3931,8 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
             {
                 "id": item.id,
                 "subject": item.subject,
+                "lesson_start": item.lesson_start,
+                "lesson_end": item.lesson_end,
                 "taken_at": item.taken_at,
                 "updated_at": item.updated_at,
                 "counts": _attendance_counts(item),
@@ -4174,7 +4179,13 @@ def take_attendance(class_id: int, body: AttendanceIn, user: User = Depends(get_
     if not students:
         raise HTTPException(status_code=400, detail="Sinfda hali o'quvchi yo'q — avval o'quvchilarni qo'shing")
 
-    attendance = Attendance(class_id=school_class.id, teacher_user_id=user.id, subject=body.subject)
+    attendance = Attendance(
+        class_id=school_class.id,
+        teacher_user_id=user.id,
+        subject=body.subject,
+        lesson_start=body.lesson_start,
+        lesson_end=body.lesson_end,
+    )
     db.add(attendance)
     db.flush()
     for student in students:
@@ -4220,12 +4231,28 @@ def edit_attendance(
     if body.subject and body.subject != attendance.subject:
         attendance.subject = body.subject
         changed = True
+    if body.lesson_start and body.lesson_end and (body.lesson_start, body.lesson_end) != (
+        attendance.lesson_start,
+        attendance.lesson_end,
+    ):
+        attendance.lesson_start, attendance.lesson_end = body.lesson_start, body.lesson_end
+        changed = True
 
     if changed:
         attendance.updated_at = utcnow()
     db.commit()
     db.refresh(attendance)
     return _attendance_view(attendance)
+
+
+def _attendance_when(attendance: Attendance) -> str:
+    """Sana, keyin dars vaqti: "09.10.2026 · 11:00–11:45". Vaqt kiritilmagan
+    eski davomatlarda — olingan vaqt."""
+
+    taken = _local_time(attendance.taken_at)
+    if attendance.lesson_start and attendance.lesson_end:
+        return f"{taken[:10]} · {attendance.lesson_start}–{attendance.lesson_end}"
+    return taken.replace(" ", " · ", 1)
 
 
 def _attendance_context(db: Session, attendance: Attendance) -> dict:
@@ -4241,6 +4268,8 @@ def _attendance_context(db: Session, attendance: Attendance) -> dict:
         "lesson": f"{attendance.subject} darsi" if attendance.subject else "Dars",
         "taken_at": _local_time(attendance.taken_at),
         "updated_at": _local_time(attendance.updated_at),
+        # "09.10.2026 · 11:00–11:45" — sana, keyin dars vaqti
+        "when": _attendance_when(attendance),
         "counts": _attendance_counts(attendance),
         "marks": [(mark.student_name, mark.status) for mark in attendance.marks],
     }
@@ -4252,7 +4281,7 @@ def attendance_caption(context: dict) -> str:
     lines = [
         f"📋 {context['class_name']} — {context['lesson']}",
         f"👤 {context['teacher_name']}",
-        f"🕘 {context['taken_at']}",
+        f"🕘 {context['when']}",
     ]
     if context["updated_at"]:
         lines.append(f"✏️ Tahrirlangan: {context['updated_at']}")
@@ -4300,7 +4329,7 @@ def attendance_pdf(context: dict) -> bytes:
     width = document.width
 
     meta = f"🏫 {context['school_name']}  ·  {context['lesson']}  ·  O'qituvchi: {context['teacher_name']}"
-    times = f"Olingan: {context['taken_at']}" + (f"  ·  Tahrirlangan: {context['updated_at']}" if context["updated_at"] else "")
+    times = f"Dars: {context['when']}" + (f"  ·  Tahrirlangan: {context['updated_at']}" if context["updated_at"] else "")
     counts = context["counts"]
     summary = "   ".join(f"{ATTENDANCE_LABELS[s][0]}: {counts.get(s, 0)}" for s in ATTENDANCE_LABELS)
 
@@ -4354,7 +4383,7 @@ def attendance_image(context: dict) -> bytes:
     draw.text((50, 40), f"{context['class_name']} — {context['lesson']}", font=title_font, fill="#1f4e79")
     draw.text((50, 110), f"{context['school_name']}  ·  davomat", font=text_font, fill="#374151")
     draw.text((50, 152), f"O'qituvchi: {context['teacher_name']}", font=text_font, fill="#374151")
-    times = f"Olingan: {context['taken_at']}" + (f"   Tahrir: {context['updated_at']}" if context["updated_at"] else "")
+    times = f"Dars: {context['when']}" + (f"   Tahrir: {context['updated_at']}" if context["updated_at"] else "")
     draw.text((50, 194), times, font=text_font, fill="#6b7280")
 
     counts = context["counts"]

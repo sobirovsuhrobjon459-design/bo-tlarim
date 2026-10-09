@@ -479,6 +479,9 @@ class Attendance(Base):
     class_id: Mapped[int] = mapped_column(ForeignKey("school_classes.id"), index=True)
     teacher_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     subject: Mapped[str] = mapped_column(String(100), default="")
+    # Dars vaqti — o'qituvchi kiritadi: "11:00" dan "11:45" gacha (Toshkent vaqti)
+    lesson_start: Mapped[str | None] = mapped_column(String(5), default=None)
+    lesson_end: Mapped[str | None] = mapped_column(String(5), default=None)
     taken_at: Mapped[datetime] = mapped_column(default=utcnow)
     updated_at: Mapped[datetime | None] = mapped_column(default=None)
 
@@ -729,10 +732,15 @@ class AttendanceIn(BaseModel):
 
     subject: str = Field(default="", max_length=100)
     marks: dict[int, str] = Field(default_factory=dict)
+    # Dars qachon boshlanib, qachon tugagani — "HH:MM"
+    lesson_start: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    lesson_end: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
 
     @model_validator(mode="after")
     def validate_marks(self) -> "AttendanceIn":
         self.subject = " ".join(self.subject.split())
+        if self.lesson_start and self.lesson_end and self.lesson_end <= self.lesson_start:
+            raise ValueError("Dars tugash vaqti boshlanish vaqtidan keyin bo'lishi kerak")
         for status in self.marks.values():
             if status not in ATTENDANCE_STATUSES:
                 raise ValueError(f"Noto'g'ri holat: {status}")

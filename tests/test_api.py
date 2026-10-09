@@ -1362,11 +1362,27 @@ def test_davomat_matn_rasm_va_pdf():
     cid = school_class["id"]
     detail = client.post(f"/api/classes/{cid}/students", json={"full_name": "Фаррух Комилжонов"}, headers=as_user(701)).json()
     sid = detail["students"][0]["id"]
-    attendance = client.post(f"/api/classes/{cid}/attendance", json={"subject": "Ingliz tili", "marks": {sid: "absent"}},
+    # Dars vaqti: tugash boshlanishdan keyin bo'lishi shart, format HH:MM
+    for start, end in (("11:45", "11:00"), ("9:00", "09:45"), ("25:00", "25:45")):
+        bad = client.post(f"/api/classes/{cid}/attendance", json={"lesson_start": start, "lesson_end": end},
+                          headers=as_user(701))
+        assert bad.status_code == 422, (start, end, bad.status_code)
+    attendance = client.post(f"/api/classes/{cid}/attendance",
+                             json={"subject": "Ingliz tili", "marks": {sid: "absent"},
+                                   "lesson_start": "11:00", "lesson_end": "11:45"},
                              headers=as_user(701)).json()
+    assert (attendance["lesson_start"], attendance["lesson_end"]) == ("11:00", "11:45"), attendance
+    history = client.get(f"/api/classes/{cid}", headers=as_user(701)).json()["attendances"]
+    assert history[0]["lesson_start"] == "11:00" and history[0]["lesson_end"] == "11:45", history[0]
 
     text = client.get(f"/api/attendance/{attendance['id']}/text", headers=as_user(701)).json()["text"]
     assert "10/2 — Ingliz tili darsi" in text and "Aziza Karimova" in text, text
+    assert " · 11:00–11:45" in text, text
+
+    # Tahrirda dars vaqti o'zgaradi
+    edited = client.put(f"/api/attendance/{attendance['id']}", json={"lesson_start": "12:00", "lesson_end": "12:45"},
+                        headers=as_user(701)).json()
+    assert (edited["lesson_start"], edited["lesson_end"]) == ("12:00", "12:45") and edited["updated_at"], edited
     assert "❌ Yo'q:\n1. Фаррух Комилжонов" in text, text
     assert "Ota-onalar" not in text
 

@@ -1301,6 +1301,19 @@ function dayLabel(isoString) {
   return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()}`;
 }
 
+function dateLabel(isoString) {
+  const date = parseUtc(isoString);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()}`;
+}
+
+// Davomat qachon: "09.10.2026 · 11:00–11:45" — sana, keyin dars vaqti.
+// Vaqt kiritilmagan eski davomatlarda — olingan vaqt.
+function attendanceWhen(item) {
+  const time = item.lesson_start && item.lesson_end ? `${item.lesson_start}–${item.lesson_end}` : timeLabel(item.taken_at);
+  return `${dateLabel(item.taken_at)} · ${time}`;
+}
+
 function timeLabel(isoString) {
   const date = parseUtc(isoString);
   const pad = (value) => String(value).padStart(2, "0");
@@ -1326,7 +1339,7 @@ function renderClassAttendanceTab(schoolClass) {
                 .map(
                   (item) => `
                     <button type="button" class="pick-item" data-attendance-id="${item.id}">
-                      <span class="pick-title">🕘 ${timeLabel(item.taken_at)} · ${escapeHtml(lessonName(item.subject))}
+                      <span class="pick-title">🕘 ${attendanceWhen(item)} · ${escapeHtml(lessonName(item.subject))}
                         <small>${item.teacher_name ? `👤 ${escapeHtml(item.teacher_name)} · ` : ""}✅ ${item.counts.present} · ❌ ${item.counts.absent} · 🟡 ${item.counts.excused} · ⏰ ${item.counts.late}${
                           item.updated_at ? " · ✏️" : ""
                         }</small>
@@ -1747,6 +1760,17 @@ function attendanceSubjectFieldHtml(current = "") {
     </select>`;
 }
 
+// Yangi davomat uchun dars vaqti taklifi: hozirgi vaqt (5 daqiqaga
+// yaxlitlab) va 45 daqiqalik dars. O'qituvchi o'zgartira oladi.
+function defaultLessonTime() {
+  const pad = (value) => String(value).padStart(2, "0");
+  const now = new Date();
+  const startMinutes = now.getHours() * 60 + Math.floor(now.getMinutes() / 5) * 5;
+  const endMinutes = Math.min(startMinutes + 45, 23 * 60 + 59);
+  const clock = (minutes) => `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
+  return { start: clock(startMinutes), end: clock(endMinutes) };
+}
+
 /*
   Davomat oynasi. Yangi davomatda hamma oldindan "Bor"; tahrirda saqlangan
   holatlar. O'quvchi qatori bosilganda holat almashadi:
@@ -1761,15 +1785,21 @@ function renderAttendanceForm(schoolClass, existing = null) {
     rows.reduce((result, row) => ({ ...result, [row.status]: (result[row.status] || 0) + 1 }), {});
 
   const timesHtml = existing
-    ? `<p class="subtitle" style="margin:0">🕘 Olingan: ${formatDateTime(existing.taken_at)}${
+    ? `<p class="subtitle" style="margin:0">📅 ${dateLabel(existing.taken_at)}${
         existing.updated_at ? ` · ✏️ Tahrirlangan: ${formatDateTime(existing.updated_at)}` : ""
       }</p>`
-    : `<p class="subtitle" style="margin:0">🕘 ${formatDateTime(new Date().toISOString().slice(0, 19))}</p>`;
+    : `<p class="subtitle" style="margin:0">📅 ${dateLabel(new Date().toISOString().slice(0, 19))}</p>`;
+  const lesson = existing?.lesson_start ? { start: existing.lesson_start, end: existing.lesson_end } : defaultLessonTime();
 
   showPage(`
     ${schoolPageHeader(existing ? "Davomatni tahrirlash" : `Davomat — ${schoolClass.name}`, "back-class")}
     ${timesHtml}
     ${attendanceSubjectFieldHtml(existing ? existing.subject : "")}
+    <div class="lesson-time">
+      <label>Dars boshlandi<input type="time" class="input" id="lesson-start" value="${lesson.start}" required /></label>
+      <span class="lesson-time-dash">—</span>
+      <label>Dars tugadi<input type="time" class="input" id="lesson-end" value="${lesson.end}" required /></label>
+    </div>
     <div id="att-counts-host">${attendanceCountsHtml(counts())}</div>
     <p class="subtitle" style="margin:4px 0 8px">O'quvchini bosing: Bor → Yo'q → Sababli → Kechikdi</p>
     <div class="panel" style="padding:4px 0">
@@ -1816,10 +1846,16 @@ function renderAttendanceForm(schoolClass, existing = null) {
     "click",
     guarded(async () => {
       const subject = document.getElementById("attendance-subject").value.trim();
+      const lessonStart = document.getElementById("lesson-start").value;
+      const lessonEnd = document.getElementById("lesson-end").value;
+      if (!lessonStart || !lessonEnd) throw new Error("Dars qachon boshlanib, qachon tugaganini kiriting");
+      if (lessonEnd <= lessonStart) throw new Error("Dars tugash vaqti boshlanish vaqtidan keyin bo'lishi kerak");
+
       const marks = Object.fromEntries(rows.map((row) => [row.id, row.status]));
+      const body = { subject, marks, lesson_start: lessonStart, lesson_end: lessonEnd };
       const saved = existing
-        ? await api(`/api/attendance/${existing.id}`, { method: "PUT", body: { subject, marks } })
-        : await api(`/api/classes/${schoolClass.id}/attendance`, { method: "POST", body: { subject, marks } });
+        ? await api(`/api/attendance/${existing.id}`, { method: "PUT", body })
+        : await api(`/api/classes/${schoolClass.id}/attendance`, { method: "POST", body });
 
       unsavedChanges = false;
       setExitProtection(false);
@@ -1864,7 +1900,7 @@ function renderAttendanceShare(attendance, schoolClass, { justSaved = false } = 
     ${justSaved ? `<div class="result-number pop">✅</div>` : ""}
     <div class="card" style="cursor:default;display:block">
       <b>${escapeHtml(schoolClass.name)} · ${escapeHtml(lessonName(attendance.subject))}</b>
-      <p class="subtitle" style="margin:4px 0 0">🕘 ${formatDateTime(attendance.taken_at)}${
+      <p class="subtitle" style="margin:4px 0 0">🕘 ${attendanceWhen(attendance)}${
         attendance.updated_at ? ` · ✏️ ${formatDateTime(attendance.updated_at)}` : ""
       }</p>
       ${attendanceCountsHtml(attendance.counts)}
@@ -1891,7 +1927,7 @@ async function renderAttendanceDetail(attendanceId, schoolClass) {
     ${schoolPageHeader(`Davomat — ${schoolClass.name}`, "back-history")}
     <div class="card" style="cursor:default;display:block">
       <b>📚 ${escapeHtml(lessonName(attendance.subject))}</b>
-      <p class="subtitle" style="margin:4px 0 0">🕘 Olingan: ${formatDateTime(attendance.taken_at)}</p>
+      <p class="subtitle" style="margin:4px 0 0">🕘 ${attendanceWhen(attendance)}</p>
       ${attendance.updated_at ? `<p class="subtitle" style="margin:2px 0 0">✏️ Tahrirlangan: ${formatDateTime(attendance.updated_at)}</p>` : ""}
       ${attendanceCountsHtml(attendance.counts)}
     </div>
