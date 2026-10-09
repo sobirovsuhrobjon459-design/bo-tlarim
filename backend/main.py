@@ -3421,7 +3421,8 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
             {
                 "user_id": item.user_id,
                 "name": item.user.full_name if item.user else "Noma'lum",
-                "subjects": _read_subjects(item),
+                # Boshqa xodimlarning ma'lumotlari — faqat rahbariyatga
+                "subjects": _read_subjects(item) if (leader or item.user_id == user.id) else [],
                 "role": item.role,
                 "position": item.position,
                 # Shaxsiy ma'lumotlar — faqat rahbariyatga (va xodimning o'ziga)
@@ -3430,7 +3431,7 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
                 "passport": item.passport if (leader or item.user_id == user.id) else None,
                 "photo_url": item.user.photo_url if item.user else None,
                 "username": item.user.username if item.user else None,
-                "curator_of": curator_of.get(item.user_id, []),
+                "curator_of": curator_of.get(item.user_id, []) if (leader or item.user_id == user.id) else [],
                 "joined_at": item.joined_at,
                 "is_me": item.user_id == user.id,
             }

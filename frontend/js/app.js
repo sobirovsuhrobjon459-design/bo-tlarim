@@ -1439,7 +1439,8 @@ function openEditStudentSheet(schoolClass, student, onSaved) {
 }
 
 function rateBadge(stats) {
-  if (!stats || stats.rate === null || stats.rate === undefined) return `<span class="rate-badge none">—</span>`;
+  // Davomat hali olinmagan — belgi ko'rsatilmaydi ("Hali davomat olinmagan" yozuvi yetarli)
+  if (!stats || stats.rate === null || stats.rate === undefined) return "";
   const level = stats.rate >= 90 ? "good" : stats.rate >= 70 ? "mid" : "low";
   return `<span class="rate-badge ${level}">${stats.rate}%</span>`;
 }
@@ -3139,14 +3140,22 @@ function renderSchoolTeachers(school) {
 
   const canAssign = isOwner(school);
   const canManage = canAssign || Boolean(school.can_remove_members);
+  // Oddiy o'qituvchi boshqa xodimlarning ma'lumotlarini ko'rmaydi — faqat ism va lavozim
+  const leader = Boolean(school.can_see_phones);
   const memberRows = school.members
     .map(
       (member) => `
-        <div class="member-line is-tappable" data-member-id="${member.user_id}">
+        <div class="member-line${leader || member.is_me ? " is-tappable" : ""}" data-member-id="${member.user_id}">
           ${memberAvatarHtml(member)}
           <div class="member-info">
             <b>${escapeHtml(member.name)}${member.is_me ? " (siz)" : ""}</b>
-            <small>${member.role === "owner" ? "Maktab admini" : subjectsText(member.subjects)}</small>
+            ${
+              member.role === "owner"
+                ? `<small>Maktab admini</small>`
+                : leader || member.is_me
+                  ? `<small>${subjectsText(member.subjects)}</small>`
+                  : ""
+            }
             ${
               school.can_see_phones
                 ? member.phone
