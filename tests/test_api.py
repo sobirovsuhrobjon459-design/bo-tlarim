@@ -1250,6 +1250,55 @@ def test_direktor_oz_maktabiga_kodsiz_qaytadi():
     assert again.status_code == 200 and again.json()["school"]["my_role"] == "owner", again.text
 
 
+def test_oqituvchini_shaxsiy_havola_bilan_kodsiz_qoshish():
+    """Admin bir martalik havola yaratadi; o'qituvchi kodsiz qo'shiladi; havola ikkinchi marta ishlamaydi."""
+    reset_database()
+    _set_name(701, "Admin", "Karimov")
+    _set_name(702, "Yangi", "Ustoz")
+    _set_name(703, "Ikkinchi", "Odam")
+    school = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                               "name": "Havola maktabi"}, headers=as_user(701)).json()["school"]
+    classes = client.post("/api/classes", json={"name": "8-A"}, headers=as_user(701)).json()
+
+    created = client.post("/api/schools/invites", headers=as_user(701))
+    assert created.status_code == 200, created.text
+    invite = created.json()
+    assert invite["link"] == f"https://t.me/test_platform_bot?start=inv_{invite['token']}", invite
+    assert school["code"] not in invite["link"], "havolada maktab kodi bo'lmasligi kerak"
+
+    # Havola ma'lumoti: maktab, kim taklif qilgan, kuratorsiz sinflar
+    info = client.get(f"/api/schools/invites/{invite['token']}", headers=as_user(702)).json()
+    assert info["school"]["name"] == "Havola maktabi" and info["invited_by"] == "Admin Karimov"
+    assert [c["name"] for c in info["open_classes"]] == ["8-A"]
+
+    # Kodsiz qo'shilish — kurator sifatida
+    accepted = client.post(f"/api/schools/invites/{invite['token']}/accept",
+                           json={"is_curator": True, "curator_class_id": classes["id"]}, headers=as_user(702))
+    assert accepted.status_code == 200, accepted.text
+    assert client.get(f"/api/classes/{classes['id']}", headers=as_user(702)).json()["is_curator"]
+
+    # Bir martalik: boshqa odam shu havola bilan kira olmaydi
+    again = client.post(f"/api/schools/invites/{invite['token']}/accept", json={"subjects": ["Fizika"]}, headers=as_user(703))
+    assert again.status_code == 410, again.text
+    assert client.get(f"/api/schools/invites/{invite['token']}", headers=as_user(703)).status_code == 410
+
+    # Faqat admin havola yaratadi; muddati o'tgan havola ishlamaydi
+    assert client.post("/api/schools/invites", headers=as_user(702)).status_code == 403
+    second = client.post("/api/schools/invites", headers=as_user(701)).json()
+    session = SessionLocal()
+    try:
+        from backend.database import SchoolInvite
+
+        row = session.scalar(main.select(SchoolInvite).where(SchoolInvite.token == second["token"]))
+        row.expires_at = utcnow() - timedelta(minutes=1)
+        session.commit()
+    finally:
+        session.close()
+    expired = client.post(f"/api/schools/invites/{second['token']}/accept", json={"subjects": ["Fizika"]}, headers=as_user(703))
+    assert expired.status_code == 410, expired.text
+    assert client.get("/api/schools/invites/YOQTOKEN", headers=as_user(703)).status_code == 404
+
+
 def test_davomat_olish_tahrirlash_va_vaqtlar():
     reset_database()
     school_class = _school_with_class()

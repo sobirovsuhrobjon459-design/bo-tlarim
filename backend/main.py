@@ -25,6 +25,7 @@ import logging
 import os
 import random
 import re
+import secrets
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -79,6 +80,7 @@ from .database import (
     CreditPurchaseIn,
     FinishIn,
     IS_SQLITE,
+    InviteAcceptIn,
     KeyQuestion,
     NameUpdateIn,
     Payment,
@@ -89,6 +91,7 @@ from .database import (
     SchoolCreateIn,
     SchoolMember,
     SchoolClass,
+    SchoolInvite,
     SchoolProfileIn,
     StudentImportIn,
     StudentIn,
@@ -3578,23 +3581,15 @@ def lookup_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db
     }
 
 
-@app.post("/api/schools/join")
-def join_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def _join_as_teacher(db: Session, user: User, school: PrivateSchool, body) -> SchoolMember:
     """
-    Maktab kodi bilan maktabga qo'shiladi.
-
-    O'qituvchidan so'raladi: kuratormisiz? Ha — kuratori yo'q sinflardan
+    O'qituvchini maktabga qo'shadi. Kuratormi? Ha — kuratori yo'q sinflardan
     o'zinikini tanlaydi (fan ixtiyoriy). Yo'q — dars beradigan fani majburiy.
+    Maktab egasi (admin) qaytayotgan bo'lsa — admin sifatida qaytadi.
     """
 
-    _require_profile_name(user)
-    if _active_membership(db, user):
-        raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
-
-    school = _school_by_code(db, user, body.code, body.school_id)
     if school.owner_user_id == user.id:
-        member = _rejoin_as_director(db, user, school)
-        return {"school": _school_view(db, member, user)}
+        return _rejoin_as_director(db, user, school)
     if not body.is_curator:
         _require_subjects(body.subjects)
 
@@ -3614,6 +3609,96 @@ def join_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db: 
     db.add(member)
     if curator_class:
         curator_class.curator_user_id = user.id
+    db.flush()
+    return member
+
+
+@app.post("/api/schools/join")
+def join_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Maktab kodi bilan maktabga qo'shiladi."""
+
+    _require_profile_name(user)
+    if _active_membership(db, user):
+        raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
+
+    school = _school_by_code(db, user, body.code, body.school_id)
+    member = _join_as_teacher(db, user, school, body)
+    db.commit()
+    db.refresh(member)
+    return {"school": _school_view(db, member, user)}
+
+
+# ---------- Shaxsiy taklif havolasi (kodsiz qo'shilish) ----------
+
+INVITE_LIFETIME = timedelta(days=7)
+
+
+def _invite_link(token: str) -> str | None:
+    username = _bot_username()
+    return f"https://t.me/{username}?start=inv_{token}" if username else None
+
+
+def _valid_invite(db: Session, token: str) -> SchoolInvite:
+    invite = db.scalar(select(SchoolInvite).where(SchoolInvite.token == token))
+    if not invite:
+        raise HTTPException(status_code=404, detail="Taklif havolasi topilmadi")
+    if invite.used_at is not None:
+        raise HTTPException(status_code=410, detail="Bu taklif havolasi allaqachon ishlatilgan. Admindan yangisini so'rang.")
+    if invite.expires_at < utcnow():
+        raise HTTPException(status_code=410, detail="Taklif havolasining muddati tugagan. Admindan yangisini so'rang.")
+    return invite
+
+
+@app.post("/api/schools/invites")
+def create_invite(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Admin o'qituvchiga yuborish uchun bir martalik, 7 kunlik havola yaratadi."""
+
+    member = _require_school_member(db, user)
+    _require_director(member)
+
+    token = secrets.token_urlsafe(12).replace("-", "").replace("_", "")[:16]
+    invite = SchoolInvite(
+        school_id=member.school_id, token=token, created_by=user.id, expires_at=utcnow() + INVITE_LIFETIME
+    )
+    db.add(invite)
+    db.commit()
+    return {"token": token, "link": _invite_link(token), "expires_at": invite.expires_at,
+            "school_name": member.school.name}
+
+
+@app.get("/api/schools/invites/{token}")
+def invite_info(token: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Havola kimni, qaysi maktabga taklif qilyapti — qo'shilish formasi uchun."""
+
+    invite = _valid_invite(db, token)
+    school = db.get(PrivateSchool, invite.school_id)
+    inviter = db.get(User, invite.created_by)
+    return {
+        "school": {"id": school.id, "name": school.name, "region": school.region, "district": school.district},
+        "invited_by": inviter.full_name if inviter else "",
+        "open_classes": [{"id": item.id, "name": item.name} for item in _open_classes(db, school.id)],
+    }
+
+
+@app.post("/api/schools/invites/{token}/accept")
+def accept_invite(
+    token: str, body: InviteAcceptIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """Shaxsiy havola orqali — kodsiz qo'shilish. Havola shu bilan yopiladi."""
+
+    _require_profile_name(user)
+    if _active_membership(db, user):
+        raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
+
+    invite = db.scalar(select(SchoolInvite).where(SchoolInvite.token == token).with_for_update())
+    if not invite:
+        raise HTTPException(status_code=404, detail="Taklif havolasi topilmadi")
+    invite = _valid_invite(db, token)
+    school = db.get(PrivateSchool, invite.school_id)
+
+    member = _join_as_teacher(db, user, school, body)
+    invite.used_by = user.id
+    invite.used_at = utcnow()
     db.commit()
     db.refresh(member)
     return {"school": _school_view(db, member, user)}

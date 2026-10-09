@@ -409,6 +409,27 @@ class SchoolMember(Base):
     user: Mapped["User"] = relationship()
 
 
+class SchoolInvite(Base):
+    """
+    O'qituvchiga shaxsiy taklif havolasi — kodsiz qo'shilish uchun.
+
+    Admin "O'qituvchi qo'shish"ni bosib, havolani o'qituvchiga yuboradi.
+    Havola BIR MARTALIK va muddatli: tarqalib ketsa ham faqat bir kishi
+    ishlata oladi.
+    """
+
+    __tablename__ = "school_invites"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    token: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    expires_at: Mapped[datetime]
+    used_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
+    used_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
 class SchoolClass(Base):
     """
     Maktab sinfi yoki guruhi (masalan "10/2", "Iqtisod guruhi").
@@ -736,3 +757,16 @@ class CuratorIn(BaseModel):
     """Sinfga kurator tayinlash (bo'sh — kuratorni olib tashlash)."""
 
     user_id: int | None = None
+
+
+class InviteAcceptIn(BaseModel):
+    """Shaxsiy havola orqali qo'shilish: kuratormi (qaysi sinf) yoki fanlari."""
+
+    subjects: list[str] = Field(default_factory=list, max_length=20)
+    is_curator: bool = False
+    curator_class_id: int | None = None
+
+    @model_validator(mode="after")
+    def normalize(self) -> "InviteAcceptIn":
+        self.subjects = _clean_subjects(self.subjects)
+        return self

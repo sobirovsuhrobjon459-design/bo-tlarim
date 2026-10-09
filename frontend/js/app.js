@@ -2751,11 +2751,17 @@ function renderSchoolTeachers(school) {
   showPage(`
     <div data-school-tab="teachers">
       ${schoolTabHeader(`O'qituvchilar (${school.members.length})`, { share: true })}
+      ${
+        isDirector(school)
+          ? `<button class="btn" id="invite-teacher-button" style="margin:4px 0 12px">➕ O'qituvchi qo'shish</button>`
+          : ""
+      }
       <div class="panel" style="padding:4px 0">${memberRows}</div>
     </div>
   `);
 
   wireSchoolTab("teachers");
+  document.getElementById("invite-teacher-button")?.addEventListener("click", guarded(inviteTeacher));
   refreshSchoolInBackground("teachers");
 }
 
@@ -2783,6 +2789,109 @@ function renderSchoolClasses(school) {
 }
 
 // 👤 Profil tabi: ma'lumotlar, tahrirlash va maktabdan chiqish
+/* ---------- O'qituvchini shaxsiy havola bilan qo'shish ---------- */
+
+/*
+  Admin "➕ O'qituvchi qo'shish"ni bosadi → Telegram'da chat (o'qituvchi)
+  tanlanadi → unga bir martalik shaxsiy havola boradi. O'qituvchi havolani
+  bosganda KODSIZ qo'shilish sahifasi ochiladi.
+*/
+async function inviteTeacher() {
+  const invite = await api("/api/schools/invites", { method: "POST", body: {} });
+  const text =
+    `🏫 «${invite.school_name}» maktabiga o'qituvchi sifatida taklif qilaman.\n` +
+    `Havolani bosing — kod kerak emas. Havola bir martalik, 7 kun amal qiladi.`;
+
+  if (!invite.link) {
+    await copyToClipboard(text, "📋 Taklif nusxalandi — o'qituvchiga yuboring");
+    return;
+  }
+  openExternalLink(`https://t.me/share/url?url=${encodeURIComponent(invite.link)}&text=${encodeURIComponent(text)}`);
+}
+
+// Havoladan kelgan o'qituvchi — kodsiz qo'shilish sahifasi
+async function renderInviteJoin(token) {
+  const info = await api(`/api/schools/invites/${encodeURIComponent(token)}`);
+  const nameFields = await profileNameFieldsHtml();
+  const hasOpenClasses = info.open_classes.length > 0;
+
+  showPage(`
+    ${schoolPageHeader("Maktabga qo'shilish", "back-start")}
+    <div class="card" style="cursor:default">
+      <div class="card-icon">🏫</div>
+      <div class="card-body">
+        <h3 style="margin:0">${escapeHtml(info.school.name)}</h3>
+        <p class="subtitle" style="margin:4px 0 0">📍 ${escapeHtml(info.school.region)}, ${escapeHtml(info.school.district)}</p>
+        <p style="margin:8px 0 0">👤 ${escapeHtml(info.invited_by)} sizni taklif qildi — kod kerak emas.</p>
+      </div>
+    </div>
+
+    <p class="section-label" style="margin-top:18px">SIZNING PROFILINGIZ</p>
+    ${nameFields}
+
+    <label class="field-label">Siz sinf kuratorimisiz (sinf rahbari)?</label>
+    <div class="choice-toggle" id="curator-toggle">
+      <button type="button" data-curator="no" class="active">Yo'q</button>
+      <button type="button" data-curator="yes">Ha, kuratorman</button>
+    </div>
+    <div id="curator-class-box" hidden>
+      <label class="field-label" for="curator-class-select">Qaysi sinfning kuratorisiz? <span class="required-mark">*</span></label>
+      ${
+        hasOpenClasses
+          ? `<select id="curator-class-select">
+               <option value="">Sinfni tanlang</option>
+               ${info.open_classes.map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}
+             </select>`
+          : `<p class="subtitle" style="margin:4px 0 0">Kuratorsiz sinf hozircha yo'q — admin sinfingizni yaratgach, sizni tayinlaydi.</p>`
+      }
+    </div>
+
+    <label class="field-label" id="subject-label">Qaysi fanlardan dars berasiz? <span class="required-mark">*</span></label>
+    ${subjectChipsHtml()}
+
+    <button class="btn" id="accept-invite-button" style="margin-top:18px">🏫 Maktabga qo'shilish</button>
+  `);
+
+  protectSchoolForm();
+  wireSubjectChips();
+  document.querySelector('[data-action="back-start"]').addEventListener(
+    "click",
+    guarded(async () => {
+      if (await confirmLeave()) renderPrivateSchoolStart();
+    })
+  );
+
+  let isCurator = false;
+  document.getElementById("curator-toggle").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-curator]");
+    if (!button) return;
+    isCurator = button.dataset.curator === "yes";
+    document.querySelectorAll("#curator-toggle [data-curator]").forEach((item) => item.classList.toggle("active", item === button));
+    document.getElementById("curator-class-box").hidden = !isCurator;
+    document.getElementById("subject-label").innerHTML = isCurator
+      ? "Qaysi fanlardan dars berasiz? (ixtiyoriy)"
+      : 'Qaysi fanlardan dars berasiz? <span class="required-mark">*</span>';
+  });
+
+  document.getElementById("accept-invite-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const subjects = isCurator ? readSelectedSubjects() : readSubjectsOrThrow();
+      const classSelect = document.getElementById("curator-class-select");
+      const curatorClassId = isCurator && classSelect ? Number(classSelect.value) || null : null;
+      if (isCurator && classSelect && !curatorClassId) throw new Error("Qaysi sinfning kuratori ekaningizni tanlang");
+
+      await saveProfileName();
+      const { school } = await api(`/api/schools/invites/${encodeURIComponent(token)}/accept`, {
+        method: "POST",
+        body: { subjects, is_curator: isCurator, curator_class_id: curatorClassId },
+      });
+      showToast(`✅ «${school.name}» maktabiga qo'shildingiz`);
+      renderMySchool(school);
+    })
+  );
+}
+
 function renderSchoolProfile(school) {
   currentSchool = school;
   const me = school.members.find((member) => member.is_me);
@@ -5484,6 +5593,27 @@ async function deliverPdf(basePath, fileName, sentMessage) {
 */
 async function openPendingSchoolInvite() {
   const params = new URLSearchParams(window.location.search);
+
+  // Admin yuborgan shaxsiy havola (?invite=TOKEN) — kodsiz qo'shilish
+  const inviteToken = (params.get("invite") || "").trim();
+  if (/^[A-Za-z0-9]{6,40}$/.test(inviteToken)) {
+    params.delete("invite");
+    const rest = params.toString();
+    history.replaceState(null, "", window.location.pathname + (rest ? `?${rest}` : "") + window.location.hash);
+    try {
+      const { school } = await api("/api/schools/me");
+      if (school) {
+        showToast("Siz allaqachon maktabga a'zosiz");
+        renderMySchool(school);
+      } else {
+        await renderInviteJoin(inviteToken);
+      }
+    } catch (error) {
+      showToast(error.message || "Taklifni ochib bo'lmadi");
+    }
+    return;
+  }
+
   const code = (params.get("school_code") || "").trim().toUpperCase();
   if (!/^[A-Z0-9]{4,20}$/.test(code)) return;
 

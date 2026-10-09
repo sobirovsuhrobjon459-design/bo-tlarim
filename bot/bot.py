@@ -108,11 +108,67 @@ async def _handle_school_invite(message: Message, code: str) -> None:
         await message.answer(text, parse_mode="HTML")
 
 
+def _find_invite(token: str):
+    """Shaxsiy taklif (maktab nomi, kim taklif qilgan) — alohida ipda chaqiriladi."""
+
+    from backend.database import PrivateSchool, SchoolInvite, SessionLocal, User, utcnow
+    from sqlalchemy import select
+
+    with SessionLocal() as session:
+        invite = session.scalar(select(SchoolInvite).where(SchoolInvite.token == token))
+        if not invite:
+            return None, "Taklif havolasi topilmadi."
+        if invite.used_at is not None:
+            return None, "Bu taklif havolasi allaqachon ishlatilgan. Admindan yangisini so'rang."
+        if invite.expires_at < utcnow():
+            return None, "Taklif havolasining muddati tugagan. Admindan yangisini so'rang."
+        school = session.get(PrivateSchool, invite.school_id)
+        inviter = session.get(User, invite.created_by)
+        return (school.name, school.region, school.district, inviter.full_name if inviter else ""), None
+
+
+async def _handle_teacher_invite(message: Message, token: str) -> None:
+    """
+    Admin yuborgan shaxsiy havola bosildi (t.me/bot?start=inv_TOKEN):
+    o'qituvchi KODSIZ qo'shiladi — tugma Mini App'ni shu taklif bilan ochadi.
+    """
+
+    found, error = await asyncio.to_thread(_find_invite, token)
+    if not found:
+        await message.answer(f"❗️ {error}\n\n{SUPPORT_TEXT}")
+        return
+
+    name, region, district, inviter = found
+    text = (
+        f"🏫 <b>{name}</b>\n📍 {region}, {district}\n\n"
+        f"👤 {inviter} sizni shu maktabga o'qituvchi sifatida taklif qildi.\n"
+        "Kod kerak emas — pastdagi tugmani bosing va ismingiz, fan yoki sinfingizni kiriting."
+    )
+    if WEBAPP_URL.startswith("https://"):
+        separator = "&" if "?" in WEBAPP_URL else "?"
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="🏫 Maktabga qo'shilish",
+                    web_app=WebAppInfo(url=f"{WEBAPP_URL}{separator}invite={token}"),
+                )
+            ]]
+        )
+        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        await message.answer(text, parse_mode="HTML")
+
+
 @dispatcher.message(CommandStart())
 async def handle_start(message: Message, command: CommandObject) -> None:
     """Foydalanuvchi botga /start yuborganda ishlaydi (taklif havolasi bilan ham)."""
 
     payload = (command.args or "").strip()
+    if payload.startswith("inv_"):
+        token = payload[len("inv_"):]
+        if token.isalnum() and 6 <= len(token) <= 40:
+            await _handle_teacher_invite(message, token)
+            return
     if payload.startswith("school_"):
         code = payload[len("school_"):].upper()
         if code.isalnum() and 4 <= len(code) <= 20:
