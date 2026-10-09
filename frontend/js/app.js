@@ -2863,7 +2863,7 @@ async function inviteTeacher() {
   const invite = await api("/api/schools/invites", { method: "POST", body: {} });
   const text =
     `🏫 «${invite.school_name}» maktabiga o'qituvchi sifatida taklif qilaman.\n` +
-    `Havolani bosing — kod kerak emas. Havola bir martalik, 7 kun amal qiladi.`;
+    `Havolani bosing — kod kerak emas. Havola bir martalik, 24 soat amal qiladi.`;
 
   if (!invite.link) {
     await copyToClipboard(text, "📋 Taklif nusxalandi — o'qituvchiga yuboring");

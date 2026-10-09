@@ -3710,7 +3710,7 @@ def join_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db: 
 
 # ---------- Shaxsiy taklif havolasi (kodsiz qo'shilish) ----------
 
-INVITE_LIFETIME = timedelta(days=7)
+INVITE_LIFETIME = timedelta(hours=24)
 
 
 def _invite_link(token: str) -> str | None:
@@ -3731,7 +3731,7 @@ def _valid_invite(db: Session, token: str) -> SchoolInvite:
 
 @app.post("/api/schools/invites")
 def create_invite(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Admin o'qituvchiga yuborish uchun bir martalik, 7 kunlik havola yaratadi."""
+    """Admin o'qituvchiga yuborish uchun bir martalik, 24 soatlik havola yaratadi."""
 
     member = _require_school_member(db, user)
     _require_director(member)
