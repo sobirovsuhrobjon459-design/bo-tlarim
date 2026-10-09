@@ -1188,7 +1188,7 @@ function openClassSettings(schoolClass, tab) {
     <p class="subtitle" style="margin:4px 0 0">Kurator o'quvchilarni qo'shadi va sinfni boshqaradi.</p>
     <button class="btn" id="sheet-save-curator" style="margin-top:10px">🎓 Kuratorni saqlash</button>
 
-    <button class="btn btn-ghost" id="sheet-delete-class" style="margin-top:16px">🗑 Sinfni o'chirish</button>
+    ${schoolClass.can_delete ? `<button class="btn btn-ghost" id="sheet-delete-class" style="margin-top:16px">🗑 Sinfni o'chirish</button>` : ""}
     <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Yopish</button>
   `);
 
@@ -1222,7 +1222,7 @@ function openClassSettings(schoolClass, tab) {
     })
   );
 
-  sheet.querySelector("#sheet-delete-class").addEventListener("click", () => {
+  sheet.querySelector("#sheet-delete-class")?.addEventListener("click", () => {
     close();
     renderDeleteClass(schoolClass, tab);
   });
@@ -2588,33 +2588,28 @@ function subjectsText(subjects) {
   return subjects.length ? subjects.map(escapeHtml).join(", ") : "⚠️ Fan kiritilmagan";
 }
 
-function roleBadge(role) {
-  return role === "owner" ? `<span class="badge badge-purple">👑 Admin</span>` : "";
+const POSITION_BADGES = {
+  director: `<span class="badge badge-blue">🎓 Direktor</span>`,
+  deputy: `<span class="badge badge-blue">🎖 Zam direktor</span>`,
+};
+
+function roleBadge(role, position = null) {
+  if (role === "owner") return `<span class="badge badge-purple">👑 Admin</span>`;
+  return POSITION_BADGES[position] || "";
 }
 
-function isDirector(school) {
+// Maktabni ochgan admin — lavozim tayinlaydi, fani so'ralmaydi
+function isOwner(school) {
   return school?.my_role === "owner";
+}
+
+// Rahbariyat (admin, direktor, zam direktor) — sinf yaratadi, o'qituvchi qo'shadi
+function isLeader(school) {
+  return Boolean(school?.is_leader);
 }
 
 function avatarLetter(name) {
   return escapeHtml((name || "?").trim().charAt(0).toUpperCase());
-}
-
-function shareSchoolInvite(school) {
-  // Telegram'ning "ulashish" oynasi: istalgan guruh yoki chatni tanlab yuboradi
-  const text =
-    `🏫 «${school.name}» xususiy maktabi\n📍 ${school.region}, ${school.district}\n\n` +
-    `O'qituvchilar uchun kirish kodi: ${school.code}\n\n` +
-    `Shu maktab o'qituvchisi bo'lsangiz, havolani bosib ro'yxatdan o'ting 👇`;
-
-  if (!school.invite_link) {
-    // Bot havolasi aniqlanmasa — hech bo'lmasa matnni nusxalab olsin
-    copyToClipboard(text, "📋 Taklif matni nusxalandi — guruhga joylang");
-    return;
-  }
-
-  const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(school.invite_link)}&text=${encodeURIComponent(text)}`;
-  openExternalLink(shareUrl);
 }
 
 /* ---------- Maktab bo'limi: pastki menyu (Maktab · O'qituvchilar · Profil) ---------- */
@@ -2684,29 +2679,27 @@ async function refreshSchoolInBackground(tab) {
   }
 }
 
-function schoolTabHeader(title, { share = false } = {}) {
+function schoolTabHeader(title) {
   return `
     <div class="page-header">
       <button class="back-button" type="button" data-action="back-folder" style="margin:0">←</button>
       <h2 style="margin:0;flex:1">${escapeHtml(title)}</h2>
-      ${share ? `<button type="button" class="share-pill" id="share-school-button">📤 Ulashish</button>` : ""}
     </div>`;
 }
 
 function wireSchoolTab(tab) {
   showSchoolNav(tab);
   document.querySelector('[data-action="back-folder"]').addEventListener("click", renderSchoolFolder);
-  document.getElementById("share-school-button")?.addEventListener("click", () => renderSchoolInvite(currentSchool, tab));
 }
 
-// 🏫 Maktab tabi: ma'lumot va kirish kodi (ulashish — tepada kichik tugma)
+// 🏫 Maktab tabi: maktab haqida ma'lumot
 function renderMySchool(school, { refresh = true } = {}) {
   currentSchool = school;
   schoolMembershipKnown = true;
 
   showPage(`
     <div data-school-tab="school">
-      ${schoolTabHeader(school.name, { share: true })}
+      ${schoolTabHeader(school.name)}
       <div class="card" style="cursor:default">
         <div class="card-icon">🏫</div>
         <div class="card-body">
@@ -2716,7 +2709,7 @@ function renderMySchool(school, { refresh = true } = {}) {
         </div>
       </div>
       ${
-        school.my_subjects.length || isDirector(school)
+        school.my_subjects.length || isOwner(school)
           ? ""
           : `<div class="card warning-card" data-action="fill-subjects">
                <div class="card-icon">⚠️</div>
@@ -2735,76 +2728,110 @@ function renderMySchool(school, { refresh = true } = {}) {
   if (refresh) refreshSchoolInBackground("school");
 }
 
-/*
-  "Ulashish" ekrani — maktabga o'qituvchilarga kirish huquqini berish:
-  kodni nusxalash va taklifni guruhga yuborish shu yerda.
-*/
-function renderSchoolInvite(school, fromTab = "school") {
-  showPage(`
-    ${schoolPageHeader("Kirish huquqini berish", "back-tab")}
-    <p class="subtitle" style="margin-top:0">
-      Maktabingiz o'qituvchilari shu kod bilan qo'shiladi. Kodni nusxalab yuboring yoki taklifni
-      guruhga ulashing — ko'rgan o'qituvchilar o'zini shu maktabda ro'yxatdan o'tkazadi.
-    </p>
-
-    <p class="section-label" style="margin-top:14px">O'QITUVCHILAR UCHUN KIRISH KODI</p>
-    <div class="card" style="cursor:default">
-      <div class="card-body" style="width:100%">
-        ${copyCodeChip(school.code)}
-        <p class="subtitle" style="margin:8px 0 0">Kodni bosing — nusxalanadi.</p>
-      </div>
-    </div>
-
-    <button class="btn" id="send-invite-button" style="margin-top:16px">📤 Guruhlarga yuborish</button>
-    <p class="subtitle" style="margin:8px 0 0">
-      Telegram'da guruh yoki chatni tanlaysiz. Havolani bosgan o'qituvchiga bot maktab nomi va kodni
-      yozib, "Maktabga qo'shilish" tugmasini beradi.
-    </p>
-  `);
-
-  document.querySelector('[data-action="back-tab"]').addEventListener("click", () => openSchoolTab(fromTab));
-  document.getElementById("send-invite-button").addEventListener("click", () => shareSchoolInvite(school));
-}
-
 // 👥 O'qituvchilar tabi — hammasi bitta ekranda
 function renderSchoolTeachers(school) {
   currentSchool = school;
 
+  const canAssign = isOwner(school);
   const memberRows = school.members
     .map(
       (member) => `
-        <div class="member-line">
+        <div class="member-line${canAssign && member.role !== "owner" ? " is-tappable" : ""}" data-member-id="${member.user_id}">
           <div class="member-avatar">${avatarLetter(member.name)}</div>
           <div class="member-info">
             <b>${escapeHtml(member.name)}${member.is_me ? " (siz)" : ""}</b>
             <small>${member.role === "owner" ? "Maktab admini" : subjectsText(member.subjects)}</small>
           </div>
-          ${roleBadge(member.role)}
+          ${roleBadge(member.role, member.position)}
         </div>`
     )
     .join("");
 
   showPage(`
     <div data-school-tab="teachers">
-      ${schoolTabHeader(`O'qituvchilar (${school.members.length})`, { share: true })}
+      ${schoolTabHeader(`O'qituvchilar (${school.members.length})`)}
+      <div class="panel" style="padding:4px 0">${memberRows}</div>
       ${
-        isDirector(school)
-          ? `<button class="btn" id="invite-teacher-button" style="margin:4px 0 12px">➕ O'qituvchi qo'shish</button>`
+        canAssign && school.members.length > 1
+          ? `<p class="subtitle" style="margin:8px 4px 0">O'qituvchini bosib, lavozim bering: direktor yoki zam direktor.</p>`
           : ""
       }
-      <div class="panel" style="padding:4px 0">${memberRows}</div>
+      ${
+        isLeader(school)
+          ? `<button type="button" class="fab" id="invite-teacher-button" aria-label="O'qituvchi qo'shish" title="O'qituvchi qo'shish">
+               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                 <circle cx="9" cy="8" r="4"/><path d="M2 21v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 4 1.5"/><path d="M19 14v6M16 17h6"/>
+               </svg>
+             </button>`
+          : ""
+      }
     </div>
   `);
 
   wireSchoolTab("teachers");
   document.getElementById("invite-teacher-button")?.addEventListener("click", guarded(inviteTeacher));
+  if (canAssign) {
+    document.querySelectorAll(".member-line.is-tappable").forEach((line) => {
+      const member = school.members.find((item) => item.user_id === Number(line.dataset.memberId));
+      line.addEventListener("click", () => openPositionSheet(member));
+    });
+  }
   refreshSchoolInBackground("teachers");
+}
+
+/*
+  Lavozim tayinlash (faqat admin): Direktor — bitta; Zam direktor — bir nechta.
+  Ikkalasi ham sinf yaratadi, kurator tayinlaydi va o'qituvchi qo'shadi;
+  sinfni o'chirish faqat admin va direktorda.
+*/
+function openPositionSheet(member) {
+  const options = [
+    { id: "", icon: "👤", title: "O'qituvchi", note: "Davomat oladi, kurator bo'lsa sinfini boshqaradi" },
+    { id: "deputy", icon: "🎖", title: "Zam direktor", note: "Sinf yaratadi, kurator tayinlaydi, o'qituvchi qo'shadi" },
+    { id: "director", icon: "🎓", title: "Direktor", note: "Zam direktor huquqlari + sinflarni o'chira oladi" },
+  ];
+  const current = member.position || "";
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 4px">${escapeHtml(member.name)}</h3>
+    <p class="subtitle" style="margin:0 0 12px">Lavozimni tanlang</p>
+    <div class="panel pick-list">
+      ${options
+        .map(
+          (option) => `
+            <button type="button" class="pick-item${option.id === current ? " is-selected" : ""}" data-position="${option.id}">
+              <span class="pick-title">${option.icon} ${option.title}<small>${option.note}</small></span>
+              <span>${option.id === current ? "✓" : ""}</span>
+            </button>`
+        )
+        .join("")}
+    </div>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:12px">Yopish</button>
+  `);
+
+  sheet.querySelectorAll("[data-position]").forEach((button) => {
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        const position = button.dataset.position || null;
+        if ((position || "") === current) return close();
+        if (position === "director" && !(await askConfirm(`${member.name} direktor bo'ladimi? Avvalgi direktor (bo'lsa) oddiy o'qituvchiga qaytadi.`))) return;
+        const { school } = await api(`/api/schools/members/${member.user_id}/position`, {
+          method: "PUT",
+          body: { position },
+        });
+        currentSchool = school;
+        close();
+        showToast(position ? `✅ ${member.name} — ${position === "director" ? "Direktor" : "Zam direktor"}` : `${member.name} — oddiy o'qituvchi`);
+        renderSchoolTeachers(school);
+      })
+    );
+  });
 }
 
 // 📚 Sinflarim tabi — o'qituvchi faqat o'zi dars beradigan sinf/guruhlari
 function renderSchoolClasses(school) {
   currentSchool = school;
-  const director = isDirector(school);
+  const director = isLeader(school);
 
   showPage(`
     <div data-school-tab="classes">
@@ -2813,7 +2840,7 @@ function renderSchoolClasses(school) {
         director
           ? `<button class="btn" id="create-class-button" style="margin-top:4px">➕ Sinf yaratish</button>
              <p class="subtitle" style="margin:6px 0 0">Sinf yaratgach, unga kurator (sinf rahbari) tayinlang — o'quvchilarni kurator qo'shadi.</p>`
-          : `<p class="subtitle" style="margin:0">Sinflarni admin yaratadi. Kurator bo'lgan sinfingizni boshqarasiz, qolgan sinflarda davomat olasiz.</p>`
+          : `<p class="subtitle" style="margin:0">Sinflarni maktab rahbariyati yaratadi. Kurator bo'lgan sinfingizni boshqarasiz, qolgan sinflarda davomat olasiz.</p>`
       }
       <div id="my-classes" style="margin-top:14px"><p class="subtitle" style="margin:6px 0 0">⏳ Yuklanmoqda...</p></div>
     </div>
@@ -2939,14 +2966,22 @@ function renderSchoolProfile(school) {
         <div class="member-avatar" style="width:52px;height:52px;font-size:20px">${avatarLetter(me && me.name)}</div>
         <div class="card-body" style="width:100%">
           <h3 style="margin:0">${escapeHtml(me ? me.name : "")}</h3>
-          <p style="margin:6px 0 0">${roleBadge(school.my_role) || `<span class="badge badge-blue">O'qituvchi</span>`}</p>
+          <p style="margin:6px 0 0">${roleBadge(school.my_role, school.my_position) || `<span class="badge badge-blue">O'qituvchi</span>`}</p>
         </div>
       </div>
 
       <div class="panel profile-facts">
         <div class="row-between"><span class="subtitle" style="margin:0">Maktab</span><b>${escapeHtml(school.name)}</b></div>
-        <div class="row-between"><span class="subtitle" style="margin:0">${isDirector(school) ? "Lavozim" : "Fanlar"}</span><b>${isDirector(school) ? "Maktab admini" : subjectsText(school.my_subjects)}</b></div>
+        <div class="row-between"><span class="subtitle" style="margin:0">${isOwner(school) ? "Lavozim" : "Fanlar"}</span><b>${isOwner(school) ? "Maktab admini" : subjectsText(school.my_subjects)}</b></div>
         <div class="row-between"><span class="subtitle" style="margin:0">Joylashuv</span><b>${escapeHtml(school.district)}</b></div>
+      </div>
+
+      <p class="section-label" style="margin-top:18px">MAKTAB KODI</p>
+      <div class="card" style="cursor:default">
+        <div class="card-body" style="width:100%">
+          ${copyCodeChip(school.code)}
+          <p class="subtitle" style="margin:8px 0 0">Maktabdan chiqishda shu kod so'raladi. Bosing — nusxalanadi.</p>
+        </div>
       </div>
 
       <button class="btn" id="edit-school-profile" style="margin-top:20px">✏️ Profilni tahrirlash</button>
@@ -2966,7 +3001,7 @@ async function renderSchoolProfileEdit(school) {
     ${schoolPageHeader("Profilim", "back-school")}
     ${nameFields}
     ${
-      isDirector(school)
+      isOwner(school)
         ? ""
         : `<label class="field-label">Qaysi fanlardan dars berasiz? <span class="required-mark">*</span></label>
            ${subjectChipsHtml(school.my_subjects)}`
@@ -2975,7 +3010,7 @@ async function renderSchoolProfileEdit(school) {
   `);
 
   protectSchoolForm();
-  if (!isDirector(school)) wireSubjectChips();
+  if (!isOwner(school)) wireSubjectChips();
   document.querySelector('[data-action="back-school"]').addEventListener(
     "click",
     guarded(async () => {
@@ -2986,7 +3021,7 @@ async function renderSchoolProfileEdit(school) {
   document.getElementById("save-school-profile").addEventListener(
     "click",
     guarded(async () => {
-      const subjects = isDirector(school) ? [] : readSubjectsOrThrow();
+      const subjects = isOwner(school) ? [] : readSubjectsOrThrow();
 
       await saveProfileName();
       const { school: updated } = await api("/api/schools/me/profile", { method: "PUT", body: { subjects } });
@@ -3007,7 +3042,7 @@ function renderLeaveSchool(school) {
       </div>
     </div>
     ${
-      isDirector(school) && school.members.some((member) => !member.is_me)
+      isOwner(school) && school.members.some((member) => !member.is_me)
         ? `<label class="field-label" for="successor-select">Adminlikni kimga topshirasiz? <span class="required-mark">*</span></label>
            <select id="successor-select">
              <option value="">O'qituvchini tanlang</option>

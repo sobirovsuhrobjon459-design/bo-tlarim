@@ -4,6 +4,7 @@ Ma'lumotlar bazasi fayli: .env sozlamalari, bazaga ulanish, barcha jadvallar
 """
 
 import os
+from typing import Literal
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -401,6 +402,8 @@ class SchoolMember(Base):
     school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     role: Mapped[str] = mapped_column(String(20), default="teacher")  # owner | teacher
+    # Lavozim — admin tayinlaydi: director (direktor) | deputy (zam direktor) | None
+    position: Mapped[str | None] = mapped_column(String(20), default=None)
     subjects: Mapped[str] = mapped_column(Text, default="[]")  # JSON ro'yxat: ["Matematika", ...]
     joined_at: Mapped[datetime] = mapped_column(default=utcnow)
     left_at: Mapped[datetime | None] = mapped_column(default=None)
@@ -759,6 +762,12 @@ class StudentsBulkIn(BaseModel):
     """Ko'rib chiqilgan ro'yxatni bir yo'la qo'shish."""
 
     names: list[str] = Field(min_length=1, max_length=500)
+
+
+class PositionIn(BaseModel):
+    """O'qituvchiga lavozim: direktor, zam direktor yoki oddiy o'qituvchi (bo'sh)."""
+
+    position: Literal["director", "deputy"] | None = None
 
 
 class CuratorIn(BaseModel):

@@ -81,6 +81,7 @@ from .database import (
     FinishIn,
     IS_SQLITE,
     InviteAcceptIn,
+    PositionIn,
     KeyQuestion,
     NameUpdateIn,
     Payment,
@@ -144,6 +145,7 @@ def _add_missing_columns() -> None:
         "test_attempts": {"offline_name": "VARCHAR(200)", "saved_answers": "TEXT"},
         "users": {"username": "VARCHAR(64)"},
         "school_classes": {"curator_user_id": "INTEGER"},
+        "school_members": {"position": "VARCHAR(20)"},
         "attendances": {"lesson_start": "VARCHAR(5)", "lesson_end": "VARCHAR(5)"},
         "key_questions": {"label": "VARCHAR(20)"},
         "payments": {
@@ -3302,7 +3304,9 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
     school = member.school
     members = [item for item in school.members if item.left_at is None]
     # Avval egasi, keyin qo'shilish tartibida
-    members.sort(key=lambda item: (item.role != "owner", item.joined_at, item.id))
+    # Avval admin, keyin direktor, zam direktor, so'ng qo'shilish tartibida
+    rank = {"director": 1, "deputy": 2}
+    members.sort(key=lambda item: (0 if item.role == "owner" else rank.get(item.position, 3), item.joined_at, item.id))
 
     return {
         "id": school.id,
@@ -3312,6 +3316,8 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         "code": school.code,
         "created_at": school.created_at,
         "my_role": member.role,
+        "my_position": member.position,
+        "is_leader": _is_director(member),
         "my_subjects": _read_subjects(member),
         "invite_link": school_invite_link(school.code),
         "members": [
@@ -3320,6 +3326,7 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
                 "name": item.user.full_name if item.user else "Noma'lum",
                 "subjects": _read_subjects(item),
                 "role": item.role,
+                "position": item.position,
                 "joined_at": item.joined_at,
                 "is_me": item.user_id == user.id,
             }
@@ -3705,6 +3712,47 @@ def accept_invite(
     return {"school": _school_view(db, member, user)}
 
 
+@app.put("/api/schools/members/{user_id}/position")
+def set_member_position(
+    user_id: int, body: PositionIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """
+    Admin (maktabni ochgan) o'qituvchiga lavozim beradi: direktor yoki zam
+    direktor. Direktor bitta bo'ladi — yangisi tayinlansa, avvalgisi oddiy
+    o'qituvchiga qaytadi. Zam direktor bir nechta bo'lishi mumkin.
+    """
+
+    member = _require_school_member(db, user)
+    if member.role != "owner":
+        raise HTTPException(status_code=403, detail="Lavozimni faqat maktab admini tayinlaydi")
+    target = db.scalar(
+        select(SchoolMember).where(
+            SchoolMember.school_id == member.school_id,
+            SchoolMember.user_id == user_id,
+            SchoolMember.left_at.is_(None),
+        )
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Bu o'qituvchi maktabingizda yo'q")
+    if target.role == "owner":
+        raise HTTPException(status_code=422, detail="Admin lavozimi o'zgartirilmaydi")
+
+    if body.position == "director":
+        for other in db.scalars(
+            select(SchoolMember).where(
+                SchoolMember.school_id == member.school_id,
+                SchoolMember.position == "director",
+                SchoolMember.left_at.is_(None),
+                SchoolMember.id != target.id,
+            )
+        ):
+            other.position = None
+    target.position = body.position
+    db.commit()
+    db.refresh(member)
+    return {"school": _school_view(db, member, user)}
+
+
 @app.put("/api/schools/me/profile")
 def update_school_profile(body: SchoolProfileIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """O'qituvchi maktabdagi profilini (fanlarini) yangilaydi."""
@@ -3764,6 +3812,7 @@ def leave_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db:
         member.role = "teacher"
         if successor:
             successor.role = "owner"
+            successor.position = None  # endi u admin
             school.owner_user_id = successor.user_id
 
     db.commit()
@@ -3809,8 +3858,18 @@ def _school_class(db: Session, user: User, class_id: int) -> tuple[SchoolClass, 
     return school_class, member
 
 
+POSITION_LABELS = {"director": "Direktor", "deputy": "Zam direktor"}
+
+
 def _is_director(member: SchoolMember) -> bool:
-    return member.role == "owner"
+    """Maktab rahbariyati: admin (maktabni ochgan), direktor va zam direktor.
+    Sinf yaratadi, kurator tayinlaydi, o'qituvchi taklif qiladi, davomatni tahrirlaydi."""
+    return member.role == "owner" or member.position in POSITION_LABELS
+
+
+def _can_delete_classes(member: SchoolMember) -> bool:
+    """Sinfni o'chirish — faqat admin va direktor (zam direktor emas)."""
+    return member.role == "owner" or member.position == "director"
 
 
 def _can_manage_class(school_class: SchoolClass, member: SchoolMember) -> bool:
@@ -3820,7 +3879,7 @@ def _can_manage_class(school_class: SchoolClass, member: SchoolMember) -> bool:
 
 def _require_director(member: SchoolMember) -> None:
     if not _is_director(member):
-        raise HTTPException(status_code=403, detail="Buni faqat maktab admini qila oladi")
+        raise HTTPException(status_code=403, detail="Buni faqat maktab admini, direktor yoki zam direktor qila oladi")
 
 
 def _managed_class(db: Session, user: User, class_id: int) -> SchoolClass:
@@ -3832,7 +3891,8 @@ def _managed_class(db: Session, user: User, class_id: int) -> SchoolClass:
 
 def _director_class(db: Session, user: User, class_id: int) -> SchoolClass:
     school_class, member = _school_class(db, user, class_id)
-    _require_director(member)
+    if not _can_delete_classes(member):
+        raise HTTPException(status_code=403, detail="Sinfni faqat maktab admini yoki direktor o'chira oladi")
     return school_class
 
 
@@ -3905,6 +3965,7 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
         "is_curator": bool(member and school_class.curator_user_id == member.user_id),
         "can_manage": bool(member and _can_manage_class(school_class, member)),
         "is_director": bool(member and _is_director(member)),
+        "can_delete": bool(member and _can_delete_classes(member)),
     }
     if with_details:
         stats = _student_attendance_stats(db, [student.id for student in students])

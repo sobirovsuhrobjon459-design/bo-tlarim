@@ -2227,3 +2227,48 @@ select option {
   padding-bottom: 12px;
   color: var(--color-text-muted);
 }
+
+/* Suzuvchi "O'qituvchi qo'shish" tugmasi — sahifa aylantirilsa ham joyida turadi */
+.fab {
+  position: fixed;
+  right: max(18px, calc((100vw - 520px) / 2 + 18px));
+  bottom: calc(86px + env(safe-area-inset-bottom));
+  z-index: 25;
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: linear-gradient(135deg, #818cf8, #6366f1);
+  border: 0;
+  border-radius: 50%;
+  box-shadow: 0 8px 22px rgba(79, 70, 229, 0.45);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.fab svg {
+  width: 26px;
+  height: 26px;
+}
+
+.fab:active {
+  transform: scale(0.92);
+}
+
+body.keyboard-open .fab {
+  visibility: hidden;
+}
+
+/* Admin o'qituvchini bosib lavozim beradi */
+.member-line.is-tappable {
+  cursor: pointer;
+}
+
+.member-line.is-tappable:active {
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.pick-item.is-selected .pick-title {
+  color: var(--color-primary);
+}

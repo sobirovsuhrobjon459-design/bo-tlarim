@@ -1081,6 +1081,58 @@ def _school_with_class(tg_id: int = 701) -> dict:
     return created.json()
 
 
+def test_lavozimlar_direktor_va_zam_direktor():
+    """Admin lavozim beradi: direktor (bitta) va zam direktor. Ikkalasi sinf yaratadi va
+    o'qituvchi taklif qiladi; sinfni faqat admin va direktor o'chiradi."""
+    reset_database()
+    _set_name(701, "Maktab", "Admini")
+    school = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                               "name": "Lavozim maktabi"}, headers=as_user(701)).json()["school"]
+    for tg_id in (702, 703, 704):
+        _set_name(tg_id, "Ustoz", f"Nomer{tg_id}")
+        assert client.post("/api/schools/join", json={"code": school["code"], "subjects": ["Fizika"]},
+                           headers=as_user(tg_id)).status_code == 200
+    ids = {m["name"]: m["user_id"] for m in client.get("/api/schools/me", headers=as_user(701)).json()["school"]["members"]}
+    uid = {tg: ids[f"Ustoz Nomer{tg}"] for tg in (702, 703, 704)}
+
+    # Oddiy o'qituvchi sinf yarata olmaydi, lavozim ham bera olmaydi
+    assert client.post("/api/classes", json={"name": "1-A"}, headers=as_user(702)).status_code == 403
+    assert client.put(f"/api/schools/members/{uid[703]}/position", json={"position": "deputy"},
+                      headers=as_user(702)).status_code == 403
+    assert client.put(f"/api/schools/members/{uid[702]}/position", json={"position": "boss"},
+                      headers=as_user(701)).status_code == 422
+
+    # Admin: 702 — direktor, 703 — zam direktor
+    for tg, position in ((702, "director"), (703, "deputy")):
+        r = client.put(f"/api/schools/members/{uid[tg]}/position", json={"position": position}, headers=as_user(701))
+        assert r.status_code == 200, r.text
+    me = client.get("/api/schools/me", headers=as_user(703)).json()["school"]
+    assert me["my_position"] == "deputy" and me["is_leader"] is True, me
+    assert [m["position"] for m in me["members"]][:3] == [None, "director", "deputy"], me["members"]
+
+    # Zam direktor: sinf yaratadi, taklif qiladi, lekin o'chira olmaydi
+    created = client.post("/api/classes", json={"name": "1-A"}, headers=as_user(703)).json()
+    assert created["is_director"] is True and created["can_delete"] is False, created
+    assert client.post("/api/schools/invites", json={}, headers=as_user(703)).status_code == 200
+    assert client.delete(f"/api/classes/{created['id']}", headers=as_user(703)).status_code == 403
+    # Direktor o'chira oladi
+    assert client.get(f"/api/classes/{created['id']}", headers=as_user(702)).json()["can_delete"] is True
+    assert client.delete(f"/api/classes/{created['id']}", headers=as_user(702)).status_code == 200
+
+    # Direktor bitta: 704 direktor bo'lsa, 702 oddiy o'qituvchiga qaytadi
+    client.put(f"/api/schools/members/{uid[704]}/position", json={"position": "director"}, headers=as_user(701))
+    positions = {m["user_id"]: m["position"] for m in client.get("/api/schools/me", headers=as_user(701)).json()["school"]["members"]}
+    assert positions[uid[704]] == "director" and positions[uid[702]] is None, positions
+    assert client.post("/api/classes", json={"name": "2-A"}, headers=as_user(702)).status_code == 403
+
+    # Lavozimni olib tashlash va admin lavozimiga tegib bo'lmasligi
+    assert client.put(f"/api/schools/members/{uid[703]}/position", json={"position": None},
+                      headers=as_user(701)).json()["school"]["members"]
+    admin_id = ids["Maktab Admini"]
+    assert client.put(f"/api/schools/members/{admin_id}/position", json={"position": "deputy"},
+                      headers=as_user(701)).status_code == 422
+
+
 def test_sinf_yaratish_va_oquvchilar():
     reset_database()
     # Maktabga a'zo bo'lmasa sinf ochib bo'lmaydi
