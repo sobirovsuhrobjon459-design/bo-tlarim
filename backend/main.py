@@ -787,6 +787,17 @@ def _rasch_items(test: Test) -> list[tuple[int, str]]:
     return items
 
 
+def _school_grade(percent: float) -> str:
+    """Bepul testlar uchun oddiy 5 ballik baho: 86%+ — 5, 71%+ — 4, 56%+ — 3, qolgani — 2."""
+    if percent >= 86:
+        return "5"
+    if percent >= 71:
+        return "4"
+    if percent >= 56:
+        return "3"
+    return "2"
+
+
 def build_rasch_report(db: Session, test: Test) -> dict:
     """
     Test natijalari Rasch modeli bo'yicha: har bir qatnashchining balli,
@@ -800,6 +811,9 @@ def build_rasch_report(db: Session, test: Test) -> dict:
     results = best_attempts(db, test)
     items = _rasch_items(test)
     total_questions = _question_count(test)
+    # Rasch (Milliy sertifikat uslubidagi ball) — faqat PULLIK testlarda.
+    # Bepul testda — oddiy natija: to'g'ri javoblar, foiz va 5 ballik baho.
+    uses_rasch = (test.price or 0) > 0
 
     correct_refs: dict[int, set[int]] = {attempt.id: set() for attempt, _ in results}
     if correct_refs:
@@ -811,7 +825,7 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             correct_refs[attempt_id].add(question_ref)
 
     matrix = [[1 if ref in correct_refs[attempt.id] else 0 for ref, _ in items] for attempt, _ in results]
-    rasch = rasch_scores(matrix)
+    scores = rasch_scores(matrix)["scores"] if uses_rasch else [None] * len(results)
 
     rows = [
         {
@@ -823,15 +837,16 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             "percent": attempt.percent,
             "seconds": attempt.seconds,
             "ball": score,
-            "grade": grade_for(score),
+            "grade": grade_for(score) if uses_rasch else _school_grade(attempt.percent),
         }
-        for (attempt, name), score in zip(results, rasch["scores"])
+        for (attempt, name), score in zip(results, scores)
     ]
 
-    # O'rin: ball bo'yicha; teng ball — teng o'rin (1, 1, 3 ...)
-    rows.sort(key=lambda row: (-row["ball"], -row["percent"], row["name"].lower()))
+    # O'rin: pullikda — Rasch balli, bepulda — to'g'ri javoblar/foiz; teng natija — teng o'rin (1, 1, 3 ...)
+    sort_key = (lambda row: row["ball"]) if uses_rasch else (lambda row: (row["correct"], row["percent"]))
+    rows.sort(key=lambda row: (-row["ball"] if uses_rasch else -row["correct"], -row["percent"], row["name"].lower()))
     for index, row in enumerate(rows):
-        same_as_previous = index and rows[index - 1]["ball"] == row["ball"]
+        same_as_previous = index and sort_key(rows[index - 1]) == sort_key(row)
         row["rank"] = rows[index - 1]["rank"] if same_as_previous else index + 1
 
     participants = len(rows)
@@ -846,16 +861,19 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             }
         )
 
-    top_count = sum(1 for row in rows if row["ball"] >= 65)
+    top_count = sum(1 for row in rows if (row["ball"] >= 65 if uses_rasch else row["grade"] == "5"))
     best = rows[0] if rows else None
 
     return {
         "rows": rows,
         "items": item_stats,
+        "uses_rasch": uses_rasch,
         "summary": {
             "participants": participants,
-            "avg_ball": round(sum(row["ball"] for row in rows) / participants, 2) if participants else 0,
-            "max_ball": best["ball"] if best else 0,
+            "uses_rasch": uses_rasch,
+            "avg_ball": round(sum(row["ball"] for row in rows) / participants, 2) if participants and uses_rasch else None,
+            "max_ball": best["ball"] if best else None,
+            "max_percent": max((row["percent"] for row in rows), default=0),
             "max_name": best["name"] if best else "",
             "top_count": top_count,
             "top_share": round(top_count / participants * 100, 1) if participants else 0,
@@ -930,12 +948,20 @@ def _section_heading(text: str, styles: dict) -> list:
 
 
 def _stat_tiles(summary: dict, styles: dict, width: float):
-    tiles = [
-        ("ISHTIROKCHILAR", f"{summary['participants']}", ""),
-        ("O'RTACHA BALL", f"{summary['avg_ball']:.2f}", f"o'rtacha foiz {summary['avg_percent']}%"),
-        ("ENG YUQORI BALL", f"{summary['max_ball']:.2f}", summary["max_name"]),
-        ("A+ VA A", f"{summary['top_count']} ta", f"ishtirokchilarning {summary['top_share']}%"),
-    ]
+    if summary.get("uses_rasch"):
+        tiles = [
+            ("ISHTIROKCHILAR", f"{summary['participants']}", ""),
+            ("O'RTACHA BALL", f"{summary['avg_ball']:.2f}", f"o'rtacha foiz {summary['avg_percent']}%"),
+            ("ENG YUQORI BALL", f"{summary['max_ball']:.2f}", summary["max_name"]),
+            ("A+ VA A", f"{summary['top_count']} ta", f"ishtirokchilarning {summary['top_share']}%"),
+        ]
+    else:
+        tiles = [
+            ("ISHTIROKCHILAR", f"{summary['participants']}", ""),
+            ("O'RTACHA FOIZ", f"{summary['avg_percent']}%", ""),
+            ("ENG YUQORI", f"{summary['max_percent']}%", summary["max_name"]),
+            ("A'LO (5)", f"{summary['top_count']} ta", f"ishtirokchilarning {summary['top_share']}%"),
+        ]
 
     gap = 8
     tile_width = (width - gap * 3) / 4
@@ -1037,8 +1063,9 @@ def _question_list(title: str, items: list[dict], title_style, styles: dict, wid
             HRFlowable(width="100%", thickness=0.5, color=REPORT_GRID, spaceBefore=3, spaceAfter=5), table]
 
 
-def _results_table(rows: list[dict], styles: dict, width: float) -> Table:
-    header = ["O'rin", "F.I.Sh.", "To'g'ri", "Xato", "Foiz", "Ball", "Daraja"]
+def _results_table(rows: list[dict], styles: dict, width: float, uses_rasch: bool = True) -> Table:
+    header = ["O'rin", "F.I.Sh.", "To'g'ri", "Xato", "Foiz", "Ball", "Daraja"] if uses_rasch else \
+        ["O'rin", "F.I.Sh.", "To'g'ri", "Xato", "Foiz", "Baho"]
     data = [[Paragraph(f"<font color='white'>{xml_escape(text)}</font>", styles["cell_bold"]) for text in header]]
     for row in rows:
         data.append(
@@ -1048,12 +1075,12 @@ def _results_table(rows: list[dict], styles: dict, width: float) -> Table:
                 Paragraph(f"{row['correct']}/{row['total']}", styles["cell"]),
                 Paragraph(str(row["wrong"]), styles["cell"]),
                 Paragraph(f"{row['percent']}%", styles["cell"]),
-                Paragraph(f"{row['ball']:.2f}", styles["cell_bold"]),
+                *([Paragraph(f"{row['ball']:.2f}", styles["cell_bold"])] if uses_rasch else []),
                 Paragraph(xml_escape(row["grade"]), styles["cell_bold"]),
             ]
         )
 
-    column_widths = [0.08, 0.38, 0.11, 0.08, 0.11, 0.12, 0.12]
+    column_widths = [0.08, 0.38, 0.11, 0.08, 0.11, 0.12, 0.12] if uses_rasch else [0.09, 0.44, 0.12, 0.09, 0.12, 0.14]
     table = Table(data, colWidths=[width * part for part in column_widths], repeatRows=1)
     commands = [
         ("BACKGROUND", (0, 0), (-1, 0), REPORT_BLUE),
@@ -1073,7 +1100,7 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes
     """
     Test natijalari hisoboti (PDF): umumiy statistika, savollar bo'yicha
     to'g'ri javoblar ulushi, eng qiyin/oson savollar va o'rinlar jadvali.
-    Ball — Rasch modeli bo'yicha (pullik va bepul testda ham).
+    Pullik testda — Rasch balli (Milliy sertifikat uslubi), bepulda — oddiy natija.
     """
 
     report = build_rasch_report(db, test)
@@ -1117,22 +1144,22 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes
     elements.append(lists)
 
     elements.append(PageBreak())
-    elements += _section_heading("Natijalar (Rasch balli bo'yicha o'rinlar)", styles)
+    uses_rasch = report["uses_rasch"]
+    elements += _section_heading(
+        "Natijalar (Rasch balli bo'yicha o'rinlar)" if uses_rasch else "Natijalar (to'g'ri javoblar bo'yicha o'rinlar)", styles
+    )
     if report["rows"]:
-        elements.append(_results_table(report["rows"], styles, width))
+        elements.append(_results_table(report["rows"], styles, width, uses_rasch))
     else:
         elements.append(Paragraph("Hali hech kim testni yakunlamagan.", styles["cell"]))
 
-    elements += [
-        Spacer(1, 10),
-        Paragraph(
-            xml_escape(
-                "Ball Rasch modeli bo'yicha hisoblangan (Milliy sertifikat uslubida): qiyin savol ko'proq ball "
-                "beradi, o'rtacha ball ~50. Darajalar: A+ 70+, A 65+, B+ 60+, B 55+, C+ 50+, C 46+."
-            ),
-            styles["meta"],
-        ),
-    ]
+    footnote = (
+        "Ball Rasch modeli bo'yicha hisoblangan (Milliy sertifikat uslubida, 75 ballik shkala): qiyin savol ko'proq "
+        "ball beradi, o'rtacha ball ~50. Darajalar: A+ 70+, A 65+, B+ 60+, B 55+, C+ 50+, C 46+."
+        if uses_rasch
+        else "Baho to'g'ri javoblar foizi bo'yicha: 86% va yuqori — 5, 71% — 4, 56% — 3, qolgani — 2."
+    )
+    elements += [Spacer(1, 10), Paragraph(xml_escape(footnote), styles["meta"])]
 
     document.build(elements)
     return buffer.getvalue()
@@ -3055,6 +3082,7 @@ def test_results(test_id: int, teacher: Teacher = Depends(get_current_teacher), 
         "enrollment_type": test.enrollment_type,
         "total_questions": _question_count(test),
         "summary": report["summary"],
+        "uses_rasch": report["uses_rasch"],
         "rows": [{**row, **splits[row["attempt_id"]]} for row in report["rows"]],
     }
 

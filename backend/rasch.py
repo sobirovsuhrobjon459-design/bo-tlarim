@@ -15,8 +15,8 @@ Hisoblash (JMLE — qo'shma maksimal ehtimollik):
      2500 kishilik testda ham bir zumda tugaydi.
   3. Chetki natijalar (0 yoki hammasi to'g'ri) uchun θ odatdagidek 0.3 ga
      surilgan ball bo'yicha baholanadi.
-  4. θ ballga aylantiriladi: ball = 50 + 10·z (z — qatnashchilar orasidagi
-     standart og'ish birligida). O'rtacha ball shu sababli ~50 bo'ladi.
+  4. θ ballga aylantiriladi (UZBMB, Milliy sertifikat): Z = (θ − μ) / σ,
+     T = 50 + 10·Z. O'rtacha ball ~50; shkala 0..75 (A+ — 70..75).
      Qatnashchilar juda kam bo'lsa (< MIN_FOR_STANDARDIZE), z o'rniga θ
      ishlatiladi (savollar qiyinligi o'rtachasi = 0 ga nisbatan).
 """
@@ -30,6 +30,7 @@ TOLERANCE = 1e-5
 MAX_STEP = 1.0
 EXTREME_ADJUSTMENT = 0.3
 MIN_FOR_STANDARDIZE = 5
+MAX_SCORE = 75.0  # Milliy sertifikatning T-shkalasi 75 ballik
 
 # Milliy sertifikat darajalari (ball bo'yicha, yuqoridan pastga)
 GRADES = [(70, "A+"), (65, "A"), (60, "B+"), (55, "B"), (50, "C+"), (46, "C")]
@@ -192,6 +193,6 @@ def rasch_scores(matrix: list[list[int]]) -> dict:
     scores = []
     for theta in thetas:
         z = (theta - mean_theta) / deviation if deviation > 1e-9 else theta
-        scores.append(round(min(100.0, max(0.0, 50 + 10 * z)), 2))
+        scores.append(round(min(MAX_SCORE, max(0.0, 50 + 10 * z)), 2))
 
     return {"thetas": thetas, "scores": scores, "difficulties": all_difficulties}

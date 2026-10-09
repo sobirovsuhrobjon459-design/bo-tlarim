@@ -6443,18 +6443,31 @@ async function renderResultsTab(selectedId) {
   const results = await api(`/api/teacher/tests/${testId}/results`);
   const summary = results.summary;
 
-  // Darajalar taqsimoti (Rasch balli bo'yicha, Milliy sertifikat uslubida)
-  const buckets = [
-    { label: "—", from: 0, to: 46 },
-    { label: "C", from: 46, to: 50 },
-    { label: "C+", from: 50, to: 55 },
-    { label: "B", from: 55, to: 60 },
-    { label: "B+", from: 60, to: 65 },
-    { label: "A", from: 65, to: 70 },
-    { label: "A+", from: 70, to: 101 },
-  ].map((bucket) => ({
+  // Pullik testda — Rasch darajalari (Milliy sertifikat), bepulda — 5 ballik baho
+  const usesRasch = Boolean(results.uses_rasch);
+  const buckets = (
+    usesRasch
+      ? [
+          { label: "—", from: 0, to: 46 },
+          { label: "C", from: 46, to: 50 },
+          { label: "C+", from: 50, to: 55 },
+          { label: "B", from: 55, to: 60 },
+          { label: "B+", from: 60, to: 65 },
+          { label: "A", from: 65, to: 70 },
+          { label: "A+", from: 70, to: 101 },
+        ]
+      : [
+          { label: "2", from: 0, to: 56 },
+          { label: "3", from: 56, to: 71 },
+          { label: "4", from: 71, to: 86 },
+          { label: "5", from: 86, to: 101 },
+        ]
+  ).map((bucket) => ({
     ...bucket,
-    count: results.rows.filter((row) => row.ball >= bucket.from && row.ball < bucket.to).length,
+    count: results.rows.filter((row) => {
+      const value = usesRasch ? row.ball : row.percent;
+      return value >= bucket.from && value < bucket.to;
+    }).length,
   }));
 
   const maxCount = Math.max(1, ...buckets.map((bucket) => bucket.count));
@@ -6479,7 +6492,7 @@ async function renderResultsTab(selectedId) {
           ${escapeHtml(row.name)}
           <small class="result-meta">✅ ${row.correct} • ❌ ${row.wrong} • ${row.percent}%</small>
         </span>
-        <span class="result-percent">${row.ball.toFixed(2)}<small class="result-grade">${escapeHtml(row.grade)}</small></span>
+        <span class="result-percent">${usesRasch ? row.ball.toFixed(2) : `${row.percent}%`}<small class="result-grade">${usesRasch ? escapeHtml(row.grade) : `baho ${escapeHtml(row.grade)}`}</small></span>
       </div>`
     )
     .join("") || `<p class="subtitle" style="padding:14px">Hali natija yo'q</p>`;
@@ -6500,11 +6513,17 @@ async function renderResultsTab(selectedId) {
     <div class="panel">
       <div class="stats-grid" style="margin:0 0 16px">
         <div class="stat-tile"><span class="stat-value">${summary.participants}</span>Ishtirokchi</div>
-        <div class="stat-tile"><span class="stat-value">${summary.avg_ball.toFixed(2)}</span>O'rtacha ball</div>
-        <div class="stat-tile"><span class="stat-value">${summary.max_ball.toFixed(2)}</span>Eng yuqori ball</div>
-        <div class="stat-tile"><span class="stat-value">${summary.top_count} ta</span>A+ va A</div>
+        ${
+          usesRasch
+            ? `<div class="stat-tile"><span class="stat-value">${summary.avg_ball.toFixed(2)}</span>O'rtacha ball</div>
+               <div class="stat-tile"><span class="stat-value">${summary.max_ball.toFixed(2)}</span>Eng yuqori ball</div>
+               <div class="stat-tile"><span class="stat-value">${summary.top_count} ta</span>A+ va A</div>`
+            : `<div class="stat-tile"><span class="stat-value">${summary.avg_percent}%</span>O'rtacha foiz</div>
+               <div class="stat-tile"><span class="stat-value">${summary.max_percent}%</span>Eng yuqori</div>
+               <div class="stat-tile"><span class="stat-value">${summary.top_count} ta</span>A'lo (5)</div>`
+        }
       </div>
-      <p class="section-label" style="margin:0 0 10px">DARAJALAR (RASCH BALLI)</p>
+      <p class="section-label" style="margin:0 0 10px">${usesRasch ? "DARAJALAR (RASCH BALLI)" : "BAHOLAR (TO'G'RI JAVOBLAR FOIZI)"}</p>
       <div class="chart">${chart}</div>
     </div>
 
@@ -6512,7 +6531,7 @@ async function renderResultsTab(selectedId) {
 
     <div class="row-between" style="margin:18px 0 8px">
       <span class="section-label" style="margin:0">ISHTIROKCHILAR (O'RIN BO'YICHA)</span>
-      <span class="subtitle" style="margin:0;font-size:12px">ball • daraja</span>
+      <span class="subtitle" style="margin:0;font-size:12px">${usesRasch ? "ball • daraja" : "foiz • baho"}</span>
     </div>
     <div class="panel" style="padding:4px 0">${rows}</div>
   `);
@@ -6574,7 +6593,7 @@ async function renderTestResults(testId) {
         <tr class="result-row">
           <td>${row.rank}</td><td>${escapeHtml(row.name)}</td>
           <td>${row.correct}</td><td>${row.wrong}</td><td>${row.percent}%</td>
-          <td><b>${row.ball.toFixed(2)}</b></td><td><b>${escapeHtml(row.grade)}</b></td>
+          ${results.uses_rasch ? `<td><b>${row.ball.toFixed(2)}</b></td>` : ""}<td><b>${escapeHtml(row.grade)}</b></td>
         </tr>`
     )
     .join("");
@@ -6600,16 +6619,22 @@ async function renderTestResults(testId) {
     </div>
     <div class="stats-grid">
       <div class="stat-tile"><span class="stat-value">${results.summary.participants}</span>Qatnashchilar</div>
-      <div class="stat-tile"><span class="stat-value">${results.summary.avg_ball.toFixed(2)}</span>O'rtacha ball</div>
-      <div class="stat-tile"><span class="stat-value">${results.summary.max_ball.toFixed(2)}</span>Eng yuqori ball</div>
-      <div class="stat-tile"><span class="stat-value">${results.summary.top_count} ta</span>A+ va A</div>
+      ${
+        results.uses_rasch
+          ? `<div class="stat-tile"><span class="stat-value">${results.summary.avg_ball.toFixed(2)}</span>O'rtacha ball</div>
+             <div class="stat-tile"><span class="stat-value">${results.summary.max_ball.toFixed(2)}</span>Eng yuqori ball</div>
+             <div class="stat-tile"><span class="stat-value">${results.summary.top_count} ta</span>A+ va A</div>`
+          : `<div class="stat-tile"><span class="stat-value">${results.summary.avg_percent}%</span>O'rtacha foiz</div>
+             <div class="stat-tile"><span class="stat-value">${results.summary.max_percent}%</span>Eng yuqori</div>
+             <div class="stat-tile"><span class="stat-value">${results.summary.top_count} ta</span>A'lo (5)</div>`
+      }
     </div>
     <button class="btn" id="pdf-button">📄 PDF HISOBOT</button>
     <h3>Natijalar</h3>
     <input class="input" id="filter-input" placeholder="🔍 O'quvchini qidirish..." />
     <div style="overflow-x:auto">
       <table>
-        <tr><th>O'rin</th><th>O'quvchi</th><th>✅</th><th>❌</th><th>%</th><th>Ball</th><th>Daraja</th></tr>
+        <tr><th>O'rin</th><th>O'quvchi</th><th>✅</th><th>❌</th><th>%</th>${results.uses_rasch ? "<th>Ball</th><th>Daraja</th>" : "<th>Baho</th>"}</tr>
         ${tableRows}
       </table>
     </div>

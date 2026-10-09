@@ -766,12 +766,31 @@ def test_rasch_balli_orin_va_daraja():
     finally:
         restore()
 
+    # Bepul test — Rasch yo'q: to'g'ri javoblar bo'yicha o'rin, 5 ballik baho
     results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
     rows = results["rows"]
+    assert results["uses_rasch"] is False
     assert [row["rank"] for row in rows] == [1, 1, 3], rows
-    assert rows[0]["ball"] > rows[2]["ball"] and rows[2]["correct"] == 0 and rows[0]["correct"] == 1, rows
-    assert all("grade" in row and "correct" in row for row in rows), rows
+    assert rows[0]["ball"] is None and rows[0]["correct"] == 1 and rows[2]["correct"] == 0, rows
+    assert rows[0]["grade"] == "2" and results["summary"]["avg_ball"] is None, rows  # 1/4 = 25%
     assert results["summary"]["participants"] == 3, results["summary"]
+    pdf = client.get(f"/api/teacher/tests/{created['id']}/pdf", headers=as_user(555))
+    assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF"), pdf.status_code
+
+    # Pullik test — Rasch balli (75 ballik shkala), Milliy sertifikat darajalari
+    session = SessionLocal()
+    try:
+        from backend.database import Test as DbTest
+        test_row = session.get(DbTest, created["id"])
+        test_row.price = 5000
+        session.commit()
+        paid = main.build_rasch_report(session, test_row)
+    finally:
+        session.close()
+    assert paid["uses_rasch"] is True
+    assert paid["rows"][0]["ball"] > paid["rows"][2]["ball"] and paid["rows"][0]["grade"] in ("A+", "A", "B+", "B", "C+", "C", "—")
+    assert all(0 <= row["ball"] <= 75 for row in paid["rows"]), paid["rows"]
+    assert max(rasch_scores([[1] * 9 + [0]] + [[0] * 10] * 9)["scores"]) <= 75
 
 
 def test_pdf_hisobot_kirill_ismlar_va_yopilgan_test():
