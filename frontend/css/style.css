@@ -2666,3 +2666,76 @@ body.keyboard-open .fab {
   text-align: center;
   font-weight: 700;
 }
+
+/* ===== Yuklanish belgilari ===== */
+
+/* Ekran tepasidagi yuguruvchi chiziq */
+#top-loader {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  height: 3px;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+#top-loader.active {
+  opacity: 1;
+}
+
+#top-loader::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, #818cf8, #6366f1, transparent);
+  animation: top-loader-run 1s ease-in-out infinite;
+}
+
+@keyframes top-loader-run {
+  from {
+    left: -40%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+/* Bosilgan tugma yoki karta — aylanuvchi doiracha */
+.is-loading {
+  position: relative;
+}
+
+.is-loading::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 16px;
+  width: 20px;
+  height: 20px;
+  margin-top: -10px;
+  border: 2.5px solid rgba(129, 140, 248, 0.35);
+  border-top-color: #818cf8;
+  border-radius: 50%;
+  animation: spin-loader 0.7s linear infinite;
+}
+
+.btn.is-loading:disabled {
+  opacity: 0.85;
+}
+
+.btn.is-loading::after {
+  border-color: rgba(255, 255, 255, 0.35);
+  border-top-color: #ffffff;
+}
+
+@keyframes spin-loader {
+  to {
+    transform: rotate(360deg);
+  }
+}

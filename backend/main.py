@@ -37,6 +37,7 @@ from pathlib import Path
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -204,13 +205,43 @@ async def lifespan(app: FastAPI):
     bot_task = asyncio.create_task(run_bot())
     backup_task = asyncio.create_task(_daily_backup_loop())
     finish_task = asyncio.create_task(_finish_expired_tests_loop())
+    awake_task = asyncio.create_task(_keep_awake_loop())
     yield
     bot_task.cancel()
     backup_task.cancel()
     finish_task.cancel()
+    awake_task.cancel()
 
 
 app = FastAPI(title="Test Platformasi API", lifespan=lifespan)
+# JS/CSS fayllar siqilib yuboriladi (~320 KB → ~70 KB) — ilova tezroq ochiladi
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.get("/api/health")
+def health():
+    """Server tirikligini tekshirish (uyg'oq tutish uchun ham)."""
+    return {"ok": True}
+
+
+# Render'ning bepul tarifi 15 daqiqa so'rov kelmasa serverni uxlatib qo'yadi:
+# keyingi kirish 30-50 soniya cho'ziladi va bot ham javob bermaydi. Server o'z
+# manzilini har 10 daqiqada so'rab, uyg'oq turadi (RENDER_EXTERNAL_URL'ni
+# Render o'zi beradi; lokalda bu ishlamaydi).
+KEEP_AWAKE_SECONDS = 600
+
+
+async def _keep_awake_loop() -> None:
+    base_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not base_url:
+        return
+    async with httpx.AsyncClient(timeout=20) as client:
+        while True:
+            await asyncio.sleep(KEEP_AWAKE_SECONDS)
+            try:
+                await client.get(f"{base_url}/api/health")
+            except Exception:
+                logging.getLogger("backend").warning("Uyg'oq tutish so'rovi o'tmadi", exc_info=True)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 

@@ -87,11 +87,15 @@ let teacherTestsTab = "active";
   eski holat ko'rinib qolmasin.
 */
 const pageDataCache = new Map();
+// O'zgartirishdan keyingi "eski" nusxa: bo'lim shu bilan DARHOL ochiladi,
+// yangisi fonda keladi va almashtiriladi (ekran bo'sh turib qolmasin)
+const staleDataCache = new Map();
 // Sinf tafsilotlari (id → sinf) — qayta kirganda darhol ochish uchun
 const classDetailCache = new Map();
 
 async function api(path, { method = "GET", body, keepalive = false } = {}) {
   if (method !== "GET") {
+    pageDataCache.forEach((value, key) => staleDataCache.set(key, value));
     pageDataCache.clear();
     // O'zgartirishdan keyin sinf eskirgan ma'lumot bilan ochilmasin
     classDetailCache.clear();
@@ -724,6 +728,29 @@ function testBadges(test) {
 // Hozir bajarilayotgan tugmalar — ikkinchi bosish e'tiborsiz qoldiriladi
 const busyElements = new WeakSet();
 
+/*
+  Yuklanish belgisi: amal 0.15 soniyadan uzoq cho'zilsa — ekran tepasida
+  yuguruvchi chiziq va bosilgan tugma/kartada aylanuvchi doiracha. Shunda
+  sekin internetda ham ilova "qotib qolgandek" ko'rinmaydi.
+*/
+let topLoaderCount = 0;
+
+function startTopLoader() {
+  topLoaderCount += 1;
+  let bar = document.getElementById("top-loader");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "top-loader";
+    document.body.appendChild(bar);
+  }
+  bar.classList.add("active");
+}
+
+function stopTopLoader() {
+  topLoaderCount = Math.max(topLoaderCount - 1, 0);
+  if (!topLoaderCount) document.getElementById("top-loader")?.classList.remove("active");
+}
+
 function guarded(handler) {
   /*
     Xatoni chiroyli xabar qilib ko'rsatadi va IKKI MARTA BOSISHDAN himoya
@@ -738,12 +765,23 @@ function guarded(handler) {
     if (target) busyElements.add(target);
     const isButton = target instanceof HTMLButtonElement;
     if (isButton) target.disabled = true;
+    let loading = false;
+    const loaderTimer = setTimeout(() => {
+      loading = true;
+      target?.classList.add("is-loading");
+      startTopLoader();
+    }, 150);
 
     try {
       await handler(...args);
     } catch (error) {
       showToast(error.message || "Xatolik yuz berdi");
     } finally {
+      clearTimeout(loaderTimer);
+      if (loading) {
+        target?.classList.remove("is-loading");
+        stopTopLoader();
+      }
       if (target) busyElements.delete(target);
       if (isButton) target.disabled = false;
     }
@@ -3935,21 +3973,25 @@ async function fetchProtectedImage(path) {
   kutib, keyin chizadi.
 */
 async function renderWithCache(key, fetcher, draw, marker) {
-  const cached = pageDataCache.get(key);
+  const cached = pageDataCache.get(key) || staleDataCache.get(key);
   if (cached) {
     draw(cached);
+    startTopLoader(); // fonda yangilanayotganini bildiradi
     fetcher()
       .then((fresh) => {
         const changed = JSON.stringify(fresh) !== JSON.stringify(cached);
         pageDataCache.set(key, fresh);
+        staleDataCache.delete(key);
         if (changed && document.querySelector(marker)) draw(fresh);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(stopTopLoader);
     return;
   }
 
   const data = await fetcher();
   pageDataCache.set(key, data);
+  staleDataCache.delete(key);
   draw(data);
 }
 
@@ -6405,6 +6447,10 @@ function renderChannelGate(missing) {
 }
 
 loadHome()
-  .then(checkChannelGate)
-  .then((allowed) => allowed && openPendingSchoolInvite())
-  .then(() => Promise.all([prefetchSchoolData(), prefetchSectionData()]));
+  .then(() => {
+    // Bo'limlar ma'lumoti darhol fonda yuklanadi — foydalanuvchi bosguncha tayyor tursin
+    prefetchSchoolData();
+    prefetchSectionData();
+    return checkChannelGate();
+  })
+  .then((allowed) => allowed && openPendingSchoolInvite());
