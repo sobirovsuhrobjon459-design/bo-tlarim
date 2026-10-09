@@ -28,6 +28,7 @@ import re
 import secrets
 import threading
 import time
+from types import SimpleNamespace
 from contextlib import asynccontextmanager
 from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timedelta, timezone
@@ -1591,6 +1592,45 @@ def _is_subscribed(channel: str, user: User) -> bool:
     # "restricted" — kanalda, lekin cheklangan. U ham obunachi hisoblanadi,
     # faqat is_member rost bo'lsa. "left" va "kicked" — obuna emas.
     return status in ("creator", "administrator", "member") or (status == "restricted" and bool(member.get("is_member")))
+
+
+# Adminlar kanaliga obuna tasdiqlangan foydalanuvchilar — har ochilishda
+# Telegram'ga qayta so'ramaslik uchun 10 daqiqa eslab qolinadi.
+SUBSCRIPTION_CACHE_SECONDS = 600
+_subscription_confirmed: dict[int, float] = {}
+
+
+def missing_default_channels(tg_id: int) -> list[str]:
+    """
+    Foydalanuvchi obuna bo'lmagan adminlar kanallari (bot va Mini App
+    kirishida tekshiriladi). Tekshirib bo'lmasa (bot kanalda admin emas,
+    Telegram javob bermadi) — foydalanuvchini to'smaymiz: testlar baribir
+    alohida, qat'iy tekshiriladi.
+    """
+
+    if not DEFAULT_REQUIRED_CHANNELS or not BOT_TOKEN or BOT_TOKEN == "your_bot_token_here":
+        return []
+    confirmed_at = _subscription_confirmed.get(tg_id)
+    if confirmed_at and time.monotonic() - confirmed_at < SUBSCRIPTION_CACHE_SECONDS:
+        return []
+
+    probe = SimpleNamespace(tg_id=tg_id)
+    missing = []
+    for channel in DEFAULT_REQUIRED_CHANNELS:
+        try:
+            if not _is_subscribed(channel, probe):
+                missing.append(channel)
+        except HTTPException:
+            logging.getLogger("backend").warning("Kirishda %s obunasini tekshirib bo'lmadi", channel)
+    if not missing:
+        _subscription_confirmed[tg_id] = time.monotonic()
+    return missing
+
+
+@app.get("/api/me/subscription")
+def my_subscription(user: User = Depends(get_current_user)):
+    """Mini App ochilganda: adminlar kanaliga obunami? Bo'lmasa — obuna ekrani chiqadi."""
+    return {"missing": missing_default_channels(user.tg_id)}
 
 
 def _check_channel_subscription(test: Test, user: User) -> None:

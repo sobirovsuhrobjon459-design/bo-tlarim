@@ -22,6 +22,8 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    MenuButtonCommands,
+    MenuButtonDefault,
     MenuButtonWebApp,
     Message,
     ReplyKeyboardRemove,
@@ -159,11 +161,43 @@ async def _handle_teacher_invite(message: Message, token: str) -> None:
         await message.answer(text, parse_mode="HTML")
 
 
-@dispatcher.message(CommandStart())
-async def handle_start(message: Message, command: CommandObject) -> None:
-    """Foydalanuvchi botga /start yuborganda ishlaydi (taklif havolasi bilan ham)."""
+async def _missing_channels(tg_id: int) -> list[str]:
+    """Foydalanuvchi obuna bo'lmagan adminlar kanallari (@sukhrobmath)."""
 
-    payload = (command.args or "").strip()
+    from backend.main import missing_default_channels
+
+    return await asyncio.to_thread(missing_default_channels, tg_id)
+
+
+async def _show_subscribe_gate(message: Message, missing: list[str], payload: str) -> None:
+    """
+    Obuna bo'lmaguncha botdan foydalanib bo'lmaydi: shu chatda PLAY tugmasi
+    yashiriladi, kanal(lar)ga obuna bo'lish va tekshirish tugmalari chiqadi.
+    """
+
+    try:
+        await bot.set_chat_menu_button(chat_id=message.chat.id, menu_button=MenuButtonCommands())
+    except Exception:
+        logger.warning("PLAY tugmasini yashirib bo'lmadi", exc_info=True)
+
+    buttons = [
+        [InlineKeyboardButton(text=f"📢 {channel} — obuna bo'lish", url=f"https://t.me/{channel.lstrip('@')}")]
+        for channel in missing
+        if channel.startswith("@")
+    ]
+    buttons.append([InlineKeyboardButton(text="✅ Obuna bo'ldim", callback_data=f"checksub:{payload}"[:64])])
+    await message.answer(
+        f"Assalomu alaykum, {message.from_user.first_name}! 👋\n\n"
+        f"Botdan foydalanish uchun avval kanalimizga obuna bo'ling: <b>{', '.join(missing)}</b>\n\n"
+        "Obuna bo'lgach, «✅ Obuna bo'ldim» tugmasini bosing.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+
+
+async def _open_bot(message: Message, payload: str) -> None:
+    """Obuna tasdiqlangan foydalanuvchi: PLAY tugmasi va salomlashish (yoki taklif)."""
+
     if payload.startswith("inv_"):
         token = payload[len("inv_"):]
         if token.isalnum() and 6 <= len(token) <= 40:
@@ -176,7 +210,7 @@ async def handle_start(message: Message, command: CommandObject) -> None:
             return
 
     welcome_text = (
-        f"Assalomu alaykum, {message.from_user.first_name}! 👋\n\n"
+        f"Assalomu alaykum, {message.chat.first_name or ''}! 👋\n\n"
         "🎓 <b>Test Platformasiga xush kelibsiz!</b>\n\n"
         "Bilimingizni sinang, natijangizni kuzating va rivojlaning.\n\n"
         "Boshlash uchun pastda, xabar yozish maydoni yonidagi <b>PLAY</b> tugmasini bosing.\n\n"
@@ -186,7 +220,52 @@ async def handle_start(message: Message, command: CommandObject) -> None:
     # Eski reply-keyboard PLAY tugmasi qolib ketgan bo'lsa, uni tozalaydi —
     # endi Mini App faqat yagona, chat menyusidagi PLAY tugmasi orqali ochiladi.
     await message.answer(welcome_text, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+
+
+@dispatcher.message(CommandStart())
+async def handle_start(message: Message, command: CommandObject) -> None:
+    """Foydalanuvchi botga /start yuborganda ishlaydi (taklif havolasi bilan ham)."""
+
+    payload = (command.args or "").strip()
     logger.info("Yangi /start: %s (tg_id=%s)", message.from_user.full_name, message.from_user.id)
+
+    missing = await _missing_channels(message.from_user.id)
+    if missing:
+        await _show_subscribe_gate(message, missing, payload)
+        return
+
+    await _restore_play_button(message.chat.id)
+    await _open_bot(message, payload)
+
+
+async def _restore_play_button(chat_id: int) -> None:
+    """Obuna bo'lgan foydalanuvchiga PLAY tugmasini qaytaradi (umumiy sozlamaga)."""
+
+    try:
+        await bot.set_chat_menu_button(chat_id=chat_id, menu_button=MenuButtonDefault())
+    except Exception:
+        logger.warning("PLAY tugmasini qaytarib bo'lmadi", exc_info=True)
+
+
+@dispatcher.callback_query(F.data.startswith("checksub:"))
+async def handle_check_subscription(callback: CallbackQuery) -> None:
+    """«✅ Obuna bo'ldim» — qayta tekshiradi; obuna bo'lsa botni ochadi."""
+
+    from backend.main import _subscription_confirmed
+
+    _subscription_confirmed.pop(callback.from_user.id, None)  # eski natija emas, hozirgisini so'raymiz
+    missing = await _missing_channels(callback.from_user.id)
+    if missing:
+        await callback.answer(f"Hali obuna ko'rinmayapti: {', '.join(missing)}", show_alert=True)
+        return
+
+    await callback.answer("✅ Rahmat! Obuna tasdiqlandi")
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await _restore_play_button(callback.message.chat.id)
+    await _open_bot(callback.message, callback.data.partition(":")[2])
 
 
 @dispatcher.message(Command("help"))

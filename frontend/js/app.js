@@ -5726,6 +5726,52 @@ async function openPendingSchoolInvite() {
   }
 }
 
+/*
+  Kirishda adminlar kanaliga (@sukhrobmath) obuna tekshiriladi. Obuna
+  bo'lmagan foydalanuvchi ilovadan foydalana olmaydi — obuna ekrani chiqadi.
+  Tekshirib bo'lmasa (internet) — to'smaydi, testlar baribir alohida tekshiriladi.
+*/
+async function checkChannelGate() {
+  let missing = [];
+  try {
+    ({ missing } = await api("/api/me/subscription"));
+  } catch (error) {
+    return true;
+  }
+  if (!missing.length) return true;
+  renderChannelGate(missing);
+  return false;
+}
+
+function renderChannelGate(missing) {
+  showPage(`
+    <div class="result-number">📢</div>
+    <h2 style="text-align:center">Avval kanalimizga obuna bo'ling</h2>
+    <div class="card" style="cursor:default">
+      <div class="card-body">
+        <p style="margin:0">Botdan foydalanish uchun <b>${missing.map(escapeHtml).join(", ")}</b> kanaliga obuna bo'ling, so'ng «Obuna bo'ldim» tugmasini bosing.</p>
+      </div>
+    </div>
+    ${subscribeButtonsHtml(missing)}
+    <button class="btn btn-ghost" id="gate-recheck" style="margin-top:12px">✅ Obuna bo'ldim</button>
+  `);
+  wireSubscribeButtons();
+  document.getElementById("gate-recheck").addEventListener(
+    "click",
+    guarded(async () => {
+      const { missing: still } = await api("/api/me/subscription");
+      if (still.length) {
+        showToast("Hali obuna ko'rinmayapti — bir oz kutib qayta urining");
+        return;
+      }
+      showToast("✅ Rahmat! Obuna tasdiqlandi");
+      await loadHome();
+      await openPendingSchoolInvite();
+    })
+  );
+}
+
 loadHome()
-  .then(openPendingSchoolInvite)
+  .then(checkChannelGate)
+  .then((allowed) => allowed && openPendingSchoolInvite())
   .then(() => Promise.all([prefetchSchoolData(), prefetchSectionData()]));

@@ -64,6 +64,7 @@ def reset_database() -> None:
     main._code_requests.clear()
     main._bot_username_cache = "test_platform_bot"  # Telegram'ga so'rov ketmasin
     main.DEFAULT_REQUIRED_CHANNELS = []  # adminlar kanali — alohida testda tekshiriladi
+    main._subscription_confirmed.clear()
 
 
 def as_user(tg_id: int) -> dict:
@@ -1950,6 +1951,35 @@ def test_adminlar_kanali_har_bir_testda_majburiy():
         assert client.post(f"/api/tests/{own['code']}/start", json={}, headers=as_user(901)).status_code == 200
     finally:
         main._ask_telegram_chat_member = original
+        main.DEFAULT_REQUIRED_CHANNELS = []
+
+
+def test_kirishda_adminlar_kanaliga_obuna_tekshiriladi():
+    """Mini App/bot kirishida: obuna bo'lmasa — kanal ro'yxati; tekshirib bo'lmasa — to'smaydi."""
+    reset_database()
+    main.DEFAULT_REQUIRED_CHANNELS = ["@sukhrobmath"]
+    original_member, original_token = main._ask_telegram_chat_member, main.BOT_TOKEN
+    main.BOT_TOKEN = "123:test"
+    state = {"status": "left"}
+
+    def fake_member(channel, tg_id):
+        if state["status"] == "error":
+            raise main.ChannelUnavailable("Bad Request: member list is inaccessible")
+        return {"status": state["status"]}
+
+    main._ask_telegram_chat_member = fake_member
+    try:
+        assert client.get("/api/me/subscription", headers=as_user(901)).json() == {"missing": ["@sukhrobmath"]}
+        state["status"] = "member"
+        assert client.get("/api/me/subscription", headers=as_user(901)).json() == {"missing": []}
+        # Tasdiqlangan obuna 10 daqiqa eslab qolinadi
+        state["status"] = "left"
+        assert client.get("/api/me/subscription", headers=as_user(901)).json() == {"missing": []}
+        # Bot kanalni tekshira olmasa — kirish to'silmaydi
+        state["status"] = "error"
+        assert client.get("/api/me/subscription", headers=as_user(902)).json() == {"missing": []}
+    finally:
+        main._ask_telegram_chat_member, main.BOT_TOKEN = original_member, original_token
         main.DEFAULT_REQUIRED_CHANNELS = []
 
 
