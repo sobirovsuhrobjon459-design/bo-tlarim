@@ -68,6 +68,9 @@ from .database import (
     BOT_TOKEN,
     PAYME_MERCHANT_ID,
     PAYME_SECRET_KEY,
+    CLICK_MERCHANT_ID,
+    CLICK_SECRET_KEY,
+    CLICK_SERVICE_ID,
     PLATFORM_COMMISSION_PERCENT,
     WELCOME_CREDITS,
     Attempt,
@@ -175,10 +178,12 @@ def _add_missing_columns() -> None:
             "payme_transaction_id": "VARCHAR(50)",
             "performed_at": "TIMESTAMP",
             "cancelled_at": "TIMESTAMP",
+            "click_trans_id": "VARCHAR(50)",
         },
         "credit_purchases": {
             "method": "VARCHAR(10) DEFAULT 'payme'",
             "receipt_file_id": "VARCHAR(200)",
+            "click_trans_id": "VARCHAR(50)",
         },
     }
 
@@ -2335,6 +2340,7 @@ def teacher_balance(teacher: Teacher = Depends(get_current_teacher)):
         "credit_price_tiers": CREDIT_PRICE_TIERS_DISPLAY,
         # Qaysi to'lov usullari ishlayapti — frontend faqat shularni ko'rsatadi
         "payme_enabled": bool(PAYME_MERCHANT_ID),
+        "click_enabled": _click_enabled(),
         "card_enabled": _card_topup_enabled(),
     }
 
@@ -2383,13 +2389,11 @@ def preview_credit_price(credits: int, teacher: Teacher = Depends(get_current_te
 def create_credit_purchase(
     body: CreditPurchaseIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
 ):
-    """Kredit sotib olish buyurtmasini yaratadi va Payme to'lov havolasini qaytaradi."""
+    """Kredit sotib olish buyurtmasini yaratadi va tanlangan tizimning (Payme/Click) to'lov havolasini qaytaradi."""
 
-    if not PAYME_MERCHANT_ID:
-        raise HTTPException(status_code=503, detail="Payme hali sozlanmagan, admin bilan bog'laning")
-
+    _require_provider(body.provider)
     amount = _calculate_credit_price(body.credits)
-    purchase = CreditPurchase(teacher_id=teacher.id, credits=body.credits, amount=amount)
+    purchase = CreditPurchase(teacher_id=teacher.id, credits=body.credits, amount=amount, method=body.provider)
     db.add(purchase)
     db.commit()
 
@@ -2397,7 +2401,7 @@ def create_credit_purchase(
         "id": purchase.id,
         "credits": purchase.credits,
         "amount": purchase.amount,
-        "checkout_url": _build_payme_checkout_url("purchase_id", purchase.id, amount),
+        "checkout_url": _checkout_url(body.provider, purchase, amount),
     }
 
 
@@ -3220,13 +3224,14 @@ def get_test(code: str, user: User = Depends(get_current_user), db: Session = De
         "enrollment_type": test.enrollment_type,
         "required_channel": test.required_channel,
         "required_channels": _required_channels(test),
+        "payment_providers": _enabled_providers(),
         "start_time": test.start_time,
         "end_time": test.end_time,
     }
 
 
 @app.post("/api/tests/{code}/pay")
-def pay_for_test(code: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def pay_for_test(code: str, provider: str = "payme", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     Pullik testga to'lov boshlaydi: Payme to'lov sahifasiga havola qaytaradi.
 
@@ -3242,8 +3247,7 @@ def pay_for_test(code: str, user: User = Depends(get_current_user), db: Session 
     if test.price <= 0:
         return {"paid": True}  # bepul test — to'lovning hojati yo'q
 
-    if not PAYME_MERCHANT_ID:
-        raise HTTPException(status_code=503, detail="To'lov tizimi hali sozlanmagan, admin bilan bog'laning")
+    _require_provider(provider)
 
     # Boshlangan, lekin tugatilmagan to'lov bo'lsa — yangisini yaratmaymiz,
     # o'sha havolani qaytaramiz (aks holda har bosishda yangi buyurtma to'planardi).
@@ -3254,15 +3258,18 @@ def pay_for_test(code: str, user: User = Depends(get_current_user), db: Session 
     )
 
     if not payment or payment.amount != test.price:
-        payment = Payment(user_id=user.id, test_id=test.id, amount=test.price, status="pending")
+        payment = Payment(user_id=user.id, test_id=test.id, amount=test.price, status="pending", provider=provider)
         db.add(payment)
+        db.commit()
+    elif payment.provider != provider:
+        payment.provider = provider
         db.commit()
 
     return {
         "paid": False,
         "payment_id": payment.id,
         "amount": payment.amount,
-        "checkout_url": _build_payme_checkout_url("payment_id", payment.id, payment.amount),
+        "checkout_url": _checkout_url(provider, payment, payment.amount),
     }
 
 
@@ -5657,6 +5664,170 @@ def send_attendance(
 def attendance_text_view(attendance_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Matn ko'rinishi — Mini App uni to'g'ridan-to'g'ri guruhga ulashadi."""
     return {"text": attendance_text(_attendance_context(db, _school_attendance(db, user, attendance_id)[0]))}
+
+
+# ========== 6.9) To'lov tizimlari: umumiy ==========
+
+def _click_enabled() -> bool:
+    return bool(CLICK_SERVICE_ID and CLICK_MERCHANT_ID and CLICK_SECRET_KEY)
+
+
+def _enabled_providers() -> list[str]:
+    providers = []
+    if PAYME_MERCHANT_ID:
+        providers.append("payme")
+    if _click_enabled():
+        providers.append("click")
+    return providers
+
+
+def _require_provider(provider: str) -> None:
+    if provider not in _enabled_providers():
+        raise HTTPException(status_code=503, detail="Bu to'lov usuli hali sozlanmagan, admin bilan bog'laning")
+
+
+def _click_order_ref(order) -> str:
+    """Click'ga yuboriladigan buyurtma raqami: c12 — kredit xaridi, t34 — test to'lovi."""
+    return f"{'c' if isinstance(order, CreditPurchase) else 't'}{order.id}"
+
+
+def _build_click_checkout_url(order, amount: int) -> str:
+    from urllib.parse import urlencode
+
+    query = urlencode({
+        "service_id": CLICK_SERVICE_ID,
+        "merchant_id": CLICK_MERCHANT_ID,
+        "amount": f"{amount:.2f}" if isinstance(amount, float) else str(amount),
+        "transaction_param": _click_order_ref(order),
+    })
+    return f"https://my.click.uz/services/pay?{query}"
+
+
+def _checkout_url(provider: str, order, amount: int) -> str:
+    if provider == "click":
+        return _build_click_checkout_url(order, amount)
+    field = "purchase_id" if isinstance(order, CreditPurchase) else "payment_id"
+    return _build_payme_checkout_url(field, order.id, amount)
+
+
+# ========== 6.10) Click webhook (SHOP API: Prepare + Complete) ==========
+#
+# Click to'lovni ikki bosqichda tasdiqlaydi: Prepare (buyurtma bormi, summa
+# to'g'rimi) va Complete (pul yechildi). Har so'rov MD5 imzo bilan keladi —
+# imzo noto'g'ri bo'lsa, hech narsa o'zgarmaydi. Kredit/balans faqat Complete
+# muvaffaqiyatli bo'lgandagina yoziladi (Payme bilan bir xil mantiq).
+
+CLICK_ERRORS = {
+    -1: "SIGN CHECK FAILED",
+    -2: "Incorrect parameter amount",
+    -3: "Action not found",
+    -4: "Already paid",
+    -5: "Order does not exist",
+    -6: "Transaction does not exist",
+    -8: "Error in request from click",
+    -9: "Transaction cancelled",
+}
+
+
+def _click_response(form: dict, error: int, **extra) -> JSONResponse:
+    body = {
+        "click_trans_id": form.get("click_trans_id"),
+        "merchant_trans_id": form.get("merchant_trans_id"),
+        "error": error,
+        "error_note": CLICK_ERRORS.get(error, "Success"),
+        **extra,
+    }
+    return JSONResponse(body)
+
+
+def _click_sign_ok(form: dict, with_prepare_id: bool) -> bool:
+    import hashlib
+
+    parts = [form.get("click_trans_id", ""), form.get("service_id", ""), CLICK_SECRET_KEY, form.get("merchant_trans_id", "")]
+    if with_prepare_id:
+        parts.append(form.get("merchant_prepare_id", ""))
+    parts += [form.get("amount", ""), form.get("action", ""), form.get("sign_time", "")]
+    expected = hashlib.md5("".join(str(part) for part in parts).encode()).hexdigest()
+    return hmac.compare_digest(expected, str(form.get("sign_string", "")))
+
+
+def _click_find_order(db: Session, ref: str):
+    if not ref or ref[0] not in "ct" or not ref[1:].isdigit():
+        return None
+    model = CreditPurchase if ref[0] == "c" else Payment
+    return db.get(model, int(ref[1:]))
+
+
+def _click_amount_ok(form: dict, order) -> bool:
+    try:
+        return abs(float(form.get("amount", "0")) - order.amount) < 0.01
+    except ValueError:
+        return False
+
+
+@app.post("/api/click/prepare")
+async def click_prepare(request: Request, db: Session = Depends(get_db)):
+    form = dict(await request.form())
+    if not _click_enabled():
+        return _click_response(form, -8)
+    if not _click_sign_ok(form, with_prepare_id=False):
+        return _click_response(form, -1)
+    if str(form.get("action")) != "0":
+        return _click_response(form, -3)
+    order = _click_find_order(db, form.get("merchant_trans_id", ""))
+    if not order:
+        return _click_response(form, -5)
+    if order.status == "paid":
+        return _click_response(form, -4)
+    if order.status == "cancelled":
+        return _click_response(form, -9)
+    if not _click_amount_ok(form, order):
+        return _click_response(form, -2)
+    order.click_trans_id = str(form.get("click_trans_id"))
+    db.commit()
+    return _click_response(form, 0, merchant_prepare_id=order.id)
+
+
+@app.post("/api/click/complete")
+async def click_complete(request: Request, db: Session = Depends(get_db)):
+    form = dict(await request.form())
+    if not _click_enabled():
+        return _click_response(form, -8)
+    if not _click_sign_ok(form, with_prepare_id=True):
+        return _click_response(form, -1)
+    if str(form.get("action")) != "1":
+        return _click_response(form, -3)
+    order = _click_find_order(db, form.get("merchant_trans_id", ""))
+    if not order or str(order.id) != str(form.get("merchant_prepare_id")):
+        return _click_response(form, -6)
+    if order.click_trans_id and order.click_trans_id != str(form.get("click_trans_id")):
+        return _click_response(form, -6)
+    if order.status == "paid":
+        return _click_response(form, -4, merchant_confirm_id=order.id)
+    if not _click_amount_ok(form, order):
+        return _click_response(form, -2)
+
+    # Click tomonda to'lov o'tmagan (error < 0) — buyurtma bekor qilinadi, hech narsa yozilmaydi
+    try:
+        click_error = int(form.get("error", "0"))
+    except ValueError:
+        click_error = 0
+    if click_error < 0:
+        if order.status != "cancelled":
+            order.status = "cancelled"
+            order.cancelled_at = utcnow()
+            db.commit()
+        return _click_response(form, -9)
+    if order.status == "cancelled":
+        return _click_response(form, -9)
+
+    order.status = "paid"
+    order.performed_at = utcnow()
+    order.click_trans_id = str(form.get("click_trans_id"))
+    _payme_apply_paid(order)
+    db.commit()
+    logging.getLogger("backend").info("Click to'lovi o'tdi: %s, %s so'm", _click_order_ref(order), order.amount)
+    return _click_response(form, 0, merchant_confirm_id=order.id)
 
 
 # ========== 7) Payme webhook (Merchant API) ==========

@@ -4402,7 +4402,12 @@ function renderTestFound(test) {
       : // To'lov Payme sahifasida amalga oshadi va tasdiq serverga webhook
         // orqali keladi — shuning uchun o'quvchi qaytib kelib holatni
         // yangilashi uchun alohida tugma turadi.
-        `<button class="btn" id="pay-button">💳 ${formatNumber(test.price)} so'm to'lash</button>
+        `${(test.payment_providers?.length ? test.payment_providers : ["payme"])
+           .map(
+             (provider, index) =>
+               `<button class="btn ${index ? "btn-ghost" : ""}" data-test-pay="${provider}">${provider === "click" ? "🔵 Click" : "🅿️ Payme"} orqali ${formatNumber(test.price)} so'm to'lash</button>`
+           )
+           .join("")}
          <button class="btn btn-ghost" id="recheck-payment-button">🔄 To'lovni tekshirish</button>`;
 
   document.getElementById("search-result").innerHTML = `
@@ -4448,10 +4453,10 @@ function renderTestFound(test) {
     })
   );
 
-  document.getElementById("pay-button")?.addEventListener(
+  document.querySelectorAll("[data-test-pay]").forEach((button) => button.addEventListener(
     "click",
     guarded(async () => {
-      const payment = await api(`/api/tests/${test.code}/pay`, { method: "POST", body: {} });
+      const payment = await api(`/api/tests/${test.code}/pay?provider=${button.dataset.testPay}`, { method: "POST", body: {} });
 
       if (payment.paid) {
         renderTestFound(await api(`/api/tests/${test.code}`));
@@ -4464,7 +4469,7 @@ function renderTestFound(test) {
       openExternalLink(payment.checkout_url);
       showToast("💳 To'lov sahifasi ochildi. To'lagach, \"To'lovni tekshirish\" ni bosing");
     })
-  );
+  ));
 
   document.getElementById("recheck-payment-button")?.addEventListener(
     "click",
@@ -5312,12 +5317,19 @@ async function renderCreditPurchaseForm() {
       </div>`
     : "";
 
-  const paymeSection = balanceInfo.payme_enabled
-    ? `<button class="btn ${balanceInfo.card_enabled ? "btn-ghost" : ""}" id="pay-with-payme-button">🅿️ Payme orqali to'lash</button>`
-    : "";
+  // Avtomatik to'lov: karta ma'lumoti faqat to'lov tizimi sahifasida kiritiladi,
+  // to'lov o'tishi bilan kredit o'zi tushadi
+  const paymeSection = [
+    balanceInfo.payme_enabled
+      ? `<button class="btn ${balanceInfo.card_enabled ? "btn-ghost" : ""}" data-pay-provider="payme">🅿️ Payme orqali to'lash</button>`
+      : "",
+    balanceInfo.click_enabled
+      ? `<button class="btn ${balanceInfo.card_enabled || balanceInfo.payme_enabled ? "btn-ghost" : ""}" data-pay-provider="click">🔵 Click orqali to'lash</button>`
+      : "",
+  ].join("");
 
   const noMethods =
-    !balanceInfo.card_enabled && !balanceInfo.payme_enabled
+    !balanceInfo.card_enabled && !balanceInfo.payme_enabled && !balanceInfo.click_enabled
       ? `<div class="card" style="cursor:default"><div class="card-body">
            <p>To'lov usullari hali sozlanmagan. Kredit olish uchun admin bilan bog'laning.</p>
          </div></div>`
@@ -5468,14 +5480,20 @@ async function renderCreditPurchaseForm() {
   );
 
   // --- Payme orqali ---
-  document.getElementById("pay-with-payme-button")?.addEventListener(
-    "click",
-    guarded(async () => {
-      const credits = readCredits();
-      const purchase = await api("/api/teacher/credit-purchases", { method: "POST", body: { credits } });
-      openExternalLink(purchase.checkout_url);
-    })
-  );
+  document.querySelectorAll("[data-pay-provider]").forEach((button) => {
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        const credits = readCredits();
+        const purchase = await api("/api/teacher/credit-purchases", {
+          method: "POST",
+          body: { credits, provider: button.dataset.payProvider },
+        });
+        openExternalLink(purchase.checkout_url);
+        showToast("💳 To'lov sahifasi ochildi — to'lov o'tishi bilan kredit o'zi tushadi");
+      })
+    );
+  });
 }
 
 /*

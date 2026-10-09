@@ -74,6 +74,12 @@ ADMIN_CARD_NUMBER = os.getenv("ADMIN_CARD_NUMBER", "")
 PAYME_MERCHANT_ID = os.getenv("PAYME_MERCHANT_ID", "")
 PAYME_SECRET_KEY = os.getenv("PAYME_SECRET_KEY", "")
 
+# Click (my.click.uz) — Uzcard, Humo, Visa, Mastercard va Click ilovasi.
+# Uchalasi ham to'ldirilsa, "Click orqali to'lash" tugmasi paydo bo'ladi.
+CLICK_SERVICE_ID = os.getenv("CLICK_SERVICE_ID", "")
+CLICK_MERCHANT_ID = os.getenv("CLICK_MERCHANT_ID", "")
+CLICK_SECRET_KEY = os.getenv("CLICK_SECRET_KEY", "")
+
 
 # ========== 2) Bazaga ulanish ==========
 
@@ -311,6 +317,7 @@ class Payment(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | paid | cancelled
     provider: Mapped[str] = mapped_column(String(20), default="payme")
     payme_transaction_id: Mapped[str | None] = mapped_column(String(50), default=None, unique=True, index=True)
+    click_trans_id: Mapped[str | None] = mapped_column(String(50), default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     performed_at: Mapped[datetime | None] = mapped_column(default=None)
     cancelled_at: Mapped[datetime | None] = mapped_column(default=None)
@@ -353,6 +360,7 @@ class CreditPurchase(Base):
     amount: Mapped[int]  # so'm
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | paid | cancelled
     payme_transaction_id: Mapped[str | None] = mapped_column(String(50), default=None, unique=True, index=True)
+    click_trans_id: Mapped[str | None] = mapped_column(String(50), default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     performed_at: Mapped[datetime | None] = mapped_column(default=None)
     cancelled_at: Mapped[datetime | None] = mapped_column(default=None)
@@ -728,6 +736,7 @@ class CreditPurchaseIn(BaseModel):
     """O'qituvchi kredit sotib olmoqchi bo'lganda yuboriladi."""
 
     credits: int = Field(ge=1, le=100_000)
+    provider: Literal["payme", "click"] = "payme"
 
 
 class CardTopUpIn(BaseModel):

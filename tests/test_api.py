@@ -42,6 +42,9 @@ os.environ.update(
     PAYME_SECRET_KEY="test_secret_key",
     PLATFORM_COMMISSION_PERCENT="30",
     ADMIN_CARD_NUMBER="8600 1234 5678 9012",
+    CLICK_SERVICE_ID="111",
+    CLICK_MERCHANT_ID="222",
+    CLICK_SECRET_KEY="click_secret",
 )
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -1293,6 +1296,57 @@ def test_kredit_narx_pogonalari():
     """1-100: 1200, 101-150: 1000, 151-300: 650, 301-500: 500, 501+: 450 so'm (1 dona)."""
     price = main._calculate_credit_price
     assert [price(n) // n for n in (1, 100, 101, 150, 151, 300, 301, 500, 501, 8000)] ==         [1200, 1200, 1000, 1000, 650, 650, 500, 500, 450, 450]
+
+
+def _click_form(action: int, ref: str, amount, prepare_id=None, click_trans_id="9001", error=0) -> dict:
+    import hashlib
+
+    form = {"click_trans_id": click_trans_id, "service_id": "111", "click_paydoc_id": "5", "merchant_trans_id": ref,
+            "amount": str(amount), "action": str(action), "error": str(error), "error_note": "", "sign_time": "2026-10-09 12:00:00"}
+    if prepare_id is not None:
+        form["merchant_prepare_id"] = str(prepare_id)
+    parts = [form["click_trans_id"], "111", "click_secret", ref] + ([str(prepare_id)] if prepare_id is not None else []) + \
+        [form["amount"], form["action"], form["sign_time"]]
+    form["sign_string"] = hashlib.md5("".join(parts).encode()).hexdigest()
+    return form
+
+
+def test_click_orqali_kredit_avtomatik_tushadi():
+    """Click: Prepare + Complete; imzo, summa, takror to'lov va bekor qilish tekshiriladi."""
+    reset_database()
+    register_teacher(tg_id=777)
+    start = credits_of(777)
+
+    purchase = client.post("/api/teacher/credit-purchases", json={"credits": 100, "provider": "click"}, headers=as_user(777)).json()
+    assert purchase["checkout_url"].startswith("https://my.click.uz/services/pay?"), purchase
+    assert f"transaction_param=c{purchase['id']}" in purchase["checkout_url"] and "amount=120000" in purchase["checkout_url"]
+    ref, amount = f"c{purchase['id']}", "120000.00"
+
+    # Imzo noto'g'ri yoki summa xato — rad etiladi
+    bad = _click_form(0, ref, amount); bad["sign_string"] = "0" * 32
+    assert client.post("/api/click/prepare", data=bad).json()["error"] == -1
+    assert client.post("/api/click/prepare", data=_click_form(0, ref, "1000.00")).json()["error"] == -2
+    assert client.post("/api/click/prepare", data=_click_form(0, "c999999", amount)).json()["error"] == -5
+
+    prepared = client.post("/api/click/prepare", data=_click_form(0, ref, amount)).json()
+    assert prepared["error"] == 0 and prepared["merchant_prepare_id"] == purchase["id"], prepared
+    assert credits_of(777) == start  # hali pul yechilmagan
+
+    done = client.post("/api/click/complete", data=_click_form(1, ref, amount, prepare_id=purchase["id"])).json()
+    assert done["error"] == 0 and done["merchant_confirm_id"] == purchase["id"], done
+    assert credits_of(777) == start + 100
+    again = client.post("/api/click/complete", data=_click_form(1, ref, amount, prepare_id=purchase["id"])).json()
+    assert again["error"] == -4 and credits_of(777) == start + 100  # ikki marta yozilmaydi
+
+    # Click tomonda to'lov o'tmasa — bekor, kredit yo'q
+    second = client.post("/api/teacher/credit-purchases", json={"credits": 10, "provider": "click"}, headers=as_user(777)).json()
+    ref2 = f"c{second['id']}"
+    client.post("/api/click/prepare", data=_click_form(0, ref2, "12000.00", click_trans_id="9002"))
+    failed = client.post("/api/click/complete", data=_click_form(1, ref2, "12000.00", prepare_id=second["id"], click_trans_id="9002", error=-5017)).json()
+    assert failed["error"] == -9 and credits_of(777) == start + 100
+
+    # Sozlanmagan provider — 503
+    assert client.post("/api/teacher/credit-purchases", json={"credits": 5, "provider": "uzum"}, headers=as_user(777)).status_code == 422
 
 
 def test_promo_kod():
