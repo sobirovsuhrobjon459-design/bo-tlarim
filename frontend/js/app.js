@@ -3953,7 +3953,7 @@ async function renderAdminDashboard() {
                 <b>+${formatNumber(promo.credits)} kredit</b>
               </div>
               <p class="subtitle" style="margin:4px 0 0">
-                ${promo.used}${promo.max_uses ? ` / ${promo.max_uses}` : ""} marta ishlatildi
+                ${promo.used}${promo.max_uses ? ` / ${promo.max_uses}` : ""} marta ishlatildi • har kim ${promo.per_teacher_limit} martagacha
                 ${promo.expires_on ? ` • ${formatDate(promo.expires_on)} gacha` : ""}
                 • ${promo.active ? "✅ faol" : "⛔ to'xtatilgan"}
               </p>
@@ -4085,13 +4085,14 @@ async function renderAdminDashboard() {
     <h3>🎁 Promo kodlar</h3>
     <div class="card" style="cursor:default">
       <div class="card-body" style="width:100%">
-        <p style="margin:0 0 8px">Kod yarating — o'qituvchi kiritsa, kredit oladi (har kim bir marta).</p>
+        <p style="margin:0 0 8px">Kod yarating — o'qituvchi kiritsa, kredit oladi.</p>
         <input class="input" id="promo-new-code" placeholder="Kod, masalan BAHOR2026" maxlength="40" style="text-transform:uppercase" />
         <p class="subtitle" style="margin:4px 0 8px">O'qituvchi kodni «Kredit sotib olish» dagi son maydoniga yozadi. Faqat raqamli kod kamida 7 xonali bo'lsin.</p>
         <div class="two-fields">
           <input class="input" id="promo-new-credits" type="number" min="1" value="3000" placeholder="Kredit" />
-          <input class="input" id="promo-new-limit" type="number" min="1" placeholder="Necha kishi (cheksiz)" />
+          <input class="input" id="promo-new-per-teacher" type="number" min="1" max="100" value="3" placeholder="Har kim necha marta" />
         </div>
+        <input class="input" id="promo-new-limit" type="number" min="1" placeholder="Jami necha marta (bo'sh — cheksiz)" />
         <label class="field-label" for="promo-new-expires">Amal qilish muddati (ixtiyoriy)</label>
         <input class="input" id="promo-new-expires" type="date" />
         <button class="btn" id="promo-create-button" style="margin-top:10px">➕ Promo kod yaratish</button>
@@ -4118,8 +4119,9 @@ async function renderAdminDashboard() {
       if (code.length < 4) throw new Error("Kod kamida 4 belgidan iborat bo'lsin");
       const credits = Number(document.getElementById("promo-new-credits").value) || 3000;
       const limit = Number(document.getElementById("promo-new-limit").value) || null;
+      const perTeacher = Number(document.getElementById("promo-new-per-teacher").value) || 3;
       const expires = document.getElementById("promo-new-expires").value || null;
-      await api("/api/admin/promo-codes", { method: "POST", body: { code, credits, max_uses: limit, expires_on: expires } });
+      await api("/api/admin/promo-codes", { method: "POST", body: { code, credits, max_uses: limit, per_teacher_limit: perTeacher, expires_on: expires } });
       showToast(`✅ Promo kod yaratildi: +${formatNumber(credits)} kredit`);
       renderAdminDashboard();
     })
@@ -5328,7 +5330,6 @@ async function renderCreditPurchaseForm() {
     <input class="input" id="credit-count-input" type="text" inputmode="numeric" autocomplete="off"
            placeholder="Kredit miqdori" value="50" />
     <p class="subtitle" id="credit-price-line">Jami narx: <b id="credit-price-preview">—</b></p>
-    <button class="btn" id="redeem-promo-button" style="margin:4px 0 14px" hidden>🎁 Kodni faollashtirish</button>
     <div class="card" style="cursor:default">
       <div class="card-body">
         <h3>Narxlash tizimi</h3>
@@ -5350,22 +5351,31 @@ async function renderCreditPurchaseForm() {
   const cardAmount = document.getElementById("card-amount");
 
   /*
-    Shu maydonga promo kod ham yoziladi: harf qatnashsa yoki 7 xonadan uzun
-    bo'lsa — bu miqdor emas (eng ko'pi 100 000), promo kod deb olinadi.
+    Yashirin promo kod: shu maydonga yoziladi. Hech qanday tugma yoki belgi
+    chiqmaydi — yozuv promo kodga o'xshasa (harf qatnashsa yoki 7+ xonali son)
+    va 5 soniya hech narsa yozilmasa, kod jimgina tekshiriladi. To'g'ri bo'lsa —
+    kredit tushadi; noto'g'ri bo'lsa — hech narsa ko'rinmaydi.
   */
-  const promoButton = document.getElementById("redeem-promo-button");
-  const priceLine = document.getElementById("credit-price-line");
+  const PROMO_IDLE_MS = 5000;
   const looksLikePromo = (value) => /[a-z]/i.test(value) || value.replace(/\s/g, "").length >= 7;
-  const redeemPromo = guarded(async () => {
+  let promoTimer = null;
+  let lastTriedCode = "";
+  const tryPromoSilently = async () => {
     const code = creditInput.value.trim();
-    const result = await api("/api/teacher/promo", { method: "POST", body: { code } });
-    telegram?.HapticFeedback?.notificationOccurred?.("success");
-    showToast(`🎉 +${formatNumber(result.credits_added)} kredit! Hozir: ${formatNumber(result.credits)} ta`);
-    await renderCreditPurchaseForm();
-  });
-  promoButton.addEventListener("click", redeemPromo);
-  creditInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && looksLikePromo(creditInput.value)) redeemPromo(event);
+    if (!looksLikePromo(code) || code === lastTriedCode || !creditInput.isConnected) return;
+    lastTriedCode = code;
+    try {
+      const result = await api("/api/teacher/promo", { method: "POST", body: { code } });
+      telegram?.HapticFeedback?.notificationOccurred?.("success");
+      showToast(`🎉 +${formatNumber(result.credits_added)} kredit! Hozir: ${formatNumber(result.credits)} ta`);
+      await renderCreditPurchaseForm();
+    } catch (_) {
+      /* noto'g'ri kod — jim; hech qanday ishora berilmaydi */
+    }
+  };
+  creditInput.addEventListener("input", () => {
+    clearTimeout(promoTimer);
+    if (looksLikePromo(creditInput.value)) promoTimer = setTimeout(tryPromoSilently, PROMO_IDLE_MS);
   });
 
   // Narx sahifadagi jadval bo'yicha DARHOL hisoblanadi (har harfda serverga so'rov
@@ -5378,13 +5388,6 @@ async function renderCreditPurchaseForm() {
   };
 
   const updatePricePreview = () => {
-    const isPromo = looksLikePromo(creditInput.value);
-    promoButton.hidden = !isPromo;
-    priceLine.hidden = isPromo;
-    if (isPromo) {
-      if (cardAmount) cardAmount.textContent = "—";
-      return;
-    }
     const credits = Number(creditInput.value) || 0;
     if (credits < 1) {
       pricePreview.textContent = "—";
@@ -5406,9 +5409,9 @@ async function renderCreditPurchaseForm() {
   updatePricePreview();
 
   const readCredits = () => {
-    if (looksLikePromo(creditInput.value)) throw new Error("Bu promo kod — «Kodni faollashtirish» ni bosing");
     const credits = Number(creditInput.value) || 0;
     if (credits < 1) throw new Error("Kredit sonini kiriting");
+    if (credits > 100000) throw new Error("Bir martada eng ko'pi 100 000 ta kredit");
     return credits;
   };
 

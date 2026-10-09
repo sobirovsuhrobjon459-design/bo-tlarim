@@ -162,6 +162,7 @@ def _add_missing_columns() -> None:
         "school_classes": {"curator_user_id": "INTEGER"},
         "private_schools": {"monthly_fee": "INTEGER DEFAULT 0"},
         "class_students": {"discount_percent": "INTEGER DEFAULT 0"},
+        "promo_codes": {"per_teacher_limit": "INTEGER DEFAULT 3"},
         "school_members": {"position": "VARCHAR(20)", "phone": "VARCHAR(20)", "birth_date": "DATE", "passport": "VARCHAR(20)"},
         "attendances": {
             "lesson_start": "VARCHAR(5)",
@@ -205,6 +206,52 @@ _add_missing_columns()
 
 # ---------- Promo kodlar ----------
 
+def _drop_promo_unique_constraint() -> None:
+    """
+    Avval bitta o'qituvchi kodni faqat BIR MARTA ishlata olardi (bazada unique
+    cheklov). Endi 3 martagacha — eski cheklov olib tashlanadi. Yozuvlar saqlanadi.
+    """
+
+    logger = logging.getLogger("backend")
+    if not IS_SQLITE:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE promo_redemptions DROP CONSTRAINT IF EXISTS uq_promo_teacher"))
+        return
+
+    # SQLite cheklovni o'chira olmaydi — jadval yangidan quriladi, yozuvlar ko'chiriladi.
+    # Har qadam alohida: yarim qolgan holatdan (masalan _old jadval qolgan bo'lsa) ham tiklanadi.
+    with engine.begin() as connection:
+        tables = {name: sql or "" for name, sql in connection.execute(
+            text("SELECT name, sql FROM sqlite_master WHERE type='table' AND name LIKE 'promo_redemptions%'")
+        )}
+        if "uq_promo_teacher" in tables.get("promo_redemptions", "") and "promo_redemptions_old" not in tables:
+            connection.execute(text("ALTER TABLE promo_redemptions RENAME TO promo_redemptions_old"))
+            tables["promo_redemptions_old"] = tables.pop("promo_redemptions")
+        if "promo_redemptions_old" not in tables:
+            return
+        connection.execute(text("DROP INDEX IF EXISTS ix_promo_redemptions_promo_id"))
+        connection.execute(text("DROP INDEX IF EXISTS ix_promo_redemptions_teacher_id"))
+    PromoRedemption.__table__.create(engine, checkfirst=True)
+    with engine.begin() as connection:
+        connection.execute(text(
+            # id emas, mazmuni bo'yicha solishtiriladi — yangi id bilan ko'chiriladi (hech biri yo'qolmaydi)
+            "INSERT INTO promo_redemptions (promo_id, teacher_id, credits, created_at) "
+            "SELECT o.promo_id, o.teacher_id, o.credits, o.created_at FROM promo_redemptions_old o "
+            "WHERE NOT EXISTS (SELECT 1 FROM promo_redemptions n WHERE n.promo_id = o.promo_id "
+            "AND n.teacher_id = o.teacher_id AND n.created_at = o.created_at)"
+        ))
+        connection.execute(text("DROP TABLE promo_redemptions_old"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_promo_redemptions_promo_id ON promo_redemptions (promo_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_promo_redemptions_teacher_id ON promo_redemptions (teacher_id)"))
+    logger.info("promo_redemptions: bir martalik cheklov olib tashlandi (SQLite)")
+
+
+try:
+    _drop_promo_unique_constraint()
+except Exception:
+    logging.getLogger("backend").warning("Promo cheklovini yangilab bo'lmadi", exc_info=True)
+
+
 def _promo_hash(code: str) -> str:
     """Kod katta-kichik harf va bo'shliqlarsiz solishtiriladi; faqat izi saqlanadi."""
     import hashlib
@@ -219,7 +266,8 @@ def _promo_hint(code: str) -> str:
 
 # Boshlang'ich promo kod(lar) — kodning o'zi emas, faqat izi (repo ochiq bo'lsa ham bilinmaydi)
 SEED_PROMO_CODES = [
-    {"code_hash": "22a75c624bbc4380b4791cf1e145c50bcb8bc638639aaae11d3a69f98a46a299", "hint": "51…09", "credits": 3000},
+    {"code_hash": "22a75c624bbc4380b4791cf1e145c50bcb8bc638639aaae11d3a69f98a46a299", "hint": "51…09", "credits": 3000,
+     "per_teacher_limit": 3},
 ]
 
 
@@ -2208,8 +2256,15 @@ def redeem_promo(body: PromoRedeemIn, teacher: Teacher = Depends(get_current_tea
     if not promo or not promo.active or (promo.expires_on and promo.expires_on < date.today()):
         _promo_failures.setdefault(teacher.id, []).append(now)
         raise HTTPException(status_code=404, detail="Bunday promo kod yo'q yoki muddati tugagan")
-    if db.scalar(select(PromoRedemption.id).where(PromoRedemption.promo_id == promo.id, PromoRedemption.teacher_id == teacher.id)):
-        raise HTTPException(status_code=409, detail="Bu promo kodni allaqachon ishlatgansiz")
+    # Bir vaqtda bir necha marta bosilsa ham chegaradan oshmasin — o'qituvchi yozuvi qulflanadi
+    db.scalar(select(Teacher.id).where(Teacher.id == teacher.id).with_for_update())
+    limit = promo.per_teacher_limit or 1
+    used_by_me = db.scalar(
+        select(func.count()).select_from(PromoRedemption)
+        .where(PromoRedemption.promo_id == promo.id, PromoRedemption.teacher_id == teacher.id)
+    ) or 0
+    if used_by_me >= limit:
+        raise HTTPException(status_code=409, detail=f"Bu promo kodni {limit} marta ishlatib bo'lgansiz")
     if promo.max_uses is not None:
         used = db.scalar(select(func.count()).select_from(PromoRedemption).where(PromoRedemption.promo_id == promo.id)) or 0
         if used >= promo.max_uses:
@@ -2217,14 +2272,10 @@ def redeem_promo(body: PromoRedeemIn, teacher: Teacher = Depends(get_current_tea
 
     db.add(PromoRedemption(promo_id=promo.id, teacher_id=teacher.id, credits=promo.credits))
     teacher.credits += promo.credits
-    try:
-        db.commit()
-    except IntegrityError:  # bir vaqtda ikki marta bosilsa — ikkinchisi rad etiladi
-        db.rollback()
-        raise HTTPException(status_code=409, detail="Bu promo kodni allaqachon ishlatgansiz")
+    db.commit()
     _promo_failures.pop(teacher.id, None)
     logging.getLogger("backend").info("Promo kod ishlatildi: promo=%s teacher=%s +%s kredit", promo.id, teacher.id, promo.credits)
-    return {"credits_added": promo.credits, "credits": teacher.credits}
+    return {"credits_added": promo.credits, "credits": teacher.credits, "used": used_by_me + 1, "limit": limit}
 
 
 @app.post("/api/teacher/register")
@@ -5944,6 +5995,7 @@ def _promo_view(db: Session, promo: PromoCode) -> dict:
         "hint": promo.hint,
         "credits": promo.credits,
         "max_uses": promo.max_uses,
+        "per_teacher_limit": promo.per_teacher_limit,
         "used": used,
         "expires_on": promo.expires_on,
         "active": promo.active,
@@ -5964,7 +6016,8 @@ def admin_create_promo(body: PromoCreateIn, admin: User = Depends(get_current_ad
     if db.scalar(select(PromoCode.id).where(PromoCode.code_hash == code_hash)):
         raise HTTPException(status_code=409, detail="Bunday promo kod allaqachon bor")
     promo = PromoCode(code_hash=code_hash, hint=_promo_hint(body.code), credits=body.credits,
-                      max_uses=body.max_uses, expires_on=body.expires_on, created_by=admin.id)
+                      max_uses=body.max_uses, per_teacher_limit=body.per_teacher_limit,
+                      expires_on=body.expires_on, created_by=admin.id)
     db.add(promo)
     db.commit()
     db.refresh(promo)

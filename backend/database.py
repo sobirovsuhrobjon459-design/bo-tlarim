@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import BigInteger, ForeignKey, String, Text, UniqueConstraint, create_engine
+from sqlalchemy import BigInteger, ForeignKey, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 # ========== 1) Sozlamalar (.env) ==========
@@ -574,7 +574,9 @@ class PromoCode(Base):
     code_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     hint: Mapped[str] = mapped_column(String(20))
     credits: Mapped[int] = mapped_column()
-    max_uses: Mapped[int | None] = mapped_column(default=None)  # bo'sh — cheksiz
+    max_uses: Mapped[int | None] = mapped_column(default=None)  # jami (hamma uchun); bo'sh — cheksiz
+    # Bitta o'qituvchi shu kodni necha marta ishlata oladi
+    per_teacher_limit: Mapped[int] = mapped_column(default=3)
     expires_on: Mapped[date | None] = mapped_column(default=None)
     active: Mapped[bool] = mapped_column(default=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
@@ -582,10 +584,9 @@ class PromoCode(Base):
 
 
 class PromoRedemption(Base):
-    """Kim qaysi kodni qachon ishlatgani — bitta o'qituvchi bitta kodni faqat BIR MARTA."""
+    """Kim qaysi kodni qachon ishlatgani (bitta o'qituvchi — kodning per_teacher_limit marta)."""
 
     __tablename__ = "promo_redemptions"
-    __table_args__ = (UniqueConstraint("promo_id", "teacher_id", name="uq_promo_teacher"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     promo_id: Mapped[int] = mapped_column(ForeignKey("promo_codes.id"), index=True)
@@ -912,6 +913,7 @@ class PromoCreateIn(BaseModel):
     code: str = Field(min_length=4, max_length=40)
     credits: int = Field(default=3000, ge=1, le=1_000_000)
     max_uses: int | None = Field(default=None, ge=1, le=1_000_000)
+    per_teacher_limit: int = Field(default=3, ge=1, le=100)
     expires_on: date | None = None
 
     @model_validator(mode="after")
