@@ -951,7 +951,10 @@ def test_xususiy_maktab_yaratish_va_kod_bilan_qoshilish():
     assert updated.json()["school"]["my_subjects"] == ["Kimyo", "Biologiya"]
 
     # Guruhlarga ulashish havolasi — bot orqali kod bilan
-    assert joined.json()["school"]["invite_link"] == f"https://t.me/test_platform_bot?start=school_{current_code(school)}"
+    # Kod va havola faqat adminga ko'rinadi
+    assert joined.json()["school"]["code"] is None and joined.json()["school"]["invite_link"] is None
+    owner_view = client.get("/api/schools/me", headers=as_user(701)).json()["school"]
+    assert owner_view["invite_link"] == f"https://t.me/test_platform_bot?start=school_{current_code(school)}"
 
     # Kod bir martalik: ishlatilgan kod endi ishlamaydi, yangisi beriladi
     assert current_code(school) != school["code"]
@@ -973,9 +976,11 @@ def test_maktabdan_faqat_kod_bilan_chiqiladi_va_tarix_saqlanadi():
                                                "name": "Ilm maktabi"}, headers=as_user(701)).json()["school"]
     client.post("/api/schools/join", json={"phone": "901234567", "subjects": ["Matematika"], "code": current_code(school)}, headers=as_user(702))
 
-    # Kodsiz / noto'g'ri kod bilan chiqib bo'lmaydi
-    assert client.post("/api/schools/leave", json={"code": "AAAAAA"}, headers=as_user(702)).status_code == 403
+    # O'qituvchi o'zi chiqa olmaydi (to'g'ri kod bilan ham) — faqat admin chiqaradi
+    assert client.post("/api/schools/leave", json={"code": current_code(school)}, headers=as_user(702)).status_code == 403
     assert client.get("/api/schools/me", headers=as_user(702)).json()["school"] is not None
+    # Admin noto'g'ri kod bilan chiqa olmaydi
+    assert client.post("/api/schools/leave", json={"code": "AAAAAA"}, headers=as_user(701)).status_code == 403
 
     # Direktor o'rinbosar tanlamasdan chiqa olmaydi — maktab direktorsiz qolmasin
     assert client.post("/api/schools/leave", json={"code": current_code(school)}, headers=as_user(701)).status_code == 422
@@ -1133,6 +1138,37 @@ def test_xodimlar_telefon_raqami():
                                               "name": "Raqamsiz maktab"}, headers=as_user(703)).json()["school"]
     assert other["my_phone"] is None
     assert client.put("/api/schools/me/profile", json={"subjects": []}, headers=as_user(703)).status_code == 422
+
+
+def test_xodimni_faqat_admin_chiqaradi():
+    """Admin/direktor xodimni chiqaradi (yozuv qoladi, kuratorlik bo'shaydi); oddiy o'qituvchi chiqara olmaydi."""
+    reset_database()
+    _set_name(701, "Maktab", "Admini")
+    school = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                               "name": "Chiqarish maktabi"}, headers=as_user(701)).json()["school"]
+    for tg_id in (702, 703):
+        _set_name(tg_id, "Ustoz", f"Nomer{tg_id}")
+        assert client.post("/api/schools/join", json={"phone": "901234567", "code": current_code(school),
+                                                      "subjects": ["Fizika"]}, headers=as_user(tg_id)).status_code == 200
+    ids = {m["name"]: m["user_id"] for m in client.get("/api/schools/me", headers=as_user(701)).json()["school"]["members"]}
+    cls = client.post("/api/classes", json={"name": "7-A"}, headers=as_user(701)).json()
+    client.put(f"/api/classes/{cls['id']}/curator", json={"user_id": ids["Ustoz Nomer702"]}, headers=as_user(701))
+
+    assert client.delete(f"/api/schools/members/{ids['Ustoz Nomer702']}", headers=as_user(703)).status_code == 403
+    assert client.delete(f"/api/schools/members/{ids['Maktab Admini']}", headers=as_user(701)).status_code == 422
+    removed = client.delete(f"/api/schools/members/{ids['Ustoz Nomer702']}", headers=as_user(701))
+    assert removed.status_code == 200, removed.text
+    assert [m["name"] for m in removed.json()["school"]["members"]] == ["Maktab Admini", "Ustoz Nomer703"]
+    assert client.get("/api/schools/me", headers=as_user(702)).json()["school"] is None
+    assert client.get(f"/api/classes/{cls['id']}", headers=as_user(701)).json()["curator"] is None
+
+    # Admin chiqib ketgan bo'lsa ham o'z maktabini ko'radi (kodsiz qaytish uchun)
+    _set_name(704, "Yolgiz", "Admin")
+    own = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                            "name": "Yolgiz maktab"}, headers=as_user(704)).json()["school"]
+    assert client.post("/api/schools/leave", json={"code": own["code"]}, headers=as_user(704)).status_code == 200
+    me = client.get("/api/schools/me", headers=as_user(704)).json()
+    assert me["school"] is None and me["owned_school"]["id"] == own["id"], me
 
 
 def test_lavozimlar_direktor_va_zam_direktor():

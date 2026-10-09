@@ -3385,7 +3385,8 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         "name": school.name,
         "region": school.region,
         "district": school.district,
-        "code": school.code,
+        # Kod faqat adminda: o'qituvchilarni maktabga faqat admin qo'shadi
+        "code": school.code if member.role == "owner" else None,
         "created_at": school.created_at,
         "my_role": member.role,
         "my_position": member.position,
@@ -3395,7 +3396,8 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         "is_leader": _is_director(member),
         "can_create_classes": _can_delete_classes(member),
         "my_subjects": _read_subjects(member),
-        "invite_link": school_invite_link(school.code),
+        "invite_link": school_invite_link(school.code) if member.role == "owner" else None,
+        "can_remove_members": _can_delete_classes(member),
         "members": [
             {
                 "user_id": item.user_id,
@@ -3579,7 +3581,17 @@ def my_school(user: User = Depends(get_current_user), db: Session = Depends(get_
     """O'qituvchi a'zo bo'lgan maktab (bo'lmasa — null)."""
 
     member = _active_membership(db, user)
-    return {"school": _school_view(db, member, user) if member else None}
+    if member:
+        return {"school": _school_view(db, member, user)}
+
+    # A'zo emas, lekin o'zi ochgan maktab bor — kodsiz qaytish uchun
+    owned = db.scalar(select(PrivateSchool).where(PrivateSchool.owner_user_id == user.id).order_by(PrivateSchool.id.desc()))
+    return {
+        "school": None,
+        "owned_school": (
+            {"id": owned.id, "name": owned.name, "region": owned.region, "district": owned.district} if owned else None
+        ),
+    }
 
 
 @app.post("/api/schools")
@@ -3843,6 +3855,43 @@ def set_member_position(
     return {"school": _school_view(db, member, user)}
 
 
+@app.delete("/api/schools/members/{user_id}")
+def remove_member(user_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Admin (yoki direktor) xodimni maktabdan chiqaradi. Yozuv o'chirilmaydi —
+    left_at belgilanadi; davomat tarixi o'z joyida qoladi. Kurator bo'lgan
+    sinflari kuratorsiz qoladi (yangisini tayinlash kerak).
+    """
+
+    member = _require_school_member(db, user)
+    if not _can_delete_classes(member):
+        raise HTTPException(status_code=403, detail="Xodimni faqat maktab admini yoki direktor chiqaradi")
+    target = db.scalar(
+        select(SchoolMember).where(
+            SchoolMember.school_id == member.school_id,
+            SchoolMember.user_id == user_id,
+            SchoolMember.left_at.is_(None),
+        )
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Bu xodim maktabingizda yo'q")
+    if target.role == "owner":
+        raise HTTPException(status_code=422, detail="Maktab adminini chiqarib bo'lmaydi")
+    if target.id == member.id:
+        raise HTTPException(status_code=422, detail="O'zingizni chiqarib bo'lmaydi")
+
+    target.left_at = utcnow()
+    target.position = None
+    for school_class in db.scalars(
+        select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.curator_user_id == user_id)
+    ):
+        school_class.curator_user_id = None
+    db.commit()
+    db.refresh(member)
+    logging.getLogger("backend").info("Xodim maktabdan chiqarildi: school=%s user=%s", member.school_id, user_id)
+    return {"school": _school_view(db, member, user)}
+
+
 @app.put("/api/schools/me/profile")
 def update_school_profile(body: SchoolProfileIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """O'qituvchi maktabdagi profilini (fanlarini) yangilaydi."""
@@ -3878,6 +3927,10 @@ def leave_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db:
     member = _active_membership(db, user)
     if not member:
         raise HTTPException(status_code=404, detail="Siz hech qaysi maktabga a'zo emassiz")
+    if member.role != "owner":
+        raise HTTPException(
+            status_code=403, detail="Maktabdan chiqish — faqat admin orqali. Adminga murojaat qiling."
+        )
 
     school = member.school
     _check_code_attempts(user)

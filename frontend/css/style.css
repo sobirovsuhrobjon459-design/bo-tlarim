@@ -2412,17 +2412,33 @@ body.keyboard-open .fab {
 /* Maktab ekrani: bo'limlar alohida kartochkalarda, yonma-yon */
 .school-tiles {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.school-tile.is-wide {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 14px;
+  min-height: 0;
+  padding: 16px 18px;
+  text-align: left;
+}
+
+.school-tile.is-wide .school-tile-icon {
+  margin: 0;
 }
 
 .school-tile {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  min-height: 112px;
-  padding: 14px 6px 12px;
+  justify-content: center;
+  gap: 6px;
+  min-height: 132px;
+  padding: 18px 10px 16px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18);
   font-family: inherit;
   text-align: center;
   color: var(--color-text);
@@ -2439,18 +2455,35 @@ body.keyboard-open .fab {
 }
 
 .school-tile-icon {
+  display: grid;
+  place-items: center;
+  width: 50px;
+  height: 50px;
+  margin-bottom: 4px;
   font-size: 26px;
-  line-height: 1.2;
+  border-radius: 16px;
+  background: rgba(99, 102, 241, 0.14);
 }
 
 .school-tile b {
-  font-size: 13.5px;
+  font-size: 15px;
   line-height: 1.25;
 }
 
 .school-tile small {
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--color-text-muted);
+}
+
+.school-tile-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* Xodimni chiqarish tugmasi — qizil matn */
+.danger-text {
+  color: #ef4444;
 }
 
 /* Telefon raqam maydoni + "Telegram'dan" tugmasi */
