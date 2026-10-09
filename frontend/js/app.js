@@ -813,21 +813,57 @@ function roleCard(action, icon, title, description) {
 */
 const SUPPORT_CONTACTS = ["saidjanovic", "Ulugbeck_dev"];
 
+/*
+  Admin rasmi (Telegram profil rasmi). Ostida doim bosh harf turadi — rasm
+  bo'lmasa yoki yuklanmasa ham bo'sh joy emas, chiroyli harf ko'rinadi.
+*/
+function supportAvatarHtml(username, size, className) {
+  return `
+    <span class="support-avatar ${className}">
+      <span>${escapeHtml(username.charAt(0).toUpperCase())}</span>
+      <img src="https://t.me/i/userpic/${size}/${username}.jpg" alt="" loading="lazy" onerror="this.remove()" />
+    </span>`;
+}
+
+// Kichkina "Murojaat uchun" tugmasi — bosilsa adminlar profillari chiqadi
 function supportCardHtml(note = "Savol, taklif yoki muammo bo'lsa — yozing") {
   return `
-    <div class="support-card">
-      <div class="support-title">💬 Murojaat uchun</div>
-      <p class="subtitle" style="margin:2px 0 8px">${escapeHtml(note)}</p>
-      <div class="support-links">
-        ${SUPPORT_CONTACTS.map(
-          (username) => `<button type="button" class="support-link" data-support-user="${username}">@${username}</button>`
-        ).join("")}
-      </div>
+    <div class="support-row">
+      <button type="button" class="support-pill" data-open-support="${escapeHtml(note)}">
+        <span class="support-avatars">
+          ${SUPPORT_CONTACTS.map((username) => supportAvatarHtml(username, 160, "support-mini")).join("")}
+        </span>
+        💬 Murojaat uchun
+      </button>
     </div>`;
+}
+
+function openSupportSheet(note) {
+  openSheet(`
+    <h3 style="margin:0 0 4px">💬 Murojaat uchun</h3>
+    <p class="subtitle" style="margin:0 0 12px">${escapeHtml(note || "Savol, taklif yoki muammo bo'lsa — yozing")}</p>
+    ${SUPPORT_CONTACTS.map(
+      (username) => `
+        <div class="support-profile">
+          ${supportAvatarHtml(username, 320, "support-photo")}
+          <div class="support-profile-info">
+            <b>@${username}</b>
+            <small>Platforma admini</small>
+          </div>
+          <button type="button" class="btn support-write" data-support-user="${username}">✉️ Yozish</button>
+        </div>`
+    ).join("")}
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:10px">Yopish</button>
+  `);
 }
 
 // Bitta umumiy tinglovchi — kontakt tugmasi qaysi sahifada bo'lmasin ishlaydi
 document.addEventListener("click", (event) => {
+  const opener = event.target.closest("[data-open-support]");
+  if (opener) {
+    openSupportSheet(opener.dataset.openSupport);
+    return;
+  }
   const link = event.target.closest("[data-support-user]");
   if (link) openExternalLink(`https://t.me/${link.dataset.supportUser}`);
 });
@@ -2364,7 +2400,18 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
 
     <p class="section-label" style="margin-top:18px">SIZNING PROFILINGIZ</p>
     ${nameFields}
-    <label class="field-label">Qaysi fanlardan dars berasiz? <span class="required-mark">*</span></label>
+
+    <label class="field-label">Siz sinf kuratorimisiz (sinf rahbari)?</label>
+    <div class="choice-toggle" id="curator-toggle">
+      <button type="button" data-curator="no" class="active">Yo'q</button>
+      <button type="button" data-curator="yes">Ha, kuratorman</button>
+    </div>
+    <div id="curator-class-box" hidden>
+      <label class="field-label" for="curator-class-select">Qaysi sinfning kuratorisiz? <span class="required-mark">*</span></label>
+      <div id="curator-class-holder"><p class="subtitle" style="margin:4px 0 0">Avval maktab kodini kiriting.</p></div>
+    </div>
+
+    <label class="field-label" id="subject-label">Qaysi fanlardan dars berasiz? <span class="required-mark">*</span></label>
     ${subjectChipsHtml()}
 
     <button class="btn" id="join-school-button" style="margin-top:18px">🔑 Maktabga qo'shilish</button>
@@ -2372,6 +2419,56 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
 
   protectSchoolForm();
   wireSubjectChips();
+
+  // "Kuratormisiz?" — Ha: o'z sinfini tanlaydi (fan ixtiyoriy); Yo'q: fan majburiy
+  let isCurator = false;
+  let loadedFor = "";
+  const codeInput = document.getElementById("school-code-input");
+  const classBox = document.getElementById("curator-class-box");
+  const classHolder = document.getElementById("curator-class-holder");
+  const subjectLabel = document.getElementById("subject-label");
+
+  const loadOpenClasses = async () => {
+    const code = codeInput.value.trim().toUpperCase();
+    if (code.length < 6) {
+      classHolder.innerHTML = `<p class="subtitle" style="margin:4px 0 0">Avval maktab kodini kiriting.</p>`;
+      loadedFor = "";
+      return;
+    }
+    if (code === loadedFor) return;
+    loadedFor = code;
+    classHolder.innerHTML = `<p class="subtitle" style="margin:4px 0 0">⏳ Sinflar yuklanmoqda...</p>`;
+    try {
+      const result = await api("/api/schools/lookup", {
+        method: "POST",
+        body: { code, school_id: target ? target.id : null },
+      });
+      classHolder.innerHTML = result.open_classes.length
+        ? `<select id="curator-class-select">
+             <option value="">Sinfni tanlang</option>
+             ${result.open_classes.map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}
+           </select>`
+        : `<p class="subtitle" style="margin:4px 0 0">«${escapeHtml(result.school.name)}» maktabida kuratorsiz sinf yo'q — direktor sinfingizni yaratgach, sizni kurator qilib tayinlaydi.</p>`;
+    } catch (error) {
+      loadedFor = "";
+      classHolder.innerHTML = `<p class="subtitle" style="margin:4px 0 0;color:#d93636">${escapeHtml(error.message)}</p>`;
+    }
+  };
+
+  document.getElementById("curator-toggle").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-curator]");
+    if (!button) return;
+    isCurator = button.dataset.curator === "yes";
+    document.querySelectorAll("#curator-toggle [data-curator]").forEach((item) => item.classList.toggle("active", item === button));
+    classBox.hidden = !isCurator;
+    subjectLabel.innerHTML = isCurator
+      ? "Qaysi fanlardan dars berasiz? (ixtiyoriy)"
+      : 'Qaysi fanlardan dars berasiz? <span class="required-mark">*</span>';
+    if (isCurator) loadOpenClasses();
+  });
+  codeInput.addEventListener("change", () => {
+    if (isCurator) loadOpenClasses();
+  });
   document.querySelector('[data-action="back-join"]').addEventListener(
     "click",
     guarded(async () => {
@@ -2400,7 +2497,10 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
     guarded(async () => {
       const code = document.getElementById("school-code-input").value.trim().toUpperCase();
       if (code.length < 4) throw new Error("Maktab kodini kiriting");
-      const subjects = readSubjectsOrThrow();
+      const subjects = isCurator ? readSelectedSubjects() : readSubjectsOrThrow();
+      const classSelect = document.getElementById("curator-class-select");
+      const curatorClassId = isCurator && classSelect ? Number(classSelect.value) || null : null;
+      if (isCurator && classSelect && !curatorClassId) throw new Error("Qaysi sinfning kuratori ekaningizni tanlang");
 
       const confirmed = await askConfirm(
         "Maktabga qo'shilasizmi? Siz shu maktabda qolasiz — chiqish uchun ham maktab kodi kerak bo'ladi."
@@ -2410,7 +2510,7 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
       await saveProfileName();
       const { school } = await api("/api/schools/join", {
         method: "POST",
-        body: { code, subjects, school_id: target ? target.id : null },
+        body: { code, subjects, school_id: target ? target.id : null, is_curator: isCurator, curator_class_id: curatorClassId },
       });
       showToast(`✅ "${school.name}" maktabiga qo'shildingiz`);
       renderMySchool(school);
@@ -2729,13 +2829,21 @@ function renderLeaveSchool(school) {
         <p style="margin:0">
           "${escapeHtml(school.name)}" maktabidan chiqish uchun <b>maktab kodini</b> kiriting.
         </p>
-        ${
-          school.my_role === "owner"
-            ? `<p class="subtitle" style="margin:8px 0 0">Siz maktab adminisiz — chiqsangiz, adminlik maktabdagi keyingi o'qituvchiga o'tadi.</p>`
-            : ""
-        }
       </div>
     </div>
+    ${
+      isDirector(school) && school.members.some((member) => !member.is_me)
+        ? `<label class="field-label" for="successor-select">Direktorlikni kimga topshirasiz? <span class="required-mark">*</span></label>
+           <select id="successor-select">
+             <option value="">O'qituvchini tanlang</option>
+             ${school.members
+               .filter((member) => !member.is_me)
+               .map((member) => `<option value="${member.user_id}">${escapeHtml(member.name)} — ${subjectsText(member.subjects)}</option>`)
+               .join("")}
+           </select>
+           <p class="subtitle" style="margin:4px 0 8px">Maktab direktorsiz qolmasligi uchun o'rningizga yangi direktorni tanlang.</p>`
+        : ""
+    }
     <input class="input" id="leave-code-input" placeholder="Maktab kodi" maxlength="12"
            style="text-transform:uppercase;letter-spacing:3px;text-align:center;font-size:18px" />
     <button class="btn" id="confirm-leave-button" style="margin-top:12px">🚪 Chiqish</button>
@@ -2747,9 +2855,16 @@ function renderLeaveSchool(school) {
     guarded(async () => {
       const code = document.getElementById("leave-code-input").value.trim().toUpperCase();
       if (code.length < 4) throw new Error("Maktab kodini kiriting");
-      if (!(await askConfirm(`"${school.name}" maktabidan chiqasizmi?`))) return;
+      const successorSelect = document.getElementById("successor-select");
+      const successorId = successorSelect ? Number(successorSelect.value) || null : null;
+      if (successorSelect && !successorId) throw new Error("Direktorlikni topshiradigan o'qituvchini tanlang");
+      const successorName = successorSelect ? successorSelect.selectedOptions[0].textContent.split(" — ")[0] : "";
+      const question = successorId
+        ? `Direktorlik ${successorName}ga o'tadi va siz "${school.name}" maktabidan chiqasiz. Davom etasizmi?`
+        : `"${school.name}" maktabidan chiqasizmi?`;
+      if (!(await askConfirm(question))) return;
 
-      await api("/api/schools/leave", { method: "POST", body: { code } });
+      await api("/api/schools/leave", { method: "POST", body: { code, successor_user_id: successorId } });
       currentSchool = null;
       schoolMembershipKnown = true;
       showToast("Maktabdan chiqdingiz");

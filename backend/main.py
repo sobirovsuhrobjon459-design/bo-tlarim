@@ -3501,37 +3501,79 @@ def create_school(body: SchoolCreateIn, user: User = Depends(get_current_user), 
     return {"school": _school_view(db, member, user)}
 
 
-@app.post("/api/schools/join")
-def join_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Maktab kodi bilan maktabga qo'shiladi."""
-
-    _require_profile_name(user)
-    _require_subjects(body.subjects)
-    if _active_membership(db, user):
-        raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
+def _school_by_code(db: Session, user: User, code: str, school_id: int | None) -> PrivateSchool:
+    """Kod to'g'ri bo'lsa maktabni qaytaradi; noto'g'ri urinishlar hisoblanadi (taxmin qilishdan himoya)."""
 
     _check_code_attempts(user)
-
-    if body.school_id:
-        # Ro'yxatdan tanlangan maktab — kod aynan shu maktabniki bo'lishi shart
-        school = db.get(PrivateSchool, body.school_id)
+    if school_id:
+        school = db.get(PrivateSchool, school_id)
         if not school:
             raise HTTPException(status_code=404, detail="Maktab topilmadi")
-        if not hmac.compare_digest(body.code, school.code):
+        if not hmac.compare_digest(code, school.code):
             _record_code_failure(user)
-            raise HTTPException(status_code=403, detail="Maktab kodi noto'g'ri. Kodni maktabingiz o'qituvchisidan oling.")
+            raise HTTPException(status_code=403, detail="Maktab kodi noto'g'ri. Kodni maktabingiz direktoridan oling.")
     else:
-        school = db.scalar(select(PrivateSchool).where(PrivateSchool.code == body.code))
+        school = db.scalar(select(PrivateSchool).where(PrivateSchool.code == code))
         if not school:
             _record_code_failure(user)
             raise HTTPException(status_code=404, detail="Bunday kodli maktab topilmadi. Kodni tekshirib qayta kiriting.")
-
     _school_code_failures.pop(user.id, None)
+    return school
+
+
+def _open_classes(db: Session, school_id: int) -> list[SchoolClass]:
+    """Kuratori hali tayinlanmagan sinflar — qo'shilayotgan kurator o'zinikini tanlaydi."""
+    return db.scalars(
+        select(SchoolClass)
+        .where(SchoolClass.school_id == school_id, SchoolClass.deleted_at.is_(None), SchoolClass.curator_user_id.is_(None))
+        .order_by(SchoolClass.name)
+    ).all()
+
+
+@app.post("/api/schools/lookup")
+def lookup_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Kod bo'yicha maktab nomi va kuratorsiz sinflari (qo'shilish formasida "Kuratormisiz? — Ha" uchun)."""
+
+    school = _school_by_code(db, user, body.code, body.school_id)
+    return {
+        "school": {"id": school.id, "name": school.name},
+        "open_classes": [{"id": item.id, "name": item.name} for item in _open_classes(db, school.id)],
+    }
+
+
+@app.post("/api/schools/join")
+def join_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Maktab kodi bilan maktabga qo'shiladi.
+
+    O'qituvchidan so'raladi: kuratormisiz? Ha — kuratori yo'q sinflardan
+    o'zinikini tanlaydi (fan ixtiyoriy). Yo'q — dars beradigan fani majburiy.
+    """
+
+    _require_profile_name(user)
+    if not body.is_curator:
+        _require_subjects(body.subjects)
+    if _active_membership(db, user):
+        raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
+
+    school = _school_by_code(db, user, body.code, body.school_id)
+
+    curator_class = None
+    if body.is_curator and body.curator_class_id:
+        curator_class = db.get(SchoolClass, body.curator_class_id)
+        if not curator_class or curator_class.school_id != school.id or curator_class.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Sinf topilmadi")
+        if curator_class.curator_user_id is not None:
+            raise HTTPException(status_code=409, detail=f"«{curator_class.name}» sinfining kuratori allaqachon bor")
+    elif body.is_curator and _open_classes(db, school.id):
+        raise HTTPException(status_code=422, detail="Qaysi sinfning kuratori ekaningizni tanlang")
 
     member = SchoolMember(
         school_id=school.id, user_id=user.id, role="teacher", subjects=json.dumps(body.subjects, ensure_ascii=False)
     )
     db.add(member)
+    if curator_class:
+        curator_class.curator_user_id = user.id
     db.commit()
     db.refresh(member)
     return {"school": _school_view(db, member, user)}
@@ -3544,8 +3586,11 @@ def update_school_profile(body: SchoolProfileIn, user: User = Depends(get_curren
     member = _active_membership(db, user)
     if not member:
         raise HTTPException(status_code=404, detail="Siz hech qaysi maktabga a'zo emassiz")
-    if member.role != "owner":
-        _require_subjects(body.subjects)  # direktor fan o'qituvchisi emas
+    is_curator = db.scalar(
+        select(SchoolClass.id).where(SchoolClass.curator_user_id == user.id, SchoolClass.deleted_at.is_(None))
+    )
+    if member.role != "owner" and not is_curator:
+        _require_subjects(body.subjects)  # direktor va kurator uchun fan ixtiyoriy
 
     member.subjects = json.dumps(body.subjects, ensure_ascii=False)
     db.commit()
@@ -3557,8 +3602,8 @@ def leave_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db:
     """
     Maktabdan chiqish — faqat maktab kodi to'g'ri kiritilsa.
 
-    A'zolik yozuvi o'chirilmaydi (left_at belgilanadi). Egasi chiqsa, egalik
-    maktabda eng oldin qo'shilgan o'qituvchiga o'tadi; hech kim qolmasa,
+    A'zolik yozuvi o'chirilmaydi (left_at belgilanadi). Direktor chiqsa,
+    direktorlikni o'zi tanlagan o'qituvchiga topshiradi; hech kim qolmasa,
     maktab ma'lumotlari baribir saqlanib turadi.
     """
 
@@ -3572,15 +3617,25 @@ def leave_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db:
         _record_code_failure(user)
         raise HTTPException(status_code=403, detail="Maktab kodi noto'g'ri. Chiqish uchun maktab kodini kiriting.")
 
-    member.left_at = utcnow()
+    # Direktor chiqayotganda o'rniga kimni direktor qilishni O'ZI tanlaydi —
+    # maktab direktorsiz qolmasin. Boshqa o'qituvchi bo'lmasa, tanlash shart emas.
+    successor = None
+    if member.role == "owner":
+        others = db.scalars(
+            select(SchoolMember).where(
+                SchoolMember.school_id == school.id, SchoolMember.left_at.is_(None), SchoolMember.id != member.id
+            )
+        ).all()
+        if others:
+            successor = next((item for item in others if item.user_id == body.successor_user_id), None)
+            if not successor:
+                raise HTTPException(
+                    status_code=422, detail="Chiqishdan oldin direktorlikni maktabdagi o'qituvchilardan biriga topshiring"
+                )
 
+    member.left_at = utcnow()
     if member.role == "owner":
         member.role = "teacher"
-        successor = db.scalar(
-            select(SchoolMember)
-            .where(SchoolMember.school_id == school.id, SchoolMember.left_at.is_(None), SchoolMember.id != member.id)
-            .order_by(SchoolMember.joined_at, SchoolMember.id)
-        )
         if successor:
             successor.role = "owner"
             school.owner_user_id = successor.user_id

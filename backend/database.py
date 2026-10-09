@@ -653,6 +653,11 @@ class SchoolCodeIn(BaseModel):
     subjects: list[str] = Field(default_factory=list, max_length=20)
     # Tuman ro'yxatidan tanlangan maktab (bo'lmasa — maktab kod bo'yicha topiladi)
     school_id: int | None = None
+    # Qo'shilayotgan o'qituvchi kuratormi (sinf rahbari) va qaysi sinfniki
+    is_curator: bool = False
+    curator_class_id: int | None = None
+    # Direktor chiqayotganda: direktorlik kimga o'tadi
+    successor_user_id: int | None = None
 
     @model_validator(mode="after")
     def normalize(self) -> "SchoolCodeIn":
