@@ -3550,17 +3550,23 @@ function renderTestFound(test) {
         <p>📝 ${test.count} ta savol</p>
         <p>⏱️ ${test.duration} daqiqa</p>
         <p>💰 ${priceLabel}</p>
-        ${
-          testChannels(test).length
-            ? `<p>📢 Obuna shart: <b>${testChannels(test).map(escapeHtml).join(", ")}</b></p>
-               ${subscribeButtonsHtml(testChannels(test), "btn btn-ghost")}`
-            : ""
-        }
-        ${blockedMessage ? `<p style="color:var(--color-primary);font-weight:600">${blockedMessage}</p>` : ""}
+        ${testConditionsHtml(test)}
+        <button class="btn btn-ghost" id="check-conditions-button" style="margin-top:10px">🔄 Tekshirish</button>
         ${actionButton}
       </div>
     </div>
   `;
+
+  wireSubscribeButtons();
+  loadSubscriptionStatuses(test);
+  document.getElementById("check-conditions-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const fresh = await api(`/api/tests/${test.code}`);
+      renderTestFound(fresh);
+      showToast("🔄 Shartlar qayta tekshirildi");
+    })
+  );
 
   document.getElementById("start-test-button")?.addEventListener(
     "click",
@@ -3610,6 +3616,69 @@ function renderTestFound(test) {
       renderTestFound(fresh);
     })
   );
+  wireSubscribeButtons();
+}
+
+/*
+  Testni boshlash shartlari — har biri yonida holati (✅ bajarilgan / ❌ yo'q):
+  kanallarga obuna, boshlanish va tugash vaqti, to'lov. Obuna holati
+  Telegram'dan alohida so'raladi ("Tekshirish" tugmasi qayta so'raydi).
+*/
+function testConditionsHtml(test) {
+  const now = new Date();
+  const row = (state, icon, title, note, extra = "") => `
+    <div class="condition-row ${state}">
+      <span class="condition-state">${state === "ok" ? "✅" : state === "bad" ? "❌" : "⏳"}</span>
+      <span class="condition-text">${icon} ${title}<small>${note}</small>${extra}</span>
+    </div>`;
+
+  const rows = testChannels(test).map((channel) =>
+    `<div data-sub-row="${escapeHtml(channel)}">${row("wait", "📢", `${escapeHtml(channel)} kanaliga obuna`, "Tekshirilmoqda...")}</div>`
+  );
+
+  if (test.enrollment_type === "closed") {
+    rows.push(row("bad", "🔒", "Yopiq test", "Javoblarni o'qituvchining o'zi kiritadi"));
+  }
+  if (test.start_time) {
+    const started = now >= parseUtc(test.start_time);
+    rows.push(row(started ? "ok" : "wait", "⏰", `Boshlanish: ${formatDateTime(test.start_time)}`, started ? "Test boshlangan" : "Test hali boshlanmagan"));
+  }
+  if (test.end_time) {
+    const ended = now > parseUtc(test.end_time);
+    rows.push(row(ended ? "bad" : "ok", "⌛", `Tugash: ${formatDateTime(test.end_time)}`, ended ? "Test vaqti tugagan" : "Hali vaqt bor"));
+  }
+  if (test.price) {
+    rows.push(row(test.paid ? "ok" : "bad", "💳", `To'lov: ${formatNumber(test.price)} so'm`, test.paid ? "To'langan" : "Hali to'lanmagan"));
+  }
+
+  if (!rows.length) return "";
+  return `
+    <p class="section-label" style="margin:14px 0 6px">📋 SHARTLAR</p>
+    <div class="conditions">${rows.join("")}</div>`;
+}
+
+async function loadSubscriptionStatuses(test) {
+  if (!testChannels(test).length) return;
+  let channels = [];
+  try {
+    ({ channels } = await api(`/api/tests/${test.code}/subscriptions`));
+  } catch (error) {
+    channels = testChannels(test).map((channel) => ({ channel, status: "unknown" }));
+  }
+
+  channels.forEach(({ channel, status }) => {
+    const holder = [...document.querySelectorAll("[data-sub-row]")].find((item) => item.dataset.subRow === channel);
+    if (!holder) return;
+    const state = status === "yes" ? "ok" : status === "no" ? "bad" : "wait";
+    const note = status === "yes" ? "Obuna bo'lgansiz" : status === "no" ? "Obuna bo'lmagansiz" : "Tekshirib bo'lmadi — «Tekshirish»ni bosing";
+    holder.innerHTML = `
+      <div class="condition-row ${state}">
+        <span class="condition-state">${state === "ok" ? "✅" : state === "bad" ? "❌" : "⏳"}</span>
+        <span class="condition-text">📢 ${escapeHtml(channel)} kanaliga obuna<small>${note}</small>
+          ${status !== "yes" && channelLink(channel) ? `<button type="button" class="share-pill condition-action" data-subscribe="${escapeHtml(channel)}">Obuna bo'lish</button>` : ""}
+        </span>
+      </div>`;
+  });
   wireSubscribeButtons();
 }
 

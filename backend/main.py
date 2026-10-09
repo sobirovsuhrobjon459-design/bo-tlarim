@@ -3008,6 +3008,24 @@ def send_answer_sheet_to_telegram(
 # ========== 6) O'quvchi endpointlari ==========
 
 
+@app.get("/api/tests/{code}/subscriptions")
+def test_subscriptions(code: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    "Tekshirish" tugmasi: o'quvchi testning har bir majburiy kanaliga obunami?
+    status: "yes" — obuna, "no" — obuna emas, "unknown" — tekshirib bo'lmadi.
+    """
+
+    test = _get_test_by_code(db, code)
+    result = []
+    for channel in _required_channels(test):
+        try:
+            status = "yes" if _is_subscribed(channel, user) else "no"
+        except HTTPException:
+            status = "unknown"
+        result.append({"channel": channel, "status": status})
+    return {"channels": result}
+
+
 @app.get("/api/tests/{code}")
 def get_test(code: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """O'quvchi test kodini kiritganda, testning umumiy ma'lumotini qaytaradi."""

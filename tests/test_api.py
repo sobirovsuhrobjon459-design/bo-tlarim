@@ -1937,6 +1937,10 @@ def test_adminlar_kanali_har_bir_testda_majburiy():
         assert client.get(f"/api/tests/{same['code']}", headers=as_user(901)).json()["required_channels"] == ["@sukhrobmath"]
         assert client.get("/api/me", headers=as_user(901)).json()["default_channels"] == ["@sukhrobmath"]
 
+        # "Tekshirish": har bir kanal holati alohida
+        statuses = client.get(f"/api/tests/{own['code']}/subscriptions", headers=as_user(901)).json()["channels"]
+        assert statuses == [{"channel": "@sukhrobmath", "status": "no"}, {"channel": "@ustoz_kanali", "status": "no"}], statuses
+
         # Kanal qo'shilmagan testda ham adminlar kanaliga obuna shart
         blocked = client.post(f"/api/tests/{plain['code']}/start", json={}, headers=as_user(901))
         assert blocked.status_code == 451 and "@sukhrobmath" in blocked.json()["detail"], blocked.text
@@ -1947,6 +1951,8 @@ def test_adminlar_kanali_har_bir_testda_majburiy():
         blocked = client.post(f"/api/tests/{own['code']}/start", json={}, headers=as_user(901))
         assert blocked.status_code == 451 and "@ustoz_kanali" in blocked.json()["detail"], blocked.text
         assert "@sukhrobmath" not in blocked.json()["detail"], blocked.text
+        statuses = client.get(f"/api/tests/{own['code']}/subscriptions", headers=as_user(901)).json()["channels"]
+        assert [item["status"] for item in statuses] == ["yes", "no"], statuses
         subscribed.add("@ustoz_kanali")
         assert client.post(f"/api/tests/{own['code']}/start", json={}, headers=as_user(901)).status_code == 200
     finally:
