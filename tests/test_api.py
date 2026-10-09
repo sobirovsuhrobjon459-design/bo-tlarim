@@ -300,13 +300,15 @@ def test_notogri_kalit_qabul_qilinmaydi():
 
 
 def test_pullik_test_tolov_tizimisiz_yaratilmaydi():
-    """Payme sozlanmagan bo'lsa, pullik test yaratishga yo'l qo'yilmaydi."""
+    """Hech qaysi to'lov tizimi (Payme, Click) ulanmagan bo'lsa, pullik test yaratilmaydi."""
     reset_database()
     register_teacher()
 
-    original = main.PAYME_MERCHANT_ID
+    original, original_click = main.PAYME_MERCHANT_ID, main.CLICK_SERVICE_ID
     main.PAYME_MERCHANT_ID = ""
+    main.CLICK_SERVICE_ID = ""
     try:
+        assert client.get("/api/me", headers=as_user(555)).json()["payment_providers"] == []
         response = client.post(
             "/api/teacher/tests",
             json={
@@ -322,6 +324,16 @@ def test_pullik_test_tolov_tizimisiz_yaratilmaydi():
             headers=as_user(555),
         )
         assert response.status_code == 503, response.text
+    finally:
+        main.PAYME_MERCHANT_ID = original
+        main.CLICK_SERVICE_ID = original_click
+
+    # Faqat Click ulangan bo'lsa ham pullik test yaratiladi
+    original = main.PAYME_MERCHANT_ID
+    main.PAYME_MERCHANT_ID = ""
+    try:
+        assert client.get("/api/me", headers=as_user(555)).json()["payment_providers"] == ["click"]
+        assert create_test(price=5000)["code"]
     finally:
         main.PAYME_MERCHANT_ID = original
 

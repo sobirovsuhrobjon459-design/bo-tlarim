@@ -2227,6 +2227,8 @@ def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)
         "is_admin": bool(ADMIN_ID) and user.tg_id == ADMIN_ID,
         "is_teacher": is_teacher,
         "default_channels": DEFAULT_REQUIRED_CHANNELS,
+        # Pullik test va onlayn to'lov uchun ulangan tizimlar (bo'sh — pullik test yaratib bo'lmaydi)
+        "payment_providers": _enabled_providers(),
     }
 
 
@@ -2727,10 +2729,10 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         raise HTTPException(status_code=422, detail="Kamida bitta savol kiriting")
     if body.price > 0 and body.enrollment_type == "closed":
         raise HTTPException(status_code=422, detail="Pullik testlar faqat ochiq test sifatida yaratiladi")
-    if body.price > 0 and not PAYME_MERCHANT_ID:
+    if body.price > 0 and not _enabled_providers():
         raise HTTPException(
             status_code=503,
-            detail="To'lov tizimi hali sozlanmagan — hozircha faqat bepul test yaratish mumkin",
+            detail="To'lov tizimi hali ulanmagan — hozircha faqat bepul test yaratish mumkin",
         )
 
     # Majburiy obuna so'ralgan bo'lsa, bot kanalni haqiqatan tekshira olishini
@@ -3126,8 +3128,8 @@ def update_test_price(
     # testni keyin pullik qilib, to'lov tizimini chetlab o'tish mumkin bo'lardi.
     if body.price > 0 and test.enrollment_type == "closed":
         raise HTTPException(status_code=422, detail="Yopiq testni pullik qilib bo'lmaydi")
-    if body.price > 0 and not PAYME_MERCHANT_ID:
-        raise HTTPException(status_code=503, detail="To'lov tizimi hali sozlanmagan")
+    if body.price > 0 and not _enabled_providers():
+        raise HTTPException(status_code=503, detail="To'lov tizimi hali ulanmagan — testni pullik qilib bo'lmaydi")
 
     test.price = body.price
     db.commit()

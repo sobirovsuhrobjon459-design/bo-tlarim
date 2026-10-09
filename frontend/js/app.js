@@ -5645,10 +5645,10 @@ function renderNewTestForm(testType, draft = {}) {
     <div id="price-wrapper" style="display:${draft.paid ? "block" : "none"};margin-bottom:16px">
       <input class="input" id="field-price" type="number" min="0" step="1000"
              value="${draft.price ?? 0}" placeholder="Narxi (so'm)" style="margin:0" />
-      <div class="notice" style="margin-top:8px">
-        ⚠️ O'quvchi to'lovi hali to'lov tizimiga ulanmagan — hozircha o'quvchi pul
-        to'lamasdan testni ocha oladi, balansingizga esa haqiqiy bo'lmagan pul yoziladi.
-        Pullik testni ishlatishdan oldin menga ayting, Payme'ni ulab beraman.
+      <!-- To'lov tizimi ulanmagan bo'lsagina ko'rsatiladi (pastda /api/me orqali tekshiriladi) -->
+      <div class="notice" id="paid-unavailable-notice" style="margin-top:8px" hidden>
+        ⚠️ Onlayn to'lov hali ulanmagan, shuning uchun pullik test yaratib bo'lmaydi.
+        Hozircha bepul test yarating. To'lov ulangach, bu yerda narx qo'yish mumkin bo'ladi.
       </div>
     </div>
 
@@ -5800,6 +5800,15 @@ function renderNewTestForm(testType, draft = {}) {
     priceHint.textContent = "O'quvchi to'lov qilgandan keyin testni ishlaydi";
     selectOpenEnrollment(); // pullik test faqat ochiq bo'ladi
   });
+
+  // To'lov tizimi ulanmagan bo'lsa — ogohlantirish va narx maydoni o'chiriladi
+  api("/api/me")
+    .then((me) => {
+      if ((me.payment_providers || []).length) return;
+      document.getElementById("paid-unavailable-notice").hidden = false;
+      document.getElementById("field-price").disabled = true;
+    })
+    .catch(() => {});
 
   const enrollmentToggle = document.getElementById("enrollment-toggle");
   const enrollmentOpenButton = document.getElementById("enrollment-open-button");
