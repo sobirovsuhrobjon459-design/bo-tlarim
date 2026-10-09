@@ -993,9 +993,11 @@ function classCuratorNote(item) {
   Sinflar ro'yxati: chapda o'quvchilar soni, o'rtada sinf nomi va
   ostida kurator (o'zingizniki bo'lsa — "Sizning sinfingiz").
 */
-function classListHtml(classes) {
+function classListHtml(classes, scope = "mine") {
   if (!classes.length) {
-    return `<p class="subtitle" style="margin:6px 0 0">Maktabda hali sinf yo'q.</p>`;
+    return `<p class="subtitle" style="margin:6px 0 0">${
+      scope === "mine" ? "Siz hali hech qaysi sinfning kuratori emassiz." : "Boshqa sinf yo'q."
+    }</p>`;
   }
   return `
     <div class="panel class-list">
@@ -1021,19 +1023,18 @@ function wireClassList(container) {
   });
 }
 
-async function loadMyClassesInto(container) {
-  if (myClassesCache) {
-    container.innerHTML = classListHtml(myClassesCache);
+async function loadMyClassesInto(container, scope = "mine") {
+  const pick = (classes) => classes.filter((item) => Boolean(item.is_curator) === (scope === "mine"));
+  const draw = (classes) => {
+    container.innerHTML = classListHtml(pick(classes), scope);
     wireClassList(container);
-  }
+  };
+  if (myClassesCache) draw(myClassesCache);
   try {
     const classes = await api("/api/classes");
     const changed = JSON.stringify(classes) !== JSON.stringify(myClassesCache);
     myClassesCache = classes;
-    if (changed && container.isConnected) {
-      container.innerHTML = classListHtml(classes);
-      wireClassList(container);
-    }
+    if (changed && container.isConnected) draw(classes);
   } catch (error) {
     if (!myClassesCache && container.isConnected) container.innerHTML = `<p class="subtitle">${escapeHtml(error.message)}</p>`;
   }
@@ -1048,7 +1049,7 @@ function renderCreateClass() {
     <button class="btn" id="create-class-button" style="margin-top:14px">➕ Yaratish</button>
   `);
 
-  document.querySelector('[data-action="back-profile"]').addEventListener("click", () => renderSchoolClasses(currentSchool));
+  document.querySelector('[data-action="back-profile"]').addEventListener("click", () => renderMySchool(currentSchool));
   document.getElementById("create-class-button").addEventListener(
     "click",
     guarded(async () => {
@@ -1152,7 +1153,9 @@ function classHeader(schoolClass, action = "") {
 
 function wireClassTab(schoolClass, tab) {
   showClassNav(tab);
-  document.querySelector('[data-action="back-classes"]').addEventListener("click", () => renderSchoolClasses(currentSchool));
+  document.querySelector('[data-action="back-classes"]').addEventListener("click", () =>
+    renderSchoolClasses(currentSchool, schoolClass.is_curator ? "mine" : "others")
+  );
   document.getElementById("class-settings-button")?.addEventListener("click", () => openClassSettings(schoolClass, tab));
 }
 
@@ -1297,7 +1300,7 @@ function renderDeleteClass(schoolClass, fromTab = "attendance") {
       await api(`/api/classes/${schoolClass.id}`, { method: "DELETE" });
       myClassesCache = null;
       showToast(`🗑 «${schoolClass.name}» o'chirildi`);
-      renderSchoolClasses(currentSchool);
+      renderMySchool(currentSchool);
     })
   );
 }
@@ -2619,12 +2622,14 @@ function avatarLetter(name) {
   return escapeHtml((name || "?").trim().charAt(0).toUpperCase());
 }
 
-/* ---------- Maktab bo'limi: pastki menyu (Maktab · O'qituvchilar · Profil) ---------- */
+/* ---------- Maktab bo'limi: pastki menyu (Maktab · Profil) ---------- */
 
+/*
+  O'qituvchilar va sinflar — Maktab ekranidagi bo'limlar orqali, oddiy
+  (menyusiz) ekranlarda ochiladi.
+*/
 const SCHOOL_TABS = [
   { id: "school", icon: "🏫", label: "Maktab" },
-  { id: "teachers", icon: "👥", label: "O'qituvchilar" },
-  { id: "classes", icon: "📚", label: "Sinflar" },
   { id: "profile", icon: "👤", label: "Profil" },
 ];
 
@@ -2663,7 +2668,8 @@ function showSchoolNav(activeTab) {
 
 function openSchoolTab(tab) {
   if (tab === "teachers") renderSchoolTeachers(currentSchool);
-  else if (tab === "classes") renderSchoolClasses(currentSchool);
+  else if (tab === "classes-mine") renderSchoolClasses(currentSchool, "mine");
+  else if (tab === "classes-others") renderSchoolClasses(currentSchool, "others");
   else if (tab === "profile") renderSchoolProfile(currentSchool);
   else renderMySchool(currentSchool);
 }
@@ -2727,12 +2733,80 @@ function renderMySchool(school, { refresh = true } = {}) {
              </div>`
       }
 
+      <p class="section-label" style="margin-top:18px">SINFLAR VA O'QITUVCHILAR</p>
+      <div class="panel pick-list school-menu">
+        ${schoolMenuItem("classes-mine", "⭐", "Mening sinflarim", '<i class="menu-count" data-count="mine">…</i>')}
+        ${schoolMenuItem("classes-others", "📚", "Boshqa sinflar", '<i class="menu-count" data-count="others">…</i>')}
+        ${schoolMenuItem("teachers", "👥", "O'qituvchilar", `${school.members.length} ta o'qituvchi`)}
+      </div>
+
+      ${
+        isLeader(school)
+          ? `<p class="section-label" style="margin-top:18px">BOSHQARUV</p>
+             <div class="panel pick-list school-menu">
+               ${school.can_create_classes ? schoolMenuItem("create-class", "➕", "Sinf yaratish", "Yangi sinf ochib, kurator tayinlang") : ""}
+               ${schoolMenuItem("invite-teacher", "👤", "O'qituvchi qo'shish", "Bir martalik havola — kodsiz qo'shiladi")}
+               ${isOwner(school) ? schoolMenuItem("teachers", "🎖", "Lavozim berish", "Direktor va zam direktor tayinlash") : ""}
+             </div>`
+          : ""
+      }
     </div>
   `);
 
   wireSchoolTab("school");
   document.querySelector('[data-action="fill-subjects"]')?.addEventListener("click", guarded(() => renderSchoolProfileEdit(school)));
+  document.querySelectorAll("[data-school-menu]").forEach((item) => {
+    item.addEventListener(
+      "click",
+      guarded(async () => {
+        const target = item.dataset.schoolMenu;
+        if (target === "create-class") renderCreateClass();
+        else if (target === "invite-teacher") await inviteTeacher();
+        else openSchoolTab(target);
+      })
+    );
+  });
+  fillClassCounts();
   if (refresh) refreshSchoolInBackground("school");
+}
+
+function schoolMenuItem(target, icon, title, note) {
+  return `
+    <button type="button" class="pick-item" data-school-menu="${target}">
+      <span class="pick-title">${icon} ${title}<small>${note}</small></span>
+      <span>›</span>
+    </button>`;
+}
+
+// Maktab ekranidagi "Mening sinflarim" / "Boshqa sinflar" soni
+async function fillClassCounts() {
+  const show = (classes) => {
+    const mine = classes.filter((item) => item.is_curator).length;
+    const mineNode = document.querySelector('[data-count="mine"]');
+    const othersNode = document.querySelector('[data-count="others"]');
+    if (mineNode) mineNode.textContent = mine ? `${mine} ta sinf — kuratori siz` : "Siz kurator bo'lgan sinf yo'q";
+    if (othersNode) othersNode.textContent = `${classes.length - mine} ta sinf — davomat olasiz`;
+  };
+  if (myClassesCache) show(myClassesCache);
+  try {
+    myClassesCache = await api("/api/classes");
+    show(myClassesCache);
+  } catch (_) {
+    /* soni ko'rinmasa ham bo'limlar ishlaydi */
+  }
+}
+
+// Menyusiz ekranlar (o'qituvchilar, sinflar) sarlavhasi: ← Maktab ekraniga
+function schoolSubHeader(title) {
+  return `
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-school-home" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">${escapeHtml(title)}</h2>
+    </div>`;
+}
+
+function wireSchoolSubPage() {
+  document.querySelector('[data-action="back-school-home"]').addEventListener("click", () => renderMySchool(currentSchool));
 }
 
 // 👥 O'qituvchilar tabi — hammasi bitta ekranda
@@ -2756,7 +2830,7 @@ function renderSchoolTeachers(school) {
 
   showPage(`
     <div data-school-tab="teachers">
-      ${schoolTabHeader(`O'qituvchilar (${school.members.length})`)}
+      ${schoolSubHeader(`O'qituvchilar (${school.members.length})`)}
       <div class="panel" style="padding:4px 0">${memberRows}</div>
       ${
         canAssign && school.members.length > 1
@@ -2775,7 +2849,7 @@ function renderSchoolTeachers(school) {
     </div>
   `);
 
-  wireSchoolTab("teachers");
+  wireSchoolSubPage();
   document.getElementById("invite-teacher-button")?.addEventListener("click", guarded(inviteTeacher));
   if (canAssign) {
     document.querySelectorAll(".member-line.is-tappable").forEach((line) => {
@@ -2836,26 +2910,24 @@ function openPositionSheet(member) {
 }
 
 // 📚 Sinflarim tabi — o'qituvchi faqat o'zi dars beradigan sinf/guruhlari
-function renderSchoolClasses(school) {
+function renderSchoolClasses(school, scope = "mine") {
   currentSchool = school;
-  const director = Boolean(school.can_create_classes);
+  const mine = scope === "mine";
 
   showPage(`
-    <div data-school-tab="classes">
-      ${schoolTabHeader("Sinflar")}
-      ${
-        director
-          ? `<button class="btn" id="create-class-button" style="margin-top:4px">➕ Sinf yaratish</button>
-             <p class="subtitle" style="margin:6px 0 0">Sinf yaratgach, unga kurator (sinf rahbari) tayinlang — o'quvchilarni kurator qo'shadi.</p>`
-          : `<p class="subtitle" style="margin:0">Sinflarni maktab admini yoki direktor ochadi. Kurator bo'lgan sinfingizni boshqarasiz, qolgan sinflarda davomat olasiz.</p>`
-      }
+    <div data-school-tab="classes-${scope}">
+      ${schoolSubHeader(mine ? "Mening sinflarim" : "Boshqa sinflar")}
+      <p class="subtitle" style="margin:0">${
+        mine
+          ? "Kuratori siz bo'lgan sinflar — o'quvchilarni qo'shasiz va sinfni boshqarasiz."
+          : "Maktabning boshqa sinflari — dars o'tganingizda davomat olasiz."
+      }</p>
       <div id="my-classes" style="margin-top:14px"><p class="subtitle" style="margin:6px 0 0">⏳ Yuklanmoqda...</p></div>
     </div>
   `);
 
-  wireSchoolTab("classes");
-  document.getElementById("create-class-button")?.addEventListener("click", renderCreateClass);
-  loadMyClassesInto(document.getElementById("my-classes"));
+  wireSchoolSubPage();
+  loadMyClassesInto(document.getElementById("my-classes"), scope);
 }
 
 // 👤 Profil tabi: ma'lumotlar, tahrirlash va maktabdan chiqish

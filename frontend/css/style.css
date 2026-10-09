@@ -2225,7 +2225,7 @@ select option {
 .fab {
   position: fixed;
   right: max(18px, calc((100vw - 520px) / 2 + 18px));
-  bottom: calc(86px + env(safe-area-inset-bottom));
+  bottom: calc(24px + env(safe-area-inset-bottom));
   z-index: 25;
   width: 58px;
   height: 58px;
@@ -2402,4 +2402,9 @@ body.keyboard-open .fab {
 .class-arrow {
   color: var(--color-text-muted);
   font-size: 20px;
+}
+
+/* Maktab ekranidagi sinflar soni — oddiy izoh matni */
+.menu-count {
+  font-style: normal;
 }
