@@ -1652,6 +1652,22 @@ def test_fan_oqituvchisi_faqat_ozi_olgan_davomatni_koradi():
     assert client.get(f"/api/attendance/{math['id']}", headers=as_user(703)).status_code == 403
     assert client.get(f"/api/attendance/{math['id']}", headers=as_user(704)).status_code == 200
 
+    # O'quvchi foizi va tarixi ham faqat o'z fani bo'yicha: matematikada yo'q, biologiyada bor
+    sid = client.get(f"/api/classes/{cid}", headers=as_user(701)).json()["students"][0]["id"]
+    client.put(f"/api/attendance/{math['id']}", json={"marks": {sid: "absent"}}, headers=as_user(702))
+    bio_view = client.get(f"/api/classes/{cid}", headers=as_user(703)).json()["students"][0]["stats"]
+    assert bio_view["total"] == 1 and bio_view["rate"] == 100, bio_view
+    admin_view = client.get(f"/api/classes/{cid}", headers=as_user(701)).json()["students"][0]["stats"]
+    assert admin_view["total"] == 2 and admin_view["rate"] == 50, admin_view
+    profile = client.get(f"/api/classes/{cid}/students/{sid}", headers=as_user(703)).json()
+    assert [h["subject"] for h in profile["history"]] == ["Biologiya"], profile["history"]
+
+    # Ikkinchi biologiya o'qituvchisi (o'rinbosar) biologiya davomatini ko'radi, matematikanikini emas
+    _set_name(705, "Ikkinchi", "Biolog")
+    client.post("/api/schools/join", json={"phone": "901234567", "code": current_code(school), "subjects": ["Biologiya"]},
+                headers=as_user(705))
+    assert seen(705) == {bio["id"]}
+
 
 def test_oqish_tolovlari():
     """Oylik summa, chegirma, qisman to'lov, ortiqcha to'lovni rad etish, bekor qilish (o'chirilmaydi), ruxsatlar."""

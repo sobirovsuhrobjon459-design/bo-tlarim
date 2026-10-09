@@ -49,7 +49,7 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from sqlalchemy import String, case, cast, delete, distinct, func, inspect, select, text
+from sqlalchemy import String, case, cast, delete, distinct, func, inspect, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from .rasch import grade_for, rasch_scores
@@ -4135,13 +4135,38 @@ def _sees_all_attendance(school_class: SchoolClass, member: SchoolMember | None)
     return bool(member and (_is_director(member) or school_class.curator_user_id == member.user_id))
 
 
+def _attendance_filter(school_class: SchoolClass, member: SchoolMember | None):
+    """
+    Fan o'qituvchisi qaysi davomatlarni ko'radi: o'zi olganlarini va O'Z FANI
+    bo'yicha olinganlarini (masalan, o'rniga dars o'tgan boshqa biologiya
+    o'qituvchisiniki). Boshqa fanniki ko'rinmaydi. Rahbariyat va kurator — hammasini
+    (shunda None qaytadi).
+    """
+
+    if _sees_all_attendance(school_class, member):
+        return None
+    if not member:
+        return Attendance.id == -1
+    subjects = _read_subjects(member)
+    conditions = [Attendance.teacher_user_id == member.user_id]
+    if subjects:
+        conditions.append(Attendance.subject.in_(subjects))
+    return or_(*conditions)
+
+
+def _can_see_attendance(attendance: Attendance, school_class: SchoolClass, member: SchoolMember | None) -> bool:
+    if _sees_all_attendance(school_class, member):
+        return True
+    return bool(member and (attendance.teacher_user_id == member.user_id or attendance.subject in _read_subjects(member)))
+
+
 def _school_attendance(db: Session, user: User, attendance_id: int) -> tuple[Attendance, SchoolMember]:
     attendance = db.get(Attendance, attendance_id)
     if not attendance or attendance.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Davomat topilmadi")
     school_class, member = _school_class(db, user, attendance.class_id)
-    if attendance.teacher_user_id != user.id and not _sees_all_attendance(school_class, member):
-        raise HTTPException(status_code=403, detail="Bu davomatni boshqa o'qituvchi olgan")
+    if not _can_see_attendance(attendance, school_class, member):
+        raise HTTPException(status_code=403, detail="Bu davomat boshqa fan bo'yicha olingan")
     return attendance, member
 
 
@@ -4173,18 +4198,22 @@ def _attendance_view(attendance: Attendance) -> dict:
     }
 
 
-def _student_attendance_stats(db: Session, student_ids: list[int]) -> dict[int, dict]:
-    """Har bir o'quvchi bo'yicha: necha darsda bor/yo'q/sababli/kechikkan — bitta so'rovda."""
+def _student_attendance_stats(db: Session, student_ids: list[int], scope=None) -> dict[int, dict]:
+    """Har bir o'quvchi bo'yicha: necha darsda bor/yo'q/sababli/kechikkan — bitta so'rovda.
+    scope — fan o'qituvchisi uchun filtr: foiz faqat uning fani bo'yicha hisoblanadi."""
 
     stats = {sid: {status: 0 for status in ATTENDANCE_LABELS} for sid in student_ids}
     if not student_ids:
         return stats
-    rows = db.execute(
+    query = (
         select(AttendanceMark.student_id, AttendanceMark.status, func.count())
         .join(Attendance, Attendance.id == AttendanceMark.attendance_id)
         .where(AttendanceMark.student_id.in_(student_ids), Attendance.deleted_at.is_(None))
         .group_by(AttendanceMark.student_id, AttendanceMark.status)
-    ).all()
+    )
+    if scope is not None:
+        query = query.where(scope)
+    rows = db.execute(query).all()
     for student_id, status, count in rows:
         stats[student_id][status] = count
     for item in stats.values():
@@ -4211,7 +4240,7 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
         "can_delete": bool(member and _can_delete_classes(member)),
     }
     if with_details:
-        stats = _student_attendance_stats(db, [student.id for student in students])
+        stats = _student_attendance_stats(db, [student.id for student in students], _attendance_filter(school_class, member))
         view["students"] = [
             {
                 "id": student.id,
@@ -4222,9 +4251,10 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
             for student in students
         ]
         query = select(Attendance).where(Attendance.class_id == school_class.id, Attendance.deleted_at.is_(None))
-        if not _sees_all_attendance(school_class, member):
-            # Fan o'qituvchisi faqat o'zi olgan davomatlarni ko'radi
-            query = query.where(Attendance.teacher_user_id == (member.user_id if member else -1))
+        scope = _attendance_filter(school_class, member)
+        if scope is not None:
+            # Fan o'qituvchisi faqat o'zi olgan va o'z fani bo'yicha davomatlarni ko'radi
+            query = query.where(scope)
         recent = db.scalars(query.order_by(Attendance.taken_at.desc()).limit(50)).all()
         takers = {
             user.id: user.full_name
@@ -4428,18 +4458,22 @@ def edit_student(
 def student_profile(class_id: int, student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """O'quvchi haqida: ma'lumotlari, davomat statistikasi va har darsdagi holati."""
 
-    school_class, _ = _school_class(db, user, class_id)
+    school_class, member = _school_class(db, user, class_id)
     student = db.get(ClassStudent, student_id)
     if not student or student.class_id != school_class.id:
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
 
-    history = db.execute(
+    scope = _attendance_filter(school_class, member)
+    history_query = (
         select(Attendance.id, Attendance.taken_at, Attendance.subject, AttendanceMark.status)
         .join(AttendanceMark, AttendanceMark.attendance_id == Attendance.id)
         .where(AttendanceMark.student_id == student.id, Attendance.deleted_at.is_(None))
         .order_by(Attendance.taken_at.desc())
         .limit(100)
-    ).all()
+    )
+    if scope is not None:
+        history_query = history_query.where(scope)
+    history = db.execute(history_query).all()
 
     return {
         "id": student.id,
@@ -4449,7 +4483,7 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
         "birth_date": student.birth_date,
         "created_at": student.created_at,
         "removed": student.removed_at is not None,
-        "stats": _student_attendance_stats(db, [student.id])[student.id],
+        "stats": _student_attendance_stats(db, [student.id], scope)[student.id],
         "history": [
             {"attendance_id": aid, "taken_at": taken_at, "subject": subject, "status": status}
             for aid, taken_at, subject, status in history

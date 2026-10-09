@@ -1407,10 +1407,31 @@ function timeLabel(isoString) {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+// Davomat tarixi — fan bo'yicha filtr (sinf id → tanlangan fan)
+const attendanceSubjectFilter = new Map();
+
 function renderClassAttendanceTab(schoolClass) {
   currentClass = schoolClass;
+  // Bir nechta fan bo'lsa (kurator/rahbariyat ko'radi) — fan bo'yicha ajratib ko'rish
+  const subjects = [...new Set(schoolClass.attendances.map((item) => item.subject || ""))];
+  let chosen = attendanceSubjectFilter.get(schoolClass.id) ?? null;
+  if (chosen !== null && !subjects.includes(chosen)) chosen = null;
+  const visible = chosen === null ? schoolClass.attendances : schoolClass.attendances.filter((item) => (item.subject || "") === chosen);
+  const filterHtml =
+    subjects.length > 1
+      ? `<div class="subject-filter">
+           <button type="button" class="filter-chip${chosen === null ? " active" : ""}" data-subject-filter="__all">Hammasi</button>
+           ${subjects
+             .map(
+               (subject) =>
+                 `<button type="button" class="filter-chip${chosen === subject ? " active" : ""}" data-subject-filter="${escapeHtml(subject)}">${escapeHtml(subject || "Fansiz")}</button>`
+             )
+             .join("")}
+         </div>`
+      : "";
+
   const groups = [];
-  schoolClass.attendances.forEach((item) => {
+  visible.forEach((item) => {
     const label = dayLabel(item.taken_at);
     if (!groups.length || groups[groups.length - 1].label !== label) groups.push({ label, items: [] });
     groups[groups.length - 1].items.push(item);
@@ -1443,6 +1464,7 @@ function renderClassAttendanceTab(schoolClass) {
         (currentSchool?.my_subjects || []).length === 1 ? `${escapeHtml(lessonName(currentSchool.my_subjects[0]))} davomati` : "Davomat olish"
       }</button>
       <p class="subtitle" style="margin:6px 0 0;text-align:center">👨‍🎓 ${schoolClass.students.length} ta o'quvchi · hamma oldindan "Bor"</p>
+      ${filterHtml}
       ${historyHtml}
     </div>
   `);
@@ -1463,6 +1485,13 @@ function renderClassAttendanceTab(schoolClass) {
   });
   document.querySelectorAll("[data-attendance-id]").forEach((item) => {
     item.addEventListener("click", guarded(() => renderAttendanceDetail(Number(item.dataset.attendanceId), schoolClass)));
+  });
+  document.querySelectorAll("[data-subject-filter]").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const value = chip.dataset.subjectFilter;
+      attendanceSubjectFilter.set(schoolClass.id, value === "__all" ? null : value);
+      renderClassAttendanceTab(schoolClass);
+    });
   });
 }
 
