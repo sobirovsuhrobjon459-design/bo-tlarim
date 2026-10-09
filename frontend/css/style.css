@@ -2187,7 +2187,7 @@ select option {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: calc(12px + env(safe-area-inset-bottom));
+  bottom: calc(32px + env(safe-area-inset-bottom));
   z-index: 5;
   margin: 0;
   pointer-events: none;
