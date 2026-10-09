@@ -1936,18 +1936,6 @@ select option {
   border-radius: 999px;
 }
 
-/* O'quvchi kartasidagi tez tahrirlash tugmasi */
-.student-edit {
-  flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  font-size: 15px;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  cursor: pointer;
-}
-
 /* O'quvchilarni import qilish */
 .import-actions {
   display: flex;

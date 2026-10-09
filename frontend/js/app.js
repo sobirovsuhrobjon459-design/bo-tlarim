@@ -1449,7 +1449,6 @@ function renderClassStudentsTab(schoolClass) {
                 <small>${studentStatsLine(student.stats)}</small>
               </span>
               ${rateBadge(student.stats)}
-              ${schoolClass.can_manage ? `<button type="button" class="student-edit" data-edit-student="${student.id}" aria-label="Tahrirlash">✏️</button>` : ""}
             </div>`
         )
         .join("")
@@ -1476,15 +1475,9 @@ function renderClassStudentsTab(schoolClass) {
   document.querySelectorAll("[data-student-id]").forEach((card) => {
     card.addEventListener(
       "click",
-      guarded(async (event) => {
-        // ✏️ bosilsa — profilga o'tmasdan, shu yerning o'zida tahrirlash oynasi
-        const editButton = event.target.closest("[data-edit-student]");
-        const student = schoolClass.students.find((item) => item.id === Number(card.dataset.studentId));
-        if (editButton) {
-          openEditStudentSheet(schoolClass, student, () => renderClass(schoolClass.id, "students"));
-          return;
-        }
-        await renderStudentProfile(schoolClass, student.id);
+      // Tahrirlash — o'quvchi profilining ichida
+      guarded(async () => {
+        await renderStudentProfile(schoolClass, Number(card.dataset.studentId));
       })
     );
   });
