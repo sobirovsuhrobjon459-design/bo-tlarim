@@ -75,6 +75,9 @@ from .database import (
     Base,
     ClassIn,
     ClassStudent,
+    ClassTest,
+    ClassTestIn,
+    ClassTestScore,
     CuratorIn,
     CreditPurchase,
     CardTopUpIn,
@@ -4521,6 +4524,154 @@ def delete_attendance(attendance_id: int, user: User = Depends(get_current_user)
     attendance.deleted_by = user.id
     db.commit()
     logging.getLogger("backend").info("Davomat o'chirildi: id=%s user=%s", attendance.id, user.id)
+    return {"ok": True}
+
+
+# ---------- Sinf test natijalari (o'qituvchi kiritadi) ----------
+
+
+def _grade(percent: float) -> int:
+    """Foizdan baho: 86%+ — 5, 71%+ — 4, 56%+ — 3, qolgani — 2."""
+    if percent >= 86:
+        return 5
+    if percent >= 71:
+        return 4
+    if percent >= 56:
+        return 3
+    return 2
+
+
+def _can_see_class_test(test: ClassTest, member: SchoolMember) -> bool:
+    """Ko'radi: testni kiritgan o'qituvchi, admin, direktor va zam direktor."""
+    return test.teacher_user_id == member.user_id or _is_director(member)
+
+
+def _class_test_view(db: Session, test: ClassTest, member: SchoolMember, with_scores: bool = True) -> dict:
+    rows = []
+    for item in test.scores:
+        percent = round(item.score / test.max_score * 100, 1) if item.score is not None else None
+        rows.append({
+            "student_id": item.student_id,
+            "name": item.student_name,
+            "score": item.score,
+            "percent": percent,
+            "grade": _grade(percent) if percent is not None else None,
+        })
+    # Eng ko'p yechganlar tepada; qatnashmaganlar — oxirida
+    rows.sort(key=lambda row: (row["score"] is None, -(row["score"] or 0), row["name"].lower()))
+    rank = 0
+    for index, row in enumerate(rows):
+        if row["score"] is None:
+            continue
+        if index == 0 or row["score"] != rows[index - 1]["score"]:
+            rank = index + 1
+        row["rank"] = rank
+
+    taken = [row for row in rows if row["score"] is not None]
+    teacher = db.get(User, test.teacher_user_id)
+    view = {
+        "id": test.id,
+        "class_id": test.class_id,
+        "title": test.title,
+        "subject": test.subject,
+        "taken_on": test.taken_on,
+        "max_score": test.max_score,
+        "teacher_name": teacher.full_name if teacher else "",
+        "participants": len(taken),
+        "total": len(rows),
+        "average_percent": round(sum(row["percent"] for row in taken) / len(taken), 1) if taken else None,
+        "best": taken[0]["name"] if taken else None,
+        "can_edit": test.teacher_user_id == member.user_id or _is_director(member),
+        "updated_at": test.updated_at,
+    }
+    if with_scores:
+        view["scores"] = rows
+    return view
+
+
+def _visible_class_test(db: Session, user: User, test_id: int) -> tuple[ClassTest, SchoolMember]:
+    test = db.get(ClassTest, test_id)
+    if not test or test.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Test topilmadi")
+    _, member = _school_class(db, user, test.class_id)
+    if not _can_see_class_test(test, member):
+        raise HTTPException(status_code=403, detail="Bu test natijalarini faqat uni kiritgan o'qituvchi va rahbariyat ko'radi")
+    return test, member
+
+
+def _save_scores(db: Session, test: ClassTest, school_class: SchoolClass, scores: dict[int, float | None]) -> None:
+    """Sinfning har bir o'quvchisi uchun ball (yo'q bo'lsa — qatnashmagan)."""
+    existing = {item.student_id: item for item in test.scores}
+    for student in _active_students(school_class):
+        value = scores.get(student.id)
+        if student.id in existing:
+            existing[student.id].score = value
+        else:
+            db.add(ClassTestScore(test_id=test.id, student_id=student.id, student_name=student.full_name, score=value))
+
+
+@app.get("/api/classes/{class_id}/tests")
+def list_class_tests(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    school_class, member = _school_class(db, user, class_id)
+    tests = db.scalars(
+        select(ClassTest)
+        .where(ClassTest.class_id == school_class.id, ClassTest.deleted_at.is_(None))
+        .order_by(ClassTest.taken_on.desc(), ClassTest.id.desc())
+    ).all()
+    return [_class_test_view(db, test, member, with_scores=False) for test in tests if _can_see_class_test(test, member)]
+
+
+@app.post("/api/classes/{class_id}/tests")
+def create_class_test(class_id: int, body: ClassTestIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """O'qituvchi sinfda o'tkazgan test natijalarini kiritadi."""
+
+    school_class, member = _school_class(db, user, class_id)
+    if not _active_students(school_class):
+        raise HTTPException(status_code=400, detail="Sinfda hali o'quvchi yo'q — avval o'quvchilarni qo'shing")
+    if not any(score is not None for score in body.scores.values()):
+        raise HTTPException(status_code=422, detail="Kamida bitta o'quvchining balini kiriting")
+
+    test = ClassTest(
+        class_id=school_class.id,
+        teacher_user_id=user.id,
+        title=body.title,
+        subject=body.subject,
+        taken_on=body.taken_on,
+        max_score=body.max_score,
+    )
+    db.add(test)
+    db.flush()
+    _save_scores(db, test, school_class, body.scores)
+    db.commit()
+    db.refresh(test)
+    return _class_test_view(db, test, member)
+
+
+@app.get("/api/class-tests/{test_id}")
+def class_test_detail(test_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    test, member = _visible_class_test(db, user, test_id)
+    return _class_test_view(db, test, member)
+
+
+@app.put("/api/class-tests/{test_id}")
+def edit_class_test(test_id: int, body: ClassTestIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    test, member = _visible_class_test(db, user, test_id)
+    if not any(score is not None for score in body.scores.values()):
+        raise HTTPException(status_code=422, detail="Kamida bitta o'quvchining balini kiriting")
+    test.title, test.subject, test.taken_on, test.max_score = body.title, body.subject, body.taken_on, body.max_score
+    _save_scores(db, test, db.get(SchoolClass, test.class_id), body.scores)
+    test.updated_at = utcnow()
+    db.commit()
+    db.refresh(test)
+    return _class_test_view(db, test, member)
+
+
+@app.delete("/api/class-tests/{test_id}")
+def delete_class_test(test_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Test natijalari ro'yxatdan olinadi — bazada qoladi (tiklash mumkin)."""
+    test, _ = _visible_class_test(db, user, test_id)
+    test.deleted_at = utcnow()
+    db.commit()
     return {"ok": True}
 
 

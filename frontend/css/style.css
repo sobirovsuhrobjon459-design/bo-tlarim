@@ -2579,3 +2579,91 @@ body.keyboard-open .fab {
   font-weight: 400;
   color: var(--color-text-muted);
 }
+
+/* Sinf test natijalari jadvali */
+.score-table {
+  margin-top: 14px;
+  padding: 4px 0;
+}
+
+.score-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 44px 52px 44px;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 14px;
+}
+
+.score-row:last-child {
+  border-bottom: 0;
+}
+
+.score-row > span:not(.score-name) {
+  text-align: center;
+}
+
+.score-head {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+}
+
+.score-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.score-row.is-absent {
+  opacity: 0.55;
+}
+
+.grade-badge {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  font-weight: 800;
+  color: #fff;
+  border-radius: 8px;
+}
+
+.grade-badge.g5 {
+  background: #16a34a;
+}
+
+.grade-badge.g4 {
+  background: #2563eb;
+}
+
+.grade-badge.g3 {
+  background: #d97706;
+}
+
+.grade-badge.g2 {
+  background: #dc2626;
+}
+
+.grade-badge.none {
+  color: var(--color-text-muted);
+  background: none;
+}
+
+/* Natija kiritish formasi */
+.two-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.score-input-row .score-input {
+  flex: 0 0 76px;
+  width: 76px;
+  margin: 0;
+  padding: 10px 8px;
+  text-align: center;
+  font-weight: 700;
+}

@@ -520,6 +520,43 @@ class AttendanceMark(Base):
     attendance: Mapped["Attendance"] = relationship(back_populates="marks")
 
 
+class ClassTest(Base):
+    """
+    Sinfda o'tkazilgan test natijalari — o'qituvchi kiritadi (o'quvchilar botda
+    ishlamaydi). Ko'radi: kiritgan o'qituvchi va rahbariyat. O'chirilganda
+    bazada qoladi (deleted_at).
+    """
+
+    __tablename__ = "class_tests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    class_id: Mapped[int] = mapped_column(ForeignKey("school_classes.id"), index=True)
+    teacher_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    subject: Mapped[str] = mapped_column(String(100), default="")
+    taken_on: Mapped[date] = mapped_column()
+    max_score: Mapped[float] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime | None] = mapped_column(default=None)
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+
+    scores: Mapped[list["ClassTestScore"]] = relationship(back_populates="test", order_by="ClassTestScore.id")
+
+
+class ClassTestScore(Base):
+    """O'quvchining test bali. score bo'sh — testda qatnashmagan. Ism nusxasi saqlanadi."""
+
+    __tablename__ = "class_test_scores"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    test_id: Mapped[int] = mapped_column(ForeignKey("class_tests.id"), index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("class_students.id"), index=True)
+    student_name: Mapped[str] = mapped_column(String(200))
+    score: Mapped[float | None] = mapped_column(default=None)
+
+    test: Mapped["ClassTest"] = relationship(back_populates="scores")
+
+
 # ========== 4) API so'rov sxemalari (Pydantic) ==========
 
 
@@ -799,6 +836,27 @@ class StudentIn(BaseModel):
         self.full_name = " ".join(self.full_name.split())
         if len(self.full_name) < 2:
             raise ValueError("O'quvchining ism-familiyasini kiriting")
+        return self
+
+
+class ClassTestIn(BaseModel):
+    """Sinf testi natijalari: nomi, fani, sanasi, maksimal ball va har o'quvchining bali (bo'sh — qatnashmadi)."""
+
+    title: str = Field(min_length=2, max_length=200)
+    subject: str = Field(default="", max_length=100)
+    taken_on: date = Field(default_factory=date.today)
+    max_score: float = Field(gt=0, le=1000)
+    scores: dict[int, float | None] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_scores(self) -> "ClassTestIn":
+        self.title = " ".join(self.title.split())
+        self.subject = " ".join(self.subject.split())
+        if self.taken_on > date.today():
+            raise ValueError("Test sanasi kelajakda bo'lishi mumkin emas")
+        for score in self.scores.values():
+            if score is not None and not (0 <= score <= self.max_score):
+                raise ValueError(f"Ball 0 dan {self.max_score:g} gacha bo'lishi kerak")
         return self
 
 

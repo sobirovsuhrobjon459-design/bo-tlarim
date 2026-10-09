@@ -1721,22 +1721,208 @@ async function renderStudentProfile(schoolClass, studentId) {
 
 /* --- 📊 Natijalar tabi --- */
 
-function renderClassResultsTab(schoolClass) {
+/*
+  📊 Natijalar: o'qituvchi sinfda o'tkazgan test natijalarini kiritadi.
+  Ko'radi — kiritgan o'qituvchi va rahbariyat (admin, direktor, zam direktor).
+*/
+async function renderClassResultsTab(schoolClass) {
   currentClass = schoolClass;
   showPage(`
     <div data-class-tab="results">
       ${classHeader(schoolClass)}
-      <div class="empty-state">
-        <div style="font-size:42px">📊</div>
-        <p><b>Test natijalari — tez orada</b></p>
-        <p class="subtitle">
-          Sinf o'quvchilari testlarga bog'langach, har birining natijalari shu yerda va o'quvchi
-          profilida ko'rinadi. O'quvchilarni qayta qo'shish shart bo'lmaydi.
-        </p>
-      </div>
+      <button class="btn" id="add-class-test-button">➕ Test natijasini kiritish</button>
+      <div id="class-tests" style="margin-top:14px"><p class="subtitle">⏳ Yuklanmoqda...</p></div>
     </div>
   `);
   wireClassTab(schoolClass, "results");
+  document.getElementById("add-class-test-button").addEventListener("click", () => {
+    if (!schoolClass.students.length) {
+      showToast("Avval sinfga o'quvchilarni qo'shing");
+      return;
+    }
+    renderClassTestForm(schoolClass);
+  });
+
+  const holder = document.getElementById("class-tests");
+  try {
+    const tests = await api(`/api/classes/${schoolClass.id}/tests`);
+    if (!holder.isConnected) return;
+    holder.innerHTML = tests.length
+      ? `<div class="panel pick-list">
+           ${tests
+             .map(
+               (test) => `
+                 <button type="button" class="pick-item" data-class-test="${test.id}">
+                   <span class="pick-title">📝 ${escapeHtml(test.title)}
+                     <small>${formatDate(test.taken_on)}${test.subject ? ` · ${escapeHtml(test.subject)}` : ""} · ${test.participants} ta o'quvchi · o'rtacha ${test.average_percent ?? 0}%</small>
+                   </span>
+                   <span>›</span>
+                 </button>`
+             )
+             .join("")}
+         </div>`
+      : `<p class="subtitle" style="margin:6px 0 0">Hali natija kiritilmagan. Sinfda o'tkazgan testingiz natijalarini kiriting — har bir o'quvchining foizi va bahosi chiqadi.</p>`;
+    holder.querySelectorAll("[data-class-test]").forEach((item) => {
+      item.addEventListener("click", guarded(() => renderClassTestDetail(Number(item.dataset.classTest), schoolClass)));
+    });
+  } catch (error) {
+    if (holder.isConnected) holder.innerHTML = `<p class="subtitle">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function gradeBadge(grade) {
+  if (!grade) return `<span class="grade-badge none">—</span>`;
+  return `<span class="grade-badge g${grade}">${grade}</span>`;
+}
+
+// Test natijalari: o'rin, ism, ball, foiz, baho — eng ko'p yechganlar tepada
+async function renderClassTestDetail(testId, schoolClass) {
+  const test = await api(`/api/class-tests/${testId}`);
+  const medal = { 1: "🥇", 2: "🥈", 3: "🥉" };
+
+  showPage(`
+    ${schoolPageHeader(test.title, "back-results")}
+    <div class="card" style="cursor:default;display:block">
+      <div class="row-between" style="align-items:flex-start">
+        <div>
+          <b>📝 ${escapeHtml(test.title)}</b>
+          <p class="subtitle" style="margin:4px 0 0">📅 ${formatDate(test.taken_on)}${test.subject ? ` · ${escapeHtml(test.subject)}` : ""} · maks. ${test.max_score} ball</p>
+          <p class="subtitle" style="margin:2px 0 0">👤 Kiritgan: <b>${escapeHtml(test.teacher_name)}</b></p>
+          <p class="subtitle" style="margin:2px 0 0">👥 Qatnashdi: ${test.participants} / ${test.total}</p>
+        </div>
+        <div class="rate-badge ${(test.average_percent ?? 0) >= 86 ? "good" : (test.average_percent ?? 0) >= 56 ? "mid" : "low"}">${test.average_percent ?? 0}%<small>o'rtacha</small></div>
+      </div>
+    </div>
+
+    <div class="panel score-table">
+      <div class="score-row score-head"><span>#</span><span>O'quvchi</span><span>Ball</span><span>%</span><span>Baho</span></div>
+      ${test.scores
+        .map(
+          (row) => `
+            <div class="score-row${row.score === null ? " is-absent" : ""}">
+              <span>${row.rank ? medal[row.rank] || row.rank : "—"}</span>
+              <span class="score-name">${escapeHtml(row.name)}</span>
+              <span>${row.score === null ? "—" : row.score}</span>
+              <span>${row.percent === null ? "—" : `${row.percent}%`}</span>
+              <span>${row.score === null ? `<small>kelmadi</small>` : gradeBadge(row.grade)}</span>
+            </div>`
+        )
+        .join("")}
+    </div>
+    <p class="subtitle" style="margin:8px 4px 0">Baho: 86%+ — 5, 71%+ — 4, 56%+ — 3, qolgani — 2.</p>
+
+    ${test.can_edit ? `<button class="btn" id="edit-class-test" style="margin-top:16px">✏️ Tahrirlash</button>` : ""}
+    ${test.can_edit ? `<button class="btn btn-ghost danger-text" id="delete-class-test">🗑 Natijalarni o'chirish</button>` : ""}
+  `);
+
+  const back = () => renderClass(schoolClass.id, "results");
+  document.querySelector('[data-action="back-results"]').addEventListener("click", guarded(back));
+  document.getElementById("edit-class-test")?.addEventListener("click", () => renderClassTestForm(schoolClass, test));
+  document.getElementById("delete-class-test")?.addEventListener(
+    "click",
+    guarded(async () => {
+      if (!(await askConfirm(`«${test.title}» natijalari o'chirilsinmi?`))) return;
+      await api(`/api/class-tests/${test.id}`, { method: "DELETE" });
+      showToast("🗑 Natijalar o'chirildi");
+      await back();
+    })
+  );
+}
+
+// Natija kiritish: test nomi, fan, sana, maksimal ball va har o'quvchining bali
+function renderClassTestForm(schoolClass, existing = null) {
+  const subjects = currentSchool?.my_subjects || [];
+  const scoreOf = Object.fromEntries((existing?.scores || []).map((row) => [row.student_id, row.score]));
+  const today = new Date().toISOString().slice(0, 10);
+
+  showPage(`
+    ${schoolPageHeader(existing ? "Natijalarni tahrirlash" : `Test natijasi — ${schoolClass.name}`, "back-results")}
+    <label class="field-label" for="ct-title">Test nomi <span class="required-mark">*</span></label>
+    <input class="input" id="ct-title" maxlength="200" placeholder="Masalan: 1-chorak nazorat ishi" value="${escapeHtml(existing?.title || "")}" />
+
+    <div class="two-fields">
+      <div>
+        <label class="field-label" for="ct-subject">Fan</label>
+        <input class="input" id="ct-subject" maxlength="100" list="ct-subjects" value="${escapeHtml(existing?.subject ?? subjects[0] ?? "")}" />
+        <datalist id="ct-subjects">${schoolSubjectOptions().map((item) => `<option value="${escapeHtml(item)}"></option>`).join("")}</datalist>
+      </div>
+      <div>
+        <label class="field-label" for="ct-date">Sana</label>
+        <input class="input" id="ct-date" type="date" max="${today}" value="${existing ? String(existing.taken_on).slice(0, 10) : today}" />
+      </div>
+    </div>
+
+    <label class="field-label" for="ct-max">Maksimal ball <span class="required-mark">*</span></label>
+    <input class="input" id="ct-max" type="number" inputmode="decimal" min="1" max="1000" placeholder="Masalan: 30" value="${existing?.max_score ?? ""}" />
+
+    <p class="section-label" style="margin:18px 0 6px">O'QUVCHILAR BALLI</p>
+    <p class="subtitle" style="margin:0 0 8px">Testda qatnashmagan o'quvchining balini bo'sh qoldiring.</p>
+    <div class="panel" style="padding:4px 0">
+      ${schoolClass.students
+        .map(
+          (student, index) => `
+            <div class="att-row score-input-row" style="cursor:default">
+              <span class="att-number">${index + 1}</span>
+              <span class="att-name">${escapeHtml(student.full_name)}</span>
+              <input class="input score-input" type="number" inputmode="decimal" min="0" step="any"
+                     data-student="${student.id}" value="${scoreOf[student.id] ?? ""}" placeholder="—" />
+            </div>`
+        )
+        .join("")}
+    </div>
+    <div class="att-save-bar">
+      <button class="btn" id="save-class-test" style="margin:0">💾 Saqlash</button>
+    </div>
+  `);
+
+  markUnsaved();
+  document.querySelector('[data-action="back-results"]').addEventListener(
+    "click",
+    guarded(async () => {
+      if (!(await confirmLeave())) return;
+      if (existing) await renderClassTestDetail(existing.id, schoolClass);
+      else await renderClass(schoolClass.id, "results");
+    })
+  );
+
+  document.getElementById("save-class-test").addEventListener(
+    "click",
+    guarded(async () => {
+      const title = document.getElementById("ct-title").value.trim();
+      if (title.length < 2) throw new Error("Test nomini kiriting");
+      const maxScore = Number(document.getElementById("ct-max").value);
+      if (!maxScore || maxScore <= 0) throw new Error("Maksimal ballni kiriting");
+
+      const scores = {};
+      for (const input of document.querySelectorAll(".score-input")) {
+        const raw = input.value.trim().replace(",", ".");
+        if (raw === "") continue;
+        const value = Number(raw);
+        if (Number.isNaN(value) || value < 0 || value > maxScore) {
+          input.focus();
+          throw new Error(`Ball 0 dan ${maxScore} gacha bo'lishi kerak`);
+        }
+        scores[input.dataset.student] = value;
+      }
+      if (!Object.keys(scores).length) throw new Error("Kamida bitta o'quvchining balini kiriting");
+
+      const body = {
+        title,
+        subject: document.getElementById("ct-subject").value.trim(),
+        taken_on: document.getElementById("ct-date").value || today,
+        max_score: maxScore,
+        scores,
+      };
+      const saved = existing
+        ? await api(`/api/class-tests/${existing.id}`, { method: "PUT", body })
+        : await api(`/api/classes/${schoolClass.id}/tests`, { method: "POST", body });
+
+      unsavedChanges = false;
+      setExitProtection(false);
+      showToast("✅ Natijalar saqlandi");
+      await renderClassTestDetail(saved.id, schoolClass);
+    })
+  );
 }
 
 function lessonName(subject) {

@@ -1574,6 +1574,50 @@ def test_davomatni_ochirish_tarix_va_statistikadan_olinadi():
         session.close()
 
 
+def test_sinf_test_natijalari():
+    """O'qituvchi natija kiritadi: foiz, baho, o'rin. Ko'radi — kiritgan o'qituvchi va rahbariyat."""
+    reset_database()
+    school_class = _school_with_class()
+    cid = school_class["id"]
+    ids = {}
+    for name in ("Ali Valiyev", "Vali Aliyev", "Hasan Husanov", "Olim Karimov"):
+        detail = client.post(f"/api/classes/{cid}/students", json={"full_name": name}, headers=as_user(701)).json()
+    ids = {s["full_name"]: s["id"] for s in detail["students"]}
+    school = client.get("/api/schools/me", headers=as_user(701)).json()["school"]
+    for tg_id in (702, 703):
+        _set_name(tg_id, "Ustoz", f"N{tg_id}")
+        client.post("/api/schools/join", json={"phone": "901234567", "code": current_code(school), "subjects": ["Fizika"]},
+                    headers=as_user(tg_id))
+
+    body = {"title": "1-chorak nazorat", "subject": "Fizika", "taken_on": "2026-10-01", "max_score": 30,
+            "scores": {ids["Ali Valiyev"]: 27, ids["Vali Aliyev"]: 18, ids["Hasan Husanov"]: 27}}
+    assert client.post(f"/api/classes/{cid}/tests", json={**body, "scores": {ids["Ali Valiyev"]: 31}},
+                       headers=as_user(702)).status_code == 422
+    created = client.post(f"/api/classes/{cid}/tests", json=body, headers=as_user(702))
+    assert created.status_code == 200, created.text
+    test = created.json()
+    rows = test["scores"]
+    assert [r["name"] for r in rows] == ["Ali Valiyev", "Hasan Husanov", "Vali Aliyev", "Olim Karimov"], rows
+    assert rows[0]["percent"] == 90 and rows[0]["grade"] == 5 and rows[0]["rank"] == 1 and rows[1]["rank"] == 1
+    assert rows[2]["percent"] == 60 and rows[2]["grade"] == 3 and rows[2]["rank"] == 3
+    assert rows[3]["score"] is None and "rank" not in rows[3]
+    assert test["participants"] == 3 and test["average_percent"] == 80, test
+
+    # Boshqa oddiy o'qituvchi ko'rmaydi; admin ko'radi
+    assert client.get(f"/api/class-tests/{test['id']}", headers=as_user(703)).status_code == 403
+    assert client.get(f"/api/classes/{cid}/tests", headers=as_user(703)).json() == []
+    assert client.get(f"/api/class-tests/{test['id']}", headers=as_user(701)).status_code == 200
+    assert len(client.get(f"/api/classes/{cid}/tests", headers=as_user(701)).json()) == 1
+
+    # Tahrirlash va o'chirish (bazada qoladi)
+    edited = client.put(f"/api/class-tests/{test['id']}", json={**body, "scores": {ids["Olim Karimov"]: 30}},
+                        headers=as_user(702)).json()
+    assert edited["scores"][0]["name"] == "Olim Karimov" and edited["participants"] == 1, edited
+    assert client.delete(f"/api/class-tests/{test['id']}", headers=as_user(703)).status_code == 403
+    assert client.delete(f"/api/class-tests/{test['id']}", headers=as_user(702)).status_code == 200
+    assert client.get(f"/api/classes/{cid}/tests", headers=as_user(701)).json() == []
+
+
 def test_davomat_matn_rasm_va_pdf():
     reset_database()
     school_class = _school_with_class()
