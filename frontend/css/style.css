@@ -2016,3 +2016,8 @@ select option {
 .support-link:active {
   transform: scale(0.95);
 }
+
+/* Sinf sarlavhasi ostida kurator */
+.class-curator-line {
+  margin: -6px 0 10px;
+}

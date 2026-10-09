@@ -73,6 +73,7 @@ from .database import (
     Base,
     ClassIn,
     ClassStudent,
+    CuratorIn,
     CreditPurchase,
     CardTopUpIn,
     CreditPurchaseIn,
@@ -113,6 +114,13 @@ from bot.bot import run_bot
 Base.metadata.create_all(engine)
 
 
+# Ustun BIRINCHI marta qo'shilganda bir martalik to'ldirish: ilgari sinfni
+# o'qituvchining o'zi yaratib boshqarardi — endi u o'sha sinfning kuratori.
+COLUMN_BACKFILLS = {
+    ("school_classes", "curator_user_id"): "UPDATE school_classes SET curator_user_id = teacher_user_id",
+}
+
+
 def _add_missing_columns() -> None:
     """
     Mavjud bazaga keyinchalik qo'shilgan ustunlarni qo'shadi.
@@ -132,6 +140,7 @@ def _add_missing_columns() -> None:
         },
         "test_attempts": {"offline_name": "VARCHAR(200)", "saved_answers": "TEXT"},
         "users": {"username": "VARCHAR(64)"},
+        "school_classes": {"curator_user_id": "INTEGER"},
         "key_questions": {"label": "VARCHAR(20)"},
         "payments": {
             "payme_transaction_id": "VARCHAR(50)",
@@ -158,6 +167,9 @@ def _add_missing_columns() -> None:
                 if column_name not in existing_columns:
                     connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
                     logger.info("Bazaga yangi ustun qo'shildi: %s.%s", table_name, column_name)
+                    backfill = COLUMN_BACKFILLS.get((table_name, column_name))
+                    if backfill:
+                        connection.execute(text(backfill))
 
 
 _add_missing_columns()
@@ -3300,6 +3312,7 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         "invite_link": school_invite_link(school.code),
         "members": [
             {
+                "user_id": item.user_id,
                 "name": item.user.full_name if item.user else "Noma'lum",
                 "subjects": _read_subjects(item),
                 "role": item.role,
@@ -3449,7 +3462,6 @@ def create_school(body: SchoolCreateIn, user: User = Depends(get_current_user), 
     """Yangi xususiy maktab ochadi; yaratgan o'qituvchi uning egasi bo'ladi."""
 
     _require_profile_name(user)
-    _require_subjects(body.subjects)
     if _active_membership(db, user):
         raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
     if not is_valid_location(body.region, body.district):
@@ -3479,9 +3491,8 @@ def create_school(body: SchoolCreateIn, user: User = Depends(get_current_user), 
     db.add(school)
     db.flush()
 
-    member = SchoolMember(
-        school_id=school.id, user_id=user.id, role="owner", subjects=json.dumps(body.subjects, ensure_ascii=False)
-    )
+    # Maktabni ochgan — DIREKTOR. U fan o'qituvchisi emas, fanlari bo'lmaydi.
+    member = SchoolMember(school_id=school.id, user_id=user.id, role="owner", subjects="[]")
     db.add(member)
     db.commit()
     db.refresh(member)
@@ -3533,7 +3544,8 @@ def update_school_profile(body: SchoolProfileIn, user: User = Depends(get_curren
     member = _active_membership(db, user)
     if not member:
         raise HTTPException(status_code=404, detail="Siz hech qaysi maktabga a'zo emassiz")
-    _require_subjects(body.subjects)
+    if member.role != "owner":
+        _require_subjects(body.subjects)  # direktor fan o'qituvchisi emas
 
     member.subjects = json.dumps(body.subjects, ensure_ascii=False)
     db.commit()
@@ -3606,19 +3618,49 @@ def _require_school_member(db: Session, user: User) -> SchoolMember:
     return member
 
 
-def _own_class(db: Session, user: User, class_id: int) -> SchoolClass:
+def _school_class(db: Session, user: User, class_id: int) -> tuple[SchoolClass, SchoolMember]:
+    """Foydalanuvchi maktabidagi sinf (maktabning har bir o'qituvchisi ko'ra oladi)."""
+
+    member = _require_school_member(db, user)
     school_class = db.get(SchoolClass, class_id)
-    if not school_class or school_class.deleted_at is not None or school_class.teacher_user_id != user.id:
+    if not school_class or school_class.deleted_at is not None or school_class.school_id != member.school_id:
         raise HTTPException(status_code=404, detail="Sinf topilmadi")
+    return school_class, member
+
+
+def _is_director(member: SchoolMember) -> bool:
+    return member.role == "owner"
+
+
+def _can_manage_class(school_class: SchoolClass, member: SchoolMember) -> bool:
+    """O'quvchilarni qo'shish/tahrirlash — sinf kuratori yoki direktor."""
+    return _is_director(member) or school_class.curator_user_id == member.user_id
+
+
+def _require_director(member: SchoolMember) -> None:
+    if not _is_director(member):
+        raise HTTPException(status_code=403, detail="Buni faqat maktab direktori qila oladi")
+
+
+def _managed_class(db: Session, user: User, class_id: int) -> SchoolClass:
+    school_class, member = _school_class(db, user, class_id)
+    if not _can_manage_class(school_class, member):
+        raise HTTPException(status_code=403, detail="O'quvchilarni faqat sinf kuratori qo'sha oladi")
     return school_class
 
 
-def _own_attendance(db: Session, user: User, attendance_id: int) -> Attendance:
+def _director_class(db: Session, user: User, class_id: int) -> SchoolClass:
+    school_class, member = _school_class(db, user, class_id)
+    _require_director(member)
+    return school_class
+
+
+def _school_attendance(db: Session, user: User, attendance_id: int) -> tuple[Attendance, SchoolMember]:
     attendance = db.get(Attendance, attendance_id)
-    if not attendance or attendance.teacher_user_id != user.id:
+    if not attendance:
         raise HTTPException(status_code=404, detail="Davomat topilmadi")
-    _own_class(db, user, attendance.class_id)
-    return attendance
+    _, member = _school_class(db, user, attendance.class_id)
+    return attendance, member
 
 
 def _active_students(school_class: SchoolClass) -> list[ClassStudent]:
@@ -3668,13 +3710,18 @@ def _student_attendance_stats(db: Session, student_ids: list[int]) -> dict[int, 
     return stats
 
 
-def _class_view(db: Session, school_class: SchoolClass, with_details: bool = False) -> dict:
+def _class_view(db: Session, school_class: SchoolClass, with_details: bool = False, member: SchoolMember | None = None) -> dict:
     students = _active_students(school_class)
+    curator = db.get(User, school_class.curator_user_id) if school_class.curator_user_id else None
     view = {
         "id": school_class.id,
         "name": school_class.name,
         "students_count": len(students),
         "created_at": school_class.created_at,
+        "curator": {"user_id": curator.id, "name": curator.full_name} if curator else None,
+        "is_curator": bool(member and school_class.curator_user_id == member.user_id),
+        "can_manage": bool(member and _can_manage_class(school_class, member)),
+        "is_director": bool(member and _is_director(member)),
     }
     if with_details:
         stats = _student_attendance_stats(db, [student.id for student in students])
@@ -3693,6 +3740,10 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
             .order_by(Attendance.taken_at.desc())
             .limit(50)
         ).all()
+        takers = {
+            user.id: user.full_name
+            for user in db.scalars(select(User).where(User.id.in_({item.teacher_user_id for item in recent}))).all()
+        } if recent else {}
         view["attendances"] = [
             {
                 "id": item.id,
@@ -3700,6 +3751,8 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
                 "taken_at": item.taken_at,
                 "updated_at": item.updated_at,
                 "counts": _attendance_counts(item),
+                "teacher_name": takers.get(item.teacher_user_id, ""),
+                "can_edit": bool(member and (item.teacher_user_id == member.user_id or _is_director(member))),
             }
             for item in recent
         ]
@@ -3713,51 +3766,73 @@ def my_classes(user: User = Depends(get_current_user), db: Session = Depends(get
     member = _require_school_member(db, user)
     classes = db.scalars(
         select(SchoolClass)
-        .where(
-            SchoolClass.teacher_user_id == user.id,
-            SchoolClass.school_id == member.school_id,
-            SchoolClass.deleted_at.is_(None),
-        )
+        .where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None))
         .order_by(SchoolClass.name)
     ).all()
-    return [_class_view(db, item) for item in classes]
+    views = [_class_view(db, item, member=member) for item in classes]
+    views.sort(key=lambda view: (not view["is_curator"], view["name"].lower()))
+    return views
 
 
 @app.post("/api/classes")
 def create_class(body: ClassIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     member = _require_school_member(db, user)
+    _require_director(member)
 
     duplicate = db.scalar(
         select(SchoolClass.id).where(
-            SchoolClass.teacher_user_id == user.id,
             SchoolClass.school_id == member.school_id,
             SchoolClass.deleted_at.is_(None),
             func.lower(SchoolClass.name) == body.name.lower(),
         )
     )
     if duplicate:
-        raise HTTPException(status_code=409, detail=f"«{body.name}» nomli sinfingiz allaqachon bor")
+        raise HTTPException(status_code=409, detail=f"«{body.name}» nomli sinf maktabda allaqachon bor")
 
     school_class = SchoolClass(school_id=member.school_id, teacher_user_id=user.id, name=body.name)
     db.add(school_class)
     db.commit()
     db.refresh(school_class)
-    return _class_view(db, school_class, with_details=True)
+    return _class_view(db, school_class, with_details=True, member=member)
 
 
 @app.get("/api/classes/{class_id}")
 def class_detail(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return _class_view(db, _own_class(db, user, class_id), with_details=True)
+    school_class, member = _school_class(db, user, class_id)
+    return _class_view(db, school_class, with_details=True, member=member)
+
+
+@app.put("/api/classes/{class_id}/curator")
+def assign_curator(class_id: int, body: CuratorIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Direktor sinfga kurator (sinf rahbari) tayinlaydi yoki olib tashlaydi."""
+
+    school_class, member = _school_class(db, user, class_id)
+    _require_director(member)
+
+    if body.user_id is not None:
+        teacher = db.scalar(
+            select(SchoolMember).where(
+                SchoolMember.school_id == member.school_id,
+                SchoolMember.user_id == body.user_id,
+                SchoolMember.left_at.is_(None),
+            )
+        )
+        if not teacher:
+            raise HTTPException(status_code=404, detail="Bu o'qituvchi maktabingizda yo'q")
+
+    school_class.curator_user_id = body.user_id
+    db.commit()
+    return _class_view(db, school_class, with_details=True, member=member)
 
 
 @app.put("/api/classes/{class_id}")
 def rename_class(class_id: int, body: ClassIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Sinf nomini o'zgartiradi (o'quvchilar va davomat tarixi o'z joyida qoladi)."""
+    """Sinf nomini o'zgartiradi (o'quvchilar va davomat tarixi o'z joyida qoladi). Faqat direktor."""
 
-    school_class = _own_class(db, user, class_id)
+    school_class, member = _school_class(db, user, class_id)
+    _require_director(member)
     duplicate = db.scalar(
         select(SchoolClass.id).where(
-            SchoolClass.teacher_user_id == user.id,
             SchoolClass.school_id == school_class.school_id,
             SchoolClass.deleted_at.is_(None),
             SchoolClass.id != school_class.id,
@@ -3765,16 +3840,16 @@ def rename_class(class_id: int, body: ClassIn, user: User = Depends(get_current_
         )
     )
     if duplicate:
-        raise HTTPException(status_code=409, detail=f"«{body.name}» nomli sinfingiz allaqachon bor")
+        raise HTTPException(status_code=409, detail=f"«{body.name}» nomli sinf maktabda allaqachon bor")
     school_class.name = body.name
     db.commit()
-    return _class_view(db, school_class, with_details=True)
+    return _class_view(db, school_class, with_details=True, member=member)
 
 
 @app.delete("/api/classes/{class_id}")
 def delete_class(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Sinf ro'yxatdan olinadi; o'quvchilar va davomat tarixi bazada qoladi."""
-    school_class = _own_class(db, user, class_id)
+    """Sinf ro'yxatdan olinadi (faqat direktor); o'quvchilar va davomat tarixi bazada qoladi."""
+    school_class = _director_class(db, user, class_id)
     school_class.deleted_at = utcnow()
     db.commit()
     return {"ok": True}
@@ -3782,11 +3857,11 @@ def delete_class(class_id: int, user: User = Depends(get_current_user), db: Sess
 
 @app.post("/api/classes/{class_id}/students")
 def add_student(class_id: int, body: StudentIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    school_class = _own_class(db, user, class_id)
+    school_class = _managed_class(db, user, class_id)
     db.add(ClassStudent(class_id=school_class.id, full_name=body.full_name, birth_date=body.birth_date))
     db.commit()
     db.refresh(school_class)
-    return _class_view(db, school_class, with_details=True)
+    return _class_view(db, school_class, with_details=True, member=_active_membership(db, user))
 
 
 @app.post("/api/classes/{class_id}/students/import/preview")
@@ -3798,7 +3873,7 @@ def preview_student_import(
     O'qituvchi ro'yxatni ko'rib, tasdiqlagandan keyingina qo'shiladi.
     """
 
-    school_class = _own_class(db, user, class_id)
+    school_class = _managed_class(db, user, class_id)
     try:
         if body.file_base64:
             try:
@@ -3829,7 +3904,7 @@ def add_students_bulk(
 ):
     """Ko'rib chiqilgan ro'yxatni bir yo'la qo'shadi; sinfda bor ismlar takrorlanmaydi."""
 
-    school_class = _own_class(db, user, class_id)
+    school_class = _managed_class(db, user, class_id)
     existing = {student.full_name.lower() for student in _active_students(school_class)}
 
     added = 0
@@ -3843,14 +3918,14 @@ def add_students_bulk(
 
     db.commit()
     db.refresh(school_class)
-    return {"added": added, "class": _class_view(db, school_class, with_details=True)}
+    return {"added": added, "class": _class_view(db, school_class, with_details=True, member=_active_membership(db, user))}
 
 
 @app.put("/api/classes/{class_id}/students/{student_id}")
 def edit_student(
     class_id: int, student_id: int, body: StudentIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    school_class = _own_class(db, user, class_id)
+    school_class = _managed_class(db, user, class_id)
     student = db.get(ClassStudent, student_id)
     if not student or student.class_id != school_class.id or student.removed_at is not None:
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
@@ -3858,14 +3933,14 @@ def edit_student(
     student.birth_date = body.birth_date
     db.commit()
     db.refresh(school_class)
-    return _class_view(db, school_class, with_details=True)
+    return _class_view(db, school_class, with_details=True, member=_active_membership(db, user))
 
 
 @app.get("/api/classes/{class_id}/students/{student_id}")
 def student_profile(class_id: int, student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """O'quvchi haqida: ma'lumotlari, davomat statistikasi va har darsdagi holati."""
 
-    school_class = _own_class(db, user, class_id)
+    school_class, _ = _school_class(db, user, class_id)
     student = db.get(ClassStudent, student_id)
     if not student or student.class_id != school_class.id:
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
@@ -3897,14 +3972,14 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
 @app.delete("/api/classes/{class_id}/students/{student_id}")
 def remove_student(class_id: int, student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """O'quvchi sinfdan chiqariladi; eski davomatlarda u ko'rinib turadi."""
-    school_class = _own_class(db, user, class_id)
+    school_class = _managed_class(db, user, class_id)
     student = db.get(ClassStudent, student_id)
     if not student or student.class_id != school_class.id or student.removed_at is not None:
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
     student.removed_at = utcnow()
     db.commit()
     db.refresh(school_class)
-    return _class_view(db, school_class, with_details=True)
+    return _class_view(db, school_class, with_details=True, member=_active_membership(db, user))
 
 
 @app.post("/api/classes/{class_id}/attendance")
@@ -3914,7 +3989,7 @@ def take_attendance(class_id: int, body: AttendanceIn, user: User = Depends(get_
     (davomat oynasida hamma oldindan "bor" turadi).
     """
 
-    school_class = _own_class(db, user, class_id)
+    school_class, member = _school_class(db, user, class_id)
     students = _active_students(school_class)
     if not students:
         raise HTTPException(status_code=400, detail="Sinfda hali o'quvchi yo'q — avval o'quvchilarni qo'shing")
@@ -3938,16 +4013,24 @@ def take_attendance(class_id: int, body: AttendanceIn, user: User = Depends(get_
 
 @app.get("/api/attendance/{attendance_id}")
 def attendance_detail(attendance_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return _attendance_view(_own_attendance(db, user, attendance_id))
+    attendance, member = _school_attendance(db, user, attendance_id)
+    view = _attendance_view(attendance)
+    taker = db.get(User, attendance.teacher_user_id)
+    view["teacher_name"] = taker.full_name if taker else ""
+    view["can_edit"] = attendance.teacher_user_id == user.id or _is_director(member)
+    return view
 
 
 @app.put("/api/attendance/{attendance_id}")
 def edit_attendance(
     attendance_id: int, body: AttendanceIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    """Davomatni tahrirlaydi: birinchi olingan vaqt saqlanadi, tahrir vaqti alohida yoziladi."""
+    """Davomatni tahrirlaydi: birinchi olingan vaqt saqlanadi, tahrir vaqti alohida yoziladi.
+    Tahrirlashi mumkin: davomatni olgan o'qituvchi yoki direktor."""
 
-    attendance = _own_attendance(db, user, attendance_id)
+    attendance, member = _school_attendance(db, user, attendance_id)
+    if attendance.teacher_user_id != user.id and not _is_director(member):
+        raise HTTPException(status_code=403, detail="Bu davomatni boshqa o'qituvchi olgan — uni faqat o'zi yoki direktor tahrirlaydi")
     changed = False
     for mark in attendance.marks:
         new_status = body.marks.get(mark.student_id)
@@ -4137,7 +4220,7 @@ def attendance_file(
 ):
     """Davomatni PDF yoki rasm qilib yuklab beradi (oddiy brauzer uchun)."""
 
-    context = _attendance_context(db, _own_attendance(db, user, attendance_id))
+    context = _attendance_context(db, _school_attendance(db, user, attendance_id)[0])
     if format == "image":
         return StreamingResponse(io.BytesIO(attendance_image(context)), media_type="image/png",
                                  headers={"Content-Disposition": 'attachment; filename="davomat.png"'})
@@ -4154,7 +4237,7 @@ def send_attendance(
     ota-onalar guruhiga "Uzatish" (forward) qilinadi yoki printerga chiqariladi.
     """
 
-    context = _attendance_context(db, _own_attendance(db, user, attendance_id))
+    context = _attendance_context(db, _school_attendance(db, user, attendance_id)[0])
     caption = attendance_caption(context)
 
     if format == "text":
@@ -4171,7 +4254,7 @@ def send_attendance(
 @app.get("/api/attendance/{attendance_id}/text")
 def attendance_text_view(attendance_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Matn ko'rinishi — Mini App uni to'g'ridan-to'g'ri guruhga ulashadi."""
-    return {"text": attendance_text(_attendance_context(db, _own_attendance(db, user, attendance_id)))}
+    return {"text": attendance_text(_attendance_context(db, _school_attendance(db, user, attendance_id)[0]))}
 
 
 # ========== 7) Payme webhook (Merchant API) ==========

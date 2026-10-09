@@ -411,15 +411,19 @@ class SchoolMember(Base):
 
 class SchoolClass(Base):
     """
-    O'qituvchining sinfi yoki guruhi (masalan "10/2", "Iqtisod guruhi").
-    Faqat uni yaratgan o'qituvchi boshqaradi. O'chirilganda bazada qoladi.
+    Maktab sinfi yoki guruhi (masalan "10/2", "Iqtisod guruhi").
+
+    Sinfni DIREKTOR yaratadi va unga KURATOR (sinf rahbari) tayinlaydi.
+    Kurator o'quvchilarni qo'shadi va sinfni boshqaradi; boshqa o'qituvchilar
+    bu sinfda faqat davomat oladi. O'chirilganda bazada qoladi.
     """
 
     __tablename__ = "school_classes"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
-    teacher_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    teacher_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)  # kim yaratgan
+    curator_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
     name: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(default=None)
@@ -721,3 +725,9 @@ class StudentsBulkIn(BaseModel):
     """Ko'rib chiqilgan ro'yxatni bir yo'la qo'shish."""
 
     names: list[str] = Field(min_length=1, max_length=500)
+
+
+class CuratorIn(BaseModel):
+    """Sinfga kurator tayinlash (bo'sh — kuratorni olib tashlash)."""
+
+    user_id: int | None = None
