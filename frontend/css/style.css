@@ -2511,3 +2511,35 @@ body.keyboard-open .fab {
   font-weight: 400;
   color: #d97706;
 }
+
+/* Davomat ichidagi qatnashish foizi */
+.rate-badge {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 74px;
+  padding: 8px 10px;
+  font-size: 22px;
+  font-weight: 800;
+  border-radius: 14px;
+  color: #fff;
+}
+
+.rate-badge small {
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.9;
+}
+
+.rate-badge.good {
+  background: #16a34a;
+}
+
+.rate-badge.mid {
+  background: #d97706;
+}
+
+.rate-badge.low {
+  background: #dc2626;
+}

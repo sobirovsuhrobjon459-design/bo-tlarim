@@ -490,6 +490,9 @@ class Attendance(Base):
     lesson_end: Mapped[str | None] = mapped_column(String(5), default=None)
     taken_at: Mapped[datetime] = mapped_column(default=utcnow)
     updated_at: Mapped[datetime | None] = mapped_column(default=None)
+    # O'chirilgan davomat bazada qoladi (tiklash mumkin) — faqat ro'yxatlardan yashiriladi
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+    deleted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
 
     marks: Mapped[list["AttendanceMark"]] = relationship(back_populates="attendance", order_by="AttendanceMark.id")
 

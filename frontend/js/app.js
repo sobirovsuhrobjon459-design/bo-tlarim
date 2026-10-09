@@ -1356,11 +1356,7 @@ function renderClassAttendanceTab(schoolClass) {
                 .map(
                   (item) => `
                     <button type="button" class="pick-item" data-attendance-id="${item.id}">
-                      <span class="pick-title">🕘 ${attendanceWhen(item)} · ${escapeHtml(lessonName(item.subject))}
-                        <small>${item.teacher_name ? `👤 ${escapeHtml(item.teacher_name)} · ` : ""}✅ ${item.counts.present} · ❌ ${item.counts.absent} · 🟡 ${item.counts.excused} · ⏰ ${item.counts.late}${
-                          item.updated_at ? " · ✏️" : ""
-                        }</small>
-                      </span>
+                      <span class="pick-title">🕘 ${attendanceWhen(item)} · ${escapeHtml(lessonName(item.subject))}</span>
                       <span>›</span>
                     </button>`
                 )
@@ -1932,30 +1928,51 @@ function renderAttendanceShare(attendance, schoolClass, { justSaved = false } = 
 
 async function renderAttendanceDetail(attendanceId, schoolClass) {
   const attendance = await api(`/api/attendance/${attendanceId}`);
+  const total = attendance.marks.length;
+  // Kechikkan ham darsda bo'lgan hisoblanadi
+  const attended = attendance.counts.present + attendance.counts.late;
+  const rate = total ? Math.round((attended / total) * 100) : 0;
+
+  const group = (status, title) => {
+    const names = attendance.marks.filter((mark) => mark.status === status);
+    if (!names.length) return "";
+    const state = ATTENDANCE_STATE_BY_ID[status];
+    return `
+      <p class="section-label" style="margin:16px 0 6px">${state.icon} ${title} — ${names.length}</p>
+      <div class="panel" style="padding:4px 0">
+        ${names
+          .map(
+            (mark, index) => `
+              <div class="att-row" style="cursor:default">
+                <span class="att-number">${index + 1}</span>
+                <span class="att-name">${escapeHtml(mark.name)}</span>
+              </div>`
+          )
+          .join("")}
+      </div>`;
+  };
 
   showPage(`
     ${schoolPageHeader(`Davomat — ${schoolClass.name}`, "back-history")}
     <div class="card" style="cursor:default;display:block">
-      <b>📚 ${escapeHtml(lessonName(attendance.subject))}</b>
-      <p class="subtitle" style="margin:4px 0 0">🕘 ${attendanceWhen(attendance)}</p>
-      ${attendance.updated_at ? `<p class="subtitle" style="margin:2px 0 0">✏️ Tahrirlangan: ${formatDateTime(attendance.updated_at)}</p>` : ""}
+      <div class="row-between" style="align-items:flex-start">
+        <div>
+          <b>📚 ${escapeHtml(lessonName(attendance.subject))}</b>
+          <p class="subtitle" style="margin:4px 0 0">🕘 ${attendanceWhen(attendance)}</p>
+          ${attendance.teacher_name ? `<p class="subtitle" style="margin:2px 0 0">👤 O'qituvchi: <b>${escapeHtml(attendance.teacher_name)}</b></p>` : ""}
+          ${attendance.updated_at ? `<p class="subtitle" style="margin:2px 0 0">✏️ Tahrirlangan: ${formatDateTime(attendance.updated_at)}</p>` : ""}
+        </div>
+        <div class="rate-badge ${rate >= 90 ? "good" : rate >= 70 ? "mid" : "low"}">${rate}%<small>qatnashdi</small></div>
+      </div>
       ${attendanceCountsHtml(attendance.counts)}
     </div>
-    <div class="panel" style="padding:4px 0">
-      ${attendance.marks
-        .map(
-          (mark, index) => `
-            <div class="att-row" style="cursor:default">
-              <span class="att-number">${index + 1}</span>
-              <span class="att-name">${escapeHtml(mark.name)}</span>
-              <span class="att-status ${mark.status}">${ATTENDANCE_STATE_BY_ID[mark.status].icon} ${ATTENDANCE_STATE_BY_ID[mark.status].label}</span>
-            </div>`
-        )
-        .join("")}
-    </div>
-    ${attendance.teacher_name ? `<p class="subtitle" style="margin:12px 0 0">👤 Olgan: ${escapeHtml(attendance.teacher_name)}</p>` : ""}
-    ${attendance.can_edit ? `<button class="btn" id="edit-attendance-button" style="margin-top:14px">✏️ Tahrirlash</button>` : ""}
+    ${group("absent", "YO'Q")}
+    ${group("excused", "SABABLI")}
+    ${group("late", "KECHIKDI")}
+    ${group("present", "BOR")}
+    ${attendance.can_edit ? `<button class="btn" id="edit-attendance-button" style="margin-top:16px">✏️ Tahrirlash</button>` : ""}
     <button class="btn btn-ghost" id="share-attendance-button" style="margin-top:10px">📤 Yuborish</button>
+    ${attendance.can_edit ? `<button class="btn btn-ghost danger-text" id="delete-attendance-button">🗑 Davomatni o'chirish</button>` : ""}
   `);
 
   document.querySelector('[data-action="back-history"]').addEventListener(
@@ -1964,6 +1981,19 @@ async function renderAttendanceDetail(attendanceId, schoolClass) {
   );
   document.getElementById("edit-attendance-button")?.addEventListener("click", () => renderAttendanceForm(schoolClass, attendance));
   document.getElementById("share-attendance-button").addEventListener("click", () => renderAttendanceShare(attendance, schoolClass));
+  document.getElementById("delete-attendance-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const sure = await askConfirm(
+        `${attendanceWhen(attendance)} dagi davomat o'chirilsinmi? O'quvchilarning qatnashish foizidan ham olib tashlanadi.`
+      );
+      if (!sure) return;
+      await api(`/api/attendance/${attendance.id}`, { method: "DELETE" });
+      myClassesCache = null;
+      showToast("🗑 Davomat o'chirildi");
+      await renderClass(schoolClass.id, "attendance");
+    })
+  );
 }
 
 function renderComingSoon(title, icon) {

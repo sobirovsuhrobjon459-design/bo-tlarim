@@ -147,7 +147,12 @@ def _add_missing_columns() -> None:
         "users": {"username": "VARCHAR(64)"},
         "school_classes": {"curator_user_id": "INTEGER"},
         "school_members": {"position": "VARCHAR(20)", "phone": "VARCHAR(20)"},
-        "attendances": {"lesson_start": "VARCHAR(5)", "lesson_end": "VARCHAR(5)"},
+        "attendances": {
+            "lesson_start": "VARCHAR(5)",
+            "lesson_end": "VARCHAR(5)",
+            "deleted_at": "TIMESTAMP",
+            "deleted_by": "INTEGER",
+        },
         "key_questions": {"label": "VARCHAR(20)"},
         "payments": {
             "payme_transaction_id": "VARCHAR(50)",
@@ -4050,7 +4055,7 @@ def _director_class(db: Session, user: User, class_id: int) -> SchoolClass:
 
 def _school_attendance(db: Session, user: User, attendance_id: int) -> tuple[Attendance, SchoolMember]:
     attendance = db.get(Attendance, attendance_id)
-    if not attendance:
+    if not attendance or attendance.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Davomat topilmadi")
     _, member = _school_class(db, user, attendance.class_id)
     return attendance, member
@@ -4092,7 +4097,8 @@ def _student_attendance_stats(db: Session, student_ids: list[int]) -> dict[int, 
         return stats
     rows = db.execute(
         select(AttendanceMark.student_id, AttendanceMark.status, func.count())
-        .where(AttendanceMark.student_id.in_(student_ids))
+        .join(Attendance, Attendance.id == AttendanceMark.attendance_id)
+        .where(AttendanceMark.student_id.in_(student_ids), Attendance.deleted_at.is_(None))
         .group_by(AttendanceMark.student_id, AttendanceMark.status)
     ).all()
     for student_id, status, count in rows:
@@ -4133,7 +4139,7 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
         ]
         recent = db.scalars(
             select(Attendance)
-            .where(Attendance.class_id == school_class.id)
+            .where(Attendance.class_id == school_class.id, Attendance.deleted_at.is_(None))
             .order_by(Attendance.taken_at.desc())
             .limit(50)
         ).all()
@@ -4347,7 +4353,7 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
     history = db.execute(
         select(Attendance.id, Attendance.taken_at, Attendance.subject, AttendanceMark.status)
         .join(AttendanceMark, AttendanceMark.attendance_id == Attendance.id)
-        .where(AttendanceMark.student_id == student.id)
+        .where(AttendanceMark.student_id == student.id, Attendance.deleted_at.is_(None))
         .order_by(Attendance.taken_at.desc())
         .limit(100)
     ).all()
@@ -4467,6 +4473,23 @@ def _attendance_when(attendance: Attendance) -> str:
     if attendance.lesson_start and attendance.lesson_end:
         return f"{taken[:10]} · {attendance.lesson_start}–{attendance.lesson_end}"
     return taken.replace(" ", " · ", 1)
+
+
+@app.delete("/api/attendance/{attendance_id}")
+def delete_attendance(attendance_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Davomatni o'chiradi — uni olgan o'qituvchi yoki rahbariyat. Yozuv bazada
+    qoladi (deleted_at), tarix va statistikadan olib tashlanadi.
+    """
+
+    attendance, member = _school_attendance(db, user, attendance_id)
+    if attendance.teacher_user_id != user.id and not _is_director(member):
+        raise HTTPException(status_code=403, detail="Bu davomatni boshqa o'qituvchi olgan — uni faqat o'zi yoki rahbariyat o'chiradi")
+    attendance.deleted_at = utcnow()
+    attendance.deleted_by = user.id
+    db.commit()
+    logging.getLogger("backend").info("Davomat o'chirildi: id=%s user=%s", attendance.id, user.id)
+    return {"ok": True}
 
 
 def _attendance_context(db: Session, attendance: Attendance) -> dict:

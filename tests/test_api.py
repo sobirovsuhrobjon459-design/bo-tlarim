@@ -1508,6 +1508,38 @@ def test_davomat_olish_tahrirlash_va_vaqtlar():
     assert client.get(f"/api/attendance/{attendance['id']}", headers=as_user(709)).status_code in (403, 404)
 
 
+def test_davomatni_ochirish_tarix_va_statistikadan_olinadi():
+    """O'chirilgan davomat tarixda, statistikada ko'rinmaydi, lekin bazada qoladi."""
+    reset_database()
+    school_class = _school_with_class()
+    cid = school_class["id"]
+    sid = client.post(f"/api/classes/{cid}/students", json={"full_name": "Ali Valiyev"}, headers=as_user(701)).json()["students"][0]["id"]
+    first = client.post(f"/api/classes/{cid}/attendance", json={"marks": {sid: "absent"}}, headers=as_user(701)).json()
+    client.post(f"/api/classes/{cid}/attendance", json={"marks": {sid: "present"}}, headers=as_user(701))
+    detail = client.get(f"/api/classes/{cid}", headers=as_user(701)).json()
+    assert len(detail["attendances"]) == 2 and detail["students"][0]["stats"]["rate"] == 50, detail
+
+    # Boshqa (oddiy) o'qituvchi o'chira olmaydi
+    _set_name(702, "Begona", "Ustoz")
+    school = client.get("/api/schools/me", headers=as_user(701)).json()["school"]
+    client.post("/api/schools/join", json={"phone": "901234567", "code": current_code(school), "subjects": ["Fizika"]}, headers=as_user(702))
+    assert client.delete(f"/api/attendance/{first['id']}", headers=as_user(702)).status_code == 403
+
+    assert client.delete(f"/api/attendance/{first['id']}", headers=as_user(701)).status_code == 200
+    detail = client.get(f"/api/classes/{cid}", headers=as_user(701)).json()
+    assert len(detail["attendances"]) == 1 and detail["students"][0]["stats"]["rate"] == 100, detail
+    assert client.get(f"/api/attendance/{first['id']}", headers=as_user(701)).status_code == 404
+    student = client.get(f"/api/classes/{cid}/students/{sid}", headers=as_user(701)).json()
+    assert len(student["history"]) == 1, student
+
+    session = SessionLocal()
+    try:
+        from backend.database import Attendance
+        assert session.get(Attendance, first["id"]).deleted_at is not None  # bazada qolgan
+    finally:
+        session.close()
+
+
 def test_davomat_matn_rasm_va_pdf():
     reset_database()
     school_class = _school_with_class()
