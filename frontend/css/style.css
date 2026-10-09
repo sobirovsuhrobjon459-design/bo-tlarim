@@ -2312,3 +2312,94 @@ body.keyboard-open .fab {
 .condition-action {
   margin-top: 8px;
 }
+
+/* Sinflar ro'yxati: chapda o'quvchilar soni, o'rtada nom va kurator */
+.class-list {
+  padding: 4px 0;
+}
+
+.class-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  font-family: inherit;
+  text-align: left;
+  color: var(--color-text);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.class-row:last-child {
+  border-bottom: 0;
+}
+
+.class-row:active {
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.class-count {
+  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: rgba(99, 102, 241, 0.14);
+  color: var(--color-primary);
+}
+
+.class-count b {
+  font-size: 19px;
+  line-height: 1.1;
+}
+
+.class-count small {
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
+
+.class-row.is-mine .class-count {
+  background: linear-gradient(135deg, #818cf8, #6366f1);
+  color: #fff;
+}
+
+.class-row.is-mine .class-count small {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.class-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.class-info b {
+  font-size: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.class-info small {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.class-row.is-mine .class-info small {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.class-arrow {
+  color: var(--color-text-muted);
+  font-size: 20px;
+}

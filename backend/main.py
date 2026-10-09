@@ -3390,6 +3390,7 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         "my_role": member.role,
         "my_position": member.position,
         "is_leader": _is_director(member),
+        "can_create_classes": _can_delete_classes(member),
         "my_subjects": _read_subjects(member),
         "invite_link": school_invite_link(school.code),
         "members": [
@@ -3947,8 +3948,13 @@ def _is_director(member: SchoolMember) -> bool:
 
 
 def _can_delete_classes(member: SchoolMember) -> bool:
-    """Sinfni o'chirish — faqat admin va direktor (zam direktor emas)."""
+    """Sinflarni ochish, sozlash (nom, kurator) va o'chirish — faqat admin va direktor."""
     return member.role == "owner" or member.position == "director"
+
+
+def _require_head(member: SchoolMember) -> None:
+    if not _can_delete_classes(member):
+        raise HTTPException(status_code=403, detail="Sinflarni faqat maktab admini yoki direktor ochadi va sozlaydi")
 
 
 def _can_manage_class(school_class: SchoolClass, member: SchoolMember) -> bool:
@@ -4043,7 +4049,8 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
         "curator": {"user_id": curator.id, "name": curator.full_name} if curator else None,
         "is_curator": bool(member and school_class.curator_user_id == member.user_id),
         "can_manage": bool(member and _can_manage_class(school_class, member)),
-        "is_director": bool(member and _is_director(member)),
+        # ⚙️ sozlamalar (nom, kurator, o'chirish) — admin va direktor
+        "is_director": bool(member and _can_delete_classes(member)),
         "can_delete": bool(member and _can_delete_classes(member)),
     }
     if with_details:
@@ -4102,7 +4109,7 @@ def my_classes(user: User = Depends(get_current_user), db: Session = Depends(get
 @app.post("/api/classes")
 def create_class(body: ClassIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     member = _require_school_member(db, user)
-    _require_director(member)
+    _require_head(member)
 
     duplicate = db.scalar(
         select(SchoolClass.id).where(
@@ -4129,10 +4136,10 @@ def class_detail(class_id: int, user: User = Depends(get_current_user), db: Sess
 
 @app.put("/api/classes/{class_id}/curator")
 def assign_curator(class_id: int, body: CuratorIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Admin sinfga kurator (sinf rahbari) tayinlaydi yoki olib tashlaydi."""
+    """Admin yoki direktor sinfga kurator (sinf rahbari) tayinlaydi yoki olib tashlaydi."""
 
     school_class, member = _school_class(db, user, class_id)
-    _require_director(member)
+    _require_head(member)
 
     if body.user_id is not None:
         teacher = db.scalar(
@@ -4155,7 +4162,7 @@ def rename_class(class_id: int, body: ClassIn, user: User = Depends(get_current_
     """Sinf nomini o'zgartiradi (o'quvchilar va davomat tarixi o'z joyida qoladi). Faqat admin."""
 
     school_class, member = _school_class(db, user, class_id)
-    _require_director(member)
+    _require_head(member)
     duplicate = db.scalar(
         select(SchoolClass.id).where(
             SchoolClass.school_id == school_class.school_id,

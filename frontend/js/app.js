@@ -983,18 +983,32 @@ function curatorLine(item) {
   return item.curator ? `🎓 Kurator: ${escapeHtml(item.curator.name)}` : "⚠️ Kurator tayinlanmagan";
 }
 
+// Ro'yxatdagi kurator qatori: o'zi kurator bo'lsa — "Sizning sinfingiz"
+function classCuratorNote(item) {
+  if (item.is_curator) return "⭐ Sizning sinfingiz";
+  return item.curator ? `🎓 Kurator: ${escapeHtml(item.curator.name)}` : "⚠️ Kurator tayinlanmagan";
+}
+
+/*
+  Sinflar ro'yxati: chapda o'quvchilar soni, o'rtada sinf nomi va
+  ostida kurator (o'zingizniki bo'lsa — "Sizning sinfingiz").
+*/
 function classListHtml(classes) {
   if (!classes.length) {
     return `<p class="subtitle" style="margin:6px 0 0">Maktabda hali sinf yo'q.</p>`;
   }
   return `
-    <div class="panel pick-list">
+    <div class="panel class-list">
       ${classes
         .map(
           (item) => `
-            <button type="button" class="pick-item" data-class-id="${item.id}">
-              <span class="pick-title">📚 ${escapeHtml(item.name)}<small>${item.students_count} ta o'quvchi · ${curatorLine(item)}</small></span>
-              <span>›</span>
+            <button type="button" class="class-row${item.is_curator ? " is-mine" : ""}" data-class-id="${item.id}">
+              <span class="class-count"><b>${item.students_count}</b><small>o'quvchi</small></span>
+              <span class="class-info">
+                <b>${escapeHtml(item.name)}</b>
+                <small>${classCuratorNote(item)}</small>
+              </span>
+              <span class="class-arrow">›</span>
             </button>`
         )
         .join("")}
@@ -1052,13 +1066,13 @@ function renderCreateClass() {
 /* ---------- Sinf markazi: o'z pastki menyusi bilan ---------- */
 
 /*
-  Sinf ichida: 📋 Davomat · 👨‍🎓 O'quvchilar · 📊 Natijalar.
+  Sinf ichida: 👨‍🎓 O'quvchilar · 📋 Davomat · 📊 Natijalar.
   O'quvchi sinfga BIR MARTA qo'shiladi — u davomatda ham, o'quvchi
   profilida ham (keyinchalik natijalarda ham) avtomatik bo'ladi.
 */
 const CLASS_TABS = [
-  { id: "attendance", icon: "📋", label: "Davomat" },
   { id: "students", icon: "👨‍🎓", label: "O'quvchilar" },
+  { id: "attendance", icon: "📋", label: "Davomat" },
   { id: "results", icon: "📊", label: "Natijalar" },
 ];
 
@@ -2774,14 +2788,14 @@ function renderSchoolTeachers(school) {
 
 /*
   Lavozim tayinlash (faqat admin): Direktor — bitta; Zam direktor — bir nechta.
-  Ikkalasi ham sinf yaratadi, kurator tayinlaydi va o'qituvchi qo'shadi;
-  sinfni o'chirish faqat admin va direktorda.
+  Sinf ochish, kurator tayinlash va sinfni o'chirish — faqat admin va direktor;
+  zam direktor o'qituvchi qo'shadi, o'quvchilar va davomatni boshqaradi.
 */
 function openPositionSheet(member) {
   const options = [
     { id: "", icon: "👤", title: "O'qituvchi", note: "Davomat oladi, kurator bo'lsa sinfini boshqaradi" },
-    { id: "deputy", icon: "🎖", title: "Zam direktor", note: "Sinf yaratadi, kurator tayinlaydi, o'qituvchi qo'shadi" },
-    { id: "director", icon: "🎓", title: "Direktor", note: "Zam direktor huquqlari + sinflarni o'chira oladi" },
+    { id: "deputy", icon: "🎖", title: "Zam direktor", note: "O'qituvchi qo'shadi, o'quvchilar va davomatni boshqaradi" },
+    { id: "director", icon: "🎓", title: "Direktor", note: "Admin ishlari: sinf ochadi, kurator tayinlaydi, sinfni o'chiradi" },
   ];
   const current = member.position || "";
   const { sheet, close } = openSheet(`
@@ -2824,7 +2838,7 @@ function openPositionSheet(member) {
 // 📚 Sinflarim tabi — o'qituvchi faqat o'zi dars beradigan sinf/guruhlari
 function renderSchoolClasses(school) {
   currentSchool = school;
-  const director = isLeader(school);
+  const director = Boolean(school.can_create_classes);
 
   showPage(`
     <div data-school-tab="classes">
@@ -2833,7 +2847,7 @@ function renderSchoolClasses(school) {
         director
           ? `<button class="btn" id="create-class-button" style="margin-top:4px">➕ Sinf yaratish</button>
              <p class="subtitle" style="margin:6px 0 0">Sinf yaratgach, unga kurator (sinf rahbari) tayinlang — o'quvchilarni kurator qo'shadi.</p>`
-          : `<p class="subtitle" style="margin:0">Sinflarni maktab rahbariyati yaratadi. Kurator bo'lgan sinfingizni boshqarasiz, qolgan sinflarda davomat olasiz.</p>`
+          : `<p class="subtitle" style="margin:0">Sinflarni maktab admini yoki direktor ochadi. Kurator bo'lgan sinfingizni boshqarasiz, qolgan sinflarda davomat olasiz.</p>`
       }
       <div id="my-classes" style="margin-top:14px"><p class="subtitle" style="margin:6px 0 0">⏳ Yuklanmoqda...</p></div>
     </div>

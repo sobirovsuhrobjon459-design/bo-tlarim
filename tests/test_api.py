@@ -1128,9 +1128,14 @@ def test_lavozimlar_direktor_va_zam_direktor():
     assert me["my_position"] == "deputy" and me["is_leader"] is True, me
     assert [m["position"] for m in me["members"]][:3] == [None, "director", "deputy"], me["members"]
 
-    # Zam direktor: sinf yaratadi, taklif qiladi, lekin o'chira olmaydi
-    created = client.post("/api/classes", json={"name": "1-A"}, headers=as_user(703)).json()
-    assert created["is_director"] is True and created["can_delete"] is False, created
+    # Sinfni faqat admin va direktor ochadi; zam direktor o'qituvchi taklif qiladi, lekin sinf ocha/o'chira olmaydi
+    assert me["can_create_classes"] is False, me
+    assert client.post("/api/classes", json={"name": "1-A"}, headers=as_user(703)).status_code == 403
+    created = client.post("/api/classes", json={"name": "1-A"}, headers=as_user(702)).json()
+    assert created["is_director"] is True and created["can_delete"] is True, created
+    as_deputy = client.get(f"/api/classes/{created['id']}", headers=as_user(703)).json()
+    assert as_deputy["is_director"] is False and as_deputy["can_manage"] is True, as_deputy
+    assert client.put(f"/api/classes/{created['id']}/curator", json={"user_id": uid[704]}, headers=as_user(703)).status_code == 403
     assert client.post("/api/schools/invites", json={}, headers=as_user(703)).status_code == 200
     assert client.delete(f"/api/classes/{created['id']}", headers=as_user(703)).status_code == 403
     # Direktor o'chira oladi
