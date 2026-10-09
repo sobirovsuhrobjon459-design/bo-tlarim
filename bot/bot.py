@@ -19,6 +19,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
+    BotCommand,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -31,6 +32,7 @@ from aiogram.types import (
 )
 
 from .config import BOT_TOKEN, WEBAPP_URL
+from .guide import GUIDE_PARTS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("bot")
@@ -213,7 +215,8 @@ async def _open_bot(message: Message, payload: str) -> None:
         f"Assalomu alaykum, {message.chat.first_name or ''}! 👋\n\n"
         "🎓 <b>Test Platformasiga xush kelibsiz!</b>\n\n"
         "Bilimingizni sinang, natijangizni kuzating va rivojlaning.\n\n"
-        "Boshlash uchun pastda, xabar yozish maydoni yonidagi <b>PLAY</b> tugmasini bosing.\n\n"
+        "Boshlash uchun pastda, xabar yozish maydoni yonidagi <b>PLAY</b> tugmasini bosing.\n"
+        "📘 Qo'llanma va ilova haqida — /yordam\n\n"
         f"{SUPPORT_TEXT}"
     )
 
@@ -268,16 +271,18 @@ async def handle_check_subscription(callback: CallbackQuery) -> None:
     await _open_bot(callback.message, callback.data.partition(":")[2])
 
 
-@dispatcher.message(Command("help"))
+@dispatcher.message(Command("yordam", "help"))
 async def handle_help(message: Message) -> None:
-    """/help — bot nima qila olishi haqida qisqacha ma'lumot beradi."""
+    """
+    /yordam — ilova haqida to'liq ma'lumot va ishlatish qo'llanmasi.
 
-    await message.answer(
-        "ℹ️ Bu bot Test Platformasi Mini App'ini ochadi.\n\n"
-        "Pastdagi PLAY tugmasini bosib Mini App'ni oching — u yerda test ishlashingiz "
-        "yoki o'qituvchi sifatida test yaratishingiz mumkin.\n\n"
-        f"{SUPPORT_TEXT}"
-    )
+    Qo'llanma HIMOYALANGAN (protect_content): uni boshqaga uzatib, saqlab yoki
+    nusxalab bo'lmaydi. Botning boshqa xabarlari (davomat, chek, natija) odatdagidek
+    uzatiladi — himoya faqat shu xabarlarga qo'yiladi.
+    """
+
+    for part in GUIDE_PARTS:
+        await message.answer(part, parse_mode="HTML", protect_content=True)
 
 
 @dispatcher.message()
@@ -286,7 +291,7 @@ async def handle_unknown(message: Message) -> None:
 
     await message.answer(
         "Buyruqni tushunmadim 🤔\nBoshlash uchun /start yuboring yoki pastdagi "
-        "PLAY tugmasini bosing.\n\n"
+        "PLAY tugmasini bosing. Qo'llanma — /yordam\n\n"
         f"Savolingiz bo'lsa — adminlarga yozing.\n{SUPPORT_TEXT}"
     )
 
@@ -409,6 +414,15 @@ async def _setup_menu_button() -> None:
         # botning ishlashiga to'sqinlik qilmasligi kerak — tugma avvalgi
         # deploydan saqlanib qolgan bo'ladi, keyingi ishga tushishda yangilanadi.
         logger.warning("PLAY tugmasini sozlab bo'lmadi", exc_info=True)
+
+    # "/" bosilganda chiqadigan buyruqlar ro'yxati
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Botni ishga tushirish"),
+            BotCommand(command="yordam", description="Qo'llanma va ilova haqida"),
+        ])
+    except Exception:
+        logger.warning("Buyruqlar ro'yxatini sozlab bo'lmadi", exc_info=True)
 
 
 # Aloqa uzilib qolsa, bot qayta ulanishga urinadi. Har xatodan keyin kutish
