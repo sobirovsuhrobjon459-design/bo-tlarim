@@ -64,6 +64,7 @@ def reset_database() -> None:
     main._code_requests.clear()
     main._bot_username_cache = "test_platform_bot"  # Telegram'ga so'rov ketmasin
     main.DEFAULT_REQUIRED_CHANNELS = []  # adminlar kanali — alohida testda tekshiriladi
+    main._promo_failures.clear()
     main._subscription_confirmed.clear()
 
 
@@ -1288,6 +1289,51 @@ def test_sovga_kredit_faqat_bir_marta():
     assert credits_of(777) == 3
 
 
+def test_kredit_narx_pogonalari():
+    """1-100: 1200, 101-150: 1000, 151-300: 650, 301-500: 500, 501+: 450 so'm (1 dona)."""
+    price = main._calculate_credit_price
+    assert [price(n) // n for n in (1, 100, 101, 150, 151, 300, 301, 500, 501, 8000)] ==         [1200, 1200, 1000, 1000, 650, 650, 500, 500, 450, 450]
+
+
+def test_promo_kod():
+    """Admin kod yaratadi; o'qituvchi bir marta 3000 oladi; noto'g'ri kodlar cheklanadi; boshlang'ich kod izi to'g'ri."""
+    reset_database()
+    register_teacher(tg_id=777)
+    start = credits_of(777)
+    _set_name(4242, "Bosh", "Admin")
+
+    assert client.post("/api/admin/promo-codes", json={"code": "BAHOR2026"}, headers=as_user(777)).status_code == 403
+    created = client.post("/api/admin/promo-codes", json={"code": "bahor 2026"}, headers=as_user(4242)).json()
+    assert created["credits"] == 3000 and created["hint"] == "BA…26", created
+    assert client.post("/api/admin/promo-codes", json={"code": "BAHOR2026"}, headers=as_user(4242)).status_code == 409
+
+    ok = client.post("/api/teacher/promo", json={"code": " Bahor2026 "}, headers=as_user(777))
+    assert ok.status_code == 200 and ok.json()["credits_added"] == 3000, ok.text
+    assert credits_of(777) == start + 3000
+    assert client.post("/api/teacher/promo", json={"code": "BAHOR2026"}, headers=as_user(777)).status_code == 409
+    assert credits_of(777) == start + 3000
+
+    # Chegaralangan kod: 1 kishilik
+    client.post("/api/admin/promo-codes", json={"code": "BIRTA", "credits": 500, "max_uses": 1}, headers=as_user(4242))
+    register_teacher(tg_id=778)
+    register_teacher(tg_id=779)
+    assert client.post("/api/teacher/promo", json={"code": "BIRTA"}, headers=as_user(778)).status_code == 200
+    assert client.post("/api/teacher/promo", json={"code": "BIRTA"}, headers=as_user(779)).status_code == 410
+
+    # To'xtatilgan kod ishlamaydi
+    client.post(f"/api/admin/promo-codes/{created['id']}/toggle", headers=as_user(4242))
+    assert client.post("/api/teacher/promo", json={"code": "BAHOR2026"}, headers=as_user(779)).status_code == 404
+
+    # Taxmin qilish: 5 ta noto'g'ridan keyin bloklanadi
+    main._promo_failures.clear()
+    for attempt in range(5):
+        assert client.post("/api/teacher/promo", json={"code": f"XATO{attempt}"}, headers=as_user(779)).status_code == 404
+    assert client.post("/api/teacher/promo", json={"code": "BIRTA"}, headers=as_user(779)).status_code == 429
+
+    # Boshlang'ich kodning izi to'g'ri hisoblangan
+    assert main._promo_hash("51464825709") == main.SEED_PROMO_CODES[0]["code_hash"]
+
+
 def test_sinf_yaratish_va_oquvchilar():
     reset_database()
     # Maktabga a'zo bo'lmasa sinf ochib bo'lmaydi
@@ -2113,7 +2159,7 @@ def test_kredit_xaridi_tolovdan_keyin_yoziladi():
     purchase = client.post(
         "/api/teacher/credit-purchases", json={"credits": 50}, headers=as_user(555)
     ).json()
-    assert purchase["amount"] == 50 * 800, purchase
+    assert purchase["amount"] == 50 * 1200, purchase
     assert credits_of() == before, "to'lovdan oldin kredit qo'shilib ketdi"
 
     account = {"purchase_id": str(purchase["id"])}
@@ -2588,7 +2634,7 @@ def test_admin_daromadni_togri_ajratadi():
     reset_database()
     register_teacher()
 
-    # 1) O'qituvchi 50 ta kredit sotib oladi: 50 x 800 = 40 000 so'm
+    # 1) O'qituvchi 50 ta kredit sotib oladi: 50 x 1200 = 60 000 so'm
     purchase = client.post(
         "/api/teacher/credit-purchases", json={"credits": 50}, headers=as_user(555)
     ).json()
@@ -2611,11 +2657,11 @@ def test_admin_daromadni_togri_ajratadi():
 
     stats = client.get("/api/admin/stats", headers=as_user(4242)).json()
 
-    assert stats["credits_revenue"] == 40_000, stats
+    assert stats["credits_revenue"] == 60_000, stats
     assert stats["credits_sold"] == 50, stats
     assert stats["tests_turnover"] == 10_000, stats
     assert stats["tests_commission"] == 3_000, stats
-    assert stats["revenue"] == 43_000, stats          # 40 000 + 3 000
+    assert stats["revenue"] == 63_000, stats          # 60 000 + 3 000
     assert stats["teachers_owed"] == 7_000, stats     # o'qituvchiniki, daromad emas
 
 
@@ -2699,12 +2745,12 @@ def test_karta_orqali_chek_adminga_boradi_kredit_hali_yozilmaydi():
         response = send_card_topup(credits=50)
 
     assert response.status_code == 200, response.text
-    assert response.json()["amount"] == 50 * 800, response.json()
+    assert response.json()["amount"] == 50 * 1200, response.json()
     assert response.json()["status"] == "pending"
 
     # Chek admin'ga summa va o'qituvchi ismi bilan bordi
     assert len(telegram.receipts) == 1
-    assert "40 000 so'm" in telegram.receipts[0] and "Ali Valiyev" in telegram.receipts[0], telegram.receipts
+    assert "60 000 so'm" in telegram.receipts[0] and "Ali Valiyev" in telegram.receipts[0], telegram.receipts
 
     # Admin tasdiqlamaguncha kredit yozilmaydi
     assert credits_of() == before
@@ -2733,7 +2779,7 @@ def test_admin_tasdiqlasa_kredit_yoziladi_va_oqituvchiga_xabar_boradi():
 
     # Kutilayotganlar ro'yxatidan chiqdi, daromadga qo'shildi
     assert client.get("/api/admin/card-topups", headers=as_user(4242)).json() == []
-    assert client.get("/api/admin/stats", headers=as_user(4242)).json()["credits_revenue"] == 40_000
+    assert client.get("/api/admin/stats", headers=as_user(4242)).json()["credits_revenue"] == 60_000
 
 
 def test_tugma_ikki_marta_bosilsa_kredit_ikki_marta_yozilmaydi():

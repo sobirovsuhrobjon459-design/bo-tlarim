@@ -3932,14 +3932,63 @@ async function refreshHomeInBackground() {
   }
 }
 
+// 🎁 Promo kod — o'qituvchi kiritadi va kredit oladi
+function openPromoSheet() {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 6px">🎁 Promo kod</h3>
+    <p class="subtitle" style="margin:0 0 10px">Kodni kiriting — kredit hisobingizga qo'shiladi.</p>
+    <input class="input" id="promo-code-input" placeholder="Promo kod" maxlength="40" autocomplete="off"
+           style="text-transform:uppercase;letter-spacing:2px;text-align:center;font-size:18px" />
+    <button class="btn" id="promo-code-submit" style="margin-top:12px">✅ Faollashtirish</button>
+    <button class="btn btn-ghost" data-sheet-close>Yopish</button>
+  `);
+  const input = sheet.querySelector("#promo-code-input");
+  setTimeout(() => input.focus(), 250);
+  const submit = guarded(async () => {
+    const code = input.value.trim();
+    if (code.length < 3) throw new Error("Promo kodni kiriting");
+    const result = await api("/api/teacher/promo", { method: "POST", body: { code } });
+    close();
+    showToast(`🎉 +${formatNumber(result.credits_added)} kredit! Hozir: ${formatNumber(result.credits)} ta`);
+    telegram?.HapticFeedback?.notificationOccurred?.("success");
+    renderTeacherDashboard();
+  });
+  sheet.querySelector("#promo-code-submit").addEventListener("click", submit);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") submit(event);
+  });
+}
+
 async function renderAdminDashboard() {
-  const [stats, topStudents, withdrawalRequests, teachers, cardTopUps] = await Promise.all([
+  const [stats, topStudents, withdrawalRequests, teachers, cardTopUps, promoCodes] = await Promise.all([
     api("/api/admin/stats"),
     api("/api/admin/top-students"),
     api("/api/admin/withdrawal-requests"),
     api("/api/admin/teachers"),
     api("/api/admin/card-topups"),
+    api("/api/admin/promo-codes"),
   ]);
+
+  const promoRows =
+    promoCodes
+      .map(
+        (promo) => `
+          <div class="card" style="cursor:default">
+            <div class="card-body" style="width:100%">
+              <div class="row-between">
+                <b>🎁 ${escapeHtml(promo.hint)}</b>
+                <b>+${formatNumber(promo.credits)} kredit</b>
+              </div>
+              <p class="subtitle" style="margin:4px 0 0">
+                ${promo.used}${promo.max_uses ? ` / ${promo.max_uses}` : ""} marta ishlatildi
+                ${promo.expires_on ? ` • ${formatDate(promo.expires_on)} gacha` : ""}
+                • ${promo.active ? "✅ faol" : "⛔ to'xtatilgan"}
+              </p>
+              <button class="btn btn-ghost" data-promo-toggle="${promo.id}" style="padding:8px">${promo.active ? "⛔ To'xtatish" : "▶️ Qayta yoqish"}</button>
+            </div>
+          </div>`
+      )
+      .join("") || "<p>Hali promo kod yo'q</p>";
 
   // Karta orqali kredit so'rovlari. Asosan admin ularni Telegram'dagi chek
   // ostidagi tugma bilan tasdiqlaydi — bu yerdagisi zaxira yo'l.
@@ -4060,6 +4109,22 @@ async function renderAdminDashboard() {
         <button class="btn btn-ghost" id="backup-button">💾 Hozir zaxira olish</button>
       </div>
     </div>
+    <h3>🎁 Promo kodlar</h3>
+    <div class="card" style="cursor:default">
+      <div class="card-body" style="width:100%">
+        <p style="margin:0 0 8px">Kod yarating — o'qituvchi kiritsa, kredit oladi (har kim bir marta).</p>
+        <input class="input" id="promo-new-code" placeholder="Kod, masalan BAHOR2026" maxlength="40" style="text-transform:uppercase" />
+        <div class="two-fields">
+          <input class="input" id="promo-new-credits" type="number" min="1" value="3000" placeholder="Kredit" />
+          <input class="input" id="promo-new-limit" type="number" min="1" placeholder="Necha kishi (cheksiz)" />
+        </div>
+        <label class="field-label" for="promo-new-expires">Amal qilish muddati (ixtiyoriy)</label>
+        <input class="input" id="promo-new-expires" type="date" />
+        <button class="btn" id="promo-create-button" style="margin-top:10px">➕ Promo kod yaratish</button>
+        <p class="subtitle" style="margin:8px 0 0">🔒 Kod bazada yashirin saqlanadi — uni o'zingiz eslab qoling.</p>
+      </div>
+    </div>
+    ${promoRows}
     <h3>💳 Karta orqali to'lovlar (tasdiq kutmoqda)</h3>
     ${cardTopUpRows}
     <h3>💸 Pul yechish so'rovlari</h3>
@@ -4071,6 +4136,29 @@ async function renderAdminDashboard() {
   `);
 
   document.querySelector('[data-action="back"]')?.addEventListener("click", loadHome);
+
+  document.getElementById("promo-create-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const code = document.getElementById("promo-new-code").value.trim();
+      if (code.length < 4) throw new Error("Kod kamida 4 belgidan iborat bo'lsin");
+      const credits = Number(document.getElementById("promo-new-credits").value) || 3000;
+      const limit = Number(document.getElementById("promo-new-limit").value) || null;
+      const expires = document.getElementById("promo-new-expires").value || null;
+      await api("/api/admin/promo-codes", { method: "POST", body: { code, credits, max_uses: limit, expires_on: expires } });
+      showToast(`✅ Promo kod yaratildi: +${formatNumber(credits)} kredit`);
+      renderAdminDashboard();
+    })
+  );
+  document.querySelectorAll("[data-promo-toggle]").forEach((button) => {
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        await api(`/api/admin/promo-codes/${button.dataset.promoToggle}/toggle`, { method: "POST", body: {} });
+        renderAdminDashboard();
+      })
+    );
+  });
 
   document.getElementById("backup-button").addEventListener(
     "click",
@@ -5027,6 +5115,7 @@ function drawTeacherDashboard(me, stats, tests) {
         <div class="row-between"><span>🎫 Kredit balansi</span><b>${stats.credits} ta</b></div>
         <p>Har bir o'quvchi natijasi uchun 1 kredit sarflanadi (bepul testlarda)</p>
         <button class="btn btn-ghost" id="buy-credit-button">🛒 Kredit sotib olish</button>
+        <button class="btn btn-ghost" id="promo-code-button">🎁 Promo kod kiritish</button>
       </div>
     </div>
     <button class="btn" id="new-test-button" style="margin-top:18px">➕ Yangi test yaratish</button>
@@ -5044,6 +5133,7 @@ function drawTeacherDashboard(me, stats, tests) {
   );
   document.getElementById("withdraw-button").addEventListener("click", guarded(renderWithdrawalForm));
   document.getElementById("buy-credit-button").addEventListener("click", guarded(renderCreditPurchaseForm));
+  document.getElementById("promo-code-button").addEventListener("click", openPromoSheet);
   document.getElementById("new-test-button").addEventListener("click", () => renderNewTestForm("rash"));
 
   // Tab almashganda faqat ro'yxat qayta chiziladi — testlar allaqachon

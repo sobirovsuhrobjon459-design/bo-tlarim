@@ -31,7 +31,7 @@ import time
 from types import SimpleNamespace
 from contextlib import asynccontextmanager
 from xml.sax.saxutils import escape as xml_escape
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -49,6 +49,7 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import String, case, cast, delete, distinct, func, inspect, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
@@ -83,6 +84,10 @@ from .database import (
     FeeIn,
     PaymentCancelIn,
     PaymentIn,
+    PromoCode,
+    PromoCreateIn,
+    PromoRedeemIn,
+    PromoRedemption,
     TuitionPayment,
     CuratorIn,
     CreditPurchase,
@@ -196,6 +201,40 @@ def _add_missing_columns() -> None:
 
 
 _add_missing_columns()
+
+
+# ---------- Promo kodlar ----------
+
+def _promo_hash(code: str) -> str:
+    """Kod katta-kichik harf va bo'shliqlarsiz solishtiriladi; faqat izi saqlanadi."""
+    import hashlib
+
+    return hashlib.sha256(re.sub(r"\s", "", code).upper().encode()).hexdigest()
+
+
+def _promo_hint(code: str) -> str:
+    code = re.sub(r"\s", "", code).upper()
+    return f"{code[:2]}…{code[-2:]}" if len(code) > 4 else "…"
+
+
+# Boshlang'ich promo kod(lar) — kodning o'zi emas, faqat izi (repo ochiq bo'lsa ham bilinmaydi)
+SEED_PROMO_CODES = [
+    {"code_hash": "22a75c624bbc4380b4791cf1e145c50bcb8bc638639aaae11d3a69f98a46a299", "hint": "51…09", "credits": 3000},
+]
+
+
+def _seed_promo_codes() -> None:
+    with SessionLocal() as session:
+        for seed in SEED_PROMO_CODES:
+            if not session.scalar(select(PromoCode.id).where(PromoCode.code_hash == seed["code_hash"])):
+                session.add(PromoCode(**seed))
+        session.commit()
+
+
+try:
+    _seed_promo_codes()
+except Exception:  # baza hali tayyor bo'lmasa — ilova baribir ishga tushsin
+    logging.getLogger("backend").warning("Promo kodlarni yozib bo'lmadi", exc_info=True)
 
 
 @asynccontextmanager
@@ -1388,10 +1427,11 @@ def _is_paid(db: Session, user: User, test: Test) -> bool:
 # Kredit narxi qancha ko'p sotib olinsa, shuncha arzonlashadi (optom chegirma).
 # Har bir qator: (eng kami, eng ko'pi yoki None=cheksiz, 1 dona kredit narxi so'mda)
 CREDIT_PRICE_TIERS = [
-    (1, 49, 1000),
-    (50, 199, 800),
-    (200, 499, 650),
-    (500, None, 500),
+    (1, 100, 1200),
+    (101, 150, 1000),
+    (151, 300, 650),
+    (301, 500, 500),
+    (501, None, 450),
 ]
 
 CREDIT_PRICE_TIERS_DISPLAY = [
@@ -2147,6 +2187,46 @@ def my_attempts(user: User = Depends(get_current_user), db: Session = Depends(ge
             )
     return {"in_progress": in_progress, "completed": completed}
 # ========== 4) O'qituvchi ro'yxatdan o'tishi ==========
+# Noto'g'ri promo kod urinishlari (taxmin qilib topishdan himoya): 15 daqiqada 5 ta
+PROMO_MAX_FAILURES = 5
+PROMO_WINDOW_SECONDS = 15 * 60
+_promo_failures: dict[int, list[float]] = {}
+
+
+@app.post("/api/teacher/promo")
+def redeem_promo(body: PromoRedeemIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """O'qituvchi promo kod kiritadi — kredit oladi. Har bir kod bitta o'qituvchiga bir marta."""
+
+    now = time.monotonic()
+    recent = [moment for moment in _promo_failures.get(teacher.id, []) if now - moment < PROMO_WINDOW_SECONDS]
+    _promo_failures[teacher.id] = recent
+    if len(recent) >= PROMO_MAX_FAILURES:
+        minutes = int((PROMO_WINDOW_SECONDS - (now - recent[0])) // 60) + 1
+        raise HTTPException(status_code=429, detail=f"Kod juda ko'p marta noto'g'ri kiritildi. {minutes} daqiqadan keyin urinib ko'ring.")
+
+    promo = db.scalar(select(PromoCode).where(PromoCode.code_hash == _promo_hash(body.code)))
+    if not promo or not promo.active or (promo.expires_on and promo.expires_on < date.today()):
+        _promo_failures.setdefault(teacher.id, []).append(now)
+        raise HTTPException(status_code=404, detail="Bunday promo kod yo'q yoki muddati tugagan")
+    if db.scalar(select(PromoRedemption.id).where(PromoRedemption.promo_id == promo.id, PromoRedemption.teacher_id == teacher.id)):
+        raise HTTPException(status_code=409, detail="Bu promo kodni allaqachon ishlatgansiz")
+    if promo.max_uses is not None:
+        used = db.scalar(select(func.count()).select_from(PromoRedemption).where(PromoRedemption.promo_id == promo.id)) or 0
+        if used >= promo.max_uses:
+            raise HTTPException(status_code=410, detail="Bu promo kodning soni tugagan")
+
+    db.add(PromoRedemption(promo_id=promo.id, teacher_id=teacher.id, credits=promo.credits))
+    teacher.credits += promo.credits
+    try:
+        db.commit()
+    except IntegrityError:  # bir vaqtda ikki marta bosilsa — ikkinchisi rad etiladi
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Bu promo kodni allaqachon ishlatgansiz")
+    _promo_failures.pop(teacher.id, None)
+    logging.getLogger("backend").info("Promo kod ishlatildi: promo=%s teacher=%s +%s kredit", promo.id, teacher.id, promo.credits)
+    return {"credits_added": promo.credits, "credits": teacher.credits}
+
+
 @app.post("/api/teacher/register")
 def register_teacher(
     body: TeacherRegisterIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
@@ -5855,6 +5935,51 @@ def admin_overview(admin: User = Depends(get_current_admin), db: Session = Depen
         "teachers_owed": teachers_owed,
         "commission_percent": PLATFORM_COMMISSION_PERCENT,
     }
+
+
+def _promo_view(db: Session, promo: PromoCode) -> dict:
+    used = db.scalar(select(func.count()).select_from(PromoRedemption).where(PromoRedemption.promo_id == promo.id)) or 0
+    return {
+        "id": promo.id,
+        "hint": promo.hint,
+        "credits": promo.credits,
+        "max_uses": promo.max_uses,
+        "used": used,
+        "expires_on": promo.expires_on,
+        "active": promo.active,
+        "created_at": promo.created_at,
+    }
+
+
+@app.get("/api/admin/promo-codes")
+def admin_promo_codes(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    promos = db.scalars(select(PromoCode).order_by(PromoCode.id.desc())).all()
+    return [_promo_view(db, promo) for promo in promos]
+
+
+@app.post("/api/admin/promo-codes")
+def admin_create_promo(body: PromoCreateIn, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Admin yangi promo kod yaratadi (kodning o'zi saqlanmaydi — faqat izi)."""
+    code_hash = _promo_hash(body.code)
+    if db.scalar(select(PromoCode.id).where(PromoCode.code_hash == code_hash)):
+        raise HTTPException(status_code=409, detail="Bunday promo kod allaqachon bor")
+    promo = PromoCode(code_hash=code_hash, hint=_promo_hint(body.code), credits=body.credits,
+                      max_uses=body.max_uses, expires_on=body.expires_on, created_by=admin.id)
+    db.add(promo)
+    db.commit()
+    db.refresh(promo)
+    return _promo_view(db, promo)
+
+
+@app.post("/api/admin/promo-codes/{promo_id}/toggle")
+def admin_toggle_promo(promo_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Promo kodni to'xtatish yoki qayta yoqish (o'chirilmaydi — kim ishlatgani tarixda qoladi)."""
+    promo = db.get(PromoCode, promo_id)
+    if not promo:
+        raise HTTPException(status_code=404, detail="Promo kod topilmadi")
+    promo.active = not promo.active
+    db.commit()
+    return _promo_view(db, promo)
 
 
 @app.get("/api/admin/teachers")

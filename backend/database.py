@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import BigInteger, ForeignKey, String, Text, create_engine
+from sqlalchemy import BigInteger, ForeignKey, String, Text, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 # ========== 1) Sozlamalar (.env) ==========
@@ -561,6 +561,39 @@ class ClassTestScore(Base):
     test: Mapped["ClassTest"] = relationship(back_populates="scores")
 
 
+class PromoCode(Base):
+    """
+    Promo kod — o'qituvchi kiritsa, kredit oladi. Kodning o'zi saqlanmaydi,
+    faqat SHA-256 izi (code_hash): baza yoki kod ochilib qolsa ham promo kod
+    bilinmaydi. hint — adminga ko'rsatish uchun ("51…09").
+    """
+
+    __tablename__ = "promo_codes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    hint: Mapped[str] = mapped_column(String(20))
+    credits: Mapped[int] = mapped_column()
+    max_uses: Mapped[int | None] = mapped_column(default=None)  # bo'sh — cheksiz
+    expires_on: Mapped[date | None] = mapped_column(default=None)
+    active: Mapped[bool] = mapped_column(default=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class PromoRedemption(Base):
+    """Kim qaysi kodni qachon ishlatgani — bitta o'qituvchi bitta kodni faqat BIR MARTA."""
+
+    __tablename__ = "promo_redemptions"
+    __table_args__ = (UniqueConstraint("promo_id", "teacher_id", name="uq_promo_teacher"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    promo_id: Mapped[int] = mapped_column(ForeignKey("promo_codes.id"), index=True)
+    teacher_id: Mapped[int] = mapped_column(ForeignKey("teachers.id"), index=True)
+    credits: Mapped[int] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
 class TuitionPayment(Base):
     """
     O'qish to'lovi (pul qabul qilindi). HECH QACHON o'chirilmaydi: xato
@@ -866,6 +899,26 @@ class StudentIn(BaseModel):
         self.full_name = " ".join(self.full_name.split())
         if len(self.full_name) < 2:
             raise ValueError("O'quvchining ism-familiyasini kiriting")
+        return self
+
+
+class PromoRedeemIn(BaseModel):
+    code: str = Field(min_length=3, max_length=40)
+
+
+class PromoCreateIn(BaseModel):
+    """Admin promo kod yaratadi: kod, beriladigan kredit, ixtiyoriy chegara va muddat."""
+
+    code: str = Field(min_length=4, max_length=40)
+    credits: int = Field(default=3000, ge=1, le=1_000_000)
+    max_uses: int | None = Field(default=None, ge=1, le=1_000_000)
+    expires_on: date | None = None
+
+    @model_validator(mode="after")
+    def normalize(self) -> "PromoCreateIn":
+        self.code = re.sub(r"\s", "", self.code).upper()
+        if not re.fullmatch(r"[A-Z0-9_-]{4,40}", self.code):
+            raise ValueError("Kod faqat harf, raqam, - va _ dan iborat bo'lsin (4-40 belgi)")
         return self
 
 
