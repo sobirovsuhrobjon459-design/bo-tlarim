@@ -4714,6 +4714,175 @@ def edit_class_test(test_id: int, body: ClassTestIn, user: User = Depends(get_cu
     return _class_test_view(db, test, member)
 
 
+GRADE_COLORS = {5: "#16a34a", 4: "#2563eb", 3: "#d97706", 2: "#dc2626"}
+
+
+def _class_test_context(db: Session, test: ClassTest, member: SchoolMember) -> dict:
+    view = _class_test_view(db, test, member)
+    school_class = db.get(SchoolClass, test.class_id)
+    school = db.get(PrivateSchool, school_class.school_id)
+    view.update({"class_name": school_class.name, "school_name": school.name if school else "",
+                 "date": test.taken_on.strftime("%d.%m.%Y")})
+    return view
+
+
+def _fmt_number(value: float) -> str:
+    return f"{value:g}"
+
+
+def class_test_pdf(context: dict) -> bytes:
+    """Test natijalari — PDF (chop etish uchun)."""
+
+    styles = _report_styles()
+    buffer = io.BytesIO()
+    document = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=40, rightMargin=40, topMargin=36, bottomMargin=36,
+                                 title=f"{context['title']} — {context['class_name']}")
+    width = document.width
+    meta = (f"{context['school_name']}  ·  {context['class_name']}  ·  {context['subject'] or 'Fan'}  ·  "
+            f"{context['date']}  ·  Maks. {_fmt_number(context['max_score'])} ball")
+    summary = (f"O'qituvchi: {context['teacher_name']}   ·   Qatnashdi: {context['participants']} / {context['total']}   ·   "
+               f"O'rtacha: {_fmt_number(context['average_percent'] or 0)}%")
+
+    header = ["№", "F.I.Sh.", "Ball", "%", "Baho"]
+    data = [[Paragraph(f"<font color='white'>{xml_escape(text)}</font>", styles["cell_bold"]) for text in header]]
+    for row in context["scores"]:
+        absent = row["score"] is None
+        grade = row["grade"]
+        data.append([
+            Paragraph(str(row.get("rank", "—")), styles["cell"]),
+            Paragraph(xml_escape(row["name"]), styles["cell"]),
+            Paragraph("—" if absent else _fmt_number(row["score"]), styles["cell"]),
+            Paragraph("—" if absent else f"{_fmt_number(row['percent'])}%", styles["cell"]),
+            Paragraph("kelmadi" if absent else f"<font color='{GRADE_COLORS[grade]}'><b>{grade}</b></font>", styles["cell"]),
+        ])
+    table = Table(data, colWidths=[width * 0.08, width * 0.52, width * 0.12, width * 0.14, width * 0.14], repeatRows=1)
+    commands = [("BACKGROUND", (0, 0), (-1, 0), REPORT_BLUE), ("LINEBELOW", (0, 0), (-1, -1), 0.4, REPORT_GRID),
+                ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]
+    for index in range(2, len(data), 2):
+        commands.append(("BACKGROUND", (0, index), (-1, index), REPORT_TILE_BG))
+    table.setStyle(TableStyle(commands))
+
+    document.build([
+        Paragraph(xml_escape(f"{context['title']} — natijalar"), styles["title"]),
+        Paragraph(xml_escape(meta), styles["meta"]),
+        Spacer(1, 4),
+        Paragraph(xml_escape(summary), styles["cell_bold"]),
+        Spacer(1, 10),
+        table,
+        Spacer(1, 8),
+        Paragraph("Baho: 86% va yuqori — 5, 71% — 4, 56% — 3, qolgani — 2.", styles["meta"]),
+    ])
+    return buffer.getvalue()
+
+
+def class_test_image(context: dict) -> bytes:
+    """Test natijalari — rasm (PNG), guruhga yuborish uchun."""
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    def font(name: str, size: int):
+        try:
+            return ImageFont.truetype(str(FONTS_DIR / name), size)
+        except OSError:
+            return ImageFont.load_default()
+
+    title_font, text_font, bold_font = font("DejaVuSerif-Bold.ttf", 44), font("DejaVuSerif.ttf", 28), font("DejaVuSerif-Bold.ttf", 28)
+    width, row_height, top = 1080, 58, 300
+    rows = context["scores"]
+    height = top + row_height * (len(rows) + 1) + 80
+
+    image = Image.new("RGB", (width, height), "#ffffff")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle([0, 0, width, 12], fill="#1f4e79")
+    draw.text((50, 36), f"{context['title']}"[:40], font=title_font, fill="#1f4e79")
+    draw.text((50, 104), f"{context['school_name']}  ·  {context['class_name']}"[:60], font=text_font, fill="#374151")
+    draw.text((50, 146), f"{context['subject'] or 'Fan'}  ·  {context['date']}  ·  maks. {_fmt_number(context['max_score'])} ball",
+              font=text_font, fill="#374151")
+    draw.text((50, 188), f"O'qituvchi: {context['teacher_name']}"[:60], font=text_font, fill="#6b7280")
+    draw.text((50, 236), f"Qatnashdi: {context['participants']} / {context['total']}    O'rtacha: {_fmt_number(context['average_percent'] or 0)}%",
+              font=bold_font, fill="#111827")
+
+    columns = [(60, "№"), (130, "F.I.Sh."), (700, "Ball"), (820, "%"), (950, "Baho")]
+    y = top
+    draw.rectangle([40, y, width - 40, y + row_height], fill="#1f4e79")
+    for x, label in columns:
+        draw.text((x, y + 13), label, font=bold_font, fill="#ffffff")
+    for index, row in enumerate(rows, start=1):
+        y += row_height
+        if index % 2 == 0:
+            draw.rectangle([40, y, width - 40, y + row_height], fill="#f0f3f7")
+        absent = row["score"] is None
+        color = "#9ca3af" if absent else "#111827"
+        draw.text((60, y + 13), str(row.get("rank", "—")), font=text_font, fill=color)
+        draw.text((130, y + 13), row["name"][:32], font=text_font, fill=color)
+        draw.text((700, y + 13), "—" if absent else _fmt_number(row["score"]), font=text_font, fill=color)
+        draw.text((820, y + 13), "—" if absent else f"{_fmt_number(row['percent'])}%", font=text_font, fill=color)
+        if absent:
+            draw.text((950, y + 13), "kelmadi", font=text_font, fill="#9ca3af")
+        else:
+            draw.rounded_rectangle([950, y + 9, 994, y + row_height - 9], radius=8, fill=GRADE_COLORS[row["grade"]])
+            draw.text((972, y + row_height // 2), str(row["grade"]), font=bold_font, fill="#ffffff", anchor="mm")
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()
+
+
+@app.get("/api/class-tests/{test_id}/file")
+def class_test_file(test_id: int, format: str = "pdf", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    test, member = _visible_class_test(db, user, test_id)
+    context = _class_test_context(db, test, member)
+    name = f"natija_{context['class_name']}".replace("/", "-")
+    if format == "image":
+        return StreamingResponse(io.BytesIO(class_test_image(context)), media_type="image/png",
+                                 headers={"Content-Disposition": f'attachment; filename="{test.id}.png"'})
+    return StreamingResponse(io.BytesIO(class_test_pdf(context)), media_type="application/pdf",
+                             headers={"Content-Disposition": f'attachment; filename="{test.id}.pdf"'})
+
+
+@app.post("/api/class-tests/{test_id}/send")
+def send_class_test(test_id: int, format: str = "pdf", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Natijalarni bot orqali foydalanuvchining o'z chatiga yuboradi (u yerdan uzatish yoki chop etish)."""
+    test, member = _visible_class_test(db, user, test_id)
+    context = _class_test_context(db, test, member)
+    caption = (f"📝 {context['title']} — {context['class_name']}\n📅 {context['date']} · {context['subject'] or 'Fan'}\n"
+               f"📊 O'rtacha: {_fmt_number(context['average_percent'] or 0)}%")
+    file_name = f"natija_{context['class_name']}".replace("/", "-")
+    if format == "image":
+        _send_photo_to_telegram(user.tg_id, f"{file_name}.png", class_test_image(context), caption)
+    else:
+        _send_pdf_to_telegram(user.tg_id, f"{file_name}.pdf", class_test_pdf(context), caption)
+    return {"ok": True}
+
+
+@app.get("/api/schools/test-results")
+def school_test_results(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Rahbariyat uchun: har sinfda nechta test natijasi bor (sinfni tanlab, hammasini ko'radi)."""
+    member = _require_school_member(db, user)
+    if not _is_director(member):
+        raise HTTPException(status_code=403, detail="Barcha natijalarni faqat rahbariyat ko'radi")
+    classes = db.scalars(
+        select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None)).order_by(SchoolClass.name)
+    ).all()
+    rows = []
+    for school_class in classes:
+        tests = db.scalars(
+            select(ClassTest).where(ClassTest.class_id == school_class.id, ClassTest.deleted_at.is_(None))
+            .order_by(ClassTest.taken_on.desc(), ClassTest.id.desc())
+        ).all()
+        averages = [view["average_percent"] for view in (_class_test_view(db, test, member, with_scores=False) for test in tests)
+                    if view["average_percent"] is not None]
+        rows.append({
+            "id": school_class.id,
+            "name": school_class.name,
+            "tests": len(tests),
+            "last_date": tests[0].taken_on if tests else None,
+            "average_percent": round(sum(averages) / len(averages), 1) if averages else None,
+        })
+    rows.sort(key=lambda row: (row["tests"] == 0, row["name"].lower()))
+    return rows
+
+
 @app.delete("/api/class-tests/{test_id}")
 def delete_class_test(test_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Test natijalari ro'yxatdan olinadi — bazada qoladi (tiklash mumkin)."""

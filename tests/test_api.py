@@ -1609,6 +1609,15 @@ def test_sinf_test_natijalari():
     assert client.get(f"/api/class-tests/{test['id']}", headers=as_user(701)).status_code == 200
     assert len(client.get(f"/api/classes/{cid}/tests", headers=as_user(701)).json()) == 1
 
+    # PDF va rasm; rahbariyat uchun sinflar bo'yicha ro'yxat
+    pdf = client.get(f"/api/class-tests/{test['id']}/file", params={"format": "pdf"}, headers=as_user(702))
+    assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
+    png = client.get(f"/api/class-tests/{test['id']}/file", params={"format": "image"}, headers=as_user(701))
+    assert png.status_code == 200 and png.content[1:4] == b"PNG"
+    overview = client.get("/api/schools/test-results", headers=as_user(701)).json()
+    assert overview[0]["tests"] == 1 and overview[0]["average_percent"] == 80, overview
+    assert client.get("/api/schools/test-results", headers=as_user(703)).status_code == 403
+
     # Tahrirlash va o'chirish (bazada qoladi)
     edited = client.put(f"/api/class-tests/{test['id']}", json={**body, "scores": {ids["Olim Karimov"]: 30}},
                         headers=as_user(702)).json()

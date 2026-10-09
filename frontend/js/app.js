@@ -1846,8 +1846,17 @@ function gradeBadge(grade) {
   return `<span class="grade-badge g${grade}">${grade}</span>`;
 }
 
+async function sendClassTest(test, format) {
+  if (telegram?.initData) {
+    await api(`/api/class-tests/${test.id}/send?format=${format}`, { method: "POST", body: {} });
+    showToast(`✅ ${format === "image" ? "Rasm" : "PDF"} bot chatiga yuborildi`);
+  } else {
+    await downloadFile(`/api/class-tests/${test.id}/file?format=${format}`, format === "image" ? "natija.png" : "natija.pdf");
+  }
+}
+
 // Test natijalari: o'rin, ism, ball, foiz, baho — eng ko'p yechganlar tepada
-async function renderClassTestDetail(testId, schoolClass) {
+async function renderClassTestDetail(testId, schoolClass, onBack = null) {
   const test = await api(`/api/class-tests/${testId}`);
   const medal = { 1: "🥇", 2: "🥈", 3: "🥉" };
 
@@ -1882,12 +1891,21 @@ async function renderClassTestDetail(testId, schoolClass) {
     </div>
     <p class="subtitle" style="margin:8px 4px 0">Baho: 86%+ — 5, 71%+ — 4, 56%+ — 3, qolgani — 2.</p>
 
+    <p class="section-label" style="margin-top:18px">YUBORISH VA CHOP ETISH</p>
+    <div class="contact-actions">
+      <button class="btn btn-ghost" id="class-test-image">🖼 Rasm</button>
+      <button class="btn btn-ghost" id="class-test-pdf">📄 PDF</button>
+    </div>
+    <p class="subtitle" style="margin:6px 4px 0">Bot sizning chatingizga yuboradi — u yerdan guruhga uzatasiz yoki chop etasiz.</p>
+
     ${test.can_edit ? `<button class="btn" id="edit-class-test" style="margin-top:16px">✏️ Tahrirlash</button>` : ""}
     ${test.can_edit ? `<button class="btn btn-ghost danger-text" id="delete-class-test">🗑 Natijalarni o'chirish</button>` : ""}
   `);
 
-  const back = () => renderClass(schoolClass.id, "results");
+  const back = onBack || (() => renderClass(schoolClass.id, "results"));
   document.querySelector('[data-action="back-results"]').addEventListener("click", guarded(back));
+  document.getElementById("class-test-image").addEventListener("click", guarded(() => sendClassTest(test, "image")));
+  document.getElementById("class-test-pdf").addEventListener("click", guarded(() => sendClassTest(test, "pdf")));
   document.getElementById("edit-class-test")?.addEventListener("click", () => renderClassTestForm(schoolClass, test));
   document.getElementById("delete-class-test")?.addEventListener(
     "click",
@@ -1898,6 +1916,72 @@ async function renderClassTestDetail(testId, schoolClass) {
       await back();
     })
   );
+}
+
+/*
+  Rahbariyat uchun: barcha sinflarning test natijalari. Sinf tanlanadi —
+  o'sha sinfda qaysi o'qituvchi test natijasi kiritgan bo'lsa, hammasi ko'rinadi.
+*/
+async function renderSchoolResults() {
+  const classes = await api("/api/schools/test-results");
+  showPage(`
+    ${schoolSubHeader("Test natijalari")}
+    <p class="subtitle" style="margin:0 0 12px">Sinfni tanlang — undagi barcha o'qituvchilarning test natijalari chiqadi.</p>
+    ${
+      classes.length
+        ? `<div class="class-list">
+             ${classes
+               .map(
+                 (item) => `
+                   <button type="button" class="class-row" data-results-class="${item.id}">
+                     <span class="class-count"><b>${item.tests}</b><small>test</small></span>
+                     <span class="class-info">
+                       <b>${escapeHtml(item.name)}</b>
+                       <small>${item.tests ? `O'rtacha ${item.average_percent ?? 0}% · oxirgisi ${formatDate(item.last_date)}` : "Hali natija kiritilmagan"}</small>
+                     </span>
+                     <span class="class-arrow">›</span>
+                   </button>`
+               )
+               .join("")}
+           </div>`
+        : `<p class="subtitle">Maktabda hali sinf yo'q.</p>`
+    }
+  `);
+  wireSchoolSubPage();
+  document.querySelectorAll("[data-results-class]").forEach((item) => {
+    item.addEventListener("click", guarded(() => renderSchoolClassTests(Number(item.dataset.resultsClass))));
+  });
+}
+
+async function renderSchoolClassTests(classId) {
+  const [schoolClass, tests] = await Promise.all([api(`/api/classes/${classId}`), api(`/api/classes/${classId}/tests`)]);
+  showPage(`
+    ${schoolPageHeader(`${schoolClass.name} — natijalar`, "back-school-results")}
+    ${
+      tests.length
+        ? `<div class="panel pick-list">
+             ${tests
+               .map(
+                 (test) => `
+                   <button type="button" class="pick-item" data-class-test="${test.id}">
+                     <span class="pick-title">📝 ${escapeHtml(test.title)}
+                       <small>${formatDate(test.taken_on)}${test.subject ? ` · ${escapeHtml(test.subject)}` : ""} · 👤 ${escapeHtml(test.teacher_name)} · o'rtacha ${test.average_percent ?? 0}%</small>
+                     </span>
+                     <span>›</span>
+                   </button>`
+               )
+               .join("")}
+           </div>`
+        : `<p class="subtitle">Bu sinfda hali test natijasi kiritilmagan.</p>`
+    }
+  `);
+  document.querySelector('[data-action="back-school-results"]').addEventListener("click", guarded(renderSchoolResults));
+  document.querySelectorAll("[data-class-test]").forEach((item) => {
+    item.addEventListener(
+      "click",
+      guarded(() => renderClassTestDetail(Number(item.dataset.classTest), schoolClass, () => renderSchoolClassTests(classId)))
+    );
+  });
 }
 
 // Natija kiritish: test nomi, fan, sana, maksimal ball va har o'quvchining bali
@@ -1935,7 +2019,7 @@ function renderClassTestForm(schoolClass, existing = null) {
             <div class="att-row score-input-row" style="cursor:default">
               <span class="att-number">${index + 1}</span>
               <span class="att-name">${escapeHtml(student.full_name)}</span>
-              <input class="input score-input" type="number" inputmode="decimal" min="0" step="any"
+              <input class="input score-input" type="number" inputmode="decimal" min="0" step="any" max="${existing?.max_score ?? ""}"
                      data-student="${student.id}" value="${scoreOf[student.id] ?? ""}" placeholder="—" />
             </div>`
         )
@@ -1955,6 +2039,29 @@ function renderClassTestForm(schoolClass, existing = null) {
       else await renderClass(schoolClass.id, "results");
     })
   );
+
+  // Ball maksimaldan oshib ketmasin: yozayotgandayoq to'xtatiladi
+  const maxInput = document.getElementById("ct-max");
+  const limitScore = (input) => {
+    const max = Number(maxInput.value);
+    const value = Number(input.value.replace(",", "."));
+    if (max > 0 && input.value !== "" && value > max) {
+      input.value = String(max);
+      input.classList.add("is-over");
+      setTimeout(() => input.classList.remove("is-over"), 900);
+      showToast(`Ball ${max} dan oshmaydi`);
+    }
+    if (input.value !== "" && value < 0) input.value = "0";
+  };
+  document.querySelectorAll(".score-input").forEach((input) => {
+    input.addEventListener("input", () => limitScore(input));
+  });
+  maxInput.addEventListener("input", () => {
+    document.querySelectorAll(".score-input").forEach((input) => {
+      input.max = maxInput.value || "";
+      limitScore(input);
+    });
+  });
 
   document.getElementById("save-class-test").addEventListener(
     "click",
@@ -3140,6 +3247,7 @@ function renderMySchool(school, { refresh = true } = {}) {
       <div class="school-tiles">
         ${schoolMenuItem("classes-mine", "⭐", "Mening sinflarim", '<i class="menu-count" data-count="mine">…</i>')}
         ${schoolMenuItem("classes-others", "📚", "Boshqa sinflar", '<i class="menu-count" data-count="others">…</i>')}
+        ${isLeader(school) ? schoolMenuItem("results", "📊", "Test natijalari", "Sinflar bo'yicha", "wide") : ""}
         ${schoolMenuItem("teachers", "👥", "Xodimlar", `${school.members.length} ta xodim`, "wide")}
       </div>
 
@@ -3155,6 +3263,7 @@ function renderMySchool(school, { refresh = true } = {}) {
       guarded(async () => {
         const target = item.dataset.schoolMenu;
         if (target === "create-class") renderCreateClass();
+        else if (target === "results") await renderSchoolResults();
         else if (target === "invite-teacher") await inviteTeacher();
         else openSchoolTab(target);
       })
