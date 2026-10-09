@@ -2452,3 +2452,29 @@ body.keyboard-open .fab {
   font-size: 11.5px;
   color: var(--color-text-muted);
 }
+
+/* Telefon raqam maydoni + "Telegram'dan" tugmasi */
+.phone-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.phone-field .input {
+  flex: 1;
+}
+
+/* Xodimlar ro'yxatida telefon (faqat rahbariyatga) */
+.member-phone {
+  display: inline-block;
+  margin-top: 3px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.member-phone.missing {
+  font-weight: 400;
+  color: #d97706;
+}

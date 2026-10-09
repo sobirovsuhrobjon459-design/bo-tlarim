@@ -146,7 +146,7 @@ def _add_missing_columns() -> None:
         "test_attempts": {"offline_name": "VARCHAR(200)", "saved_answers": "TEXT"},
         "users": {"username": "VARCHAR(64)"},
         "school_classes": {"curator_user_id": "INTEGER"},
-        "school_members": {"position": "VARCHAR(20)"},
+        "school_members": {"position": "VARCHAR(20)", "phone": "VARCHAR(20)"},
         "attendances": {"lesson_start": "VARCHAR(5)", "lesson_end": "VARCHAR(5)"},
         "key_questions": {"label": "VARCHAR(20)"},
         "payments": {
@@ -3389,6 +3389,9 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         "created_at": school.created_at,
         "my_role": member.role,
         "my_position": member.position,
+        "my_phone": member.phone,
+        # Xodimlarning telefon raqamlarini faqat rahbariyat ko'radi
+        "can_see_phones": _is_director(member),
         "is_leader": _is_director(member),
         "can_create_classes": _can_delete_classes(member),
         "my_subjects": _read_subjects(member),
@@ -3400,6 +3403,7 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
                 "subjects": _read_subjects(item),
                 "role": item.role,
                 "position": item.position,
+                "phone": item.phone if (_is_director(member) or item.user_id == user.id) else None,
                 "joined_at": item.joined_at,
                 "is_me": item.user_id == user.id,
             }
@@ -3613,7 +3617,7 @@ def create_school(body: SchoolCreateIn, user: User = Depends(get_current_user), 
     db.flush()
 
     # Maktabni ochgan — DIREKTOR. U fan o'qituvchisi emas, fanlari bo'lmaydi.
-    member = SchoolMember(school_id=school.id, user_id=user.id, role="owner", subjects="[]")
+    member = SchoolMember(school_id=school.id, user_id=user.id, role="owner", subjects="[]", phone=body.phone)
     db.add(member)
     db.commit()
     db.refresh(member)
@@ -3671,6 +3675,8 @@ def _join_as_teacher(db: Session, user: User, school: PrivateSchool, body) -> Sc
 
     if school.owner_user_id == user.id:
         return _rejoin_as_director(db, user, school)
+    if not body.phone:
+        raise HTTPException(status_code=422, detail="Telefon raqamingizni kiriting — bu majburiy")
     if not body.is_curator:
         _require_subjects(body.subjects)
 
@@ -3685,7 +3691,11 @@ def _join_as_teacher(db: Session, user: User, school: PrivateSchool, body) -> Sc
         raise HTTPException(status_code=422, detail="Qaysi sinfning kuratori ekaningizni tanlang")
 
     member = SchoolMember(
-        school_id=school.id, user_id=user.id, role="teacher", subjects=json.dumps(body.subjects, ensure_ascii=False)
+        school_id=school.id,
+        user_id=user.id,
+        role="teacher",
+        subjects=json.dumps(body.subjects, ensure_ascii=False),
+        phone=body.phone,
     )
     db.add(member)
     if curator_class:
@@ -3845,6 +3855,10 @@ def update_school_profile(body: SchoolProfileIn, user: User = Depends(get_curren
     )
     if member.role != "owner" and not is_curator:
         _require_subjects(body.subjects)  # admin va kurator uchun fan ixtiyoriy
+    if body.phone:
+        member.phone = body.phone
+    elif not member.phone:
+        raise HTTPException(status_code=422, detail="Telefon raqamingizni kiriting — bu majburiy")
 
     member.subjects = json.dumps(body.subjects, ensure_ascii=False)
     db.commit()

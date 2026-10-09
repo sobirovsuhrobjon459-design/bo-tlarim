@@ -2322,6 +2322,51 @@ async function profileNameFieldsHtml() {
     <input class="input" id="profile-last-name" placeholder="Familiya" value="${escapeHtml(rest.join(" "))}" />`;
 }
 
+/*
+  Telefon raqam — har bir xodim uchun majburiy (rahbariyat ko'radi).
+  Telegram'dan bitta bosishda olish ham mumkin.
+*/
+function phoneFieldHtml(value = "") {
+  return `
+    <label class="field-label" for="profile-phone">Telefon raqamingiz <span class="required-mark">*</span></label>
+    <div class="phone-field">
+      <input class="input" id="profile-phone" type="tel" inputmode="tel" placeholder="+998 90 123 45 67"
+             value="${escapeHtml(value ? formatPhone(value) : "")}" />
+      ${telegram?.requestContact ? `<button type="button" class="share-pill" id="phone-from-telegram">📱 Telegram'dan</button>` : ""}
+    </div>
+    <p class="subtitle" style="margin:4px 0 0">Raqamingizni faqat maktab rahbariyati ko'radi.</p>`;
+}
+
+function formatPhone(phone) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (digits.length !== 12) return phone || "";
+  return `+${digits.slice(0, 3)} ${digits.slice(3, 5)} ${digits.slice(5, 8)} ${digits.slice(8, 10)} ${digits.slice(10)}`;
+}
+
+function readPhoneOrThrow() {
+  let digits = (document.getElementById("profile-phone")?.value || "").replace(/\D/g, "");
+  if (digits.length === 9) digits = `998${digits}`;
+  if (digits.length !== 12 || !digits.startsWith("998")) {
+    throw new Error("Telefon raqamingizni to'g'ri kiriting (masalan +998 90 123 45 67)");
+  }
+  return `+${digits}`;
+}
+
+// "📱 Telegram'dan" — foydalanuvchi ruxsat bersa, raqam o'zi yoziladi
+document.addEventListener("click", (event) => {
+  if (!event.target.closest("#phone-from-telegram")) return;
+  telegram.requestContact((shared, response) => {
+    const phone = response?.responseUnsafe?.contact?.phone_number;
+    const input = document.getElementById("profile-phone");
+    if (shared && phone && input) {
+      input.value = formatPhone(phone.startsWith("+") ? phone : `+${phone}`);
+      markUnsaved();
+    } else if (!shared) {
+      showToast("Raqamni qo'lda yozing");
+    }
+  });
+});
+
 async function saveProfileName() {
   const firstName = document.getElementById("profile-first-name").value.trim();
   const lastName = document.getElementById("profile-last-name").value.trim();
@@ -2354,6 +2399,7 @@ async function renderCreateSchool() {
       va o'qituvchilarni boshqaradi.
     </p>
     ${nameFields}
+    ${phoneFieldHtml()}
 
     <button class="btn" id="create-school-button" style="margin-top:18px">🏫 Maktabni ochish</button>
   `);
@@ -2397,10 +2443,11 @@ async function renderCreateSchool() {
       if (!district) throw new Error("Tumanni tanlang");
       const name = document.getElementById("school-name-input").value.trim();
       if (name.length < 2) throw new Error("Maktab nomini kiriting");
+      const phone = readPhoneOrThrow();
       await saveProfileName();
       const { school } = await api("/api/schools", {
         method: "POST",
-        body: { region, district, name, subjects: [] },
+        body: { region, district, name, subjects: [], phone },
       });
 
       showToast(`✅ Maktab ochildi! Kodi: ${school.code}`);
@@ -2476,6 +2523,7 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
 
     <p class="section-label" style="margin-top:18px">SIZNING PROFILINGIZ</p>
     ${nameFields}
+    ${phoneFieldHtml()}
 
     <label class="field-label">Siz sinf kuratorimisiz (sinf rahbari)?</label>
     <div class="choice-toggle" id="curator-toggle">
@@ -2577,6 +2625,7 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
       const classSelect = document.getElementById("curator-class-select");
       const curatorClassId = isCurator && classSelect ? Number(classSelect.value) || null : null;
       if (isCurator && classSelect && !curatorClassId) throw new Error("Qaysi sinfning kuratori ekaningizni tanlang");
+      const phone = readPhoneOrThrow();
 
       const confirmed = await askConfirm(
         "Maktabga qo'shilasizmi? Siz shu maktabda qolasiz — chiqish uchun ham maktab kodi kerak bo'ladi."
@@ -2586,7 +2635,7 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
       await saveProfileName();
       const { school } = await api("/api/schools/join", {
         method: "POST",
-        body: { code, subjects, school_id: target ? target.id : null, is_curator: isCurator, curator_class_id: curatorClassId },
+        body: { code, subjects, phone, school_id: target ? target.id : null, is_curator: isCurator, curator_class_id: curatorClassId },
       });
       showToast(`✅ "${school.name}" maktabiga qo'shildingiz`);
       renderMySchool(school);
@@ -2718,7 +2767,7 @@ function renderMySchool(school, { refresh = true } = {}) {
         <div class="card-body">
           <h3 style="margin:0">${escapeHtml(school.name)}</h3>
           <p style="margin:4px 0 0">📍 ${escapeHtml(school.region)}, ${escapeHtml(school.district)}</p>
-          <p class="subtitle" style="margin:4px 0 0">👥 ${school.members.length} ta o'qituvchi</p>
+          <p class="subtitle" style="margin:4px 0 0">👥 ${school.members.length} ta xodim</p>
         </div>
       </div>
       ${
@@ -2733,11 +2782,23 @@ function renderMySchool(school, { refresh = true } = {}) {
              </div>`
       }
 
-      <p class="section-label" style="margin-top:18px">SINFLAR VA O'QITUVCHILAR</p>
+      ${
+        school.my_phone
+          ? ""
+          : `<div class="card warning-card" data-action="fill-phone">
+               <div class="card-icon">📱</div>
+               <div class="card-body">
+                 <h3 style="margin:0">Telefon raqamingizni kiriting</h3>
+                 <p style="margin:4px 0 0">Bu majburiy — rahbariyat siz bilan bog'lana olishi uchun.</p>
+               </div>
+             </div>`
+      }
+
+      <p class="section-label" style="margin-top:18px">SINFLAR VA XODIMLAR</p>
       <div class="school-tiles">
         ${schoolMenuItem("classes-mine", "⭐", "Mening sinflarim", '<i class="menu-count" data-count="mine">…</i>')}
         ${schoolMenuItem("classes-others", "📚", "Boshqa sinflar", '<i class="menu-count" data-count="others">…</i>')}
-        ${schoolMenuItem("teachers", "👥", "O'qituvchilar", `${school.members.length} ta o'qituvchi`)}
+        ${schoolMenuItem("teachers", "👥", "Xodimlar", `${school.members.length} ta xodim`)}
       </div>
 
       ${
@@ -2755,6 +2816,7 @@ function renderMySchool(school, { refresh = true } = {}) {
 
   wireSchoolTab("school");
   document.querySelector('[data-action="fill-subjects"]')?.addEventListener("click", guarded(() => renderSchoolProfileEdit(school)));
+  document.querySelector('[data-action="fill-phone"]')?.addEventListener("click", guarded(() => renderSchoolProfileEdit(school)));
   document.querySelectorAll("[data-school-menu]").forEach((item) => {
     item.addEventListener(
       "click",
@@ -2824,15 +2886,22 @@ function renderSchoolTeachers(school) {
           <div class="member-info">
             <b>${escapeHtml(member.name)}${member.is_me ? " (siz)" : ""}</b>
             <small>${member.role === "owner" ? "Maktab admini" : subjectsText(member.subjects)}</small>
+            ${
+              school.can_see_phones
+                ? member.phone
+                  ? `<a class="member-phone" href="tel:${escapeHtml(member.phone)}">📞 ${escapeHtml(formatPhone(member.phone))}</a>`
+                  : `<small class="member-phone missing">📵 Raqam kiritilmagan</small>`
+                : ""
+            }
           </div>
-          ${roleBadge(member.role, member.position)}
+          ${roleBadge(member.role, member.position) || `<span class="badge badge-blue">O'qituvchi</span>`}
         </div>`
     )
     .join("");
 
   showPage(`
     <div data-school-tab="teachers">
-      ${schoolSubHeader(`O'qituvchilar (${school.members.length})`)}
+      ${schoolSubHeader(`Xodimlar (${school.members.length})`)}
       <div class="panel" style="padding:4px 0">${memberRows}</div>
       ${
         canAssign && school.members.length > 1
@@ -2856,7 +2925,10 @@ function renderSchoolTeachers(school) {
   if (canAssign) {
     document.querySelectorAll(".member-line.is-tappable").forEach((line) => {
       const member = school.members.find((item) => item.user_id === Number(line.dataset.memberId));
-      line.addEventListener("click", () => openPositionSheet(member));
+      line.addEventListener("click", (event) => {
+        if (event.target.closest(".member-phone")) return; // raqam bosilsa — qo'ng'iroq
+        openPositionSheet(member);
+      });
     });
   }
   refreshSchoolInBackground("teachers");
@@ -2972,6 +3044,7 @@ async function renderInviteJoin(token) {
 
     <p class="section-label" style="margin-top:18px">SIZNING PROFILINGIZ</p>
     ${nameFields}
+    ${phoneFieldHtml()}
 
     <label class="field-label">Siz sinf kuratorimisiz (sinf rahbari)?</label>
     <div class="choice-toggle" id="curator-toggle">
@@ -3024,11 +3097,12 @@ async function renderInviteJoin(token) {
       const classSelect = document.getElementById("curator-class-select");
       const curatorClassId = isCurator && classSelect ? Number(classSelect.value) || null : null;
       if (isCurator && classSelect && !curatorClassId) throw new Error("Qaysi sinfning kuratori ekaningizni tanlang");
+      const phone = readPhoneOrThrow();
 
       await saveProfileName();
       const { school } = await api(`/api/schools/invites/${encodeURIComponent(token)}/accept`, {
         method: "POST",
-        body: { subjects, is_curator: isCurator, curator_class_id: curatorClassId },
+        body: { subjects, phone, is_curator: isCurator, curator_class_id: curatorClassId },
       });
       showToast(`✅ «${school.name}» maktabiga qo'shildingiz`);
       renderMySchool(school);
@@ -3054,6 +3128,7 @@ function renderSchoolProfile(school) {
       <div class="panel profile-facts">
         <div class="row-between"><span class="subtitle" style="margin:0">Maktab</span><b>${escapeHtml(school.name)}</b></div>
         <div class="row-between"><span class="subtitle" style="margin:0">${isOwner(school) ? "Lavozim" : "Fanlar"}</span><b>${isOwner(school) ? "Maktab admini" : subjectsText(school.my_subjects)}</b></div>
+        <div class="row-between"><span class="subtitle" style="margin:0">Telefon</span><b>${school.my_phone ? escapeHtml(formatPhone(school.my_phone)) : "⚠️ Kiritilmagan"}</b></div>
         <div class="row-between"><span class="subtitle" style="margin:0">Joylashuv</span><b>${escapeHtml(school.district)}</b></div>
       </div>
 
@@ -3081,6 +3156,7 @@ async function renderSchoolProfileEdit(school) {
   showPage(`
     ${schoolPageHeader("Profilim", "back-school")}
     ${nameFields}
+    ${phoneFieldHtml(school.my_phone || "")}
     ${
       isOwner(school)
         ? ""
@@ -3103,9 +3179,10 @@ async function renderSchoolProfileEdit(school) {
     "click",
     guarded(async () => {
       const subjects = isOwner(school) ? [] : readSubjectsOrThrow();
+      const phone = readPhoneOrThrow();
 
       await saveProfileName();
-      const { school: updated } = await api("/api/schools/me/profile", { method: "PUT", body: { subjects } });
+      const { school: updated } = await api("/api/schools/me/profile", { method: "PUT", body: { subjects, phone } });
       showToast("✅ Profil saqlandi");
       renderSchoolProfile(updated);
     })

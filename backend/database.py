@@ -4,6 +4,7 @@ Ma'lumotlar bazasi fayli: .env sozlamalari, bazaga ulanish, barcha jadvallar
 """
 
 import os
+import re
 from typing import Literal
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -404,6 +405,8 @@ class SchoolMember(Base):
     role: Mapped[str] = mapped_column(String(20), default="teacher")  # owner | teacher
     # Lavozim — admin tayinlaydi: director (direktor) | deputy (zam direktor) | None
     position: Mapped[str | None] = mapped_column(String(20), default=None)
+    # Xodimning telefon raqami (+998XXXXXXXXX) — faqat rahbariyat ko'radi
+    phone: Mapped[str | None] = mapped_column(String(20), default=None)
     subjects: Mapped[str] = mapped_column(Text, default="[]")  # JSON ro'yxat: ["Matematika", ...]
     joined_at: Mapped[datetime] = mapped_column(default=utcnow)
     left_at: Mapped[datetime | None] = mapped_column(default=None)
@@ -648,6 +651,19 @@ class StudentAnswersIn(BaseModel):
     answers: dict[str, str] = {}
 
 
+def _clean_phone(value: str | None) -> str | None:
+    """Telefon raqamni +998XXXXXXXXX ko'rinishiga keltiradi (bo'sh bo'lsa — None)."""
+
+    if not value or not value.strip():
+        return None
+    digits = re.sub(r"\D", "", value)
+    if len(digits) == 9:
+        digits = "998" + digits
+    if len(digits) != 12 or not digits.startswith("998"):
+        raise ValueError("Telefon raqam noto'g'ri. Masalan: +998 90 123 45 67")
+    return "+" + digits
+
+
 def _clean_subjects(subjects: list[str]) -> list[str]:
     """Fanlar ro'yxatini tozalaydi: bo'sh va takrorlanganlari olib tashlanadi."""
     cleaned: list[str] = []
@@ -665,11 +681,13 @@ class SchoolCreateIn(BaseModel):
     district: str = Field(min_length=2, max_length=100)
     name: str = Field(min_length=2, max_length=200)
     subjects: list[str] = Field(default_factory=list, max_length=20)
+    phone: str | None = Field(None, max_length=30)
 
     @model_validator(mode="after")
     def normalize(self) -> "SchoolCreateIn":
         self.name = " ".join(self.name.split())
         self.subjects = _clean_subjects(self.subjects)
+        self.phone = _clean_phone(self.phone)
         return self
 
 
@@ -685,22 +703,27 @@ class SchoolCodeIn(BaseModel):
     curator_class_id: int | None = None
     # Direktor chiqayotganda: direktorlik kimga o'tadi
     successor_user_id: int | None = None
+    # Qo'shilayotgan xodimning telefon raqami (qo'shilishda majburiy)
+    phone: str | None = Field(None, max_length=30)
 
     @model_validator(mode="after")
     def normalize(self) -> "SchoolCodeIn":
         self.code = self.code.strip().upper().replace(" ", "")
         self.subjects = _clean_subjects(self.subjects)
+        self.phone = _clean_phone(self.phone)
         return self
 
 
 class SchoolProfileIn(BaseModel):
-    """O'qituvchining maktabdagi profili: fanlari."""
+    """Xodimning maktabdagi profili: fanlari va telefon raqami."""
 
     subjects: list[str] = Field(default_factory=list, max_length=20)
+    phone: str | None = Field(None, max_length=30)
 
     @model_validator(mode="after")
     def normalize(self) -> "SchoolProfileIn":
         self.subjects = _clean_subjects(self.subjects)
+        self.phone = _clean_phone(self.phone)
         return self
 
 
@@ -782,8 +805,10 @@ class InviteAcceptIn(BaseModel):
     subjects: list[str] = Field(default_factory=list, max_length=20)
     is_curator: bool = False
     curator_class_id: int | None = None
+    phone: str | None = Field(None, max_length=30)
 
     @model_validator(mode="after")
     def normalize(self) -> "InviteAcceptIn":
         self.subjects = _clean_subjects(self.subjects)
+        self.phone = _clean_phone(self.phone)
         return self
