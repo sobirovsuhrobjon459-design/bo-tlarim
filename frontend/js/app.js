@@ -5368,7 +5368,16 @@ async function renderCreditPurchaseForm() {
     if (event.key === "Enter" && looksLikePromo(creditInput.value)) redeemPromo(event);
   });
 
-  const updatePricePreview = guarded(async () => {
+  // Narx sahifadagi jadval bo'yicha DARHOL hisoblanadi (har harfda serverga so'rov
+  // ketmaydi). Server baribir buyurtmada narxni o'zi qayta hisoblaydi.
+  const priceFor = (credits) => {
+    const tier =
+      balanceInfo.credit_price_tiers.find((item) => credits >= item.from && (item.to === null || credits <= item.to)) ||
+      balanceInfo.credit_price_tiers[0];
+    return credits * tier.price_per_credit;
+  };
+
+  const updatePricePreview = () => {
     const isPromo = looksLikePromo(creditInput.value);
     promoButton.hidden = !isPromo;
     priceLine.hidden = isPromo;
@@ -5382,12 +5391,16 @@ async function renderCreditPurchaseForm() {
       if (cardAmount) cardAmount.textContent = "—";
       return;
     }
-    const price = await api(`/api/teacher/credit-price?credits=${credits}`);
-    const text = `${formatNumber(price.amount)} so'm`;
+    if (credits > 100000) {
+      pricePreview.textContent = "bir martada eng ko'pi 100 000 ta";
+      if (cardAmount) cardAmount.textContent = "—";
+      return;
+    }
+    const text = `${formatNumber(priceFor(credits))} so'm`;
     pricePreview.textContent = text;
     // Kartaga aynan shu summa o'tkazilishi kerak — admin chekni shu bilan solishtiradi
     if (cardAmount) cardAmount.textContent = text;
-  });
+  };
 
   creditInput.addEventListener("input", updatePricePreview);
   updatePricePreview();
