@@ -2302,9 +2302,9 @@ async function renderCreateSchool() {
     <label class="field-label" for="school-name-input">Maktab nomi</label>
     <input class="input" id="school-name-input" placeholder="Masalan: Kelajak xususiy maktabi" />
 
-    <p class="section-label" style="margin-top:18px">MAKTAB DIREKTORI</p>
+    <p class="section-label" style="margin-top:18px">MAKTAB ADMINI</p>
     <p class="subtitle" style="margin:0 0 6px">
-      Maktabni ochgan kishi — maktab direktori. Direktor sinflar yaratadi, ularga kurator tayinlaydi
+      Maktabni ochgan kishi — maktab admini. Admin sinflar yaratadi, ularga kurator tayinlaydi
       va o'qituvchilarni boshqaradi.
     </p>
     ${nameFields}
@@ -2363,7 +2363,7 @@ async function renderCreateSchool() {
   );
 }
 
-// O'z maktabi (direktor) — kod kerak emas, bir bosishda kiradi
+// O'z maktabi (admin) — kod kerak emas, bir bosishda kiradi
 function renderOwnSchoolReturn(school, onBack) {
   showPage(`
     ${schoolPageHeader("Maktabimga kirish", "back-join")}
@@ -2372,7 +2372,7 @@ function renderOwnSchoolReturn(school, onBack) {
       <div class="card-body">
         <h3 style="margin:0">${escapeHtml(school.name)}</h3>
         <p class="subtitle" style="margin:4px 0 0">📍 ${escapeHtml(school.region)}, ${escapeHtml(school.district)}</p>
-        <p style="margin:8px 0 0">👑 Bu sizning maktabingiz — siz uning direktorisiz. Kod kerak emas.</p>
+        <p style="margin:8px 0 0">👑 Bu sizning maktabingiz — siz uning adminisiz. Kod kerak emas.</p>
       </div>
     </div>
     <button class="btn" id="return-own-school" style="margin-top:16px">🏫 Maktabimga kirish</button>
@@ -2478,7 +2478,7 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
              <option value="">Sinfni tanlang</option>
              ${result.open_classes.map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}
            </select>`
-        : `<p class="subtitle" style="margin:4px 0 0">«${escapeHtml(result.school.name)}» maktabida kuratorsiz sinf yo'q — direktor sinfingizni yaratgach, sizni kurator qilib tayinlaydi.</p>`;
+        : `<p class="subtitle" style="margin:4px 0 0">«${escapeHtml(result.school.name)}» maktabida kuratorsiz sinf yo'q — admin sinfingizni yaratgach, sizni kurator qilib tayinlaydi.</p>`;
     } catch (error) {
       loadedFor = "";
       classHolder.innerHTML = `<p class="subtitle" style="margin:4px 0 0;color:#d93636">${escapeHtml(error.message)}</p>`;
@@ -2553,7 +2553,7 @@ function subjectsText(subjects) {
 }
 
 function roleBadge(role) {
-  return role === "owner" ? `<span class="badge badge-purple">👑 Direktor</span>` : "";
+  return role === "owner" ? `<span class="badge badge-purple">👑 Admin</span>` : "";
 }
 
 function isDirector(school) {
@@ -2741,7 +2741,7 @@ function renderSchoolTeachers(school) {
           <div class="member-avatar">${avatarLetter(member.name)}</div>
           <div class="member-info">
             <b>${escapeHtml(member.name)}${member.is_me ? " (siz)" : ""}</b>
-            <small>${member.role === "owner" ? "Maktab direktori" : subjectsText(member.subjects)}</small>
+            <small>${member.role === "owner" ? "Maktab admini" : subjectsText(member.subjects)}</small>
           </div>
           ${roleBadge(member.role)}
         </div>`
@@ -2771,7 +2771,7 @@ function renderSchoolClasses(school) {
         director
           ? `<button class="btn" id="create-class-button" style="margin-top:4px">➕ Sinf yaratish</button>
              <p class="subtitle" style="margin:6px 0 0">Sinf yaratgach, unga kurator (sinf rahbari) tayinlang — o'quvchilarni kurator qo'shadi.</p>`
-          : `<p class="subtitle" style="margin:0">Sinflarni direktor yaratadi. Kurator bo'lgan sinfingizni boshqarasiz, qolgan sinflarda davomat olasiz.</p>`
+          : `<p class="subtitle" style="margin:0">Sinflarni admin yaratadi. Kurator bo'lgan sinfingizni boshqarasiz, qolgan sinflarda davomat olasiz.</p>`
       }
       <div id="my-classes" style="margin-top:14px"><p class="subtitle" style="margin:6px 0 0">⏳ Yuklanmoqda...</p></div>
     </div>
@@ -2800,7 +2800,7 @@ function renderSchoolProfile(school) {
 
       <div class="panel profile-facts">
         <div class="row-between"><span class="subtitle" style="margin:0">Maktab</span><b>${escapeHtml(school.name)}</b></div>
-        <div class="row-between"><span class="subtitle" style="margin:0">${isDirector(school) ? "Lavozim" : "Fanlar"}</span><b>${isDirector(school) ? "Maktab direktori" : subjectsText(school.my_subjects)}</b></div>
+        <div class="row-between"><span class="subtitle" style="margin:0">${isDirector(school) ? "Lavozim" : "Fanlar"}</span><b>${isDirector(school) ? "Maktab admini" : subjectsText(school.my_subjects)}</b></div>
         <div class="row-between"><span class="subtitle" style="margin:0">Joylashuv</span><b>${escapeHtml(school.district)}</b></div>
       </div>
 
@@ -2863,7 +2863,7 @@ function renderLeaveSchool(school) {
     </div>
     ${
       isDirector(school) && school.members.some((member) => !member.is_me)
-        ? `<label class="field-label" for="successor-select">Direktorlikni kimga topshirasiz? <span class="required-mark">*</span></label>
+        ? `<label class="field-label" for="successor-select">Adminlikni kimga topshirasiz? <span class="required-mark">*</span></label>
            <select id="successor-select">
              <option value="">O'qituvchini tanlang</option>
              ${school.members
@@ -2871,7 +2871,7 @@ function renderLeaveSchool(school) {
                .map((member) => `<option value="${member.user_id}">${escapeHtml(member.name)} — ${subjectsText(member.subjects)}</option>`)
                .join("")}
            </select>
-           <p class="subtitle" style="margin:4px 0 8px">Maktab direktorsiz qolmasligi uchun o'rningizga yangi direktorni tanlang.</p>`
+           <p class="subtitle" style="margin:4px 0 8px">Maktab adminsiz qolmasligi uchun o'rningizga yangi adminni tanlang.</p>`
         : ""
     }
     <input class="input" id="leave-code-input" placeholder="Maktab kodi" maxlength="12"
@@ -2887,10 +2887,10 @@ function renderLeaveSchool(school) {
       if (code.length < 4) throw new Error("Maktab kodini kiriting");
       const successorSelect = document.getElementById("successor-select");
       const successorId = successorSelect ? Number(successorSelect.value) || null : null;
-      if (successorSelect && !successorId) throw new Error("Direktorlikni topshiradigan o'qituvchini tanlang");
+      if (successorSelect && !successorId) throw new Error("Adminlikni topshiradigan o'qituvchini tanlang");
       const successorName = successorSelect ? successorSelect.selectedOptions[0].textContent.split(" — ")[0] : "";
       const question = successorId
-        ? `Direktorlik ${successorName}ga o'tadi va siz "${school.name}" maktabidan chiqasiz. Davom etasizmi?`
+        ? `Adminlik ${successorName}ga o'tadi va siz "${school.name}" maktabidan chiqasiz. Davom etasizmi?`
         : `"${school.name}" maktabidan chiqasizmi?`;
       if (!(await askConfirm(question))) return;
 

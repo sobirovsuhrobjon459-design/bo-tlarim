@@ -3397,7 +3397,7 @@ def _send_bot_text(chat_id: int, text: str) -> bool:
 
 def _rejoin_as_director(db: Session, user: User, school: PrivateSchool) -> SchoolMember:
     """
-    Maktab direktori (egasi) a'zolikdan chiqib qolgan bo'lsa, kod so'ramasdan
+    Maktab admini (egasi) a'zolikdan chiqib qolgan bo'lsa, kod so'ramasdan
     o'z maktabiga DIREKTOR sifatida qaytadi. Avvalgi fanlari tiklanadi.
     """
 
@@ -3417,7 +3417,7 @@ def _rejoin_as_director(db: Session, user: User, school: PrivateSchool) -> Schoo
 
 @app.post("/api/schools/{school_id}/return")
 def return_to_own_school(school_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Direktor o'z maktabiga kodsiz qaytadi."""
+    """Admin o'z maktabiga kodsiz qaytadi."""
 
     school = db.get(PrivateSchool, school_id)
     if not school:
@@ -3548,7 +3548,7 @@ def _school_by_code(db: Session, user: User, code: str, school_id: int | None) -
             raise HTTPException(status_code=404, detail="Maktab topilmadi")
         if not hmac.compare_digest(code, school.code):
             _record_code_failure(user)
-            raise HTTPException(status_code=403, detail="Maktab kodi noto'g'ri. Kodni maktabingiz direktoridan oling.")
+            raise HTTPException(status_code=403, detail="Maktab kodi noto'g'ri. Kodni maktabingiz adminidan oling.")
     else:
         school = db.scalar(select(PrivateSchool).where(PrivateSchool.code == code))
         if not school:
@@ -3630,7 +3630,7 @@ def update_school_profile(body: SchoolProfileIn, user: User = Depends(get_curren
         select(SchoolClass.id).where(SchoolClass.curator_user_id == user.id, SchoolClass.deleted_at.is_(None))
     )
     if member.role != "owner" and not is_curator:
-        _require_subjects(body.subjects)  # direktor va kurator uchun fan ixtiyoriy
+        _require_subjects(body.subjects)  # admin va kurator uchun fan ixtiyoriy
 
     member.subjects = json.dumps(body.subjects, ensure_ascii=False)
     db.commit()
@@ -3642,8 +3642,8 @@ def leave_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db:
     """
     Maktabdan chiqish — faqat maktab kodi to'g'ri kiritilsa.
 
-    A'zolik yozuvi o'chirilmaydi (left_at belgilanadi). Direktor chiqsa,
-    direktorlikni o'zi tanlagan o'qituvchiga topshiradi; hech kim qolmasa,
+    A'zolik yozuvi o'chirilmaydi (left_at belgilanadi). Admin chiqsa,
+    adminlikni o'zi tanlagan o'qituvchiga topshiradi; hech kim qolmasa,
     maktab ma'lumotlari baribir saqlanib turadi.
     """
 
@@ -3657,8 +3657,8 @@ def leave_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db:
         _record_code_failure(user)
         raise HTTPException(status_code=403, detail="Maktab kodi noto'g'ri. Chiqish uchun maktab kodini kiriting.")
 
-    # Direktor chiqayotganda o'rniga kimni direktor qilishni O'ZI tanlaydi —
-    # maktab direktorsiz qolmasin. Boshqa o'qituvchi bo'lmasa, tanlash shart emas.
+    # Admin chiqayotganda o'rniga kimni admin qilishni O'ZI tanlaydi —
+    # maktab adminsiz qolmasin. Boshqa o'qituvchi bo'lmasa, tanlash shart emas.
     successor = None
     if member.role == "owner":
         others = db.scalars(
@@ -3670,7 +3670,7 @@ def leave_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db:
             successor = next((item for item in others if item.user_id == body.successor_user_id), None)
             if not successor:
                 raise HTTPException(
-                    status_code=422, detail="Chiqishdan oldin direktorlikni maktabdagi o'qituvchilardan biriga topshiring"
+                    status_code=422, detail="Chiqishdan oldin adminlikni maktabdagi o'qituvchilardan biriga topshiring"
                 )
 
     member.left_at = utcnow()
@@ -3728,13 +3728,13 @@ def _is_director(member: SchoolMember) -> bool:
 
 
 def _can_manage_class(school_class: SchoolClass, member: SchoolMember) -> bool:
-    """O'quvchilarni qo'shish/tahrirlash — sinf kuratori yoki direktor."""
+    """O'quvchilarni qo'shish/tahrirlash — sinf kuratori yoki admin."""
     return _is_director(member) or school_class.curator_user_id == member.user_id
 
 
 def _require_director(member: SchoolMember) -> None:
     if not _is_director(member):
-        raise HTTPException(status_code=403, detail="Buni faqat maktab direktori qila oladi")
+        raise HTTPException(status_code=403, detail="Buni faqat maktab admini qila oladi")
 
 
 def _managed_class(db: Session, user: User, class_id: int) -> SchoolClass:
@@ -3899,7 +3899,7 @@ def class_detail(class_id: int, user: User = Depends(get_current_user), db: Sess
 
 @app.put("/api/classes/{class_id}/curator")
 def assign_curator(class_id: int, body: CuratorIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Direktor sinfga kurator (sinf rahbari) tayinlaydi yoki olib tashlaydi."""
+    """Admin sinfga kurator (sinf rahbari) tayinlaydi yoki olib tashlaydi."""
 
     school_class, member = _school_class(db, user, class_id)
     _require_director(member)
@@ -3922,7 +3922,7 @@ def assign_curator(class_id: int, body: CuratorIn, user: User = Depends(get_curr
 
 @app.put("/api/classes/{class_id}")
 def rename_class(class_id: int, body: ClassIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Sinf nomini o'zgartiradi (o'quvchilar va davomat tarixi o'z joyida qoladi). Faqat direktor."""
+    """Sinf nomini o'zgartiradi (o'quvchilar va davomat tarixi o'z joyida qoladi). Faqat admin."""
 
     school_class, member = _school_class(db, user, class_id)
     _require_director(member)
@@ -3943,7 +3943,7 @@ def rename_class(class_id: int, body: ClassIn, user: User = Depends(get_current_
 
 @app.delete("/api/classes/{class_id}")
 def delete_class(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Sinf ro'yxatdan olinadi (faqat direktor); o'quvchilar va davomat tarixi bazada qoladi."""
+    """Sinf ro'yxatdan olinadi (faqat admin); o'quvchilar va davomat tarixi bazada qoladi."""
     school_class = _director_class(db, user, class_id)
     school_class.deleted_at = utcnow()
     db.commit()
@@ -4121,11 +4121,11 @@ def edit_attendance(
     attendance_id: int, body: AttendanceIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
     """Davomatni tahrirlaydi: birinchi olingan vaqt saqlanadi, tahrir vaqti alohida yoziladi.
-    Tahrirlashi mumkin: davomatni olgan o'qituvchi yoki direktor."""
+    Tahrirlashi mumkin: davomatni olgan o'qituvchi yoki admin."""
 
     attendance, member = _school_attendance(db, user, attendance_id)
     if attendance.teacher_user_id != user.id and not _is_director(member):
-        raise HTTPException(status_code=403, detail="Bu davomatni boshqa o'qituvchi olgan — uni faqat o'zi yoki direktor tahrirlaydi")
+        raise HTTPException(status_code=403, detail="Bu davomatni boshqa o'qituvchi olgan — uni faqat o'zi yoki admin tahrirlaydi")
     changed = False
     for mark in attendance.marks:
         new_status = body.marks.get(mark.student_id)
