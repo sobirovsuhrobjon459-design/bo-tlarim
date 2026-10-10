@@ -1435,6 +1435,18 @@ def test_click_orqali_kredit_avtomatik_tushadi():
     assert client.post("/api/teacher/credit-purchases", json={"credits": 5, "provider": "uzum"}, headers=as_user(777)).status_code == 422
 
 
+def test_payme_sinov_rejimi_havolasi():
+    """PAYME_TEST_MODE yoqilsa — to'lov sahifasi test.paycom.uz, aks holda checkout.paycom.uz."""
+    original = main.PAYME_TEST_MODE
+    try:
+        main.PAYME_TEST_MODE = True
+        assert main._build_payme_checkout_url("purchase_id", 1, 1000).startswith("https://test.paycom.uz/")
+        main.PAYME_TEST_MODE = False
+        assert main._build_payme_checkout_url("purchase_id", 1, 1000).startswith("https://checkout.paycom.uz/")
+    finally:
+        main.PAYME_TEST_MODE = original
+
+
 def test_promo_kod():
     """Admin kod yaratadi; o'qituvchi bir marta 3000 oladi; noto'g'ri kodlar cheklanadi; boshlang'ich kod izi to'g'ri."""
     reset_database()

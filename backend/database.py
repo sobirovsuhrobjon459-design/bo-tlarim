@@ -73,6 +73,10 @@ ADMIN_CARD_NUMBER = os.getenv("ADMIN_CARD_NUMBER", "")
 # kabinetidan olinadi: https://business.payme.uz
 PAYME_MERCHANT_ID = os.getenv("PAYME_MERCHANT_ID", "")
 PAYME_SECRET_KEY = os.getenv("PAYME_SECRET_KEY", "")
+# Payme sinov rejimi: to'lov sahifasi test.paycom.uz (haqiqiy pul yechilmaydi).
+# Kassani ishga tushirishdan oldin Payme sinovlarini o'tish uchun — 1 qo'ying,
+# PAYME_SECRET_KEY o'rniga esa kassaning TEST kalitini. Sinovdan keyin olib tashlang.
+PAYME_TEST_MODE = os.getenv("PAYME_TEST_MODE", "").strip().lower() in ("1", "true", "yes")
 
 # Click (my.click.uz) — Uzcard, Humo, Visa, Mastercard va Click ilovasi.
 # Uchalasi ham to'ldirilsa, "Click orqali to'lash" tugmasi paydo bo'ladi.

@@ -68,6 +68,7 @@ from .database import (
     BOT_TOKEN,
     PAYME_MERCHANT_ID,
     PAYME_SECRET_KEY,
+    PAYME_TEST_MODE,
     CLICK_MERCHANT_ID,
     CLICK_SECRET_KEY,
     CLICK_SERVICE_ID,
@@ -1693,7 +1694,8 @@ def _build_payme_checkout_url(account_field: str, order_id: int, amount: int) ->
     # Payme summani tiyinda kutadi
     params = f"m={PAYME_MERCHANT_ID};ac.{account_field}={order_id};a={amount * 100}"
     encoded = base64.b64encode(params.encode()).decode()
-    return f"https://checkout.paycom.uz/{encoded}"
+    base = "https://test.paycom.uz" if PAYME_TEST_MODE else "https://checkout.paycom.uz"
+    return f"{base}/{encoded}"
 
 
 def _notify_admin_about_withdrawal(request: WithdrawalRequest, teacher: Teacher) -> None:
