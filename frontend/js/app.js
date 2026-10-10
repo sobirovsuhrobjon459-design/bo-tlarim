@@ -34,21 +34,27 @@ if (telegram) {
   } catch (_) {
     /* eski Telegram versiyasida bu imkoniyat yo'q */
   }
+  // Mini App tasodifan yopilib qolmasin: yopishda Telegram DOIM "Rostdan yopasizmi?" deb so'raydi
+  try {
+    telegram.enableClosingConfirmation?.();
+  } catch (_) {
+    /* eski Telegram versiyasida bu imkoniyat yo'q */
+  }
 }
 
 /*
   Tasodifan chiqib ketishdan himoya.
 
-  Test ishlanayotganda yoki saqlanmagan forma ochiq turganda Mini App
-  yopilmoqchi bo'lsa, Telegram "Rostdan yopasizmi?" deb so'raydi. Boshqa
-  sahifalarda bu so'rov chiqmaydi (har safar so'rash zeriktirardi).
+  Mini App'ni YOPISH — har doim so'raladi (yuqorida yoqilgan). Ilova ichida
+  orqaga qaytish esa faqat saqlanmagan forma bo'lsa so'raladi (confirmLeave).
 */
 let unsavedChanges = false;
 
 function setExitProtection(enabled) {
+  // Yopish tasdig'i doimiy yoqilgan — bu yerda faqat yoqiladi, hech qachon o'chirilmaydi
+  if (!enabled) return;
   try {
-    if (enabled) telegram?.enableClosingConfirmation?.();
-    else telegram?.disableClosingConfirmation?.();
+    telegram?.enableClosingConfirmation?.();
   } catch (_) {
     /* Telegram'dan tashqarida — e'tiborsiz */
   }
