@@ -5677,7 +5677,16 @@ function renderNewTestForm(testType, draft = {}) {
       </div>
     </div>
     <div id="key-questions-container" data-default-parts="${structure.textParts}"
-         data-option-overrides='${JSON.stringify(structure.options)}'></div>`;
+         data-option-overrides='${JSON.stringify(structure.options)}'></div>
+    <div class="panel" style="margin-top:12px">
+      <div class="row-between" style="gap:10px">
+        <div style="min-width:0">
+          <b>🧩 Geometriya savollari</b>
+          <p class="subtitle" id="geometry-summary" style="margin:2px 0 0">Ixtiyoriy — belgilansa, natijalar Algebra/Geometriya bo'yicha chiqadi</p>
+        </div>
+        <button class="btn btn-ghost" id="pick-geometry-button" style="width:auto;padding:8px 14px;margin:0">Belgilash</button>
+      </div>
+    </div>`;
 
   showPage(`
     ${header}
@@ -5804,6 +5813,33 @@ function renderNewTestForm(testType, draft = {}) {
     .catch(() => {});
 
   document.getElementById("save-test-button").addEventListener("click", guarded(saveNewTest));
+
+  // Geometriya savollari — kalit qatorlaridagi savol raqamlari bo'yicha tanlanadi
+  newTestSections = { text: "", picked: [], pickedName: "Geometriya", restName: "Algebra" };
+  const geometrySummary = document.getElementById("geometry-summary");
+  document.getElementById("pick-geometry-button").addEventListener("click", () => {
+    const numbers = [...new Set(
+      [...document.querySelectorAll("#key-questions-container .key-row")]
+        .map((row) => parseInt(row.dataset.label, 10))
+        .filter((number) => number > 0)
+    )].sort((a, b) => a - b);
+    if (!numbers.length) {
+      showToast("Avval savollar sonini kiriting");
+      return;
+    }
+    openNumberPicker({
+      numbers,
+      picked: newTestSections.picked.filter((number) => numbers.includes(number)),
+      pickedName: newTestSections.pickedName,
+      restName: newTestSections.restName,
+      onSave: async (choice) => {
+        newTestSections = choice;
+        geometrySummary.textContent = choice.text
+          ? `${choice.pickedName}: ${compressNumbers(choice.picked)} · qolgani ${choice.restName}`
+          : "Ixtiyoriy — belgilansa, natijalar Algebra/Geometriya bo'yicha chiqadi";
+      },
+    });
+  });
   document.getElementById("build-key-rows-button").addEventListener("click", () => buildKeyQuestionRows());
 
   // Variantlar soni o'zgarishi bilan javoblar katakchalari darhol yangilanadi
@@ -5979,6 +6015,9 @@ function handleAnswerCellTap(event) {
   telegram?.HapticFeedback?.selectionChanged?.();
 }
 
+// Test yaratish formasida tanlangan bo'limlar (saqlashda testga yoziladi)
+let newTestSections = { text: "", picked: [], pickedName: "Geometriya", restName: "Algebra" };
+
 async function saveNewTest() {
   const titleValue = document.getElementById("field-title").value.trim();
   if (titleValue.length < 2) {
@@ -6045,6 +6084,13 @@ async function saveNewTest() {
   });
 
   const result = await api("/api/teacher/tests", { method: "POST", body });
+  if (newTestSections.text) {
+    try {
+      await api(`/api/teacher/tests/${result.id}/sections`, { method: "PUT", body: { text: newTestSections.text } });
+    } catch (_) {
+      showToast("Bo'limlarni saqlab bo'lmadi — natijalar sahifasida qayta belgilang");
+    }
+  }
   showToast(`✅ Test yaratildi! Kodi: ${result.code}`);
 
   // Test yaratilgach, darhol shu testning sahifasi ochiladi — o'quvchi qo'shish,
@@ -6546,18 +6592,12 @@ function compressNumbers(numbers) {
 }
 
 /*
-  Bo'limlar — tugmachalar bilan: o'qituvchi ikkinchi bo'lim (odatda
-  Geometriya) savollarini bosib belgilaydi, belgilanmaganlari birinchi
-  bo'limga (Algebra) tushadi. Nomlarini o'zgartirish mumkin.
+  Bo'limlar — tugmachalar bilan: o'qituvchi geometriya savollarini bosib
+  belgilaydi, belgilanmaganlari Algebra bo'ladi. Bu oyna test YARATISHDA ham,
+  natijalar sahifasida ham ishlatiladi.
 */
-function openSectionsSheet(testId, results) {
-  const numbers = results.question_numbers || [];
-  const saved = results.sections || [];
-  // Avval saqlangan bo'lsa: ikkinchi bo'lim — belgilangan, birinchisi — qolganlar
-  const restName = saved.length >= 2 ? saved[0].name : "Algebra";
-  const pickedName = saved.length >= 2 ? saved[1].name : "Geometriya";
-  const picked = new Set(saved.length >= 2 ? saved[1].numbers : []);
-
+function openNumberPicker({ numbers, picked: initial = [], pickedName = "Geometriya", restName = "Algebra", onSave, allowClear = true }) {
+  const picked = new Set(initial);
   const { sheet, close } = openSheet(`
     <h3 style="margin:0 0 4px">🧩 Bo'limlar</h3>
     <p class="subtitle" style="margin:0 0 10px">Geometriya savollarini bosib belgilang — qolganlari o'zi Algebra bo'ladi.</p>
@@ -6580,7 +6620,7 @@ function openSectionsSheet(testId, results) {
     <p class="subtitle" id="sections-summary" style="margin:8px 0 0"></p>
     <button class="btn" id="sections-save" style="margin-top:10px">💾 Saqlash</button>
     <div class="contact-actions" style="margin-top:8px">
-      <button class="btn btn-ghost" id="sections-clear">Bo'limsiz</button>
+      ${allowClear ? `<button class="btn btn-ghost" id="sections-clear">Bo'limsiz</button>` : ""}
       <button class="btn btn-ghost" data-sheet-close>Yopish</button>
     </div>
   `);
@@ -6588,10 +6628,10 @@ function openSectionsSheet(testId, results) {
   const summary = sheet.querySelector("#sections-summary");
   const pickedInput = sheet.querySelector("#picked-name");
   const restInput = sheet.querySelector("#rest-name");
+  const chips = () => sheet.querySelectorAll("[data-number]");
   const updateSummary = () => {
-    const pickedCount = picked.size;
-    summary.textContent = pickedCount
-      ? `${pickedInput.value.trim() || "Geometriya"}: ${pickedCount} ta savol · ${restInput.value.trim() || "Algebra"}: ${numbers.length - pickedCount} ta`
+    summary.textContent = picked.size
+      ? `${pickedInput.value.trim() || "Geometriya"}: ${picked.size} ta savol · ${restInput.value.trim() || "Algebra"}: ${numbers.length - picked.size} ta`
       : "Hali hech qaysi savol belgilanmagan";
   };
   sheet.querySelector("#number-grid").addEventListener("click", (event) => {
@@ -6613,22 +6653,16 @@ function openSectionsSheet(testId, results) {
     const geometry = [24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 41, 42, 43, 44];
     picked.clear();
     geometry.filter((number) => numbers.includes(number)).forEach((number) => picked.add(number));
-    sheet.querySelectorAll("[data-number]").forEach((chip) => chip.classList.toggle("is-picked", picked.has(Number(chip.dataset.number))));
+    chips().forEach((chip) => chip.classList.toggle("is-picked", picked.has(Number(chip.dataset.number))));
     pickedInput.value = "Geometriya";
     restInput.value = "Algebra";
     updateSummary();
   });
 
-  const save = async (text) => {
-    await api(`/api/teacher/tests/${testId}/sections`, { method: "PUT", body: { text } });
-    close();
-    showToast(text ? "✅ Bo'limlar saqlandi" : "Bo'limlar olib tashlandi");
-    await renderResultsTab(testId);
-  };
   sheet.querySelector("#sections-save").addEventListener(
     "click",
     guarded(async () => {
-      if (!picked.size) throw new Error("Kamida bitta savolni belgilang (yoki «Bo'limsiz» ni bosing)");
+      if (!picked.size) throw new Error(allowClear ? "Kamida bitta savolni belgilang (yoki «Bo'limsiz» ni bosing)" : "Kamida bitta savolni belgilang");
       const pickedLabel = pickedInput.value.trim() || "Geometriya";
       const restLabel = restInput.value.trim() || "Algebra";
       if (pickedLabel.toLowerCase() === restLabel.toLowerCase()) throw new Error("Ikki bo'lim nomi har xil bo'lsin");
@@ -6637,10 +6671,33 @@ function openSectionsSheet(testId, results) {
       const lines = [];
       if (rest.length) lines.push(`${restLabel}: ${compressNumbers(rest)}`);
       lines.push(`${pickedLabel}: ${compressNumbers(pickedList)}`);
-      await save(lines.join("\n"));
+      await onSave({ text: lines.join("\n"), picked: pickedList, pickedName: pickedLabel, restName: restLabel });
+      close();
     })
   );
-  sheet.querySelector("#sections-clear").addEventListener("click", guarded(() => save("")));
+  sheet.querySelector("#sections-clear")?.addEventListener(
+    "click",
+    guarded(async () => {
+      await onSave({ text: "", picked: [], pickedName: pickedInput.value.trim(), restName: restInput.value.trim() });
+      close();
+    })
+  );
+}
+
+// Natijalar sahifasidan — saqlangan testning bo'limlari
+function openSectionsSheet(testId, results) {
+  const saved = results.sections || [];
+  openNumberPicker({
+    numbers: results.question_numbers || [],
+    picked: saved.length >= 2 ? saved[1].numbers : [],
+    pickedName: saved.length >= 2 ? saved[1].name : "Geometriya",
+    restName: saved.length >= 2 ? saved[0].name : "Algebra",
+    onSave: async ({ text }) => {
+      await api(`/api/teacher/tests/${testId}/sections`, { method: "PUT", body: { text } });
+      showToast(text ? "✅ Bo'limlar saqlandi" : "Bo'limlar olib tashlandi");
+      setTimeout(() => renderResultsTab(testId), 0);
+    },
+  });
 }
 
 function renderResultsTestList(tests) {
