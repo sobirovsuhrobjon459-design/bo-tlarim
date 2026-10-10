@@ -1558,9 +1558,10 @@ function renderClassAttendanceTab(schoolClass) {
 
 /* --- 👨‍🎓 O'quvchilar tabi --- */
 
+// Jami (barcha darslar) — bugungi emasligi aniq yozilsin
 function studentStatsLine(stats) {
   if (!stats || !stats.total) return "Hali davomat olinmagan";
-  return `✅ ${stats.present} · ❌ ${stats.absent} · 🟡 ${stats.excused} · ⏰ ${stats.late}`;
+  return `${stats.total} ta darsda: ✅ ${stats.present} · ❌ ${stats.absent} · 🟡 ${stats.excused} · ⏰ ${stats.late}`;
 }
 
 // O'quvchini tahrirlash oynasi — ro'yxatdan ham, profildan ham ochiladi
@@ -1639,7 +1640,7 @@ function renderClassStudentsTab(schoolClass) {
   showPage(`
     <div data-class-tab="students">
       ${classHeader(schoolClass, schoolClass.can_manage ? `<button type="button" class="share-pill" id="add-student-pill">➕ Qo'shish</button>` : "")}
-      <p class="subtitle" style="margin:0 0 10px">${schoolClass.students.length} ta o'quvchi · % — darsda qatnashish</p>
+      <p class="subtitle" style="margin:0 0 10px">${schoolClass.students.length} ta o'quvchi · % — barcha darslar bo'yicha qatnashish (bugungi emas)</p>
       <div class="student-list">${rows}</div>
     </div>
   `);
