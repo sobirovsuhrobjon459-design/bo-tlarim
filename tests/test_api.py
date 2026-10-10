@@ -2424,6 +2424,10 @@ def test_adminlar_kanali_har_bir_testda_majburiy():
         assert "@sukhrobmath" not in blocked.json()["detail"], blocked.text
         statuses = client.get(f"/api/tests/{own['code']}/subscriptions", headers=as_user(901)).json()["channels"]
         assert [item["status"] for item in statuses] == ["yes", "no"], statuses
+        # Bitta kanalni alohida tekshirish
+        single = client.get(f"/api/tests/{own['code']}/subscriptions", params={"channel": "@ustoz_kanali"},
+                            headers=as_user(901)).json()["channels"]
+        assert single == [{"channel": "@ustoz_kanali", "status": "no"}], single
         subscribed.add("@ustoz_kanali")
         assert client.post(f"/api/tests/{own['code']}/start", json={}, headers=as_user(901)).status_code == 200
     finally:

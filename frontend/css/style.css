@@ -2804,3 +2804,73 @@ body.keyboard-open .fab {
     opacity: 1;
   }
 }
+
+/* Test kartasi: ixcham kanal qatorlari */
+.test-blocked {
+  margin: 10px 0 0;
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.channel-rows {
+  display: flex;
+  flex-direction: column;
+  margin: 12px 0 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.channel-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 6px 10px 6px 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.channel-row:last-child {
+  border-bottom: 0;
+}
+
+.channel-dot {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #9ca3af;
+}
+
+.channel-dot.ok {
+  background: #16a34a;
+}
+
+.channel-dot.bad {
+  background: #dc2626;
+}
+
+.channel-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.channel-action .share-pill {
+  padding: 7px 12px;
+}
+
+.channel-ok {
+  font-size: 13px;
+  font-weight: 700;
+  color: #16a34a;
+}

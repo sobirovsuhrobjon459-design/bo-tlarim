@@ -4416,29 +4416,18 @@ function renderTestFound(test) {
          <button class="btn btn-ghost" id="recheck-payment-button">🔄 To'lovni tekshirish</button>`;
 
   document.getElementById("search-result").innerHTML = `
-    <div class="card" style="cursor:default">
+    <div class="card test-found" style="cursor:default">
       <div class="card-body" style="width:100%">
-        <h3>📚 ${escapeHtml(test.title)}</h3>
-        <p>📝 ${test.count} ta savol</p>
-        <p>⏱️ ${test.duration} daqiqa</p>
-        <p>💰 ${priceLabel}</p>
-        ${testConditionsHtml(test)}
-        <button class="btn btn-ghost" id="check-conditions-button" style="margin-top:10px">🔄 Tekshirish</button>
+        <h3 style="margin:0">${escapeHtml(test.title)}</h3>
+        <p class="subtitle" style="margin:4px 0 0">${test.count} ta savol · ${test.duration} daqiqa · ${priceLabel}</p>
+        ${blockedMessage ? `<p class="test-blocked">${blockedMessage}</p>` : ""}
+        ${channelRowsHtml(test)}
         ${actionButton}
       </div>
     </div>
   `;
 
-  wireSubscribeButtons();
-  loadSubscriptionStatuses(test);
-  document.getElementById("check-conditions-button").addEventListener(
-    "click",
-    guarded(async () => {
-      const fresh = await api(`/api/tests/${test.code}`);
-      renderTestFound(fresh);
-      showToast("🔄 Shartlar qayta tekshirildi");
-    })
-  );
+  wireChannelRows(test);
 
   document.getElementById("start-test-button")?.addEventListener(
     "click",
@@ -4446,11 +4435,10 @@ function renderTestFound(test) {
       try {
         await startTest(test.code);
       } catch (error) {
-        // Obunaga oid xatolarni alohida, tushunarli ekranda ko'rsatamiz —
-        // bir lahzada o'tib ketadigan xabar bilan o'quvchi nima qilishni
-        // bilmay qolardi.
-        if (error.status === 451 || error.status === 424) {
-          renderSubscriptionRequired(test, error.message, error.status === 424);
+        // Obuna yo'q — kanallar qatori yangilanadi (qaysi biri qolgani ko'rinadi)
+        if (error.status === 451) {
+          showToast("Avval kanallarga obuna bo'ling");
+          testChannels(test).forEach((channel) => checkChannel(test, channel));
           return;
         }
         throw error; // 409 (allaqachon ishlagan), 503 (qayta urinish) — xabar sifatida
@@ -4488,70 +4476,71 @@ function renderTestFound(test) {
       renderTestFound(fresh);
     })
   );
-  wireSubscribeButtons();
 }
 
 /*
-  Testni boshlash shartlari — har biri yonida holati (✅ bajarilgan / ❌ yo'q):
-  kanallarga obuna, boshlanish va tugash vaqti, to'lov. Obuna holati
-  Telegram'dan alohida so'raladi ("Tekshirish" tugmasi qayta so'raydi).
+  Majburiy kanallar — har biri bitta ixcham qatorda va ALOHIDA tekshiriladi:
+  holat belgisi, kanal nomi va o'z tugmasi. "Obuna bo'lish" bosilib Telegram'dan
+  qaytilganda faqat o'sha kanal qayta tekshiriladi.
 */
-function testConditionsHtml(test) {
-  const now = new Date();
-  const row = (state, icon, title, note, extra = "") => `
-    <div class="condition-row ${state}">
-      <span class="condition-state">${state === "ok" ? "✅" : state === "bad" ? "❌" : "⏳"}</span>
-      <span class="condition-text">${icon} ${title}<small>${note}</small>${extra}</span>
-    </div>`;
-
-  const rows = testChannels(test).map((channel) =>
-    `<div data-sub-row="${escapeHtml(channel)}">${row("wait", "📢", `${escapeHtml(channel)} kanaliga obuna`, "Tekshirilmoqda...")}</div>`
-  );
-
-  if (test.enrollment_type === "closed") {
-    rows.push(row("bad", "🔒", "Yopiq test", "Javoblarni o'qituvchining o'zi kiritadi"));
-  }
-  if (test.start_time) {
-    const started = now >= parseUtc(test.start_time);
-    rows.push(row(started ? "ok" : "wait", "⏰", `Boshlanish: ${formatDateTime(test.start_time)}`, started ? "Test boshlangan" : "Test hali boshlanmagan"));
-  }
-  if (test.end_time) {
-    const ended = now > parseUtc(test.end_time);
-    rows.push(row(ended ? "bad" : "ok", "⌛", `Tugash: ${formatDateTime(test.end_time)}`, ended ? "Test vaqti tugagan" : "Hali vaqt bor"));
-  }
-  if (test.price) {
-    rows.push(row(test.paid ? "ok" : "bad", "💳", `To'lov: ${formatNumber(test.price)} so'm`, test.paid ? "To'langan" : "Hali to'lanmagan"));
-  }
-
-  if (!rows.length) return "";
+function channelRowsHtml(test) {
+  const channels = testChannels(test);
+  if (!channels.length) return "";
   return `
-    <p class="section-label" style="margin:14px 0 6px">📋 SHARTLAR</p>
-    <div class="conditions">${rows.join("")}</div>`;
+    <div class="channel-rows">
+      ${channels
+        .map(
+          (channel) => `
+            <div class="channel-row" data-channel-row="${escapeHtml(channel)}">
+              <span class="channel-dot wait" aria-hidden="true"></span>
+              <span class="channel-name">${escapeHtml(channel)}</span>
+              <span class="channel-action"><span class="subtitle" style="margin:0">tekshirilmoqda…</span></span>
+            </div>`
+        )
+        .join("")}
+    </div>`;
 }
 
-async function loadSubscriptionStatuses(test) {
-  if (!testChannels(test).length) return;
-  let channels = [];
-  try {
-    ({ channels } = await api(`/api/tests/${test.code}/subscriptions`));
-  } catch (error) {
-    channels = testChannels(test).map((channel) => ({ channel, status: "unknown" }));
-  }
+function wireChannelRows(test) {
+  testChannels(test).forEach((channel) => checkChannel(test, channel));
+}
 
-  channels.forEach(({ channel, status }) => {
-    const holder = [...document.querySelectorAll("[data-sub-row]")].find((item) => item.dataset.subRow === channel);
-    if (!holder) return;
-    const state = status === "yes" ? "ok" : status === "no" ? "bad" : "wait";
-    const note = status === "yes" ? "Obuna bo'lgansiz" : status === "no" ? "Obuna bo'lmagansiz" : "Tekshirib bo'lmadi — «Tekshirish»ni bosing";
-    holder.innerHTML = `
-      <div class="condition-row ${state}">
-        <span class="condition-state">${state === "ok" ? "✅" : state === "bad" ? "❌" : "⏳"}</span>
-        <span class="condition-text">📢 ${escapeHtml(channel)} kanaliga obuna<small>${note}</small>
-          ${status !== "yes" && channelLink(channel) ? `<button type="button" class="share-pill condition-action" data-subscribe="${escapeHtml(channel)}">Obuna bo'lish</button>` : ""}
-        </span>
-      </div>`;
-  });
-  wireSubscribeButtons();
+// Bitta kanalni tekshiradi va uning qatorini yangilaydi
+async function checkChannel(test, channel) {
+  const row = [...document.querySelectorAll("[data-channel-row]")].find((item) => item.dataset.channelRow === channel);
+  if (!row) return;
+  let status = "unknown";
+  try {
+    const { channels } = await api(`/api/tests/${test.code}/subscriptions?channel=${encodeURIComponent(channel)}`);
+    status = channels[0]?.status || "unknown";
+  } catch (_) {
+    /* tarmoq xatosi — "qayta tekshirish" taklif qilinadi */
+  }
+  if (!row.isConnected) return;
+  const dot = row.querySelector(".channel-dot");
+  const action = row.querySelector(".channel-action");
+  dot.className = `channel-dot ${status === "yes" ? "ok" : status === "no" ? "bad" : "wait"}`;
+  if (status === "yes") {
+    action.innerHTML = `<span class="channel-ok">Obuna ✓</span>`;
+  } else {
+    action.innerHTML = `
+      ${status === "no" && channelLink(channel) ? `<button type="button" class="share-pill" data-join>Obuna bo'lish</button>` : ""}
+      <button type="button" class="share-pill" data-recheck aria-label="Qayta tekshirish">↻</button>`;
+    action.querySelector("[data-join]")?.addEventListener("click", () => {
+      openExternalLink(channelLink(channel));
+      // Telegram'dan qaytganda — faqat shu kanal qayta tekshiriladi
+      const onBack = () => {
+        if (document.visibilityState !== "visible") return;
+        document.removeEventListener("visibilitychange", onBack);
+        checkChannel(test, channel);
+      };
+      document.addEventListener("visibilitychange", onBack);
+    });
+    action.querySelector("[data-recheck]").addEventListener("click", () => {
+      action.innerHTML = `<span class="subtitle" style="margin:0">tekshirilmoqda…</span>`;
+      checkChannel(test, channel);
+    });
+  }
 }
 
 // Testdagi barcha majburiy kanallar (adminlar kanali + o'qituvchi kanali)
@@ -4576,54 +4565,6 @@ function channelLink(channel) {
   // "@kanal" -> havola. Raqamli ID'li yopiq guruhga havola yasab bo'lmaydi.
   const value = String(channel || "");
   return value.startsWith("@") ? `https://t.me/${value.slice(1)}` : "";
-}
-
-function renderSubscriptionRequired(test, message, isMisconfigured) {
-  /*
-    Majburiy obuna ekrani.
-
-    Ikki xil holat bor va ularni aralashtirmaslik kerak:
-    - o'quvchi hali obuna bo'lmagan (451) — o'zi hal qila oladi
-    - bot kanalda admin emas (424) — buni faqat O'QITUVCHI hal qiladi
-  */
-  const channels = testChannels(test);
-
-  showPage(`
-    <button class="back-button" data-action="back">←</button>
-    <div class="result-number">${isMisconfigured ? "⚠️" : "📢"}</div>
-    <h2 style="text-align:center">${isMisconfigured ? "Obuna tekshirilmadi" : "Avval kanalga obuna bo'ling"}</h2>
-    <div class="card" style="cursor:default">
-      <div class="card-body">
-        <p>${escapeHtml(message)}</p>
-      </div>
-    </div>
-    ${
-      isMisconfigured
-        ? ""
-        : `${subscribeButtonsHtml(channels)}
-           <button class="btn btn-ghost" id="recheck-subscribe" style="margin-top:12px">✅ Obuna bo'ldim, tekshirish</button>`
-    }
-    ${isMisconfigured ? supportCardHtml("Muammo hal bo'lmasa — adminlarga yozing") : ""}
-  `);
-
-  document.querySelector('[data-action="back"]').addEventListener("click", guarded(() => renderTestFound(test)));
-
-  wireSubscribeButtons();
-
-  document.getElementById("recheck-subscribe")?.addEventListener(
-    "click",
-    guarded(async () => {
-      try {
-        await startTest(test.code);
-      } catch (error) {
-        if (error.status === 451) {
-          showToast("Hali obuna ko'rinmayapti — bir oz kutib qayta urining");
-          return;
-        }
-        throw error;
-      }
-    })
-  );
 }
 
 async function startTest(code) {

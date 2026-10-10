@@ -3220,15 +3220,21 @@ def send_answer_sheet_to_telegram(
 
 
 @app.get("/api/tests/{code}/subscriptions")
-def test_subscriptions(code: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def test_subscriptions(
+    code: str, channel: str | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
     """
-    "Tekshirish" tugmasi: o'quvchi testning har bir majburiy kanaliga obunami?
+    O'quvchi testning majburiy kanallariga obunami? channel berilsa — faqat
+    o'sha bittasi tekshiriladi (kanallar alohida-alohida tekshiriladi).
     status: "yes" — obuna, "no" — obuna emas, "unknown" — tekshirib bo'lmadi.
     """
 
     test = _get_test_by_code(db, code)
+    channels = _required_channels(test)
+    if channel:
+        channels = [item for item in channels if item.lower() == channel.strip().lower()]
     result = []
-    for channel in _required_channels(test):
+    for channel in channels:
         try:
             status = "yes" if _is_subscribed(channel, user) else "no"
         except HTTPException:
