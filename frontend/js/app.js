@@ -5583,6 +5583,8 @@ function renderNewTestForm(testType, draft = {}) {
     </select>
     <p class="subtitle" id="subject-note" style="margin:-6px 0 0">${structure.note}</p>
 
+    <!-- O'quvchi hech qachon to'lamaydi: har natija o'qituvchi kreditidan. Narx tanlovi yashirin. -->
+    <div id="price-block" hidden>
     <p class="field-label" style="margin-top:14px">Test bepulmi yoki pullikmi?</p>
     <div class="row-between" id="price-toggle" data-value="${draft.paid ? "paid" : "free"}" style="gap:8px;margin-bottom:6px">
       <button type="button" class="btn ${draft.paid ? "btn-ghost" : ""}" id="price-free-button" style="flex:1">Bepul test</button>
@@ -5598,11 +5600,7 @@ function renderNewTestForm(testType, draft = {}) {
     <div id="price-wrapper" style="display:${draft.paid ? "block" : "none"};margin-bottom:16px">
       <input class="input" id="field-price" type="number" min="0" step="1000"
              value="${draft.price ?? 0}" placeholder="Narxi (so'm)" style="margin:0" />
-      <!-- To'lov tizimi ulanmagan bo'lsagina ko'rsatiladi (pastda /api/me orqali tekshiriladi) -->
-      <div class="notice" id="paid-unavailable-notice" style="margin-top:8px" hidden>
-        ⚠️ Onlayn to'lov hali ulanmagan, shuning uchun pullik test yaratib bo'lmaydi.
-        Hozircha bepul test yarating. To'lov ulangach, bu yerda narx qo'yish mumkin bo'ladi.
-      </div>
+    </div>
     </div>
 
     <p class="field-label" style="margin-top:14px">Testga qo'shilish turi</p>
@@ -5763,14 +5761,7 @@ function renderNewTestForm(testType, draft = {}) {
     selectOpenEnrollment(); // pullik test faqat ochiq bo'ladi
   });
 
-  // To'lov tizimi ulanmagan bo'lsa — ogohlantirish va narx maydoni o'chiriladi
-  api("/api/me")
-    .then((me) => {
-      if ((me.payment_providers || []).length) return;
-      document.getElementById("paid-unavailable-notice").hidden = false;
-      document.getElementById("field-price").disabled = true;
-    })
-    .catch(() => {});
+
 
   const enrollmentToggle = document.getElementById("enrollment-toggle");
   const enrollmentOpenButton = document.getElementById("enrollment-open-button");
@@ -6031,12 +6022,8 @@ async function saveNewTest() {
     throw new Error("Kanal nomini kiriting (masalan @kanalingiz)");
   }
 
-  const isPaid = document.getElementById("price-toggle").dataset.value === "paid";
-  const price = isPaid ? Number(document.getElementById("field-price").value) || 0 : 0;
-
-  if (isPaid && price <= 0) {
-    throw new Error("Pullik test uchun narxini kiriting");
-  }
+  // O'quvchi to'lamaydi — test har doim bepul, natijalar o'qituvchi kreditidan
+  const price = 0;
 
   const body = {
     title: titleValue,
@@ -6764,10 +6751,7 @@ async function renderTestResults(testId) {
   showPage(`
     <button class="back-button" data-action="test">←</button>
     <h2>${escapeHtml(results.title)}</h2>
-    <div class="card row-between" style="cursor:default" id="price-card">
-      <span>💰 Narxi: <b id="price-display">${results.price ? formatNumber(results.price) + " so'm" : "Bepul"}</b></span>
-      <button class="btn btn-ghost" id="edit-price-button" style="width:auto;padding:8px 16px">✏️ Tahrirlash</button>
-    </div>
+
     <div class="stats-grid">
       <div class="stat-tile"><span class="stat-value">${results.summary.participants}</span>Qatnashchilar</div>
       ${
@@ -6795,28 +6779,13 @@ async function renderTestResults(testId) {
 
   document.querySelector('[data-action="test"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
   document.getElementById("pdf-button").addEventListener("click", guarded(() => downloadOrSendPdf(testId)));
-  document.getElementById("edit-price-button").addEventListener("click", () => showPriceEditor(testId, results.price));
+
   document.getElementById("filter-input").addEventListener("input", (event) => {
     const query = event.target.value.toLowerCase();
     document.querySelectorAll(".result-row").forEach((row) => {
       row.style.display = row.textContent.toLowerCase().includes(query) ? "" : "none";
     });
   });
-}
-
-function showPriceEditor(testId, currentPrice) {
-  document.getElementById("price-card").innerHTML = `
-    <input class="input" id="new-price-input" type="number" min="0" step="500" value="${currentPrice}" placeholder="Yangi narx (so'm, 0 = bepul)" style="margin:0" />
-    <button class="btn" id="save-price-button" style="width:auto;padding:10px 16px">💾 Saqlash</button>
-  `;
-  document.getElementById("save-price-button").addEventListener("click", guarded(() => saveNewPrice(testId)));
-}
-
-async function saveNewPrice(testId) {
-  const newPrice = Number(document.getElementById("new-price-input").value) || 0;
-  await api(`/api/teacher/tests/${testId}/price`, { method: "PATCH", body: { price: newPrice } });
-  showToast("✅ Narx yangilandi");
-  await renderTestResults(testId);
 }
 
 async function downloadOrSendPdf(testId) {
