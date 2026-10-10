@@ -6567,6 +6567,11 @@ function openSectionsSheet(testId, results) {
       <label class="field-label" style="margin:0">Qolganlari
         <input class="input" id="rest-name" maxlength="30" value="${escapeHtml(restName)}" style="margin:4px 0 0" /></label>
     </div>
+    ${
+      numbers.length >= 44
+        ? `<button type="button" class="share-pill" id="sections-preset" style="margin-top:10px">📐 Milliy sertifikat (matematika): 24–30, 33–35, 41–44</button>`
+        : ""
+    }
     <div class="number-grid" id="number-grid">
       ${numbers
         .map((number) => `<button type="button" class="number-chip${picked.has(number) ? " is-picked" : ""}" data-number="${number}">${number}</button>`)
@@ -6602,6 +6607,17 @@ function openSectionsSheet(testId, results) {
   pickedInput.addEventListener("input", updateSummary);
   restInput.addEventListener("input", updateSummary);
   updateSummary();
+
+  // UZBMB matematika spetsifikatsiyasi (45 savol): geometriya — 24–30, 33–35, 41–44
+  sheet.querySelector("#sections-preset")?.addEventListener("click", () => {
+    const geometry = [24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 41, 42, 43, 44];
+    picked.clear();
+    geometry.filter((number) => numbers.includes(number)).forEach((number) => picked.add(number));
+    sheet.querySelectorAll("[data-number]").forEach((chip) => chip.classList.toggle("is-picked", picked.has(Number(chip.dataset.number))));
+    pickedInput.value = "Geometriya";
+    restInput.value = "Algebra";
+    updateSummary();
+  });
 
   const save = async (text) => {
     await api(`/api/teacher/tests/${testId}/sections`, { method: "PUT", body: { text } });
