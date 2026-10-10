@@ -805,6 +805,61 @@ def test_rasch_balli_orin_va_daraja():
     assert max(rasch_scores([[1] * 9 + [0]] + [[0] * 10] * 9)["scores"]) <= 75
 
 
+def test_bolimlar_va_sertifikat():
+    """Bo'limlar (Algebra/Geometriya): foiz (bepul) va Rasch ballining bo'linishi (pullik); sertifikat PDF."""
+    assert main.parse_sections("Algebra: 1-2\nGeometriya: 3, 4") == [
+        {"name": "Algebra", "numbers": [1, 2]}, {"name": "Geometriya", "numbers": [3, 4]}]
+    for bad in ("Algebra 1-2", "Algebra: x", "Algebra: 5-2"):
+        try:
+            main.parse_sections(bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
+    assert main.sections_text([{"name": "A", "numbers": [1, 2, 3, 7, 9, 10]}]) == "A: 1-3, 7, 9-10"
+
+    reset_database()
+    register_teacher()
+    created = create_test()  # 4 savol: 1-B, 2-C, 3-A,C, 4-yozma
+    assert client.put(f"/api/teacher/tests/{created['id']}/sections", json={"text": "Algebra 1-2"},
+                      headers=as_user(555)).status_code == 422
+    saved = client.put(f"/api/teacher/tests/{created['id']}/sections", json={"text": "Algebra: 1-2\nGeometriya: 3-4"},
+                       headers=as_user(555)).json()
+    assert saved["text"] == "Algebra: 1-2\nGeometriya: 3-4", saved
+    sent, restore = _capture_result_notices()
+    try:
+        for tg_id, answers in ((901, {"1": "B", "2": "C"}), (902, {"1": "B", "3": "A,C"})):
+            started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(tg_id)).json()
+            client.post(f"/api/attempts/{started['attempt_id']}/finish", json={"answers": answers}, headers=as_user(tg_id))
+    finally:
+        restore()
+
+    results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
+    assert results["section_names"] == ["Algebra", "Geometriya"], results["section_names"]
+    by_name = {row["name"]: row["sections"] for row in results["rows"]}
+    assert sorted(by_name.values(), key=lambda v: v["Algebra"]) == [{"Algebra": 50.0, "Geometriya": 50.0}, {"Algebra": 100.0, "Geometriya": 0.0}], by_name
+
+    pdf = client.get(f"/api/teacher/tests/{created['id']}/pdf", headers=as_user(555))
+    assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
+    certs = client.get(f"/api/teacher/tests/{created['id']}/certificates", headers=as_user(555))
+    assert certs.status_code == 200 and certs.content.startswith(b"%PDF")
+    one = client.get(f"/api/teacher/tests/{created['id']}/certificates", params={"attempt_id": results["rows"][0]["attempt_id"]},
+                     headers=as_user(555))
+    assert one.status_code == 200
+
+    # Pullik: Rasch balli bo'limlarga bo'linadi, yig'indisi umumiy ballga teng
+    session = SessionLocal()
+    try:
+        from backend.database import Test as DbTest
+        test_row = session.get(DbTest, created["id"])
+        test_row.price = 5000
+        session.commit()
+        paid = main.build_rasch_report(session, test_row)
+    finally:
+        session.close()
+    for row in paid["rows"]:
+        assert abs(sum(row["sections"].values()) - row["ball"]) < 0.05, row
+
+
 def test_pdf_hisobot_kirill_ismlar_va_yopilgan_test():
     """PDF yopilgan (eski) test uchun ham olinadi, kirill ismlar bilan ham buzilmaydi."""
     reset_database()

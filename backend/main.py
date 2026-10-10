@@ -91,6 +91,7 @@ from .database import (
     PromoCreateIn,
     PromoRedeemIn,
     PromoRedemption,
+    SectionsIn,
     TuitionPayment,
     CuratorIn,
     CreditPurchase,
@@ -155,6 +156,7 @@ def _add_missing_columns() -> None:
 
     new_columns = {
         "tests": {
+            "sections": "TEXT DEFAULT ''",
             "status": "VARCHAR(10) DEFAULT 'active'",
             "required_channel": "VARCHAR(100)",
             "results_sent_at": "TIMESTAMP",
@@ -787,6 +789,73 @@ def _rasch_items(test: Test) -> list[tuple[int, str]]:
     return items
 
 
+MAX_SECTIONS = 4
+
+
+def parse_sections(text: str) -> list[dict]:
+    """
+    "Algebra: 1-20, 31-35" qatorlarini [{"name", "numbers"}] ga aylantiradi.
+    Xato bo'lsa — tushunarli ValueError.
+    """
+
+    sections = []
+    for line_number, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line:
+            continue
+        if ":" not in line:
+            raise ValueError(f"{line_number}-qator: «Nomi: 1-20, 31-35» ko'rinishida yozing")
+        name, ranges = (part.strip() for part in line.split(":", 1))
+        if not name or len(name) > 30:
+            raise ValueError(f"{line_number}-qator: bo'lim nomi 1-30 belgi bo'lsin")
+        numbers: list[int] = []
+        for chunk in re.split(r"[,\s]+", ranges):
+            if not chunk:
+                continue
+            match = re.fullmatch(r"(\d{1,3})(?:-(\d{1,3}))?", chunk)
+            if not match:
+                raise ValueError(f"{line_number}-qator: «{chunk}» noto'g'ri (masalan 1-20 yoki 31)")
+            low = int(match.group(1))
+            high = int(match.group(2) or low)
+            if high < low:
+                raise ValueError(f"{line_number}-qator: «{chunk}» — boshi oxiridan katta")
+            numbers += range(low, high + 1)
+        if not numbers:
+            raise ValueError(f"{line_number}-qator: savol raqamlarini yozing")
+        sections.append({"name": name, "numbers": sorted(set(numbers))})
+    if len(sections) > MAX_SECTIONS:
+        raise ValueError(f"Ko'pi bilan {MAX_SECTIONS} ta bo'lim")
+    return sections
+
+
+def _test_sections(test: Test) -> list[dict]:
+    try:
+        return json.loads(test.sections) if test.sections else []
+    except ValueError:
+        return []
+
+
+def sections_text(sections: list[dict]) -> str:
+    """Saqlangan bo'limlarni qayta tahrirlash uchun matnga aylantiradi (1-20 kabi qisqartirib)."""
+    lines = []
+    for section in sections:
+        numbers, parts, start = section["numbers"], [], None
+        for index, number in enumerate(numbers):
+            if start is None:
+                start = number
+            if index + 1 == len(numbers) or numbers[index + 1] != number + 1:
+                parts.append(str(start) if start == number else f"{start}-{number}")
+                start = None
+        lines.append(f"{section['name']}: {', '.join(parts)}")
+    return "\n".join(lines)
+
+
+def _item_number(label: str) -> int | None:
+    """Savol nomidan raqami: "12" → 12, "36(a)" → 36."""
+    match = re.match(r"(\d+)", label)
+    return int(match.group(1)) if match else None
+
+
 def _school_grade(percent: float) -> str:
     """Bepul testlar uchun oddiy 5 ballik baho: 86%+ — 5, 71%+ — 4, 56%+ — 3, qolgani — 2."""
     if percent >= 86:
@@ -825,7 +894,38 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             correct_refs[attempt_id].add(question_ref)
 
     matrix = [[1 if ref in correct_refs[attempt.id] else 0 for ref, _ in items] for attempt, _ in results]
-    scores = rasch_scores(matrix)["scores"] if uses_rasch else [None] * len(results)
+    rasch = rasch_scores(matrix) if uses_rasch else None
+    scores = rasch["scores"] if uses_rasch else [None] * len(results)
+
+    # Bo'limlar (Algebra / Geometriya ...): har savol qaysi bo'limda
+    sections = _test_sections(test)
+    section_names = [section["name"] for section in sections]
+    item_section: list[str | None] = []
+    for _, label in items:
+        number = _item_number(label)
+        item_section.append(next((section["name"] for section in sections if number in section["numbers"]), None))
+    if sections and any(name is None for name in item_section):
+        section_names.append("Boshqa")
+        item_section = [name or "Boshqa" for name in item_section]
+    # Pullikda ball bo'limlarga savol qiyinligi bo'yicha bo'linadi (qiyin savol — ko'proq ulush)
+    difficulties = rasch["difficulties"] if uses_rasch else [0.0] * len(items)
+    lowest = min(difficulties, default=0.0)
+    weights = [difficulty - lowest + 1.0 for difficulty in difficulties]
+
+    def split_sections(row_matrix: list[int], ball: float | None) -> dict:
+        if not section_names:
+            return {}
+        result = {}
+        if ball is not None:
+            total_weight = sum(weight for weight, solved in zip(weights, row_matrix) if solved)
+            for name in section_names:
+                part = sum(w for w, solved, sec in zip(weights, row_matrix, item_section) if solved and sec == name)
+                result[name] = round(ball * part / total_weight, 2) if total_weight else 0.0
+            return result
+        for name in section_names:
+            in_section = [solved for solved, sec in zip(row_matrix, item_section) if sec == name]
+            result[name] = round(sum(in_section) / len(in_section) * 100, 1) if in_section else 0.0
+        return result
 
     rows = [
         {
@@ -838,8 +938,9 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             "seconds": attempt.seconds,
             "ball": score,
             "grade": grade_for(score) if uses_rasch else _school_grade(attempt.percent),
+            "sections": split_sections(row_matrix, score),
         }
-        for (attempt, name), score in zip(results, scores)
+        for (attempt, name), score, row_matrix in zip(results, scores, matrix)
     ]
 
     # O'rin: pullikda — Rasch balli, bepulda — to'g'ri javoblar/foiz; teng natija — teng o'rin (1, 1, 3 ...)
@@ -868,6 +969,7 @@ def build_rasch_report(db: Session, test: Test) -> dict:
         "rows": rows,
         "items": item_stats,
         "uses_rasch": uses_rasch,
+        "section_names": section_names,
         "summary": {
             "participants": participants,
             "uses_rasch": uses_rasch,
@@ -1063,7 +1165,10 @@ def _question_list(title: str, items: list[dict], title_style, styles: dict, wid
             HRFlowable(width="100%", thickness=0.5, color=REPORT_GRID, spaceBefore=3, spaceAfter=5), table]
 
 
-def _results_table(rows: list[dict], styles: dict, width: float, uses_rasch: bool = True) -> Table:
+def _results_table(rows: list[dict], styles: dict, width: float, uses_rasch: bool = True,
+                   section_names: list[str] | None = None) -> Table:
+    if section_names:
+        return _section_results_table(rows, styles, width, uses_rasch, section_names)
     header = ["O'rin", "F.I.Sh.", "To'g'ri", "Xato", "Foiz", "Ball", "Daraja"] if uses_rasch else \
         ["O'rin", "F.I.Sh.", "To'g'ri", "Xato", "Foiz", "Baho"]
     data = [[Paragraph(f"<font color='white'>{xml_escape(text)}</font>", styles["cell_bold"]) for text in header]]
@@ -1092,6 +1197,50 @@ def _results_table(rows: list[dict], styles: dict, width: float, uses_rasch: boo
     for index in range(1, len(data)):
         if index % 2 == 0:
             commands.append(("BACKGROUND", (0, index), (-1, index), REPORT_TILE_BG))
+    table.setStyle(TableStyle(commands))
+    return table
+
+
+GRADE_FILL = {"A+": "#1e7b34", "A": "#2e8b47", "B+": "#2e75b6", "B": "#3d85c6", "C+": "#b8860b", "C": "#c99a2e",
+              "5": "#1e7b34", "4": "#2e75b6", "3": "#b8860b", "2": "#c00000"}
+
+
+def _section_results_table(rows: list[dict], styles: dict, width: float, uses_rasch: bool, section_names: list[str]) -> Table:
+    """Milliy sertifikat natijalari uslubida: №, F.I.Sh., bo'limlar, Ball/Foiz, Baho."""
+
+    total_title = "Ball" if uses_rasch else "Foiz"
+    header = ["№", "F.I.Sh.", *section_names, total_title, "Baho"]
+    centered = ParagraphStyle("cell_center", parent=styles["cell"], alignment=1)
+    data = [[Paragraph(f"<font color='white'><b>{xml_escape(text)}</b></font>", centered if index != 1 else styles["cell"])
+             for index, text in enumerate(header)]]
+    for row in rows:
+        values = [f"{row['sections'].get(name, 0):g}" + ("" if uses_rasch else "%") for name in section_names]
+        total = f"{row['ball']:.2f}" if uses_rasch else f"{row['percent']}%"
+        data.append([
+            Paragraph(str(row["rank"]), centered),
+            Paragraph(xml_escape(row["name"]), styles["cell"]),
+            *[Paragraph(value, centered) for value in values],
+            Paragraph(f"<b>{total}</b>", centered),
+            Paragraph(f"<font color='white'><b>{xml_escape(row['grade'])}</b></font>", centered),
+        ])
+
+    name_share = 0.40 if len(section_names) <= 2 else 0.30
+    other = (1 - 0.07 - name_share) / (len(section_names) + 2)
+    widths = [0.07, name_share, *([other] * (len(section_names) + 2))]
+    table = Table(data, colWidths=[width * share for share in widths], repeatRows=1)
+    commands = [
+        ("BACKGROUND", (0, 0), (-1, 0), REPORT_BLUE),
+        ("GRID", (0, 0), (-1, -1), 0.4, REPORT_GRID),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (2, 0), (-1, -1), "CENTER"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]
+    for index, row in enumerate(rows, start=1):
+        if index % 2 == 0:
+            commands.append(("BACKGROUND", (0, index), (-2, index), REPORT_TILE_BG))
+        fill = GRADE_FILL.get(row["grade"])
+        commands.append(("BACKGROUND", (-1, index), (-1, index), colors.HexColor(fill) if fill else REPORT_MUTED))
     table.setStyle(TableStyle(commands))
     return table
 
@@ -1149,7 +1298,7 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes
         "Natijalar (Rasch balli bo'yicha o'rinlar)" if uses_rasch else "Natijalar (to'g'ri javoblar bo'yicha o'rinlar)", styles
     )
     if report["rows"]:
-        elements.append(_results_table(report["rows"], styles, width, uses_rasch))
+        elements.append(_results_table(report["rows"], styles, width, uses_rasch, report["section_names"]))
     else:
         elements.append(Paragraph("Hali hech kim testni yakunlamagan.", styles["cell"]))
 
@@ -3085,6 +3234,8 @@ def test_results(test_id: int, teacher: Teacher = Depends(get_current_teacher), 
         "total_questions": _question_count(test),
         "summary": report["summary"],
         "uses_rasch": report["uses_rasch"],
+        "section_names": report["section_names"],
+        "sections_text": sections_text(_test_sections(test)),
         "rows": [{**row, **splits[row["attempt_id"]]} for row in report["rows"]],
     }
 
@@ -3134,6 +3285,132 @@ def update_test_price(
     test.price = body.price
     db.commit()
     return {"id": test.id, "price": test.price}
+
+
+def generate_certificates_pdf(db: Session, test: Test, teacher: Teacher, attempt_id: int | None = None) -> bytes:
+    """
+    Har bir o'quvchiga bir sahifali sertifikat (A4, yotiq). Bu MOCK test
+    sertifikati — o'qituvchi/o'quv markaz nomidan beriladi, rasmiy davlat
+    sertifikati emasligi aniq yozib qo'yiladi.
+    """
+
+    report = build_rasch_report(db, test)
+    rows = [row for row in report["rows"] if attempt_id is None or row["attempt_id"] == attempt_id]
+    if not rows:
+        raise HTTPException(status_code=404, detail="Natija topilmadi")
+    uses_rasch = report["uses_rasch"]
+    section_names = report["section_names"]
+
+    from reportlab.lib.pagesizes import landscape
+
+    page_width, page_height = landscape(A4)
+    buffer = io.BytesIO()
+    pdf = pdf_canvas.Canvas(buffer, pagesize=(page_width, page_height))
+    pdf.setTitle(f"{test.title} — sertifikatlar")
+    blue, gold, muted = colors.HexColor("#1f4e79"), colors.HexColor("#b8860b"), colors.HexColor("#6b7280")
+    center = page_width / 2
+    issued = datetime.now().strftime("%d.%m.%Y")
+
+    for row in rows:
+        # Ramka
+        pdf.setStrokeColor(blue)
+        pdf.setLineWidth(6)
+        pdf.rect(24, 24, page_width - 48, page_height - 48)
+        pdf.setStrokeColor(gold)
+        pdf.setLineWidth(1.5)
+        pdf.rect(36, 36, page_width - 72, page_height - 72)
+
+        pdf.setFillColor(blue)
+        pdf.setFont(REPORT_FONT_BOLD, 40)
+        pdf.drawCentredString(center, page_height - 110, "SERTIFIKAT")
+        pdf.setFillColor(gold)
+        pdf.setFont(REPORT_FONT, 14)
+        pdf.drawCentredString(center, page_height - 134, "MOCK TEST NATIJASI")
+
+        pdf.setFillColor(muted)
+        pdf.setFont(REPORT_FONT, 13)
+        pdf.drawCentredString(center, page_height - 178, "Ushbu sertifikat")
+        pdf.setFillColor(colors.HexColor("#111827"))
+        pdf.setFont(REPORT_FONT_BOLD, 30)
+        pdf.drawCentredString(center, page_height - 218, row["name"][:48])
+        pdf.setLineWidth(1)
+        pdf.setStrokeColor(colors.HexColor("#d1d5db"))
+        pdf.line(center - 220, page_height - 230, center + 220, page_height - 230)
+        pdf.setFillColor(muted)
+        pdf.setFont(REPORT_FONT, 13)
+        pdf.drawCentredString(center, page_height - 254, f"«{test.title}» ({test.subject}) testida qatnashib, quyidagi natijani qayd etgani uchun beriladi")
+
+        # Asosiy natija
+        main_value = f"{row['ball']:.2f}" if uses_rasch else f"{row['percent']}%"
+        main_label = "BALL" if uses_rasch else "NATIJA"
+        grade_label = "DARAJA" if uses_rasch else "BAHO"
+        box_y = page_height - 360
+        for offset, (label, value) in zip((-140, 140), ((main_label, main_value), (grade_label, row["grade"]))):
+            pdf.setFillColor(colors.HexColor("#f0f3f7"))
+            pdf.roundRect(center + offset - 110, box_y, 220, 80, 10, fill=1, stroke=0)
+            pdf.setFillColor(muted)
+            pdf.setFont(REPORT_FONT, 11)
+            pdf.drawCentredString(center + offset, box_y + 58, label)
+            pdf.setFillColor(blue)
+            pdf.setFont(REPORT_FONT_BOLD, 30)
+            pdf.drawCentredString(center + offset, box_y + 18, value)
+
+        # Bo'limlar va to'g'ri javoblar
+        details = [f"To'g'ri javoblar: {row['correct']}/{row['total']}", f"O'rin: {row['rank']}"]
+        if section_names:
+            unit = "" if uses_rasch else "%"
+            details.insert(0, "  ·  ".join(f"{name}: {row['sections'].get(name, 0):g}{unit}" for name in section_names))
+        pdf.setFillColor(colors.HexColor("#374151"))
+        pdf.setFont(REPORT_FONT, 13)
+        for index, line in enumerate(details):
+            pdf.drawCentredString(center, box_y - 26 - index * 20, line)
+
+        # Imzo va sana
+        pdf.setFillColor(colors.HexColor("#111827"))
+        pdf.setFont(REPORT_FONT, 12)
+        pdf.drawString(80, 110, f"O'qituvchi: {teacher.user.full_name}")
+        pdf.line(80, 104, 330, 104)
+        pdf.drawRightString(page_width - 80, 110, f"Sana: {issued}")
+        pdf.setFillColor(muted)
+        pdf.setFont(REPORT_FONT_ITALIC, 9.5)
+        pdf.drawCentredString(
+            center, 62,
+            "Ushbu sertifikat o'quv (mock) test natijasini tasdiqlaydi va rasmiy davlat sertifikati hisoblanmaydi.",
+        )
+        pdf.showPage()
+
+    pdf.save()
+    return buffer.getvalue()
+
+
+@app.put("/api/teacher/tests/{test_id}/sections")
+def set_test_sections(test_id: int, body: SectionsIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """O'qituvchi savollarni bo'limlarga ajratadi (Algebra: 1-20 ...). Bo'sh matn — bo'limsiz."""
+    test = _get_own_test(db, teacher, test_id)
+    try:
+        sections = parse_sections(body.text)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    test.sections = json.dumps(sections, ensure_ascii=False) if sections else ""
+    db.commit()
+    return {"sections": sections, "text": sections_text(sections)}
+
+
+@app.get("/api/teacher/tests/{test_id}/certificates")
+def download_certificates(test_id: int, attempt_id: int | None = None, teacher: Teacher = Depends(get_current_teacher),
+                          db: Session = Depends(get_db)):
+    test = _get_own_test(db, teacher, test_id)
+    return StreamingResponse(io.BytesIO(generate_certificates_pdf(db, test, teacher, attempt_id)), media_type="application/pdf",
+                             headers={"Content-Disposition": f'attachment; filename="sertifikat_{test.code}.pdf"'})
+
+
+@app.post("/api/teacher/tests/{test_id}/certificates/send")
+def send_certificates(test_id: int, attempt_id: int | None = None, teacher: Teacher = Depends(get_current_teacher),
+                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    test = _get_own_test(db, teacher, test_id)
+    _send_pdf_to_telegram(user.tg_id, f"sertifikat_{test.code}.pdf", generate_certificates_pdf(db, test, teacher, attempt_id),
+                          f"🎓 «{test.title}» — sertifikatlar")
+    return {"ok": True}
 
 
 @app.get("/api/teacher/tests/{test_id}/pdf")

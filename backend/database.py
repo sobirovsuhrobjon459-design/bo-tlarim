@@ -183,6 +183,8 @@ class Test(Base):
     # to'lovlar (pul hisobi) va o'quvchilar natijalari saqlanib qoladi, test esa
     # hamma joydan yashiriladi. Kerak bo'lsa admin uni qayta tiklay oladi.
     deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+    # Bo'limlar (masalan Algebra / Geometriya) — JSON: [{"name": "Algebra", "numbers": [1, 2, ...]}]
+    sections: Mapped[str] = mapped_column(Text, default="")
 
     teacher: Mapped["Teacher"] = relationship(back_populates="tests")
     questions: Mapped[list["Question"]] = relationship(
@@ -934,6 +936,12 @@ class PromoCreateIn(BaseModel):
         if self.code.isdigit() and len(self.code) < 7:
             raise ValueError("Faqat raqamdan iborat kod kamida 7 xonali bo'lsin (yoki harf qo'shing)")
         return self
+
+
+class SectionsIn(BaseModel):
+    """Bo'limlar matni: har qatorda "Nomi: 1-20, 31-35" (bo'sh — bo'limsiz)."""
+
+    text: str = Field(default="", max_length=2000)
 
 
 class FeeIn(BaseModel):

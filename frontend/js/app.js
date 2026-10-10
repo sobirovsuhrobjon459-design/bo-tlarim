@@ -6445,7 +6445,11 @@ async function renderResultsTab(selectedId) {
         <span class="result-rank">${row.rank}</span>
         <span class="result-name">
           ${escapeHtml(row.name)}
-          <small class="result-meta">✅ ${row.correct} • ❌ ${row.wrong} • ${row.percent}%</small>
+          <small class="result-meta">${
+            results.section_names?.length
+              ? results.section_names.map((name) => `${escapeHtml(name)}: ${row.sections[name]}${usesRasch ? "" : "%"}`).join(" • ")
+              : `✅ ${row.correct} • ❌ ${row.wrong} • ${row.percent}%`
+          }</small>
         </span>
         <span class="result-percent">${usesRasch ? row.ball.toFixed(2) : `${row.percent}%`}<small class="result-grade">${usesRasch ? escapeHtml(row.grade) : `baho ${escapeHtml(row.grade)}`}</small></span>
       </div>`
@@ -6483,6 +6487,10 @@ async function renderResultsTab(selectedId) {
     </div>
 
     <button class="btn" id="results-pdf-button" style="margin-top:14px">📄 PDF HISOBOT</button>
+    <div class="contact-actions" style="margin-top:10px">
+      <button class="btn btn-ghost" id="results-sections-button">🧩 Bo'limlar${results.section_names?.length ? ` (${results.section_names.length})` : ""}</button>
+      <button class="btn btn-ghost" id="results-certificates-button">🎓 Sertifikatlar</button>
+    </div>
 
     <div class="row-between" style="margin:18px 0 8px">
       <span class="section-label" style="margin:0">ISHTIROKCHILAR (O'RIN BO'YICHA)</span>
@@ -6495,6 +6503,14 @@ async function renderResultsTab(selectedId) {
 
   document.getElementById("all-results-button").addEventListener("click", () => renderResultsTestList(tests));
   document.getElementById("results-pdf-button").addEventListener("click", guarded(() => downloadOrSendPdf(testId)));
+  document.getElementById("results-certificates-button").addEventListener(
+    "click",
+    guarded(async () => {
+      if (!results.rows.length) throw new Error("Hali natija yo'q");
+      await deliverPdf(`/api/teacher/tests/${testId}/certificates`, "sertifikatlar.pdf", "🎓 Sertifikatlar Telegram chatga yuborildi");
+    })
+  );
+  document.getElementById("results-sections-button").addEventListener("click", () => openSectionsSheet(testId, results.sections_text || ""));
 
   document.querySelectorAll("[data-detail-id]").forEach((line) => {
     line.addEventListener(
@@ -6502,6 +6518,31 @@ async function renderResultsTab(selectedId) {
       guarded(() => renderStudentDetail(testId, Number(line.dataset.detailId)))
     );
   });
+}
+
+/*
+  Bo'limlar: savollarni Algebra / Geometriya kabi qismlarga ajratish.
+  Natijalar, PDF va sertifikatda har bo'lim alohida ko'rsatiladi.
+*/
+function openSectionsSheet(testId, currentText) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 6px">🧩 Bo'limlar</h3>
+    <p class="subtitle" style="margin:0 0 10px">Har qatorda bo'lim nomi va savol raqamlari. Masalan:<br>
+      <b>Algebra: 1-20, 31-35</b><br><b>Geometriya: 21-30, 36-45</b></p>
+    <textarea class="input" id="sections-input" rows="4" placeholder="Algebra: 1-20, 31-35&#10;Geometriya: 21-30, 36-45">${escapeHtml(currentText)}</textarea>
+    <button class="btn" id="sections-save" style="margin-top:10px">💾 Saqlash</button>
+    <button class="btn btn-ghost" data-sheet-close>Yopish</button>
+  `);
+  sheet.querySelector("#sections-save").addEventListener(
+    "click",
+    guarded(async () => {
+      const text = sheet.querySelector("#sections-input").value;
+      await api(`/api/teacher/tests/${testId}/sections`, { method: "PUT", body: { text } });
+      close();
+      showToast(text.trim() ? "✅ Bo'limlar saqlandi" : "Bo'limlar olib tashlandi");
+      await renderResultsTab(testId);
+    })
+  );
 }
 
 function renderResultsTestList(tests) {
