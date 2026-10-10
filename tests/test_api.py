@@ -760,7 +760,7 @@ def test_rasch_balli_orin_va_daraja():
     assert scores[4] > scores[0] > scores[1] > scores[2] > scores[5], scores
     assert scores[1] == scores[3], "bir xil natija — bir xil ball"
     assert abs(sum(scores) / len(scores) - 50) < 0.5, scores
-    assert grade_for(70) == "A+" and grade_for(65.5) == "A" and grade_for(45.9) == "—"
+    assert grade_for(70) == "A+" and grade_for(65.5) == "A" and grade_for(45.9) == "NC"
 
     # Bitta o'quvchi bo'lsa ham ma'noli ball (hammasi 50 bo'lib qolmaydi)
     assert rasch_scores([[1] * 10])["scores"][0] > rasch_scores([[1] * 5 + [0] * 5])["scores"][0]
@@ -800,9 +800,9 @@ def test_rasch_balli_orin_va_daraja():
     finally:
         session.close()
     assert paid["uses_rasch"] is True
-    assert paid["rows"][0]["ball"] > paid["rows"][2]["ball"] and paid["rows"][0]["grade"] in ("A+", "A", "B+", "B", "C+", "C", "—")
-    assert all(0 <= row["ball"] <= 75 for row in paid["rows"]), paid["rows"]
-    assert max(rasch_scores([[1] * 9 + [0]] + [[0] * 10] * 9)["scores"]) <= 75
+    assert paid["rows"][0]["ball"] > paid["rows"][2]["ball"] and paid["rows"][0]["grade"] in ("A+", "A", "B+", "B", "C+", "C", "NC")
+    assert all(0 <= row["ball"] <= 100 for row in paid["rows"]), paid["rows"]
+    assert grade_for(30) == "NC" and grade_for(46) == "C"
 
 
 def test_bolimlar_va_sertifikat():

@@ -16,7 +16,8 @@ Hisoblash (JMLE — qo'shma maksimal ehtimollik):
   3. Chetki natijalar (0 yoki hammasi to'g'ri) uchun θ odatdagidek 0.3 ga
      surilgan ball bo'yicha baholanadi.
   4. θ ballga aylantiriladi (UZBMB, Milliy sertifikat): Z = (θ − μ) / σ,
-     T = 50 + 10·Z. O'rtacha ball ~50; shkala 0..75 (A+ — 70..75).
+     T = 50 + 10·Z. O'rtacha ball ~50 (A+ — 70 va yuqori). C (46) ga
+     yetmagan natija — NC (sertifikatsiz).
      Qatnashchilar juda kam bo'lsa (< MIN_FOR_STANDARDIZE), z o'rniga θ
      ishlatiladi (savollar qiyinligi o'rtachasi = 0 ga nisbatan).
 """
@@ -30,7 +31,7 @@ TOLERANCE = 1e-5
 MAX_STEP = 1.0
 EXTREME_ADJUSTMENT = 0.3
 MIN_FOR_STANDARDIZE = 5
-MAX_SCORE = 75.0  # Milliy sertifikatning T-shkalasi 75 ballik
+MAX_SCORE = 100.0  # yuqori chegara (mock natijalari uslubida; A+ — 70 va yuqori)
 
 # Milliy sertifikat darajalari (ball bo'yicha, yuqoridan pastga)
 GRADES = [(70, "A+"), (65, "A"), (60, "B+"), (55, "B"), (50, "C+"), (46, "C")]
@@ -40,7 +41,7 @@ def grade_for(score: float) -> str:
     for threshold, grade in GRADES:
         if score >= threshold:
             return grade
-    return "—"
+    return "NC"  # C darajasiga yetmagan
 
 
 def _sigmoid(value: float) -> float:

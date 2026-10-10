@@ -48,7 +48,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdf_canvas
-from reportlab.platypus import HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import CondPageBreak, HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import String, case, cast, delete, distinct, func, inspect, or_, select, text
 from sqlalchemy.orm import Session, selectinload
@@ -1246,43 +1246,157 @@ def _section_results_table(rows: list[dict], styles: dict, width: float, uses_ra
     return table
 
 
+RASCH_GRADE_ORDER = ["A+", "A", "B+", "B", "C+", "C", "NC"]
+SCHOOL_GRADE_ORDER = ["5", "4", "3", "2"]
+
+
+class _NumberedCanvas(pdf_canvas.Canvas):
+    """Har sahifa pastida "1 / 35" — jami sahifalar soni oxirida ma'lum bo'ladi."""
+
+    footer_text = ""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._saved_pages = []
+
+    def showPage(self):
+        self._saved_pages.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        total = len(self._saved_pages)
+        for state in self._saved_pages:
+            self.__dict__.update(state)
+            self.setFont(REPORT_FONT_ITALIC, 8)
+            self.setFillColor(REPORT_MUTED)
+            self.setStrokeColor(REPORT_GRID)
+            self.line(36, 30, A4[0] - 36, 30)
+            self.drawString(36, 18, self.footer_text)
+            self.drawRightString(A4[0] - 36, 18, f"{self._pageNumber} / {total}")
+            super().showPage()
+        super().save()
+
+
+def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool, section_names: list[str]) -> Table:
+    """Mock natijalari uslubidagi jadval: №, Ism Familiya, bo'limlar (yoki To'g'ri/Foiz), Ball, rangli Baho."""
+
+    centered = ParagraphStyle("grid_center", parent=styles["cell"], alignment=1)
+    if section_names:
+        middle = list(section_names)
+    else:
+        middle = ["To'g'ri", "Foiz"] if uses_rasch else ["To'g'ri"]
+    total_title = "Ball" if uses_rasch else "Foiz"
+    header = ["№", "Ism Familiya", *middle, total_title, "Baho"]
+    data = [[Paragraph(f"<font color='white'><b>{xml_escape(text)}</b></font>", styles["cell"] if index == 1 else centered)
+             for index, text in enumerate(header)]]
+    for row in rows:
+        if section_names:
+            unit = "" if uses_rasch else "%"
+            middle_values = [f"{row['sections'].get(name, 0):g}{unit}" for name in section_names]
+        else:
+            middle_values = [f"{row['correct']}/{row['total']}"] + ([f"{row['percent']}%"] if uses_rasch else [])
+        total = f"{row['ball']:.2f}" if uses_rasch else f"{row['percent']}%"
+        data.append([
+            Paragraph(str(row["rank"]), centered),
+            Paragraph(xml_escape(row["name"]), styles["cell"]),
+            *[Paragraph(value, centered) for value in middle_values],
+            Paragraph(f"<b>{total}</b>", centered),
+            Paragraph(f"<font color='white'><b>{xml_escape(row['grade'])}</b></font>", centered),
+        ])
+
+    other = 0.13
+    name_share = 1 - 0.07 - other * (len(middle) + 2)
+    widths = [0.07, name_share, *([other] * (len(middle) + 2))]
+    table = Table(data, colWidths=[width * share for share in widths], repeatRows=1)
+    commands = [
+        ("BACKGROUND", (0, 0), (-1, 0), REPORT_BLUE),
+        ("GRID", (0, 0), (-1, -1), 0.4, REPORT_GRID),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]
+    for index, row in enumerate(rows, start=1):
+        if index % 2 == 0:
+            commands.append(("BACKGROUND", (0, index), (-2, index), REPORT_TILE_BG))
+        fill = GRADE_FILL.get(row["grade"])
+        commands.append(("BACKGROUND", (-1, index), (-1, index), colors.HexColor(fill) if fill else REPORT_MUTED))
+    table.setStyle(TableStyle(commands))
+    return table
+
+
+def _report_banner(test: Test, width: float, uses_rasch: bool) -> list:
+    """Yuqoridagi kanal qatori va ko'k sarlavha bloki ("… NATIJALARI")."""
+
+    elements = []
+    if test.required_channel:
+        line = ParagraphStyle("banner_line", fontName=REPORT_FONT_BOLD, fontSize=9.5, textColor=colors.HexColor("#c00000"))
+        elements += [Paragraph(xml_escape(f"Telegram kanalimiz: {test.required_channel}"), line), Spacer(1, 6)]
+    title_style = ParagraphStyle("banner_title", fontName=REPORT_FONT_BOLD, fontSize=17, leading=21,
+                                 textColor=colors.white, alignment=1)
+    subtitle_style = ParagraphStyle("banner_sub", fontName=REPORT_FONT_ITALIC, fontSize=8.5, leading=11,
+                                    textColor=colors.HexColor("#dbe4ef"), alignment=1)
+    subtitle = ("Milliy sertifikat formatida · barcha ishtirokchilar" if uses_rasch
+                else "To'g'ri javoblar bo'yicha · barcha ishtirokchilar")
+    banner = Table(
+        [[Paragraph(xml_escape(f"{test.title.upper()} NATIJALARI"), title_style)],
+         [Paragraph(xml_escape(f"{test.subject} · {datetime.now():%d.%m.%Y} · {subtitle}"), subtitle_style)]],
+        colWidths=[width],
+    )
+    banner.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), REPORT_BLUE),
+                                ("TOPPADDING", (0, 0), (-1, 0), 12), ("BOTTOMPADDING", (0, -1), (-1, -1), 10)]))
+    return elements + [banner, Spacer(1, 14)]
+
+
 def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes:
     """
-    Test natijalari hisoboti (PDF): umumiy statistika, savollar bo'yicha
-    to'g'ri javoblar ulushi, eng qiyin/oson savollar va o'rinlar jadvali.
-    Pullik testda — Rasch balli (Milliy sertifikat uslubi), bepulda — oddiy natija.
+    Test natijalari (PDF) — mock natijalari uslubida: sarlavha bloki, umumiy
+    natijalar jadvali, so'ng har bir daraja alohida (A+ olganlar, A olganlar …
+    NC), oxirida statistika. Pullikda — Rasch balli, bepulda — foiz va baho.
     """
 
     report = build_rasch_report(db, test)
     styles = _report_styles()
+    uses_rasch = report["uses_rasch"]
+    section_names = report["section_names"]
+    rows = report["rows"]
     buffer = io.BytesIO()
-    document = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=34, bottomMargin=34,
+    document = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=30, bottomMargin=44,
                                  title=f"{test.title} — natijalar")
     width = document.width
+    big_heading = ParagraphStyle("big_heading", fontName=REPORT_FONT_BOLD, fontSize=20, leading=24, textColor=REPORT_BLUE)
 
-    status = "yakunlangan" if test.status == "closed" else "davom etmoqda"
-    elements = [
-        Paragraph(xml_escape(test.title), styles["title"]),
-        Paragraph(
-            xml_escape(
-                f"Fan: {test.subject}  ·  Test kodi: {test.code}  ·  O'qituvchi: {teacher.user.full_name}  ·  "
-                f"Sana: {datetime.now():%d.%m.%Y}  ·  Test {status}"
-            ),
-            styles["meta"],
-        ),
-        *_section_heading("Umumiy statistika", styles),
-        _stat_tiles(report["summary"], styles, width),
-        *_section_heading("Savollar bo'yicha to'g'ri javoblar ulushi", styles),
-        _share_chart(report["items"], width),
-        Spacer(1, 4),
-        _share_legend(width),
-        Spacer(1, 16),
-    ]
+    elements = _report_banner(test, width, uses_rasch)
+    elements += [Paragraph("Umumiy natijalar", big_heading), *_section_heading("Ishtirokchilar natijalari", styles)]
+    if rows:
+        elements.append(_results_grid(rows, styles, width, uses_rasch, section_names))
+    else:
+        elements.append(Paragraph("Hali hech kim testni yakunlamagan.", styles["cell"]))
 
-    answered_items = [item for item in report["items"]]
-    hardest = sorted(answered_items, key=lambda item: (item["share"], item["label"]))[:8]
-    easiest = sorted(answered_items, key=lambda item: (-item["share"], item["label"]))[:8]
+    # Har bir daraja alohida: A+ olganlar, A olganlar ... NC
+    order = RASCH_GRADE_ORDER if uses_rasch else SCHOOL_GRADE_ORDER
+    for grade in order:
+        group = [row for row in rows if row["grade"] == grade]
+        if not group:
+            continue
+        if grade == "NC":
+            title = f"NC — C darajasiga yetmaganlar ({len(group)} ta)"
+        elif uses_rasch:
+            title = f"{grade} olganlar ({len(group)} ta)"
+        else:
+            title = f"«{grade}» baho olganlar ({len(group)} ta)"
+        # Guruhlar ketma-ket; joy kam qolsa (sarlavha + bir necha qator sig'masa) — yangi sahifa
+        elements += [Spacer(1, 12), CondPageBreak(130)]
+        elements += _section_heading(title, styles)
+        elements.append(_results_grid(group, styles, width, uses_rasch, section_names))
 
+    # Statistika — oxirida
+    elements.append(PageBreak())
+    elements += _section_heading("Umumiy statistika", styles)
+    elements += [_stat_tiles(report["summary"], styles, width)]
+    elements += _section_heading("Savollar bo'yicha to'g'ri javoblar ulushi", styles)
+    elements += [_share_chart(report["items"], width), Spacer(1, 4), _share_legend(width), Spacer(1, 16)]
+    hardest = sorted(report["items"], key=lambda item: (item["share"], item["label"]))[:8]
+    easiest = sorted(report["items"], key=lambda item: (-item["share"], item["label"]))[:8]
     half = (width - 24) / 2
     lists = Table(
         [[_question_list("Eng qiyin savollar", hardest, styles["hard"], styles, half), "",
@@ -1292,26 +1406,16 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes
     lists.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
                                ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
     elements.append(lists)
-
-    elements.append(PageBreak())
-    uses_rasch = report["uses_rasch"]
-    elements += _section_heading(
-        "Natijalar (Rasch balli bo'yicha o'rinlar)" if uses_rasch else "Natijalar (to'g'ri javoblar bo'yicha o'rinlar)", styles
-    )
-    if report["rows"]:
-        elements.append(_results_table(report["rows"], styles, width, uses_rasch, report["section_names"]))
-    else:
-        elements.append(Paragraph("Hali hech kim testni yakunlamagan.", styles["cell"]))
-
     footnote = (
-        "Ball Rasch modeli bo'yicha hisoblangan (Milliy sertifikat uslubida, 75 ballik shkala): qiyin savol ko'proq "
-        "ball beradi, o'rtacha ball ~50. Darajalar: A+ 70+, A 65+, B+ 60+, B 55+, C+ 50+, C 46+."
+        "Ball Rasch modeli bo'yicha hisoblangan (Milliy sertifikat uslubida): qiyin savol ko'proq ball beradi, "
+        "o'rtacha ball ~50. Darajalar: A+ 70+, A 65+, B+ 60+, B 55+, C+ 50+, C 46+; 46 dan past — NC."
         if uses_rasch
         else "Baho to'g'ri javoblar foizi bo'yicha: 86% va yuqori — 5, 71% — 4, 56% — 3, qolgani — 2."
     )
-    elements += [Spacer(1, 10), Paragraph(xml_escape(footnote), styles["meta"])]
+    elements += [Spacer(1, 10), Paragraph(xml_escape(f"{footnote} O'qituvchi: {teacher.user.full_name}."), styles["meta"])]
 
-    document.build(elements)
+    canvas_class = type("ReportCanvas", (_NumberedCanvas,), {"footer_text": f"Barcha ishtirokchilar · {test.title}"})
+    document.build(elements, canvasmaker=canvas_class)
     return buffer.getvalue()
 
 

@@ -6403,7 +6403,7 @@ async function renderResultsTab(selectedId) {
   const buckets = (
     usesRasch
       ? [
-          { label: "—", from: 0, to: 46 },
+          { label: "NC", from: 0, to: 46 },
           { label: "C", from: 46, to: 50 },
           { label: "C+", from: 50, to: 55 },
           { label: "B", from: 55, to: 60 },
