@@ -835,6 +835,7 @@ def test_bolimlar_va_sertifikat():
 
     results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
     assert results["section_names"] == ["Algebra", "Geometriya"], results["section_names"]
+    assert results["question_numbers"] == [1, 2, 3, 4], results["question_numbers"]
     by_name = {row["name"]: row["sections"] for row in results["rows"]}
     assert sorted(by_name.values(), key=lambda v: v["Algebra"]) == [{"Algebra": 50.0, "Geometriya": 50.0}, {"Algebra": 100.0, "Geometriya": 0.0}], by_name
 

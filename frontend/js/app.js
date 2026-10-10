@@ -6510,7 +6510,7 @@ async function renderResultsTab(selectedId) {
       await deliverPdf(`/api/teacher/tests/${testId}/certificates`, "sertifikatlar.pdf", "🎓 Sertifikatlar Telegram chatga yuborildi");
     })
   );
-  document.getElementById("results-sections-button").addEventListener("click", () => openSectionsSheet(testId, results.sections_text || ""));
+  document.getElementById("results-sections-button").addEventListener("click", () => openSectionsSheet(testId, results));
 
   document.querySelectorAll("[data-detail-id]").forEach((line) => {
     line.addEventListener(
@@ -6524,25 +6524,100 @@ async function renderResultsTab(selectedId) {
   Bo'limlar: savollarni Algebra / Geometriya kabi qismlarga ajratish.
   Natijalar, PDF va sertifikatda har bo'lim alohida ko'rsatiladi.
 */
-function openSectionsSheet(testId, currentText) {
+// Raqamlar ro'yxatini qisqa yozuvga: [1,2,3,7,9,10] → "1-3, 7, 9-10"
+function compressNumbers(numbers) {
+  const parts = [];
+  let start = null;
+  numbers.forEach((number, index) => {
+    if (start === null) start = number;
+    if (index + 1 === numbers.length || numbers[index + 1] !== number + 1) {
+      parts.push(start === number ? `${number}` : `${start}-${number}`);
+      start = null;
+    }
+  });
+  return parts.join(", ");
+}
+
+/*
+  Bo'limlar — tugmachalar bilan: o'qituvchi ikkinchi bo'lim (odatda
+  Geometriya) savollarini bosib belgilaydi, belgilanmaganlari birinchi
+  bo'limga (Algebra) tushadi. Nomlarini o'zgartirish mumkin.
+*/
+function openSectionsSheet(testId, results) {
+  const numbers = results.question_numbers || [];
+  const saved = results.sections || [];
+  // Avval saqlangan bo'lsa: ikkinchi bo'lim — belgilangan, birinchisi — qolganlar
+  const restName = saved.length >= 2 ? saved[0].name : "Algebra";
+  const pickedName = saved.length >= 2 ? saved[1].name : "Geometriya";
+  const picked = new Set(saved.length >= 2 ? saved[1].numbers : []);
+
   const { sheet, close } = openSheet(`
-    <h3 style="margin:0 0 6px">🧩 Bo'limlar</h3>
-    <p class="subtitle" style="margin:0 0 10px">Har qatorda bo'lim nomi va savol raqamlari. Masalan:<br>
-      <b>Algebra: 1-20, 31-35</b><br><b>Geometriya: 21-30, 36-45</b></p>
-    <textarea class="input" id="sections-input" rows="4" placeholder="Algebra: 1-20, 31-35&#10;Geometriya: 21-30, 36-45">${escapeHtml(currentText)}</textarea>
+    <h3 style="margin:0 0 4px">🧩 Bo'limlar</h3>
+    <p class="subtitle" style="margin:0 0 10px">Geometriya savollarini bosib belgilang — qolganlari o'zi Algebra bo'ladi.</p>
+    <div class="two-fields">
+      <label class="field-label" style="margin:0">Belgilanganlar
+        <input class="input" id="picked-name" maxlength="30" value="${escapeHtml(pickedName)}" style="margin:4px 0 0" /></label>
+      <label class="field-label" style="margin:0">Qolganlari
+        <input class="input" id="rest-name" maxlength="30" value="${escapeHtml(restName)}" style="margin:4px 0 0" /></label>
+    </div>
+    <div class="number-grid" id="number-grid">
+      ${numbers
+        .map((number) => `<button type="button" class="number-chip${picked.has(number) ? " is-picked" : ""}" data-number="${number}">${number}</button>`)
+        .join("")}
+    </div>
+    <p class="subtitle" id="sections-summary" style="margin:8px 0 0"></p>
     <button class="btn" id="sections-save" style="margin-top:10px">💾 Saqlash</button>
-    <button class="btn btn-ghost" data-sheet-close>Yopish</button>
+    <div class="contact-actions" style="margin-top:8px">
+      <button class="btn btn-ghost" id="sections-clear">Bo'limsiz</button>
+      <button class="btn btn-ghost" data-sheet-close>Yopish</button>
+    </div>
   `);
+
+  const summary = sheet.querySelector("#sections-summary");
+  const pickedInput = sheet.querySelector("#picked-name");
+  const restInput = sheet.querySelector("#rest-name");
+  const updateSummary = () => {
+    const pickedCount = picked.size;
+    summary.textContent = pickedCount
+      ? `${pickedInput.value.trim() || "Geometriya"}: ${pickedCount} ta savol · ${restInput.value.trim() || "Algebra"}: ${numbers.length - pickedCount} ta`
+      : "Hali hech qaysi savol belgilanmagan";
+  };
+  sheet.querySelector("#number-grid").addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-number]");
+    if (!chip) return;
+    const number = Number(chip.dataset.number);
+    if (picked.has(number)) picked.delete(number);
+    else picked.add(number);
+    chip.classList.toggle("is-picked", picked.has(number));
+    telegram?.HapticFeedback?.selectionChanged?.();
+    updateSummary();
+  });
+  pickedInput.addEventListener("input", updateSummary);
+  restInput.addEventListener("input", updateSummary);
+  updateSummary();
+
+  const save = async (text) => {
+    await api(`/api/teacher/tests/${testId}/sections`, { method: "PUT", body: { text } });
+    close();
+    showToast(text ? "✅ Bo'limlar saqlandi" : "Bo'limlar olib tashlandi");
+    await renderResultsTab(testId);
+  };
   sheet.querySelector("#sections-save").addEventListener(
     "click",
     guarded(async () => {
-      const text = sheet.querySelector("#sections-input").value;
-      await api(`/api/teacher/tests/${testId}/sections`, { method: "PUT", body: { text } });
-      close();
-      showToast(text.trim() ? "✅ Bo'limlar saqlandi" : "Bo'limlar olib tashlandi");
-      await renderResultsTab(testId);
+      if (!picked.size) throw new Error("Kamida bitta savolni belgilang (yoki «Bo'limsiz» ni bosing)");
+      const pickedLabel = pickedInput.value.trim() || "Geometriya";
+      const restLabel = restInput.value.trim() || "Algebra";
+      if (pickedLabel.toLowerCase() === restLabel.toLowerCase()) throw new Error("Ikki bo'lim nomi har xil bo'lsin");
+      const rest = numbers.filter((number) => !picked.has(number));
+      const pickedList = numbers.filter((number) => picked.has(number));
+      const lines = [];
+      if (rest.length) lines.push(`${restLabel}: ${compressNumbers(rest)}`);
+      lines.push(`${pickedLabel}: ${compressNumbers(pickedList)}`);
+      await save(lines.join("\n"));
     })
   );
+  sheet.querySelector("#sections-clear").addEventListener("click", guarded(() => save("")));
 }
 
 function renderResultsTestList(tests) {

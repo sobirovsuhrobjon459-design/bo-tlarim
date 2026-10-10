@@ -3238,6 +3238,9 @@ def test_results(test_id: int, teacher: Teacher = Depends(get_current_teacher), 
         "uses_rasch": report["uses_rasch"],
         "section_names": report["section_names"],
         "sections_text": sections_text(_test_sections(test)),
+        "sections": _test_sections(test),
+        # Bo'limlarni tugmachalar bilan belgilash uchun savol raqamlari (a/b qismlar — bitta raqam)
+        "question_numbers": sorted({number for number in (_item_number(label) for _, label in _rasch_items(test)) if number}),
         "rows": [{**row, **splits[row["attempt_id"]]} for row in report["rows"]],
     }
 

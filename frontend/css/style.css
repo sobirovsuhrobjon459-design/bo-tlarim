@@ -2874,3 +2874,32 @@ body.keyboard-open .fab {
   font-weight: 700;
   color: #16a34a;
 }
+
+/* Bo'limlar: savol raqamlari tugmachalari */
+.number-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  gap: 6px;
+  max-height: 46vh;
+  margin-top: 12px;
+  overflow-y: auto;
+}
+
+.number-chip {
+  height: 44px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.number-chip.is-picked {
+  color: #ffffff;
+  background: linear-gradient(135deg, #818cf8, #6366f1);
+  border-color: transparent;
+}
