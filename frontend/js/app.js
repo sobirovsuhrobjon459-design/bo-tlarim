@@ -206,7 +206,7 @@ function localTimeToUtcIso(value) {
   ekranga kirib kelishi bilan pastdan silliq chiqadi. Birinchi ko'ringanlar
   ketma-ket (biroz kechikish bilan) chiqadi.
 */
-const REVEAL_SELECTOR = ".member-cards .member-line, .class-list .class-row, .student-list .student-card, .school-tiles .school-tile";
+const REVEAL_SELECTOR = ".member-cards .member-line, .class-list .class-row, .student-list .student-card, .school-tiles .school-tile, .panel.pick-list .pick-item, .result-cards .result-line";
 let revealObserver = null;
 let revealBatch = 0; // bir vaqtda ko'ringanlar ketma-ket chiqishi uchun
 
@@ -6503,7 +6503,7 @@ async function renderResultsTab(selectedId) {
       <span class="section-label" style="margin:0">ISHTIROKCHILAR (O'RIN BO'YICHA)</span>
       <span class="subtitle" style="margin:0;font-size:12px">${usesRasch ? "ball • daraja" : "foiz • baho"}</span>
     </div>
-    <div class="panel" style="padding:4px 0">${rows}</div>
+    <div class="result-cards">${rows}</div>
   `);
 
   wireTeacherChrome("results");
