@@ -3725,17 +3725,24 @@ def _certificate_caption(test: Test, row: dict) -> str:
     )
 
 
-def _deliver_student_certificates(test_id: int, teacher_chat_id: int, jobs: list[tuple[int, str, bytes, str]]) -> None:
-    """Fonda: har bir o'quvchiga o'z sertifikati, oxirida o'qituvchiga qisqa hisobot."""
+def _deliver_student_certificates(test_id: int, teacher_chat_id: int, test, teacher, section_names: list[str],
+                                  jobs: list[tuple[int, dict]]) -> None:
+    """
+    Fonda: har bir o'quvchiga o'z sertifikati, oxirida o'qituvchiga qisqa hisobot.
+    PDF ham shu yerda (fonda) yasaladi — minglab o'quvchida so'rov ichida
+    yasalsa, o'qituvchi yarim daqiqa kutib qolardi va so'rov uzilishi mumkin edi.
+    test/teacher — bazaga bog'lanmagan oddiy nusxalar (sessiya allaqachon yopilgan).
+    """
 
     sent, failed = 0, []
     try:
-        for chat_id, name, pdf_bytes, caption in jobs:
+        for chat_id, row in jobs:
             try:
-                _send_pdf_to_telegram(chat_id, "sertifikat.pdf", pdf_bytes, caption)
+                pdf_bytes = _render_certificates(test, teacher, [row], section_names)
+                _send_pdf_to_telegram(chat_id, "sertifikat.pdf", pdf_bytes, _certificate_caption(test, row))
                 sent += 1
             except Exception:
-                failed.append(name)
+                failed.append(row["name"])
             time.sleep(0.05)  # Telegram cheklovi: sekundiga ~30 xabar
         text = f"🎓 Sertifikatlar yuborildi: {sent} ta o'quvchiga."
         if failed:
@@ -3784,18 +3791,15 @@ def send_certificates_to_students(test_id: int, teacher: Teacher = Depends(get_c
             raise HTTPException(status_code=409, detail="Sertifikatlar hozir yuborilmoqda — biroz kuting")
         _certificates_in_progress.add(test.id)
 
-    try:
-        jobs = [
-            (attempt_users[row["attempt_id"]], row["name"],
-             _render_certificates(test, teacher, [row], section_names), _certificate_caption(test, row))
-            for row in targets
-        ]
-    except Exception:
-        with _certificates_lock:
-            _certificates_in_progress.discard(test.id)
-        raise
-
-    threading.Thread(target=_deliver_student_certificates, args=(test.id, user.tg_id, jobs), daemon=True).start()
+    jobs = [(attempt_users[row["attempt_id"]], row) for row in targets]
+    # Fon ipi bazaga murojaat qilmasin — kerakli maydonlar oddiy nusxaga olinadi
+    test_copy = SimpleNamespace(title=test.title, code=test.code, subject=test.subject)
+    teacher_copy = SimpleNamespace(user=SimpleNamespace(full_name=teacher.user.full_name))
+    threading.Thread(
+        target=_deliver_student_certificates,
+        args=(test.id, user.tg_id, test_copy, teacher_copy, section_names, jobs),
+        daemon=True,
+    ).start()
     logging.getLogger("backend").info("Sertifikatlar o'quvchilarga yuborilmoqda: test=%s, %s ta", test.id, len(jobs))
     return {"queued": len(jobs), "skipped": len(rows) - len(targets)}
 

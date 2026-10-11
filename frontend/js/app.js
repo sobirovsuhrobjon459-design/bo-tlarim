@@ -6242,15 +6242,59 @@ function openTestEditSheet(test) {
   );
 }
 
+/*
+  Katta ro'yxatlar (bitta testda minglab o'quvchi bo'lishi mumkin) bir yo'la
+  chizilmaydi — telefon qotib qolardi. Avval 50 tasi, pastda "Yana ko'rsatish".
+  Qidiruv esa butun ro'yxat bo'yicha ishlaydi (faqat chizilganlar emas).
+  onRender — yangi chizilgan elementlarga tugma hodisalarini ulash uchun.
+*/
+function mountPagedList({ container, items, renderItem, emptyHtml = "", pageSize = 50, filterInput = null, matches = null, onRender = null }) {
+  let filtered = items;
+  let shown = 0;
+  const more = document.createElement("button");
+  more.type = "button";
+  more.className = "btn btn-ghost";
+  more.style.marginTop = "10px";
+  (container.closest("table")?.parentElement || container).after(more);
+
+  const renderNext = () => {
+    const chunk = filtered.slice(shown, shown + pageSize);
+    if (chunk.length) {
+      const before = container.children.length;
+      container.insertAdjacentHTML("beforeend", chunk.map(renderItem).join(""));
+      onRender?.([...container.children].slice(before));
+      shown += chunk.length;
+    }
+    const left = filtered.length - shown;
+    more.hidden = left <= 0;
+    more.textContent = `⬇️ Yana ${Math.min(left, pageSize)} ta ko'rsatish (jami ${filtered.length})`;
+  };
+  const reset = () => {
+    container.innerHTML = filtered.length ? "" : emptyHtml;
+    shown = 0;
+    renderNext();
+  };
+
+  more.addEventListener("click", renderNext);
+  filterInput?.addEventListener("input", () => {
+    const query = filterInput.value.trim().toLowerCase();
+    filtered = query ? items.filter((item) => matches(item, query)) : items;
+    reset();
+  });
+  reset();
+}
+
+// Elementlar ichidan (o'zi ham) selector'ga mos keladiganlarni topadi
+function findWithin(elements, selector) {
+  return elements.flatMap((element) => [element, ...element.querySelectorAll(selector)].filter((node) => node.matches(selector)));
+}
+
 async function renderTestDetail(testId) {
   const test = await api(`/api/teacher/tests/${testId}`);
   const isClosedTest = test.enrollment_type === "closed";
   const isFinished = test.status === "closed";
 
-  const studentRows =
-    test.students
-      .map(
-        (student) => `
+  const studentRow = (student) => `
           <div class="list-row" data-student-id="${student.id}">
             <div ${student.has_answers ? `class="student-summary" data-detail="${student.id}"` : ""}>
               <b>${escapeHtml(student.name)}</b>
@@ -6268,9 +6312,7 @@ async function renderTestDetail(testId) {
             : ""
           }
             </div>
-          </div>`
-      )
-      .join("") || `<p class="subtitle">Hali o'quvchi yo'q</p>`;
+          </div>`;
 
   showPage(`
     <button class="back-button" data-action="dashboard">←</button>
@@ -6316,7 +6358,7 @@ async function renderTestDetail(testId) {
       <span style="color:var(--color-primary)">Javoblari kiritilgan — ${test.filled} ta</span>
       <span style="color:#d97706">Kiritilmagan — ${test.missing} ta</span>
     </div>
-    <div id="students-list">${studentRows}</div>
+    <div id="students-list"></div>
   `);
 
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
@@ -6369,21 +6411,22 @@ async function renderTestDetail(testId) {
     })
   );
 
-  document.querySelectorAll("[data-detail]").forEach((element) => {
+  const wireStudentRows = (elements) => {
+  findWithin(elements, "[data-detail]").forEach((element) => {
     element.addEventListener(
       "click",
       guarded(() => renderStudentDetail(testId, Number(element.dataset.detail)))
     );
   });
 
-  document.querySelectorAll("[data-edit-student]").forEach((button) => {
+  findWithin(elements, "[data-edit-student]").forEach((button) => {
     button.addEventListener(
       "click",
       guarded(() => renderStudentAnswersForm(testId, Number(button.dataset.editStudent)))
     );
   });
 
-  document.querySelectorAll("[data-delete-student]").forEach((button) => {
+  findWithin(elements, "[data-delete-student]").forEach((button) => {
     button.addEventListener(
       "click",
       guarded(async () => {
@@ -6394,12 +6437,16 @@ async function renderTestDetail(testId) {
       })
     );
   });
+  };
 
-  document.getElementById("student-filter-input").addEventListener("input", (event) => {
-    const query = event.target.value.toLowerCase();
-    document.querySelectorAll(".list-row").forEach((row) => {
-      row.style.display = row.textContent.toLowerCase().includes(query) ? "" : "none";
-    });
+  mountPagedList({
+    container: document.getElementById("students-list"),
+    items: test.students,
+    renderItem: studentRow,
+    emptyHtml: `<p class="subtitle">Hali o'quvchi yo'q</p>`,
+    filterInput: document.getElementById("student-filter-input"),
+    matches: (student, query) => student.name.toLowerCase().includes(query),
+    onRender: wireStudentRows,
   });
 }
 
@@ -6639,22 +6686,10 @@ async function renderResultsTab(selectedId) {
     )
     .join("");
 
+  const TOP_COUNT = 10;
   const rows = results.rows
-    .map(
-      (row) => `
-      <div class="result-line" data-detail-id="${row.attempt_id}">
-        <span class="result-rank">${row.rank}</span>
-        <span class="result-name">
-          ${escapeHtml(row.name)}
-          <small class="result-meta">${
-            results.section_names?.length
-              ? results.section_names.map((name) => `${escapeHtml(name)}: ${row.sections[name]}%`).join(" • ")
-              : `✅ ${row.correct} • ❌ ${row.wrong} • ${row.percent}%`
-          }</small>
-        </span>
-        <span class="result-percent">${usesRasch ? row.ball.toFixed(2) : `${row.percent}%`}<small class="result-grade">${usesRasch ? escapeHtml(row.grade) : `baho ${escapeHtml(row.grade)}`}</small></span>
-      </div>`
-    )
+    .slice(0, TOP_COUNT)
+    .map((row) => resultLineHtml(row, results))
     .join("") || `<p class="subtitle" style="padding:14px">Hali natija yo'q</p>`;
 
   showPage(`
@@ -6700,10 +6735,18 @@ async function renderResultsTab(selectedId) {
     }
 
     <div class="row-between" style="margin:18px 0 8px">
-      <span class="section-label" style="margin:0">ISHTIROKCHILAR (O'RIN BO'YICHA)</span>
+      <span class="section-label" style="margin:0">${results.rows.length > TOP_COUNT ? `TOP-${TOP_COUNT}` : "ISHTIROKCHILAR (O'RIN BO'YICHA)"}</span>
       <span class="subtitle" style="margin:0;font-size:12px">${usesRasch ? "ball • daraja" : "foiz • baho"}</span>
     </div>
     <div class="result-cards">${rows}</div>
+    <div class="contact-actions" style="margin-top:10px">
+      ${
+        results.rows.length > TOP_COUNT
+          ? `<button class="btn btn-ghost" id="all-participants-button">👥 Barchasi (${results.rows.length}) ›</button>`
+          : ""
+      }
+      <button class="btn btn-ghost" id="question-stats-button">📊 Savol statistikasi ›</button>
+    </div>
   `);
 
   wireTeacherChrome("results");
@@ -6745,6 +6788,100 @@ async function renderResultsTab(selectedId) {
       guarded(() => renderStudentDetail(testId, Number(line.dataset.detailId)))
     );
   });
+  const backToResults = () => renderResultsTab(testId);
+  document.getElementById("all-participants-button")?.addEventListener("click", () => renderParticipantsPage(testId, results, backToResults));
+  document.getElementById("question-stats-button").addEventListener(
+    "click",
+    guarded(() => renderQuestionStatsPage(testId, results.mode, backToResults))
+  );
+}
+
+// Natijalar ro'yxatidagi bitta qator (o'rin, ism, bo'limlar/foiz, ball va daraja)
+function resultLineHtml(row, results) {
+  const usesRasch = Boolean(results.uses_rasch);
+  return `
+      <div class="result-line" data-detail-id="${row.attempt_id}">
+        <span class="result-rank">${row.rank}</span>
+        <span class="result-name">
+          ${escapeHtml(row.name)}
+          <small class="result-meta">${
+            results.section_names?.length
+              ? results.section_names.map((name) => `${escapeHtml(name)}: ${row.sections[name]}%`).join(" • ")
+              : `✅ ${row.correct} • ❌ ${row.wrong} • ${row.percent}%`
+          }</small>
+        </span>
+        <span class="result-percent">${usesRasch ? row.ball.toFixed(2) : `${row.percent}%`}<small class="result-grade">${usesRasch ? escapeHtml(row.grade) : `baho ${escapeHtml(row.grade)}`}</small></span>
+      </div>`;
+}
+
+// Barcha ishtirokchilar — alohida sahifa: qidiruv va 50 tadan
+function renderParticipantsPage(testId, results, onBack) {
+  showPage(`
+    <button class="back-button" data-action="back">←</button>
+    <h2>${escapeHtml(results.title)} — ishtirokchilar (${results.rows.length})</h2>
+    <input class="input" id="participants-filter" placeholder="🔍 O'quvchini qidirish..." />
+    <div class="result-cards" id="participants-list"></div>
+  `);
+  document.querySelector('[data-action="back"]').addEventListener("click", guarded(onBack));
+  mountPagedList({
+    container: document.getElementById("participants-list"),
+    items: results.rows,
+    renderItem: (row) => resultLineHtml(row, results),
+    emptyHtml: `<p class="subtitle" style="padding:14px">Hech kim topilmadi</p>`,
+    filterInput: document.getElementById("participants-filter"),
+    matches: (row, query) => row.name.toLowerCase().includes(query),
+    onRender: (elements) =>
+      findWithin(elements, "[data-detail-id]").forEach((line) =>
+        line.addEventListener("click", guarded(() => renderStudentDetail(testId, Number(line.dataset.detailId))))
+      ),
+  });
+}
+
+// Savol statistikasi — alohida sahifa. Ko'p o'quvchida eng foydalisi: qaysi savolda ko'p xato
+async function renderQuestionStatsPage(testId, mode, onBack) {
+  const stats = await api(`/api/teacher/tests/${testId}/stats`);
+  const questions = stats.questions.map((q, index) => ({
+    ...q,
+    label: mode === "key" ? q.text : `${index + 1}. ${q.text}`,
+    order: index,
+    wrongShare: q.total ? q.wrong / q.total : 0,
+  }));
+  let sortByWrong = false;
+
+  const draw = () => {
+    const list = [...questions].sort((a, b) => (sortByWrong ? b.wrongShare - a.wrongShare : a.order - b.order));
+    document.getElementById("question-stats-list").innerHTML = list
+      .map(
+        (q) => `
+          <div class="question-stat">
+            <span class="question-stat-label">${escapeHtml(q.label)}</span>
+            <span class="question-stat-count"><span class="stat-dot is-correct"></span>${q.total - q.wrong}</span>
+            <span class="question-stat-count"><span class="stat-dot is-wrong"></span>${q.wrong}</span>
+            <span class="question-stat-share">${Math.round(q.wrongShare * 100)}%</span>
+          </div>`
+      )
+      .join("") || `<p class="subtitle">Hali natija yo'q</p>`;
+    document.getElementById("question-stats-sort").textContent = sortByWrong ? "↕️ Raqam bo'yicha" : "🔥 Eng ko'p xato tepada";
+  };
+
+  showPage(`
+    <button class="back-button" data-action="back">←</button>
+    <h2>Savol statistikasi</h2>
+    <div class="row-between" style="margin-bottom:10px">
+      <span class="subtitle" style="margin:0">${stats.total ?? ""} ta ishtirokchi</span>
+      <button class="share-pill" id="question-stats-sort"></button>
+    </div>
+    <div class="question-stats">
+      <div class="question-stats-legend"><span class="stat-dot is-correct"></span>to'g'ri <span class="stat-dot is-wrong"></span>xato · % — xato qilganlar ulushi</div>
+      <div id="question-stats-list"></div>
+    </div>
+  `);
+  document.querySelector('[data-action="back"]').addEventListener("click", guarded(onBack));
+  document.getElementById("question-stats-sort").addEventListener("click", () => {
+    sortByWrong = !sortByWrong;
+    draw();
+  });
+  draw();
 }
 
 /*
@@ -6907,39 +7044,14 @@ function renderResultsTestList(tests) {
 }
 
 async function renderTestResults(testId) {
-  const [results, stats] = await Promise.all([
-    api(`/api/teacher/tests/${testId}/results`),
-    api(`/api/teacher/tests/${testId}/stats`),
-  ]);
+  const results = await api(`/api/teacher/tests/${testId}/results`);
 
-  const tableRows = results.rows
-    .map(
-      (row) => `
+  const tableRow = (row) => `
         <tr class="result-row">
           <td>${row.rank}</td><td>${escapeHtml(row.name)}</td>
           <td>${row.correct}</td><td>${row.wrong}</td><td>${row.percent}%</td>
           ${results.uses_rasch ? `<td><b>${row.ball.toFixed(2)}</b></td>` : ""}<td><b>${escapeHtml(row.grade)}</b></td>
-        </tr>`
-    )
-    .join("");
-
-  // Har bir savol — bitta ixcham qator: "41b  🟢 25  🔴 22".
-  // Kalit rejimida savol nomi o'zi raqam (41b), to'liq rejimda — tartib raqami va matni.
-  const questionBlocks = stats.questions.length
-    ? `<div class="question-stats">
-        <div class="question-stats-legend"><span class="stat-dot is-correct"></span>to'g'ri <span class="stat-dot is-wrong"></span>xato</div>
-        ${stats.questions
-          .map(
-            (q, index) => `
-              <div class="question-stat">
-                <span class="question-stat-label">${results.mode === "key" ? escapeHtml(q.text) : `${index + 1}. ${escapeHtml(q.text)}`}</span>
-                <span class="question-stat-count"><span class="stat-dot is-correct"></span>${q.total - q.wrong}</span>
-                <span class="question-stat-count"><span class="stat-dot is-wrong"></span>${q.wrong}</span>
-              </div>`
-          )
-          .join("")}
-      </div>`
-    : "";
+        </tr>`;
 
   showPage(`
     <button class="back-button" data-action="test">←</button>
@@ -6962,22 +7074,26 @@ async function renderTestResults(testId) {
     <input class="input" id="filter-input" placeholder="🔍 O'quvchini qidirish..." />
     <div style="overflow-x:auto">
       <table>
-        <tr><th>O'rin</th><th>O'quvchi</th><th>✅</th><th>❌</th><th>%</th>${results.uses_rasch ? "<th>Ball</th><th>Daraja</th>" : "<th>Baho</th>"}</tr>
-        ${tableRows}
+        <thead><tr><th>O'rin</th><th>O'quvchi</th><th>✅</th><th>❌</th><th>%</th>${results.uses_rasch ? "<th>Ball</th><th>Daraja</th>" : "<th>Baho</th>"}</tr></thead>
+        <tbody id="results-table-body"></tbody>
       </table>
     </div>
-    <h3>Savol statistikasi</h3>
-    ${questionBlocks}
+    <button class="btn btn-ghost" id="question-stats-button" style="margin-top:14px">📊 Savol statistikasi ›</button>
   `);
 
   document.querySelector('[data-action="test"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
   document.getElementById("pdf-button").addEventListener("click", guarded(() => downloadOrSendPdf(testId)));
 
-  document.getElementById("filter-input").addEventListener("input", (event) => {
-    const query = event.target.value.toLowerCase();
-    document.querySelectorAll(".result-row").forEach((row) => {
-      row.style.display = row.textContent.toLowerCase().includes(query) ? "" : "none";
-    });
+  document.getElementById("question-stats-button").addEventListener(
+    "click",
+    guarded(() => renderQuestionStatsPage(testId, results.mode, () => renderTestResults(testId)))
+  );
+  mountPagedList({
+    container: document.getElementById("results-table-body"),
+    items: results.rows,
+    renderItem: tableRow,
+    filterInput: document.getElementById("filter-input"),
+    matches: (row, query) => row.name.toLowerCase().includes(query),
   });
 }
 
