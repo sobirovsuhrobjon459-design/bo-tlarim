@@ -292,15 +292,17 @@ input[type="time"] {
   font-weight: 600;
   /* Ba'zi telefonlarda bu maydon matnga qarab torayib qoladi — to'liq kenglikda tursin */
   display: block;
+  text-align: center;
   -webkit-appearance: none;
   appearance: none;
 }
 
-/* iPhone'da sana matni markazga surilib, bo'sh maydon pastroq bo'lib qolardi */
+/* Sana-vaqt yozuvi maydon o'rtasida turadi (iPhone'da ham — u matnni shu ichki qismda chizadi).
+   min-height — bo'sh maydon to'lganidan pastroq bo'lib qolmasligi uchun. */
 input[type="datetime-local"]::-webkit-date-and-time-value,
 input[type="date"]::-webkit-date-and-time-value,
 input[type="time"]::-webkit-date-and-time-value {
-  text-align: left;
+  text-align: center;
   min-height: 1.4em;
 }
 
