@@ -32,7 +32,7 @@ from aiogram.types import (
 )
 
 from .config import BOT_TOKEN, WEBAPP_URL
-from .guide import GUIDE_PARTS
+from .guide import GUIDE_INTRO, GUIDE_ROLES
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("bot")
@@ -288,15 +288,50 @@ async def handle_check_subscription(callback: CallbackQuery) -> None:
 @dispatcher.message(Command("yordam", "help"))
 async def handle_help(message: Message) -> None:
     """
-    /yordam — ilova haqida to'liq ma'lumot va ishlatish qo'llanmasi.
+    /yordam — avval "Siz kimsiz?" so'raladi, qo'llanma tanlangan rol bo'yicha
+    keladi (qarang: handle_guide_role). Ilgari hamma qism bir yo'la tashlanardi.
 
     Qo'llanma HIMOYALANGAN (protect_content): uni boshqaga uzatib, saqlab yoki
     nusxalab bo'lmaydi. Botning boshqa xabarlari (davomat, chek, natija) odatdagidek
     uzatiladi — himoya faqat shu xabarlarga qo'yiladi.
     """
 
-    for part in GUIDE_PARTS:
-        await message.answer(part, parse_mode="HTML", protect_content=True)
+    await message.answer(GUIDE_INTRO, parse_mode="HTML", reply_markup=_guide_roles_keyboard(), protect_content=True)
+
+
+def _guide_roles_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=label, callback_data=f"guide:{key}")] for key, (label, _) in GUIDE_ROLES.items()
+        ]
+    )
+
+
+@dispatcher.callback_query(F.data.startswith("guide:"))
+async def handle_guide_role(callback: CallbackQuery) -> None:
+    """Rol tanlanganda — faqat shu rolga tegishli qo'llanma; oxirida boshqa rolni tanlash tugmasi."""
+
+    role = GUIDE_ROLES.get(callback.data.partition(":")[2])
+    if not role:
+        await callback.answer("Bu tugma eskirgan — /yordam ni qayta yuboring", show_alert=True)
+        return
+
+    await callback.answer()
+    _, parts = role
+    back = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🔄 Boshqa bo'limni ko'rish", callback_data="guide_menu")]]
+    )
+    for index, part in enumerate(parts):
+        is_last = index == len(parts) - 1
+        await callback.message.answer(
+            part, parse_mode="HTML", protect_content=True, reply_markup=back if is_last else None
+        )
+
+
+@dispatcher.callback_query(F.data == "guide_menu")
+async def handle_guide_menu(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(GUIDE_INTRO, parse_mode="HTML", reply_markup=_guide_roles_keyboard(), protect_content=True)
 
 
 @dispatcher.message()

@@ -1,5 +1,8 @@
 """
-/yordam — ilova haqida to'liq ma'lumot va ishlatish qo'llanmasi.
+/yordam — ilova qo'llanmasi, foydalanuvchining roliga qarab.
+
+Avval "Siz kimsiz?" so'raladi (GUIDE_ROLES dagi tugmalar), so'ng faqat shu
+rolga tegishli qismlar yuboriladi — hamma narsa bir yo'la tashlanmaydi.
 
 Har bir qism alohida xabar bo'lib yuboriladi (Telegram'da bitta xabar 4096
 belgidan oshmasligi kerak). Xabarlar himoyalangan (protect_content) holda
@@ -7,64 +10,83 @@ yuboriladi — ularni boshqaga uzatib, saqlab yoki nusxalab bo'lmaydi.
 Matnni yangilash kerak bo'lsa — faqat shu fayl o'zgartiriladi.
 """
 
-GUIDE_PARTS = [
-    """📘 <b>QO'LLANMA — Test Platformasi</b>
+GUIDE_INTRO = """📘 <b>QO'LLANMA — Test Platformasi</b>
 
-Bu bot ichida ilova (Mini App) bor. Uni ochish uchun pastdagi <b>PLAY</b> tugmasini bosing.
+Bu bot ichida ilova (Mini App) bor — uni pastdagi <b>PLAY</b> tugmasi ochadi.
 
-Ilovada ikki katta bo'lim bor:
+<b>Siz kimsiz?</b> Tanlang — sizga kerakli qo'llanmani yuboramiz 👇"""
 
-🧪 <b>TEST MARKAZI</b> — testlar
-• o'quvchi testni kod bilan topib ishlaydi;
-• o'qituvchi test yaratadi va natijalarni oladi.
 
-🏫 <b>TA'LIM MUASSASALARI</b> — maktab boshqaruvi
-• xususiy maktab: xodimlar, sinflar, davomat, test natijalari.
-
-Quyidagi xabarlarda har bir bo'lim qadamma-qadam tushuntirilgan.""",
-
-    """👨‍🎓 <b>O'QUVCHI UCHUN</b>
+_STUDENT = """👨‍🎓 <b>TEST TOPSHIRUVCHI UCHUN</b>
 
 1️⃣ PLAY → <b>Test markazi</b> → <b>O'quvchi</b>.
 2️⃣ <b>🔍 Yangi test qidirish</b> → o'qituvchi bergan <b>test kodini</b> kiriting.
 3️⃣ Test kartasida <b>📋 Shartlar</b> chiqadi:
    • kanalga obuna (✅ / ❌);
-   • boshlanish va tugash vaqti;
-   • pullik bo'lsa — to'lov.
+   • boshlanish va tugash vaqti.
    Shart bajarilmagan bo'lsa, tugma orqali bajaring va <b>🔄 Tekshirish</b> ni bosing.
 4️⃣ <b>▶️ Testni boshlash</b> — barcha savollar bitta sahifada. Javobni bosib belgilaysiz, yozma javoblar uchun matematik klaviatura bor.
 5️⃣ <b>Yakunlash</b> — javoblaringiz o'qituvchiga yuboriladi.
 
-💡 Internet uzilsa ham belgilagan javoblaringiz saqlanib turadi. Vaqt tugasa, test o'zi yakunlanadi.""",
+💡 Internet uzilsa ham belgilagan javoblaringiz saqlanib turadi. Vaqt tugasa, test o'zi yakunlanadi.
+⚠️ Har bir testni <b>bir marta</b> ishlash mumkin.
 
-    """🧑‍🏫 <b>O'QITUVCHI UCHUN — TEST YARATISH</b>
+<b>Testni boshlay olmayapman?</b>
+<b>📋 Shartlar</b> ni ko'ring: ❌ belgisi qaysi shart bajarilmaganini ko'rsatadi.
+
+<b>Natijamni qayerdan bilaman?</b>
+Natija o'qituvchingizga boradi — u sizga e'lon qiladi yoki sertifikat beradi."""
+
+
+_TEST_CREATE = """🧑‍🏫 <b>TEST YARATISH</b>
 
 1️⃣ PLAY → <b>Test markazi</b> → <b>O'qituvchi</b> → ism-familiyangizni kiriting.
    🎁 Birinchi kirishda hisobingizga <b>8000 kredit</b> sovg'a qilinadi.
 2️⃣ <b>➕ Yangi test yaratish</b>:
    • test nomi, fan, davomiyligi;
    • boshlanish/tugash vaqti (ixtiyoriy);
-   • <b>bepul</b> yoki <b>pullik</b>;
    • <b>ochiq</b> (o'quvchi o'zi ishlaydi) yoki <b>yopiq</b> (qog'ozda ishlanadi, javoblarni siz kiritasiz);
-   • savollar soni, variantlar soni (A–D, A–F) va <b>to'g'ri javoblar kaliti</b>.
+   • savollar soni, variantlar soni (A–D, A–F) va <b>to'g'ri javoblar kaliti</b>;
+   • 🧩 <b>Geometriya savollari</b> (ixtiyoriy) — natijalar Algebra/Geometriya bo'yicha chiqadi.
 3️⃣ Saqlang — test <b>kodi</b> chiqadi. Kodni o'quvchilarga yuboring.
 
-📢 <b>Majburiy obuna:</b> barcha testlarda @sukhrobmath kanaliga obuna shart. Xohlasangiz, o'z kanalingizni ham qo'shasiz — bot u yerda <b>administrator</b> bo'lishi kerak.""",
+📢 <b>Majburiy obuna:</b> barcha testlarda @sukhrobmath kanaliga obuna shart. Xohlasangiz, o'z kanalingizni ham qo'shasiz — bot u yerda <b>administrator</b> bo'lishi kerak."""
 
-    """📊 <b>NATIJALAR, KREDIT VA PUL</b>
 
-• <b>Natijalarni ko'rish</b> — har bir o'quvchining balli va javoblari.
-• <b>🏁 Yakunlash va natijalarni olish</b> — natijalar Rasch modeli bo'yicha hisoblanib, PDF hisobot bot orqali sizga keladi.
+_TEST_RESULTS = """📊 <b>NATIJALAR VA SERTIFIKAT</b>
+
+• Natijalar <b>Rasch modeli</b> bo'yicha (Milliy sertifikat uslubida) hisoblanadi: har bir o'quvchiga <b>ball</b> va <b>daraja</b> (A+, A, B+, B, C+, C yoki NC).
+• 45 savolli matematika testida <b>Algebra</b> va <b>Geometriya</b> foizi alohida chiqadi. Bo'linishni <b>🧩 Bo'limlar</b> tugmasi bilan o'zgartirasiz.
+• <b>🏁 Yakunlash va natijalarni olish</b> — PDF hisobot bot orqali sizga keladi.
+• <b>🎓 Sertifikat</b> — har bir o'quvchiga ball va darajasi yozilgan sertifikat (PDF).
 • Natijalar o'quvchilarga ko'rsatilmaydi — faqat sizga keladi.
 
-🎫 <b>Kredit:</b> bepul testda har bir o'quvchi natijasi uchun 1 kredit sarflanadi.
+💡 Rasch balli qatnashchilarga nisbatan hisoblanadi — qatnashchi qancha ko'p bo'lsa, ball shuncha aniq."""
+
+
+_CREDITS = """🎫 <b>KREDIT</b>
+
+Har bir o'quvchi natijasi uchun <b>1 kredit</b> sarflanadi (o'quvchi hech narsa to'lamaydi).
+
 • <b>🛒 Kredit sotib olish</b> — qancha ko'p olsangiz, shuncha arzon:
   1–100 ta — 1 200 so'm, 101–150 — 1 000, 151–300 — 650, 301–500 — 500, 501+ — 450 so'm (1 dona).
-• <b>🎁 Promo kod kiritish</b> — kodingiz bo'lsa, qo'shimcha kredit olasiz (har bir kod bir marta).
+• <b>🎁 Promo kod</b> — kodingiz bo'lsa, uni <b>Kredit sotib olish</b> oynasidagi maydonga yozing — qo'shimcha kredit olasiz.
 
-💰 <b>Pullik testlar:</b> o'quvchi to'lagan pulning sizga tegishli qismi balansingizga tushadi → <b>💸 Pul yechish</b>.""",
+<b>Kreditim tugadi?</b> Kredit tugasa, o'quvchilar testni boshlay olmaydi — oldindan to'ldirib qo'ying."""
 
-    """🏫 <b>XUSUSIY MAKTAB — BOSHLASH</b>
+
+_MENTOR = """💻 <b>ONLINE MENTOR UCHUN</b>
+
+Online o'quvchilaringizga test o'tkazib, natijalarni bir joyda yig'ishingiz mumkin:
+
+1️⃣ Test yarating (qanday — keyingi xabarda) va kodini <b>kanalingiz</b> yoki guruhingizga joylang.
+2️⃣ Testga <b>o'z kanalingizni</b> majburiy obuna qilib qo'shing — testni ishlamoqchi bo'lganlar avval kanalingizga obuna bo'ladi. Bot kanalda <b>administrator</b> bo'lishi kerak.
+3️⃣ <b>Boshlanish va tugash vaqtini</b> belgilang — hamma bir vaqtda ishlaydi (mock imtihon kabi).
+4️⃣ Vaqt tugagach, natijalar avtomatik yakunlanadi va <b>PDF hisobot</b> sizga keladi.
+5️⃣ Eng yaxshilarga <b>sertifikat</b> yuboring yoki reytingni kanalda e'lon qiling."""
+
+
+_SCHOOL_START = """🏫 <b>XUSUSIY MAKTAB — BOSHLASH</b>
 
 <b>Maktab ochish (admin):</b>
 PLAY → Ta'lim muassasalari → Xususiy maktab → <b>Maktabni ro'yxatdan o'tkazish</b> → viloyat, tuman, maktab nomi, telefon va tug'ilgan sanangiz. Maktabni ochgan kishi — <b>👑 Admin</b>.
@@ -79,9 +101,11 @@ O'qituvchi qo'shilishda telefon raqami va tug'ilgan sanasini kiritadi (pasport �
 • ⭐ <b>Kurator</b> — o'z sinfining o'quvchilarini boshqaradi;
 • <b>O'qituvchi</b> — davomat oladi, test natijalarini kiritadi.
 
-🔒 Xodimlarning telefon, sana va pasport ma'lumotlarini faqat rahbariyat ko'radi.""",
+🔒 Xodimlarning telefon, sana va pasport ma'lumotlarini faqat rahbariyat ko'radi.
+<b>O'qituvchini chiqarish</b> — faqat admin yoki direktor qiladi."""
 
-    """📚 <b>SINFLAR VA DAVOMAT</b>
+
+_SCHOOL_CLASSES = """📚 <b>SINFLAR VA DAVOMAT</b>
 
 <b>Sinf ochish:</b> Maktab → <b>Boshqa sinflar</b> → <b>➕ Sinf yaratish</b> (admin/direktor). So'ng ⚙️ orqali <b>kurator</b> tayinlanadi.
 
@@ -94,36 +118,29 @@ Sinf → <b>O'quvchilar</b> → <b>➕ Qo'shish</b> — bittalab yoki <b>Excel /
 3️⃣ Hamma oldindan «Bor». O'quvchini bosib holatini almashtirasiz: Bor → Yo'q → Sababli → Kechikdi.
 4️⃣ <b>💾 Saqlash</b> → ota-onalarga <b>rasm</b>, <b>matn</b> (faqat kelmaganlar) yoki <b>PDF</b> qilib yuboring.
 
-👁 Har bir fan o'qituvchisi faqat <b>o'z fani</b> davomatini ko'radi. Kurator va rahbariyat — hamma fanni (fan bo'yicha filtr bilan).""",
+👁 Har bir fan o'qituvchisi faqat <b>o'z fani</b> davomatini ko'radi. Kurator va rahbariyat — hamma fanni."""
 
-    """📝 <b>SINF TEST NATIJALARI</b>
 
-Sinfda o'tkazilgan nazorat natijalarini kiritish:
+_SCHOOL_TESTS = """📝 <b>SINF TEST NATIJALARI</b>
+
 1️⃣ Sinf → <b>Natijalar</b> → <b>➕ Test natijasini kiritish</b>.
-2️⃣ Test nomi, fan, sana va <b>maksimal ball</b>.
-3️⃣ Har bir o'quvchining balli (kelmagan bo'lsa — bo'sh qoldiring). Ball maksimaldan oshmaydi.
-4️⃣ <b>💾 Saqlash</b> — foiz, baho va o'rin avtomatik chiqadi:
-   86%+ → 5, 71%+ → 4, 56%+ → 3, qolgani → 2.
+2️⃣ Test nomi, fan, sana va <b>maksimal ball</b>, so'ng har bir o'quvchining balli (kelmagan — bo'sh).
+3️⃣ <b>💾 Saqlash</b> — foiz, baho va o'rin avtomatik chiqadi: 86%+ → 5, 71%+ → 4, 56%+ → 3, qolgani → 2.
+Natijani <b>🖼 rasm</b> yoki <b>📄 PDF</b> qilib guruhga yuborasiz. Direktor uchun: Maktab → <b>📊 Test natijalari</b>."""
 
-Natijani <b>🖼 rasm</b> yoki <b>📄 PDF</b> qilib olib, guruhga yuborasiz yoki chop etasiz.
 
-👁 Natijalarni testni kiritgan o'qituvchi va rahbariyat ko'radi. Direktor uchun: Maktab → <b>📊 Test natijalari</b> → sinfni tanlang.""",
+_CONTACT = """💬 <b>Savol bo'lsa:</b> @saidjanovic, @Ulugbeck_dev
 
-    """❓ <b>SAVOL-JAVOB</b>
+<b>Ilova sekin ochilyapti?</b> Internet sekin bo'lsa, tugmada aylanuvchi doiracha chiqadi — kuting, ilova qotmagan.
 
-<b>Ilova sekin ochilyapti?</b>
-Internet sekin bo'lsa, tugmada aylanuvchi doiracha chiqadi — kuting, ilova qotmagan.
+🔒 <i>Bu qo'llanma himoyalangan — uni uzatib yoki nusxalab bo'lmaydi.</i>"""
 
-<b>Testni boshlay olmayapman?</b>
-Test kartasidagi <b>📋 Shartlar</b> ni ko'ring: ❌ belgisi qaysi shart bajarilmaganini ko'rsatadi.
 
-<b>Maktabdan chiqmoqchiman?</b>
-O'qituvchini maktabdan faqat admin yoki direktor chiqaradi — ularga murojaat qiling.
-
-<b>Kreditim tugadi?</b>
-O'qituvchi → <b>🛒 Kredit sotib olish</b> yoki promo kod.
-
-💬 <b>Murojaat uchun:</b> @saidjanovic, @Ulugbeck_dev
-
-🔒 <i>Bu qo'llanma himoyalangan — uni uzatib yoki nusxalab bo'lmaydi.</i>""",
-]
+# Rol kaliti → (tugma matni, shu rolga yuboriladigan xabarlar).
+# Kalit callback_data'da ishlatiladi ("guide:student") — o'zgartirilmasin.
+GUIDE_ROLES = {
+    "student": ("👨‍🎓 Test topshiruvchi", [_STUDENT, _CONTACT]),
+    "teacher": ("🧑‍🏫 Test tuzuvchi", [_TEST_CREATE, _TEST_RESULTS, _CREDITS, _CONTACT]),
+    "school": ("🏫 Xususiy maktab asoschisi", [_SCHOOL_START, _SCHOOL_CLASSES, _SCHOOL_TESTS, _CONTACT]),
+    "mentor": ("💻 Online mentor", [_MENTOR, _TEST_CREATE, _TEST_RESULTS, _CREDITS, _CONTACT]),
+}
