@@ -2553,13 +2553,50 @@ def my_attempts(user: User = Depends(get_current_user), db: Session = Depends(ge
             # Natija (ball, foiz) o'quvchiga ko'rsatilmaydi — faqat o'qituvchiga
             completed.append(
                 {
+                    "attempt_id": attempt.id,
                     "code": test.code,
                     "title": test.title,
                     "subject": test.subject,
                     "finished_at": attempt.finished_at,
+                    # Natija faqat test yakunlangach ochiladi (qarang: my_attempt_review)
+                    "can_review": test.status == "closed",
                 }
             )
     return {"in_progress": in_progress, "completed": completed}
+
+
+@app.get("/api/me/attempts/{attempt_id}/review")
+def my_attempt_review(attempt_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    O'quvchi o'zi topshirgan testni ko'radi: natijasi (ball, daraja, o'rin) va
+    har bir savolda nimani belgilagani, to'g'ri javob nima edi.
+
+    Faqat test YAKUNLANGACH ochiladi — aks holda o'quvchi to'g'ri javoblarni
+    hali test ishlayotgan boshqalarga tarqatishi mumkin edi.
+    """
+
+    attempt = db.get(Attempt, attempt_id)
+    if not attempt or attempt.user_id != user.id or attempt.status != "done":
+        raise HTTPException(status_code=404, detail="Test topilmadi")
+    test = db.get(Test, attempt.test_id)
+    if not test or test.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Test topilmadi")
+    if test.status != "closed":
+        raise HTTPException(status_code=403, detail="Natija test yakunlangach ochiladi — biroz kuting")
+
+    review = _attempt_review(db, test, attempt)
+    report = build_rasch_report(db, test)
+    row = next((row for row in report["rows"] if row["attempt_id"] == attempt.id), None)
+    return {
+        **review,
+        "title": test.title,
+        "subject": test.subject,
+        "ball": row["ball"] if row else None,
+        "grade": row["grade"] if row else None,
+        "rank": row["rank"] if row else None,
+        "sections": row["sections"] if row else {},
+        "participants": report["summary"]["participants"],
+    }
 # ========== 4) O'qituvchi ro'yxatdan o'tishi ==========
 # Noto'g'ri promo kod urinishlari (taxmin qilib topishdan himoya): 15 daqiqada 5 ta
 PROMO_MAX_FAILURES = 5
@@ -3197,6 +3234,12 @@ def student_answer_detail(
     attempt = db.get(Attempt, attempt_id)
     if not attempt or attempt.test_id != test.id:
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+
+    return _attempt_review(db, test, attempt)
+
+
+def _attempt_review(db: Session, test: Test, attempt: Attempt) -> dict:
+    """Urinishning har bir savol bo'yicha tahlili — o'qituvchi ham, (test tugagach) o'quvchi ham ko'radi."""
 
     student = db.get(User, attempt.user_id) if attempt.user_id else None
     answers = {

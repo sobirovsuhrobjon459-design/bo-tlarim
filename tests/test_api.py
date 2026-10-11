@@ -3363,6 +3363,40 @@ def test_sertifikatlar_oquvchilarga_yuboriladi():
     assert not main._certificates_in_progress
 
 
+def test_oquvchi_yakunlangan_testini_koradi():
+    """Test yopilmaguncha natija yopiq; yopilgach — o'quvchi o'z javoblari, to'g'ri javob va balini ko'radi."""
+    reset_database()
+    register_teacher(tg_id=555)
+    created = create_test(tg_id=555)  # 1-savolning to'g'ri javobi B
+    sent, restore = _capture_result_notices()
+    try:
+        started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
+        client.post(f"/api/attempts/{started['attempt_id']}/finish", json={"answers": {"1": "A"}}, headers=as_user(901))
+    finally:
+        restore()
+
+    completed = client.get("/api/me/attempts", headers=as_user(901)).json()["completed"]
+    assert completed[0]["attempt_id"] == started["attempt_id"] and completed[0]["can_review"] is False, completed
+    url = f"/api/me/attempts/{started['attempt_id']}/review"
+    early = client.get(url, headers=as_user(901))
+    assert early.status_code == 403 and "yakunlangach" in early.text, early.text
+
+    with SessionLocal() as session:
+        from backend.database import Test as DbTest
+        session.get(DbTest, created["id"]).status = "closed"
+        session.commit()
+
+    assert client.get("/api/me/attempts", headers=as_user(901)).json()["completed"][0]["can_review"] is True
+    review = client.get(url, headers=as_user(901))
+    assert review.status_code == 200, review.text
+    body = review.json()
+    first = body["questions"][0]
+    assert first["chosen"] == "A" and first["correct"] == "B" and first["is_correct"] is False, first
+    assert body["grade"] and body["rank"] == 1 and body["participants"] == 1, body
+    # Boshqa o'quvchi birovning natijasini ko'ra olmaydi
+    assert client.get(url, headers=as_user(902)).status_code == 404
+
+
 # ========== Ishga tushirgich ==========
 
 

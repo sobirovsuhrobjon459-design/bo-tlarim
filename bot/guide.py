@@ -35,7 +35,7 @@ _STUDENT = """👨‍🎓 <b>TEST TOPSHIRUVCHI UCHUN</b>
 <b>📋 Shartlar</b> ni ko'ring: ❌ belgisi qaysi shart bajarilmaganini ko'rsatadi.
 
 <b>Natijamni qayerdan bilaman?</b>
-Natija o'qituvchingizga boradi — u sizga e'lon qiladi yoki sertifikat beradi."""
+Test yakunlangach: <b>O'quvchi</b> → <b>Yakunlangan testlar</b> → <b>📊 Natijani ko'rish</b>. U yerda ball, daraja, o'rningiz va har bir savolda nimani belgilaganingiz, to'g'ri javob nima ekani ko'rinadi. O'qituvchingiz sertifikat ham yuborishi mumkin."""
 
 
 _TEST_CREATE = """🧑‍🏫 <b>TEST YARATISH</b>

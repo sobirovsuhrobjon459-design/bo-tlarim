@@ -4298,9 +4298,13 @@ function drawStudentHome(me, attempts) {
     attempts.completed
       .map(
         (item) => `
-          <div class="card row-between" style="cursor:default">
+          <div class="card row-between" data-review-id="${item.attempt_id}" data-can-review="${item.can_review ? 1 : 0}">
             <span>${escapeHtml(item.title)}</span>
-            <span class="badge badge-green">✅ Topshirildi</span>
+            ${
+              item.can_review
+                ? `<span class="badge badge-blue">📊 Natijani ko'rish ›</span>`
+                : `<span class="badge badge-green">✅ Topshirildi</span>`
+            }
           </div>`
       )
       .join("") ||
@@ -4333,6 +4337,63 @@ function drawStudentHome(me, attempts) {
   document.querySelectorAll("[data-resume-code]").forEach((card) => {
     card.addEventListener("click", guarded(() => startTest(card.dataset.resumeCode)));
   });
+  // Yakunlangan test — natija faqat test tugagach ochiladi
+  document.querySelectorAll("[data-review-id]").forEach((card) => {
+    card.addEventListener(
+      "click",
+      guarded(async () => {
+        if (card.dataset.canReview !== "1") {
+          showToast("⏳ Natija test yakunlangach ochiladi");
+          return;
+        }
+        await renderMyAttemptReview(Number(card.dataset.reviewId));
+      })
+    );
+  });
+}
+
+/*
+  O'quvchi o'zi topshirgan testni ko'radi (test yakunlangach): ball, daraja,
+  o'rin, bo'limlar va har bir savolda nimani belgilagani / to'g'risi nima edi.
+*/
+async function renderMyAttemptReview(attemptId) {
+  const review = await api(`/api/me/attempts/${attemptId}/review`);
+
+  const rows = review.questions
+    .map(
+      (question) => `
+        <div class="answer-row ${question.is_correct ? "" : "wrong"}">
+          <b>${escapeHtml(question.label)}</b>
+          <span>${question.is_correct ? "✅" : "❌"} ${escapeHtml(latexToPlain(question.chosen))}</span>
+          ${question.is_correct ? "" : `<span class="right-answer">to'g'ri: ${escapeHtml(latexToPlain(question.correct))}</span>`}
+        </div>`
+    )
+    .join("");
+
+  const sections = Object.entries(review.sections || {});
+
+  showPage(`
+    <button class="back-button" data-action="back">←</button>
+    <h2>${escapeHtml(review.title)}</h2>
+    <p class="subtitle" style="margin-top:-6px">${escapeHtml(review.subject)}</p>
+    <div class="stats-grid">
+      ${review.ball != null ? `<div class="stat-tile"><span class="stat-value">${review.ball.toFixed(1)}</span>Ball</div>` : ""}
+      ${review.grade ? `<div class="stat-tile"><span class="stat-value">${escapeHtml(review.grade)}</span>Daraja</div>` : ""}
+      <div class="stat-tile"><span class="stat-value">${review.correct}/${review.total}</span>To'g'ri (${review.percent}%)</div>
+      ${review.rank ? `<div class="stat-tile"><span class="stat-value">${review.rank}</span>O'rin (${review.participants} tadan)</div>` : ""}
+    </div>
+    ${
+      sections.length
+        ? `<p class="subtitle" style="margin:0 0 12px">${sections
+            .map(([name, value]) => `${escapeHtml(name)}: <b>${value}%</b>`)
+            .join(" · ")}</p>`
+        : ""
+    }
+    <h3>Javoblaringiz</h3>
+    ${rows}
+  `);
+
+  document.querySelector('[data-action="back"]').addEventListener("click", guarded(renderStudentHome));
 }
 
 function renderEditName(me, onDone) {
