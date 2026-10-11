@@ -287,9 +287,12 @@ input[type="time"] {
      farq qiladi, shunda yonidagi tanlash maydonlari bilan bir tekis turadi */
   height: 52px;
   min-height: 52px;
-  padding: 0 16px;
+  /* Tepa-pastdan teng bo'shliq: iPhone sana yozuvini ichki qismning TEPASIGA
+     qo'yadi — padding 0 bo'lganda yozuv yuqoriga yopishib qolardi. 14+14+~22 ≈ 52 */
+  padding: 14px 16px;
   font-size: 16px;
   font-weight: 600;
+  line-height: 1.4;
   /* Ba'zi telefonlarda bu maydon matnga qarab torayib qoladi — to'liq kenglikda tursin */
   display: block;
   text-align: center;
@@ -304,6 +307,7 @@ input[type="date"]::-webkit-date-and-time-value,
 input[type="time"]::-webkit-date-and-time-value {
   text-align: center;
   min-height: 1.4em;
+  line-height: 1.4em;
 }
 
 /* Kalendar belgisi qorong'i fonda ham ko'rinsin */
