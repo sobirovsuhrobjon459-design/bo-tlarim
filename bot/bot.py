@@ -241,6 +241,26 @@ async def handle_start(message: Message, command: CommandObject) -> None:
     await _open_bot(message, payload)
 
 
+@dispatcher.message(Command("restart"))
+async def handle_restart(message: Message) -> None:
+    """
+    /restart — botni "toza holatga" qaytaradi: PLAY tugmasi yo'qolgan, eski
+    klaviatura qolib ketgan yoki bot javob bermayotgandek tuyulganda.
+    Obuna qayta tekshiriladi, PLAY tiklanadi va bosh xabar qayta chiqadi.
+    """
+
+    logger.info("/restart: %s (tg_id=%s)", message.from_user.full_name, message.from_user.id)
+
+    missing = await _missing_channels(message.from_user.id)
+    if missing:
+        await _show_subscribe_gate(message, missing, "")
+        return
+
+    await _restore_play_button(message.chat.id)
+    await message.answer("🔄 Bot qayta ishga tushirildi.")
+    await _open_bot(message, "")
+
+
 def _play_menu_button():
     """Mini App'ni ochadigan PLAY tugmasi (WEBAPP_URL noto'g'ri bo'lsa — umumiy sozlama)."""
 
@@ -466,6 +486,7 @@ async def _setup_menu_button() -> None:
         await bot.set_my_commands([
             BotCommand(command="start", description="Botni ishga tushirish"),
             BotCommand(command="yordam", description="Qo'llanma va ilova haqida"),
+            BotCommand(command="restart", description="Botni qayta ishga tushirish"),
         ])
     except Exception:
         logger.warning("Buyruqlar ro'yxatini sozlab bo'lmadi", exc_info=True)
