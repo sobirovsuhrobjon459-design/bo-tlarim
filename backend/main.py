@@ -23,7 +23,6 @@ import io
 import json
 import logging
 import os
-import random
 import re
 import secrets
 import threading
@@ -128,8 +127,11 @@ from .database import (
     User,
     WithdrawalRequest,
     WithdrawalRequestIn,
+    add_balance,
+    add_credits,
     engine,
     utcnow,
+    withdraw_balance,
 )
 from bot.bot import run_bot
 
@@ -461,6 +463,10 @@ def _finish_expired_attempts(db: Session) -> list:
         if not test:
             continue
         if (utcnow() - attempt.started_at).total_seconds() < test.duration * 60:
+            continue
+        # O'quvchi shu payt o'zi yakunlayotgan bo'lishi mumkin — qulflab, qayta tekshiramiz
+        db.refresh(attempt, with_for_update=True)
+        if attempt.status != "in_progress":
             continue
 
         total_questions = _grade_attempt_from_saved_answers(db, attempt, test)
@@ -1742,9 +1748,31 @@ def _get_own_test(db: Session, teacher: Teacher, test_id: int) -> Test:
     return test
 
 
-def _get_test_by_code(db: Session, code: str) -> Test:
+# Test kodini taxmin qilib topishdan himoya. Kod qisqa (4 belgi) — cheklovsiz
+# bo'lsa, begona odam kodlarni ketma-ket sinab, boshqalarning testlarini topib,
+# savollarini ko'rishi va o'qituvchining kreditini sarflashi mumkin edi.
+# O'quvchi kodni adashib yozishi tabiiy, shuning uchun chegara kengroq.
+# Muvaffaqiyatli kirish hisobni tozalamaydi — aks holda ma'lum bitta kodni
+# oralab kiritib, cheklovni chetlab o'tish mumkin bo'lardi.
+TEST_CODE_MAX_FAILURES = 20
+TEST_CODE_WINDOW_SECONDS = 15 * 60
+_test_code_failures: dict[int, list[float]] = {}
+
+
+def _get_test_by_code(db: Session, code: str, user: User) -> Test:
+    now = time.monotonic()
+    recent = [moment for moment in _test_code_failures.get(user.id, []) if now - moment < TEST_CODE_WINDOW_SECONDS]
+    _test_code_failures[user.id] = recent
+    if len(recent) >= TEST_CODE_MAX_FAILURES:
+        minutes = int((TEST_CODE_WINDOW_SECONDS - (now - recent[0])) // 60) + 1
+        raise HTTPException(
+            status_code=429,
+            detail=f"Test kodi juda ko'p marta noto'g'ri kiritildi. {minutes} daqiqadan keyin qayta urinib ko'ring.",
+        )
+
     test = db.scalar(select(Test).where(Test.code == code.strip().upper(), Test.deleted_at.is_(None)))
     if not test:
+        recent.append(now)
         raise HTTPException(status_code=404, detail="Test topilmadi")
     return test
 
@@ -2382,7 +2410,7 @@ def _finalize_attempt(db: Session, attempt: Attempt, test: Test, answers: dict[s
     # o'qituvchi uni boshqa joyda sarflab yuborishi mumkin; shunda balans
     # manfiyga tushib, o'qituvchi keyin sotib olgan kreditini yo'qotardi.
     if test.price == 0:
-        test.teacher.credits = max(0, test.teacher.credits - 1)
+        add_credits(test.teacher, -1)
 
     return total_questions
 
@@ -2560,7 +2588,7 @@ def redeem_promo(body: PromoRedeemIn, teacher: Teacher = Depends(get_current_tea
             raise HTTPException(status_code=410, detail="Bu promo kodning soni tugagan")
 
     db.add(PromoRedemption(promo_id=promo.id, teacher_id=teacher.id, credits=promo.credits))
-    teacher.credits += promo.credits
+    add_credits(teacher, promo.credits)
     db.commit()
     _promo_failures.pop(teacher.id, None)
     logging.getLogger("backend").info("Promo kod ishlatildi: promo=%s teacher=%s +%s kredit", promo.id, teacher.id, promo.credits)
@@ -2840,7 +2868,7 @@ def decide_card_topup(db: Session, purchase_id: int, approve: bool) -> tuple[boo
     if approve:
         purchase.status = "paid"
         purchase.performed_at = utcnow()
-        teacher.credits += purchase.credits
+        add_credits(teacher, purchase.credits)
         db.commit()
 
         _notify_teacher(
@@ -2998,7 +3026,7 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         _ensure_bot_can_check_channel(required_channel)
 
     while True:
-        code = "".join(random.choices(TEST_CODE_ALPHABET, k=TEST_CODE_LENGTH))
+        code = "".join(secrets.choice(TEST_CODE_ALPHABET) for _ in range(TEST_CODE_LENGTH))
         if not db.scalar(select(Test.id).where(Test.code == code)):
             break
 
@@ -3249,6 +3277,7 @@ def save_student_answers(
 
     test = _get_own_test(db, teacher, test_id)
     attempt = _get_offline_attempt(db, test, attempt_id)
+    db.refresh(attempt, with_for_update=True)  # ikki marta yuborilsa ham kredit bir marta yechilsin
 
     # Har bir YANGI o'quvchi natijasi o'qituvchidan 1 kredit oladi (bepul testlarda).
     # Javoblarni keyin tahrirlash qo'shimcha kredit talab qilmaydi.
@@ -3265,7 +3294,7 @@ def save_student_answers(
     attempt.finished_at = utcnow()
 
     if test.price == 0 and not was_filled:
-        teacher.credits = max(0, teacher.credits - 1)
+        add_credits(teacher, -1)
 
     db.commit()
 
@@ -3615,7 +3644,7 @@ def test_subscriptions(
     status: "yes" — obuna, "no" — obuna emas, "unknown" — tekshirib bo'lmadi.
     """
 
-    test = _get_test_by_code(db, code)
+    test = _get_test_by_code(db, code, user)
     channels = _required_channels(test)
     if channel:
         channels = [item for item in channels if item.lower() == channel.strip().lower()]
@@ -3633,7 +3662,7 @@ def test_subscriptions(
 def get_test(code: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """O'quvchi test kodini kiritganda, testning umumiy ma'lumotini qaytaradi."""
 
-    test = _get_test_by_code(db, code)
+    test = _get_test_by_code(db, code, user)
 
     return {
         "code": test.code,
@@ -3662,7 +3691,7 @@ def pay_for_test(code: str, provider: str = "payme", user: User = Depends(get_cu
     shundagina test ochiladi, o'qituvchi balansiga ulush qo'shiladi.
     """
 
-    test = _get_test_by_code(db, code)
+    test = _get_test_by_code(db, code, user)
     if _is_paid(db, user, test):
         return {"paid": True}
 
@@ -3709,7 +3738,7 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
     brauzerning so'rovlar oynasidan ko'rib olishi mumkin.
     """
 
-    test = _get_test_by_code(db, code)
+    test = _get_test_by_code(db, code, user)
     if not _is_paid(db, user, test):
         raise HTTPException(status_code=402, detail="Avval to'lov qiling")
     _check_enrollment(test)
@@ -3733,10 +3762,13 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
     # darhol tekshirib, natijasini qotiramiz — mehnati yo'qolmasligi uchun.
     if attempt and attempt.status == "in_progress":
         if (utcnow() - attempt.started_at).total_seconds() >= test.duration * 60:
-            total_questions = _grade_attempt_from_saved_answers(db, attempt, test)
-            notice = _result_notice(db, attempt, test, total_questions)
-            db.commit()
-            _send_result_notice_in_background(notice)
+            # Fon vazifasi shu payt uni yakunlayotgan bo'lishi mumkin — qulflab, qayta tekshiramiz
+            db.refresh(attempt, with_for_update=True)
+            if attempt.status == "in_progress":
+                total_questions = _grade_attempt_from_saved_answers(db, attempt, test)
+                notice = _result_notice(db, attempt, test, total_questions)
+                db.commit()
+                _send_result_notice_in_background(notice)
 
     # Natija (foiz) o'quvchiga aytilmaydi — uni faqat o'qituvchi ko'radi
     if attempt and attempt.status == "done":
@@ -3797,7 +3829,10 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
 def _get_own_attempt(db: Session, user: User, attempt_id: int) -> Attempt:
     """Urinish aynan shu o'quvchiga tegishli ekanini tekshiradi."""
 
-    attempt = db.get(Attempt, attempt_id)
+    # Qulflanadi: "YAKUNLASH" ikki marta bosilsa, ikkinchi so'rov birinchisi
+    # tugashini kutadi va urinishni allaqachon yakunlangan holda ko'radi —
+    # o'qituvchidan kredit ikki marta yechilmaydi.
+    attempt = db.get(Attempt, attempt_id, with_for_update=True)
     if not attempt or attempt.user_id != user.id:
         raise HTTPException(status_code=404, detail="Urinish topilmadi")
     return attempt
@@ -3870,7 +3905,7 @@ def test_rating(code: str, user: User = Depends(get_current_user), db: Session =
     ko'rsatilmaydi — boshqalarning foizlari ham.
     """
 
-    test = _get_test_by_code(db, code)
+    test = _get_test_by_code(db, code, user)
     is_owner = test.teacher is not None and test.teacher.user_id == user.id
     is_admin = bool(ADMIN_ID) and user.tg_id == ADMIN_ID
     if not (is_owner or is_admin):
@@ -3923,7 +3958,8 @@ def _active_membership(db: Session, user: User) -> SchoolMember | None:
 
 def _new_school_code(db: Session) -> str:
     while True:
-        code = "".join(random.choice(TEST_CODE_ALPHABET) for _ in range(SCHOOL_CODE_LENGTH))
+        # secrets — maktab kodi maxfiy kalit vazifasini bajaradi, uni oldindan hisoblab bo'lmasin
+        code = "".join(secrets.choice(TEST_CODE_ALPHABET) for _ in range(SCHOOL_CODE_LENGTH))
         if not db.scalar(select(PrivateSchool.id).where(PrivateSchool.code == code)):
             return code
 
@@ -6177,7 +6213,7 @@ def _click_find_order(db: Session, ref: str):
     if not ref or ref[0] not in "ct" or not ref[1:].isdigit():
         return None
     model = CreditPurchase if ref[0] == "c" else Payment
-    return db.get(model, int(ref[1:]))
+    return db.get(model, int(ref[1:]), with_for_update=True)  # takroriy so'rov ikki marta yozmasin
 
 
 def _click_amount_ok(form: dict, order) -> bool:
@@ -6311,7 +6347,7 @@ def _payme_find_order_by_account(params: dict, db: Session):
         if raw_id in (None, ""):
             continue
         try:
-            order = db.get(model, int(raw_id))
+            order = db.get(model, int(raw_id), with_for_update=True)
         except (TypeError, ValueError):
             return None
 
@@ -6338,7 +6374,8 @@ def _payme_find_order_by_transaction(params: dict, db: Session):
         return None
 
     for model in PAYME_ORDER_MODELS.values():
-        order = db.scalar(select(model).where(model.payme_transaction_id == payme_id))
+        # Qulflanadi: Payme bir so'rovni qayta yuborsa ham kredit ikki marta yozilmaydi
+        order = db.scalar(select(model).where(model.payme_transaction_id == payme_id).with_for_update())
         if order:
             return order
 
@@ -6361,20 +6398,20 @@ def _payme_apply_paid(order) -> None:
     """
 
     if isinstance(order, CreditPurchase):
-        order.teacher.credits += order.credits
+        add_credits(order.teacher, order.credits)
         return
 
-    order.test.teacher.balance += _teacher_share(order.amount)
+    add_balance(order.test.teacher, _teacher_share(order.amount))
 
 
 def _payme_revert_paid(order) -> None:
     """To'lov bekor qilinganda (pul qaytarilganda) yozilgani orqaga olinadi."""
 
     if isinstance(order, CreditPurchase):
-        order.teacher.credits = max(0, order.teacher.credits - order.credits)
+        add_credits(order.teacher, -order.credits)
         return
 
-    order.test.teacher.balance = max(0, order.test.teacher.balance - _teacher_share(order.amount))
+    add_balance(order.test.teacher, -_teacher_share(order.amount))
 
 
 def _payme_check_perform_transaction(request_id, params: dict, db: Session) -> JSONResponse:
@@ -6743,15 +6780,15 @@ def admin_list_withdrawal_requests(admin: User = Depends(get_current_admin), db:
 def admin_approve_withdrawal(request_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
     """Pul o'tkazilgach tasdiqlanadi — o'qituvchi balansidan shuncha summa yechiladi."""
 
-    request = db.get(WithdrawalRequest, request_id)
+    # Qulflanadi: admin panel va bot tugmasi bir vaqtda bosilsa ham pul ikki marta yechilmaydi
+    request = db.get(WithdrawalRequest, request_id, with_for_update=True)
     if not request or request.status != "pending":
         raise HTTPException(status_code=404, detail="So'rov topilmadi yoki allaqachon ko'rib chiqilgan")
 
     teacher = db.get(Teacher, request.teacher_id)
-    if teacher.balance < request.amount:
+    if not withdraw_balance(teacher, request.amount):
         raise HTTPException(status_code=402, detail="O'qituvchi balansi yetarli emas, so'rovni rad eting")
 
-    teacher.balance -= request.amount
     request.status = "approved"
     db.commit()
     return {"ok": True, "balance": teacher.balance}
@@ -6761,7 +6798,7 @@ def admin_approve_withdrawal(request_id: int, admin: User = Depends(get_current_
 def admin_reject_withdrawal(request_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
     """So'rovni rad etadi, balansga tegmaydi."""
 
-    request = db.get(WithdrawalRequest, request_id)
+    request = db.get(WithdrawalRequest, request_id, with_for_update=True)
     if not request or request.status != "pending":
         raise HTTPException(status_code=404, detail="So'rov topilmadi yoki allaqachon ko'rib chiqilgan")
 

@@ -11,8 +11,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import BigInteger, ForeignKey, String, Text, create_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
+from sqlalchemy import BigInteger, ForeignKey, String, Text, case, create_engine, update
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, object_session, relationship, sessionmaker
 
 # ========== 1) Sozlamalar (.env) ==========
 
@@ -144,6 +144,51 @@ class Teacher(Base):
 
     user: Mapped["User"] = relationship()
     tests: Mapped[list["Test"]] = relationship(back_populates="teacher")
+
+
+# Kredit va pul balansi faqat shu funksiyalar orqali o'zgaradi.
+#
+# Nega "teacher.credits += n" emas: u holda server avval qiymatni o'qib, keyin
+# bazaga TAYYOR raqamni yozadi. Ikki so'rov bir vaqtda kelsa (masalan Payme
+# 1000 kredit yozayotganda o'quvchi testni tugatsa), biri ikkinchisining
+# yozganini ustidan bosib, o'qituvchi sotib olgan krediti yo'qolardi.
+# Bu yerda hisob bazaning o'zida bajariladi: "credits = credits + n".
+
+
+def _adjust_teacher(teacher: "Teacher", column: str, delta: int) -> None:
+    session = object_session(teacher)
+    current = getattr(Teacher, column)
+    # Kamaytirilganda noldan pastga tushmaydi (max(0, ...) bilan bir xil)
+    new_value = current + delta if delta >= 0 else case((current + delta > 0, current + delta), else_=0)
+    session.execute(
+        update(Teacher).where(Teacher.id == teacher.id).values({column: new_value}),
+        execution_options={"synchronize_session": False},
+    )
+    session.refresh(teacher, [column])
+
+
+def add_credits(teacher: "Teacher", delta: int) -> None:
+    """O'qituvchi kreditini atomar o'zgartiradi (manfiy delta — yechish, 0 dan pastga tushmaydi)."""
+    _adjust_teacher(teacher, "credits", delta)
+
+
+def add_balance(teacher: "Teacher", delta: int) -> None:
+    """O'qituvchi pul balansini atomar o'zgartiradi (manfiy delta — yechish, 0 dan pastga tushmaydi)."""
+    _adjust_teacher(teacher, "balance", delta)
+
+
+def withdraw_balance(teacher: "Teacher", amount: int) -> bool:
+    """Balansdan pul yechadi — faqat yetarli bo'lsa. Yetmasa, hech narsa o'zgarmaydi va False qaytadi."""
+
+    session = object_session(teacher)
+    result = session.execute(
+        update(Teacher)
+        .where(Teacher.id == teacher.id, Teacher.balance >= amount)
+        .values(balance=Teacher.balance - amount),
+        execution_options={"synchronize_session": False},
+    )
+    session.refresh(teacher, ["balance"])
+    return result.rowcount == 1
 
 
 class Test(Base):

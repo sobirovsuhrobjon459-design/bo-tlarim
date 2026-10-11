@@ -68,6 +68,7 @@ def reset_database() -> None:
     main._bot_username_cache = "test_platform_bot"  # Telegram'ga so'rov ketmasin
     main.DEFAULT_REQUIRED_CHANNELS = []  # adminlar kanali — alohida testda tekshiriladi
     main._promo_failures.clear()
+    main._test_code_failures.clear()
     main._subscription_confirmed.clear()
 
 
@@ -1487,6 +1488,7 @@ def test_promo_kod():
 
     # Taxmin qilish: 5 ta noto'g'ridan keyin bloklanadi
     main._promo_failures.clear()
+    main._test_code_failures.clear()
     for attempt in range(5):
         assert client.post("/api/teacher/promo", json={"code": f"XATO{attempt}"}, headers=as_user(779)).status_code == 404
     assert client.post("/api/teacher/promo", json={"code": "BIRTA"}, headers=as_user(779)).status_code == 429
@@ -3242,6 +3244,69 @@ def test_pdf_va_javoblar_varaqasi_yasaladi():
         assert response.status_code == 200, f"{url} -> {response.status_code}"
         assert response.content.startswith(b"%PDF"), url
         assert len(response.content) > 1000, url
+
+
+def test_kredit_bir_vaqtdagi_ozgarishda_yoqolmaydi():
+    """Bir so'rov o'qituvchini o'qib turganda boshqasi kredit yozsa — ikkalasi ham saqlanadi."""
+    from backend.database import add_credits, withdraw_balance
+
+    reset_database()
+    register_teacher(tg_id=555)
+    start = credits_of(555)
+
+    slow, fast = SessionLocal(), SessionLocal()
+    try:
+        # "Sekin" so'rov o'qituvchini oldinroq o'qib oldi (masalan o'quvchi testni tugatyapti)
+        slow_teacher = slow.scalar(main.select(Teacher))
+        assert slow_teacher.credits == start
+        # Shu orada Payme 1000 kredit yozdi
+        fast_teacher = fast.scalar(main.select(Teacher))
+        add_credits(fast_teacher, 1000)
+        fast.commit()
+        # Eski "credits = credits - 1" bo'lganda bu yerda 1000 kredit yo'qolardi
+        add_credits(slow_teacher, -1)
+        slow.commit()
+        assert slow_teacher.credits == start + 999
+    finally:
+        slow.close()
+        fast.close()
+    assert credits_of(555) == start + 999
+
+    # Kamaytirish noldan pastga tushmaydi; yetmagan balansdan pul yechilmaydi
+    with SessionLocal() as session:
+        teacher = session.scalar(main.select(Teacher))
+        add_credits(teacher, -10**9)
+        assert teacher.credits == 0
+        assert withdraw_balance(teacher, 1) is False and teacher.balance == 0
+        add_credits(teacher, start)
+        session.commit()
+
+
+def test_yakunlash_ikki_marta_bosilsa_kredit_bir_marta_yechiladi():
+    reset_database()
+    register_teacher(tg_id=555)
+    created = create_test(tg_id=555)
+    before = credits_of(555)
+
+    started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
+    finish_and_grade(started["attempt_id"], json={"answers": {"1": "B"}}, headers=as_user(901))
+    again = client.post(f"/api/attempts/{started['attempt_id']}/finish", json={"answers": {}}, headers=as_user(901))
+    assert again.status_code == 400, again.text
+    assert credits_of(555) == before - 1
+
+
+def test_test_kodini_taxmin_qilish_cheklanadi():
+    reset_database()
+    register_teacher(tg_id=555)
+    created = create_test(tg_id=555)
+
+    assert client.get(f"/api/tests/{created['code']}", headers=as_user(901)).status_code == 200
+    for _ in range(main.TEST_CODE_MAX_FAILURES):
+        assert client.get("/api/tests/ZZZZ", headers=as_user(901)).status_code == 404
+    # Endi to'g'ri kod ham vaqtincha ochilmaydi — boshqa foydalanuvchiga esa ta'sir qilmaydi
+    blocked = client.get(f"/api/tests/{created['code']}", headers=as_user(901))
+    assert blocked.status_code == 429 and "daqiqadan keyin" in blocked.text, blocked.text
+    assert client.get(f"/api/tests/{created['code']}", headers=as_user(902)).status_code == 200
 
 
 # ========== Ishga tushirgich ==========

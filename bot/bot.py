@@ -316,7 +316,7 @@ async def handle_withdrawal_decision(callback: CallbackQuery) -> None:
 
     # Importlar shu yerda, funksiya ichida — chunki backend hali to'liq ishga tushmagan
     # bosqichda (masalan standalone "python -m bot.bot" bilan) bu modulga ehtiyoj yo'q.
-    from backend.database import ADMIN_ID, SessionLocal, Teacher, WithdrawalRequest
+    from backend.database import ADMIN_ID, SessionLocal, Teacher, WithdrawalRequest, withdraw_balance
 
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("Bu tugma faqat admin uchun", show_alert=True)
@@ -333,7 +333,7 @@ async def handle_withdrawal_decision(callback: CallbackQuery) -> None:
 
     session = SessionLocal()
     try:
-        request = session.get(WithdrawalRequest, request_id)
+        request = session.get(WithdrawalRequest, request_id, with_for_update=True)
         if not request or request.status != "pending":
             await callback.answer("So'rov allaqachon ko'rib chiqilgan", show_alert=True)
             return
@@ -346,11 +346,10 @@ async def handle_withdrawal_decision(callback: CallbackQuery) -> None:
         teacher_name = teacher.user.full_name
 
         if action == "withdrawal_approve":
-            if teacher.balance < request.amount:
+            if not withdraw_balance(teacher, request.amount):
                 await callback.answer("O'qituvchi balansi yetarli emas", show_alert=True)
                 return
 
-            teacher.balance -= request.amount
             request.status = "approved"
             session.commit()
             await callback.message.edit_text(
