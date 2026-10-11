@@ -3561,12 +3561,43 @@ def _subject_key(subject: str) -> list[dict]:
     key = [{"number": n, "question_type": "single", "option_count": config["options"].get(n, 4), "correct": "A"}
            for n in range(1, config["tests"] + 1)]
     for n in range(config["tests"] + 1, config["tests"] + config["written"] + 1):
-        if config["parts"] == 2:
-            key += [{"number": len(key) + 1, "label": f"{n}a", "question_type": "text", "correct": "1"},
-                    {"number": len(key) + 2, "label": f"{n}b", "question_type": "text", "correct": "2"}]
+        bands = config.get("part_overrides", {}).get(n, config["parts"])
+        if bands > 1:
+            start = len(key) + 1
+            key += [{"number": start + band, "label": f"{n}{chr(97 + band)}", "question_type": "text", "correct": str(band + 1)}
+                    for band in range(bands)]
         else:
             key.append({"number": len(key) + 1, "label": str(n), "question_type": "text", "correct": "1"})
     return key
+
+
+def test_yozma_ish_har_bandi_kalitga_solishtiriladi():
+    """Kimyo 41–43: har bandning yakuniy javobi kalit bilan; ko'proq to'g'ri band — ko'proq ball."""
+    reset_database()
+    register_teacher()
+    key = _subject_key("Kimyo")
+    created = create_test(subject="Kimyo", key_questions=key)
+    refs = {item["label"]: str(item["number"]) for item in key if item.get("label")}
+    assert {"41a", "41b", "41c", "43c"} <= set(refs), sorted(refs)[-6:]
+
+    sent, restore = _capture_result_notices()
+    try:
+        for tg_id, bands in ((7101, ["41a", "41b", "41c"]), (7102, ["41a"]), (7103, [])):
+            started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(tg_id)).json()
+            assert len(started["questions"]) == 43, len(started["questions"])  # 41 — bitta savol, 3 band
+            q41 = next(q for q in started["questions"] if q["number"] == 41)
+            assert [part["label"] for part in q41["parts"]] == ["a", "b", "c"], q41
+            answers = {refs[band]: str(ord(band[-1]) - 96) for band in bands}  # 41a→1, 41b→2, 41c→3
+            client.post(f"/api/attempts/{started['attempt_id']}/finish", json={"answers": answers}, headers=as_user(tg_id))
+    finally:
+        restore()
+
+    rows = {row["name"]: row for row in client.get(f"/api/teacher/tests/{created['id']}/results",
+                                                    headers=as_user(555)).json()["rows"]}
+    full, one, none = rows["Dev 7101"], rows["Dev 7102"], rows["Dev 7103"]
+    assert full["ball"] > one["ball"] > none["ball"], (full["ball"], one["ball"], none["ball"])
+    assert full["correct"] == 1 and one["correct"] == 0  # foizda: savol butun to'g'ri bo'lsagina
+    assert full["sections"]["Umumiy kimyo"] > one["sections"]["Umumiy kimyo"] > 0  # bo'limda — qisman
 
 
 def test_har_fan_milliy_sertifikat_pasporti_boyicha_ishlaydi():

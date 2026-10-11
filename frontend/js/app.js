@@ -5839,6 +5839,7 @@ const SUBJECT_PRESETS = Object.fromEntries(
       options: config.options || {},
       textCount: config.written,
       textParts: config.parts,
+      partOverrides: config.part_overrides || {},
       duration: config.duration,
       keyboard: config.keyboard,
       sections: config.sections || [],
@@ -5879,6 +5880,7 @@ function subjectStructure(subject, typePreset) {
     testCount: preset.testCount ?? typePreset.testCount,
     textCount: preset.textCount ?? typePreset.textCount,
     textParts: preset.textParts ?? typePreset.textParts,
+    partOverrides: preset.partOverrides || {},
     options: preset.options || {},
     duration: preset.duration,
     keyboard: preset.keyboard || "math",
@@ -6040,6 +6042,7 @@ function renderNewTestForm(testType, draft = {}) {
       </div>
     </div>
     <div id="key-questions-container" data-default-parts="${structure.textParts}"
+         data-part-overrides='${JSON.stringify(structure.partOverrides || {})}'
          data-option-overrides='${JSON.stringify(structure.options)}'></div>
     <div class="panel" style="margin-top:12px;padding:10px 14px">
       <div class="row-between" style="gap:10px">
@@ -6083,6 +6086,7 @@ function renderNewTestForm(testType, draft = {}) {
     document.getElementById("field-test-count").value = next.testCount;
     document.getElementById("field-text-count").value = next.textCount;
     container.dataset.defaultParts = next.textParts;
+    container.dataset.partOverrides = JSON.stringify(next.partOverrides);
     container.dataset.optionOverrides = JSON.stringify(next.options);
     document.getElementById("subject-note").textContent = next.note;
 
@@ -6308,6 +6312,13 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
   const defaultOptions = Math.min(8, Math.max(2, Number(document.getElementById("field-option-count").value) || 4));
   const textCount = Math.max(0, Number(document.getElementById("field-text-count").value) || 0);
   const parts = Number(container.dataset.defaultParts) || 1;
+  // Yozma ish (Kimyo/Biologiya 41–43): savolga qarab bandlar soni — o'qituvchi [−]/[+] bilan o'zgartiradi
+  let partOverrides = {};
+  try {
+    partOverrides = JSON.parse(container.dataset.partOverrides || "{}");
+  } catch (_) {
+    partOverrides = {};
+  }
 
   // Fan bo'yicha istisnolar: masalan matematikada 33-35 savollar A-F bo'ladi
   let optionOverrides = {};
@@ -6373,16 +6384,30 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
   const writtenRows = [];
   for (let index = 0; index < textCount; index += 1) {
     const questionNumber = testCount + index + 1;
+    const bandCount = Number(partOverrides[questionNumber]) || parts;
+    const isBanded = partOverrides[questionNumber] !== undefined;
+    if (isBanded) {
+      writtenRows.push(`
+        <div class="row-between written-row-gap" style="margin:4px 0">
+          <b>${questionNumber} — yozma ish</b>
+          <span class="band-stepper">
+            <span class="subtitle" style="margin:0">bandlar:</span>
+            <button type="button" class="icon-button" data-band-step="-1" data-band-question="${questionNumber}" aria-label="Band kamaytirish">−</button>
+            <b>${bandCount}</b>
+            <button type="button" class="icon-button" data-band-step="1" data-band-question="${questionNumber}" aria-label="Band qo'shish">+</button>
+          </span>
+        </div>`);
+    }
 
-    for (let partIndex = 0; partIndex < parts; partIndex += 1) {
-      const label = parts > 1 ? `${questionNumber}${String.fromCharCode(97 + partIndex)}` : String(questionNumber);
+    for (let partIndex = 0; partIndex < bandCount; partIndex += 1) {
+      const label = bandCount > 1 ? `${questionNumber}${String.fromCharCode(97 + partIndex)}` : String(questionNumber);
       const savedRow = previous[label] || {};
       // Qoralamadan tiklanganda faqat "answer" ("0,5|1/2") bo'ladi — variantlarga ajratamiz
       const variants = savedRow.variants || (savedRow.answer ? String(savedRow.answer).split("|") : [""]);
       const isFirstPart = partIndex === 0;
 
       writtenRows.push(`
-        <div class="written-row ${isFirstPart && index ? "written-row-gap" : ""}">
+        <div class="written-row ${isFirstPart && index && !isBanded ? "written-row-gap" : ""}">
           <span class="written-number">${label}</span>
           <div class="written-cell key-row" data-label="${label}" data-kind="text"
                data-answer="${escapeHtml(variants.filter(Boolean).join("|"))}">
@@ -6415,6 +6440,25 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
 }
 
 function handleAnswerCellTap(event) {
+  // Yozma ish bandlari: [−] / [+] — 1 dan 6 gacha; yozilgan javoblar saqlanib qoladi
+  const step = event.target.closest("[data-band-step]");
+  if (step) {
+    const container = document.getElementById("key-questions-container");
+    let overrides = {};
+    try {
+      overrides = JSON.parse(container.dataset.partOverrides || "{}");
+    } catch (_) {
+      overrides = {};
+    }
+    const question = step.dataset.bandQuestion;
+    const current = Number(overrides[question]) || 1;
+    overrides[question] = Math.min(6, Math.max(1, current + Number(step.dataset.bandStep)));
+    container.dataset.partOverrides = JSON.stringify(overrides);
+    telegram?.HapticFeedback?.selectionChanged?.();
+    buildKeyQuestionRows();
+    return;
+  }
+
   const cell = event.target.closest(".answer-cell");
   if (!cell) return;
 

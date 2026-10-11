@@ -13,14 +13,16 @@ Maydonlar:
               (33–35 — moslashtirish topshiriqlari, A–F)
   written   — yozma (ochiq) savollar soni, tests dan keyin raqamlanadi
   parts     — har bir yozma savol nechta bandli (2 — a va b)
+  part_overrides — boshqacha bandli yozma savollar: {savol: bandlar soni}
+              (Kimyo, Biologiya 41–43 — yozma ish, 3–5 band; o'qituvchi [−]/[+] bilan o'zgartiradi)
   duration  — daqiqa
   keyboard  — yozma javob klaviaturasi: "math" (√, kasr, π) yoki "text" (oddiy harflar)
   sections  — bo'limlar: (nomi, "savollar") — None bo'lsa "qolgan barcha savollar"
   note      — test yaratishda ko'rinadigan izoh
 
-Imtihonchi qo'lda baholaydigan "yozma ish" topshiriqlari (Kimyo, Biologiya
-41–43; Rus tili 45 — insho) javoblar kaliti bilan avtomatik tekshirib
-bo'lmaydi — ular ilovadagi testga kiritilmaydi (izohda aytiladi).
+Yozma ish (Kimyo, Biologiya 41–43) — har bandning YAKUNIY javobi o'qituvchi
+kalitiga solishtiriladi; Rasch'da har band alohida baholanadi (qisman ball).
+Rus tili 45 (insho) — matn, kalit bilan solishtirib bo'lmaydi, testga kirmaydi.
 """
 
 MATCHING = {33: 6, 34: 6, 35: 6}  # moslashtirish topshiriqlari — A–F
@@ -44,28 +46,30 @@ SUBJECTS: dict[str, dict] = {
         "note": "Fizika: 35 ta test (33–35 — moslashtirish, A–F), 10 ta yozma (a, b), 150 daqiqa",
     },
     "Kimyo": {
-        "tests": 35, "options": MATCHING, "written": 5, "parts": 1, "duration": 100, "keyboard": "math",
+        "tests": 35, "options": MATCHING, "written": 8, "parts": 1, "duration": 180, "keyboard": "math",
+        "part_overrides": {41: 3, 42: 3, 43: 3},
         "sections": [
-            ("Umumiy kimyo", "1-13, 36-37"),
-            ("Anorganik kimyo", "14-19, 38"),
-            ("Organik kimyo", "20-29, 39-40"),
+            ("Umumiy kimyo", "1-13, 36-37, 41"),
+            ("Anorganik kimyo", "14-19, 38, 43"),
+            ("Organik kimyo", "20-29, 39-40, 42"),
             ("Kimyoviy tahlil", "30-32"),
             ("Aralash", "33-35"),
         ],
-        "note": "Kimyo: 35 ta test (33–35 — moslashtirish), 5 ta qisqa javob, 100 daqiqa. "
-                "41–43 (yozma ish) imtihonchi baholaydi — ilovada tekshirilmaydi",
+        "note": "Kimyo: 35 ta test (33–35 — moslashtirish), 36–40 qisqa javob, 41–43 yozma ish "
+                "(har bandning yakuniy javobi), 180 daqiqa",
     },
     "Biologiya": {
-        "tests": 35, "options": MATCHING, "written": 5, "parts": 1, "duration": 100, "keyboard": "text",
+        "tests": 35, "options": MATCHING, "written": 8, "parts": 1, "duration": 180, "keyboard": "text",
+        "part_overrides": {41: 3, 42: 3, 43: 3},
         "sections": [
             ("Hujayra va genetika", "1-11"),
             ("O'simlik va hayvonlar", "12-19"),
             ("Odam organizmi", "20-23"),
             ("Evolyutsiya va ekologiya", "24-32"),
-            ("Umumbiologik qonuniyatlar", "33-40"),
+            ("Umumbiologik qonuniyatlar", "33-43"),
         ],
-        "note": "Biologiya: 35 ta test (33–35 — moslashtirish), 5 ta qisqa javob, 100 daqiqa. "
-                "41–43 (yozma ish) imtihonchi baholaydi — ilovada tekshirilmaydi",
+        "note": "Biologiya: 35 ta test (33–35 — moslashtirish), 36–40 qisqa javob, 41–43 yozma ish "
+                "(har bandning yakuniy javobi), 180 daqiqa",
     },
     "Tarix": {
         "tests": 35, "options": MATCHING, "written": 10, "parts": 2, "duration": 90, "keyboard": "text",
@@ -149,8 +153,9 @@ def frontend_config() -> dict:
     """Ilovaga beriladigan ko'rinish (JSON): savol raqamlari kalitlari matn bo'ladi."""
     return {
         name: {
-            **{key: value for key, value in config.items() if key != "sections"},
+            **{key: value for key, value in config.items() if key not in ("sections", "part_overrides")},
             "options": {str(number): count for number, count in config["options"].items()},
+            "part_overrides": {str(number): count for number, count in config.get("part_overrides", {}).items()},
             "sections": [{"name": name_, "ranges": ranges} for name_, ranges in config["sections"]],
         }
         for name, config in SUBJECTS.items()
