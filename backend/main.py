@@ -22,6 +22,7 @@ import hmac
 import io
 import json
 import logging
+import queue
 import math
 import os
 import re
@@ -1880,12 +1881,20 @@ def _notify_admin_about_withdrawal(request: WithdrawalRequest, teacher: Teacher)
 def _send_pdf_to_telegram(chat_id: int, file_name: str, pdf_bytes: bytes, caption: str = "") -> None:
     """Tayyor PDF'ni bot orqali foydalanuvchining shaxsiy chatiga yuboradi."""
 
-    response = httpx.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
-        data={"chat_id": chat_id, "caption": caption} if caption else {"chat_id": chat_id},
-        files={"document": (file_name, pdf_bytes, "application/pdf")},
-        timeout=30,
-    )
+    for _ in range(3):
+        response = httpx.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
+            data={"chat_id": chat_id, "caption": caption} if caption else {"chat_id": chat_id},
+            files={"document": (file_name, pdf_bytes, "application/pdf")},
+            timeout=30,
+        )
+        if response.status_code != 429:  # 429 — juda tez: Telegram aytgancha kutib qayta urinamiz
+            break
+        try:
+            retry_after = int(response.json().get("parameters", {}).get("retry_after", 3))
+        except ValueError:
+            retry_after = 3
+        time.sleep(min(retry_after, 30) + 0.5)
     if response.status_code != 200:
         raise HTTPException(status_code=502, detail="PDF yuborilmadi (botga /start bosganmisiz?)")
 
@@ -2455,31 +2464,106 @@ def _result_notice(db: Session, attempt: Attempt, test: Test, total_questions: i
     return teacher_user.tg_id, text
 
 
-def _send_result_notice(notice: tuple[int, str] | None) -> None:
-    """Natija xabarini o'qituvchiga yuboradi. Yuborilmasa ham natija bazada saqlanib qoladi."""
+# ---------- O'qituvchiga natija xabarlari: navbat orqali ----------
+#
+# Telegram bitta chatga sekundiga ~1 xabardan ko'pini qabul qilmaydi (429).
+# Ilgari har natija alohida ipda darhol yuborilardi — imtihon oxirida 300 o'quvchi
+# bir vaqtda tugatsa, xabarlarning ko'pi rad etilib, jimgina yo'qolardi.
+# Endi: bitta yuboruvchi ip, bir lahzada kelganlar bitta xabarga birlashtiriladi
+# (4096 belgi chegarasida), har chatga ≥1.1 s oraliq, 429 kelsa — kutib qayta urinadi.
+# (Natijalarning o'zi bazada; bu faqat xabar.)
 
+NOTICE_BATCH_WINDOW = 1.0   # bir lahzada kelganlarni yig'ish (soniya)
+NOTICE_CHAT_INTERVAL = 1.1  # bitta chatga xabarlar orasidagi eng kam vaqt
+NOTICE_MAX_CHARS = 3800     # Telegram chegarasi 4096
+_notice_queue: "queue.Queue[tuple[int, str]]" = queue.Queue()
+_notice_worker_lock = threading.Lock()
+_notice_worker: threading.Thread | None = None
+
+
+def _telegram_send_message(chat_id: int, text: str) -> bool:
+    """sendMessage: 429 bo'lsa — Telegram aytgan vaqtcha kutib qayta urinadi. Yetkazilsa True."""
+
+    logger = logging.getLogger("backend")
+    for _ in range(5):
+        try:
+            response = httpx.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                                  json={"chat_id": chat_id, "text": text}, timeout=15)
+        except Exception:
+            logger.warning("Telegram'ga ulanib bo'lmadi, qayta urinamiz", exc_info=True)
+            time.sleep(2)
+            continue
+        if response.status_code == 429:
+            try:
+                retry_after = int(response.json().get("parameters", {}).get("retry_after", 3))
+            except ValueError:
+                retry_after = 3
+            time.sleep(min(retry_after, 60) + 0.5)
+            continue
+        if response.status_code != 200:
+            # 400/403 — chat yo'q yoki botni bloklagan: qayta urinishdan foyda yo'q
+            logger.warning("Xabar yetmadi (%s): %s", response.status_code, response.text[:200])
+            return False
+        return True
+    return False
+
+
+def _notice_chunks(texts: list[str]) -> list[str]:
+    """Bir nechta natija xabarini Telegram chegarasidagi bo'laklarga birlashtiradi."""
+    chunks, current = [], ""
+    for text in texts:
+        text = text[:NOTICE_MAX_CHARS]
+        candidate = f"{current}\n\n➖➖➖\n\n{text}" if current else text
+        if len(candidate) > NOTICE_MAX_CHARS:
+            chunks.append(current)
+            current = text
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _notice_worker_loop() -> None:
+    last_sent: dict[int, float] = {}
+    while True:
+        batch = [_notice_queue.get()]
+        time.sleep(NOTICE_BATCH_WINDOW)
+        while True:
+            try:
+                batch.append(_notice_queue.get_nowait())
+            except queue.Empty:
+                break
+        by_chat: dict[int, list[str]] = {}
+        for chat_id, text in batch:
+            by_chat.setdefault(chat_id, []).append(text)
+        for chat_id, texts in by_chat.items():
+            for chunk in _notice_chunks(texts):
+                wait = NOTICE_CHAT_INTERVAL - (time.monotonic() - last_sent.get(chat_id, 0.0))
+                if wait > 0:
+                    time.sleep(wait)
+                if not _telegram_send_message(chat_id, chunk):
+                    logging.getLogger("backend").warning("Natija xabari o'qituvchiga yetmadi (chat %s)", chat_id)
+                last_sent[chat_id] = time.monotonic()
+
+
+def _send_result_notice(notice: tuple[int, str] | None) -> None:
+    """Natija xabarini navbatga qo'yadi (darhol qaytadi). Yuborilmasa ham natija bazada saqlanib qoladi."""
+
+    global _notice_worker
     if not notice or not BOT_TOKEN:
         return
-
-    chat_id, text = notice
-    try:
-        httpx.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": chat_id, "text": text},
-            timeout=10,
-        )
-    except Exception:
-        logging.getLogger("backend").warning("Natija o'qituvchiga yuborilmadi", exc_info=True)
+    with _notice_worker_lock:
+        if _notice_worker is None or not _notice_worker.is_alive():
+            _notice_worker = threading.Thread(target=_notice_worker_loop, name="result-notices", daemon=True)
+            _notice_worker.start()
+    _notice_queue.put(notice)
 
 
 def _send_result_notice_in_background(notice: tuple[int, str] | None) -> None:
-    """
-    So'rov ichidan chaqiriladi: xabar alohida ipda ketadi, o'quvchi esa
-    Telegram javobini (10 soniyagacha) kutmasdan darhol javob oladi.
-    """
+    """So'rov ichidan chaqiriladi — navbatga qo'yadi, o'quvchi Telegram'ni kutmaydi."""
 
-    if notice:
-        threading.Thread(target=_send_result_notice, args=(notice,), daemon=True).start()
+    _send_result_notice(notice)
 
 
 def _grade_attempt_from_saved_answers(db: Session, attempt: Attempt, test: Test) -> int:

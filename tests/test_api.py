@@ -3648,6 +3648,59 @@ def test_sahifada_fanlar_pasporti_bor():
     assert '"Fizika"' in html and '"keyboard": "text"' in html
 
 
+def test_natija_xabarlari_navbat_bilan_yetkaziladi():
+    """300 o'quvchi bir vaqtda tugatsa: xabarlar birlashtiriladi, hammasi yetadi, chatga ≥1 s oraliq."""
+    import time as _time
+
+    sent: list[tuple[int, str, float]] = []
+    originals = (main._telegram_send_message, main.NOTICE_BATCH_WINDOW, main.NOTICE_CHAT_INTERVAL, main.BOT_TOKEN)
+    main._telegram_send_message = lambda chat, text: sent.append((chat, text, _time.monotonic())) or True
+    main.NOTICE_BATCH_WINDOW, main.NOTICE_CHAT_INTERVAL = 0.2, 0.3
+    try:
+        for index in range(300):
+            main._send_result_notice((555, f"Natija #{index:03d} " + "x" * 40))
+        main._send_result_notice((777, "boshqa o'qituvchi"))
+        deadline = _time.monotonic() + 20
+        while _time.monotonic() < deadline and sum(text.count("Natija #") for _, text, _ in sent) < 300:
+            _time.sleep(0.1)
+    finally:
+        main._telegram_send_message, main.NOTICE_BATCH_WINDOW, main.NOTICE_CHAT_INTERVAL, main.BOT_TOKEN = originals
+
+    to_teacher = [item for item in sent if item[0] == 555]
+    delivered = [line for _, text, _ in to_teacher for line in text.split("\n") if line.startswith("Natija #")]
+    assert sorted(delivered) == sorted(f"Natija #{index:03d} " + "x" * 40 for index in range(300)), len(delivered)
+    assert len(to_teacher) < 30, f"birlashtirilmadi: {len(to_teacher)} ta xabar"
+    assert all(len(text) <= 4096 for _, text, _ in to_teacher)
+    gaps = [b[2] - a[2] for a, b in zip(to_teacher, to_teacher[1:])]
+    assert all(gap >= 0.29 for gap in gaps), gaps
+    assert any(chat == 777 for chat, _, _ in sent)
+
+
+def test_yangi_foydalanuvchi_bir_vaqtdagi_sorovlarda_xato_bermaydi():
+    """Ilova birinchi ochilganda ikki so'rov bir vaqtda foydalanuvchi yaratsa — 500 emas."""
+    from backend.database import User
+
+    reset_database()
+    with SessionLocal() as other:  # "boshqa so'rov" foydalanuvchini allaqachon yaratib qo'ydi
+        other.add(User(tg_id=4321, full_name="Birinchi"))
+        other.commit()
+
+    session = SessionLocal()
+    real_scalar = session.scalar
+    calls = {"n": 0}
+
+    def racing_scalar(statement, *args, **kwargs):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else real_scalar(statement, *args, **kwargs)  # 1-SELECT hali ko'rmagan
+
+    session.scalar = racing_scalar
+    try:
+        user = auth.get_current_user(x_init_data="", x_dev_user="4321", db=session)
+        assert user.tg_id == 4321 and user.full_name == "Birinchi"
+    finally:
+        session.close()
+
+
 # ========== Ishga tushirgich ==========
 
 

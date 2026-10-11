@@ -95,7 +95,11 @@ connect_args = {"check_same_thread": False} if IS_SQLITE else {}
 
 # pool_pre_ping: PostgreSQL ulanishi uzilib qolgan bo'lsa (masalan, xizmat
 # uyquga ketib qaytgandan keyin), SQLAlchemy uni avtomatik qayta ulaydi.
-engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=not IS_SQLITE)
+# Ulanishlar havzasi: imtihon paytida yuzlab o'quvchi bir vaqtda so'rov yuboradi —
+# standart 5 (+10) ulanishda so'rovlar navbatda turib qolardi. Neon'ning "-pooler"
+# manzili ko'p ulanishni ko'taradi. SQLite'da (lokal sinov) havza sozlanmaydi.
+pool_options = {} if IS_SQLITE else {"pool_size": 10, "max_overflow": 20, "pool_timeout": 60}
+engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=not IS_SQLITE, **pool_options)
 SessionLocal = sessionmaker(bind=engine)
 
 

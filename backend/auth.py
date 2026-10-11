@@ -17,6 +17,7 @@ from urllib.parse import parse_qsl
 
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .database import ADMIN_ID, BOT_TOKEN, DEV_MODE, SessionLocal, Teacher, User
@@ -129,8 +130,17 @@ def get_current_user(
         full_name = f'{telegram_user.get("first_name", "")} {telegram_user.get("last_name", "")}'.strip()
         user = User(tg_id=telegram_user["id"], full_name=full_name, username=username, photo_url=photo_url)
         db.add(user)
-        db.commit()
-        db.refresh(user)
+        try:
+            db.commit()
+            db.refresh(user)
+        except IntegrityError:
+            # Ilova birinchi ochilganda bir nechta so'rovni BIR VAQTDA yuboradi —
+            # ikkinchisi foydalanuvchini ham yaratmoqchi bo'lib, "tg_id band" xatosini
+            # olardi (yangi o'quvchilarning ~2%ida 500 xato). Endi birinchisi yaratganini olamiz.
+            db.rollback()
+            user = db.scalar(select(User).where(User.tg_id == telegram_user["id"]))
+            if not user:
+                raise
     elif x_init_data and (user.username != username or (photo_url and user.photo_url != photo_url)):
         # Username va profil rasmi har kirishda yangilanadi
         user.username = username
