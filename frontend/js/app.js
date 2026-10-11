@@ -5676,13 +5676,10 @@ function renderNewTestForm(testType, draft = {}) {
     </div>
     <div id="key-questions-container" data-default-parts="${structure.textParts}"
          data-option-overrides='${JSON.stringify(structure.options)}'></div>
-    <div class="panel" style="margin-top:12px">
+    <div class="panel" style="margin-top:12px;padding:10px 14px">
       <div class="row-between" style="gap:10px">
-        <div style="min-width:0">
-          <b>🧩 Geometriya savollari</b>
-          <p class="subtitle" id="geometry-summary" style="margin:2px 0 0">Ixtiyoriy — belgilansa, natijalar Algebra/Geometriya bo'yicha chiqadi</p>
-        </div>
-        <button class="btn btn-ghost" id="pick-geometry-button" style="width:auto;padding:8px 14px;margin:0">Belgilash</button>
+        <span style="min-width:0"><b>🧩 Geometriya:</b> <span id="geometry-summary"></span></span>
+        <button class="btn btn-ghost" id="pick-geometry-button" style="width:auto;padding:6px 12px;margin:0">Belgilash</button>
       </div>
     </div>`;
 
@@ -5805,29 +5802,54 @@ function renderNewTestForm(testType, draft = {}) {
 
   document.getElementById("save-test-button").addEventListener("click", guarded(saveNewTest));
 
-  // Geometriya savollari — kalit qatorlaridagi savol raqamlari bo'yicha tanlanadi
+  // Geometriya savollari — kalit qatorlaridagi savol raqamlari bo'yicha tanlanadi.
+  // 45 savolli matematika testida o'qituvchi hech narsa bosmaydi: server Milliy
+  // sertifikat bo'linishini (24–30, 33–35, 41–44) o'zi qo'llaydi — bu yerda faqat ko'rsatiladi.
   newTestSections = { text: "", picked: [], pickedName: "Geometriya", restName: "Algebra" };
   const geometrySummary = document.getElementById("geometry-summary");
-  document.getElementById("pick-geometry-button").addEventListener("click", () => {
-    const numbers = [...new Set(
+  const geometryButton = document.getElementById("pick-geometry-button");
+  const keyNumbers = () =>
+    [...new Set(
       [...document.querySelectorAll("#key-questions-container .key-row")]
         .map((row) => parseInt(row.dataset.label, 10))
         .filter((number) => number > 0)
     )].sort((a, b) => a - b);
+  const NATIONAL_MATH_GEOMETRY = [24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 41, 42, 43, 44];
+  const isNationalMath = () => keyNumbers().length === 45 && subjectSelect.value.toLowerCase().includes("matem");
+  const refreshGeometrySummary = () => {
+    if (newTestSections.text) {
+      geometrySummary.textContent = compressNumbers(newTestSections.picked);
+      geometryButton.textContent = "O'zgartirish";
+    } else if (isNationalMath() && !newTestSections.cleared) {
+      geometrySummary.textContent = "avtomatik ✅ (24–30, 33–35, 41–44)";
+      geometryButton.textContent = "O'zgartirish";
+    } else {
+      geometrySummary.textContent = "yo'q";
+      geometryButton.textContent = "Belgilash";
+    }
+  };
+  refreshGeometrySummary();
+  subjectSelect.addEventListener("change", refreshGeometrySummary);
+  new MutationObserver(refreshGeometrySummary).observe(document.getElementById("key-questions-container"), { childList: true, subtree: true });
+  geometryButton.addEventListener("click", () => {
+    const numbers = keyNumbers();
     if (!numbers.length) {
       showToast("Avval savollar sonini kiriting");
       return;
     }
     openNumberPicker({
       numbers,
-      picked: newTestSections.picked.filter((number) => numbers.includes(number)),
+      // Avtomatik holatda oyna shablon bilan ochiladi — o'qituvchi faqat farqini o'zgartiradi
+      picked: (newTestSections.text || newTestSections.cleared || !isNationalMath()
+        ? newTestSections.picked
+        : NATIONAL_MATH_GEOMETRY
+      ).filter((number) => numbers.includes(number)),
       pickedName: newTestSections.pickedName,
       restName: newTestSections.restName,
       onSave: async (choice) => {
-        newTestSections = choice;
-        geometrySummary.textContent = choice.text
-          ? `${choice.pickedName}: ${compressNumbers(choice.picked)} · qolgani ${choice.restName}`
-          : "Ixtiyoriy — belgilansa, natijalar Algebra/Geometriya bo'yicha chiqadi";
+        // "Bo'limsiz" ataylab tanlansa — server shablonni ham qo'llamasligi uchun eslab qolinadi
+        newTestSections = { ...choice, cleared: !choice.text };
+        refreshGeometrySummary();
       },
     });
   });
@@ -6071,7 +6093,8 @@ async function saveNewTest() {
   });
 
   const result = await api("/api/teacher/tests", { method: "POST", body });
-  if (newTestSections.text) {
+  // Bo'sh matn ("Bo'limsiz") ham yuboriladi — aks holda 45 savolli matematikada shablon qo'llanardi
+  if (newTestSections.text || newTestSections.cleared) {
     try {
       await api(`/api/teacher/tests/${result.id}/sections`, { method: "PUT", body: { text: newTestSections.text } });
     } catch (_) {
