@@ -835,9 +835,29 @@ def parse_sections(text: str) -> list[dict]:
     return sections
 
 
+# Milliy sertifikat (UZBMB) matematika testi: 45 savol, geometriya — 24–30, 33–35, 41–44
+NATIONAL_MATH_QUESTIONS = 45
+NATIONAL_MATH_GEOMETRY = [*range(24, 31), 33, 34, 35, 41, 42, 43, 44]
+
+
+def _default_sections(test: Test) -> list[dict]:
+    """
+    O'qituvchi bo'limlarni belgilamagan 45 savolli matematika testida
+    Algebra/Geometriya Milliy sertifikat shabloni bo'yicha o'zi ajratiladi.
+    """
+
+    if "matem" not in (test.subject or "").lower() or _question_count(test) != NATIONAL_MATH_QUESTIONS:
+        return []
+    algebra = [number for number in range(1, NATIONAL_MATH_QUESTIONS + 1) if number not in NATIONAL_MATH_GEOMETRY]
+    return [{"name": "Algebra", "numbers": algebra}, {"name": "Geometriya", "numbers": NATIONAL_MATH_GEOMETRY}]
+
+
 def _test_sections(test: Test) -> list[dict]:
+    # "" — hali belgilanmagan (shablon ishlaydi), "[]" — o'qituvchi ataylab "Bo'limsiz" tanlagan
+    if not test.sections:
+        return _default_sections(test)
     try:
-        return json.loads(test.sections) if test.sections else []
+        return json.loads(test.sections)
     except ValueError:
         return []
 
@@ -887,9 +907,10 @@ def build_rasch_report(db: Session, test: Test) -> dict:
     results = best_attempts(db, test)
     items = _rasch_items(test)
     total_questions = _question_count(test)
-    # Rasch (Milliy sertifikat uslubidagi ball) — faqat PULLIK testlarda.
-    # Bepul testda — oddiy natija: to'g'ri javoblar, foiz va 5 ballik baho.
-    uses_rasch = (test.price or 0) > 0
+    # Hamma testlar Rasch modeli bo'yicha baholanadi (Milliy sertifikat uslubidagi
+    # ball va A+ … NC daraja). Ilgari faqat pullik testlarda edi — pullik test
+    # olib tashlangach, hamma natija oddiy 2–5 baho bo'lib qolgandi.
+    uses_rasch = True
 
     correct_refs: dict[int, set[int]] = {attempt.id: set() for attempt, _ in results}
     if correct_refs:
@@ -914,21 +935,9 @@ def build_rasch_report(db: Session, test: Test) -> dict:
     if sections and any(name is None for name in item_section):
         section_names.append("Boshqa")
         item_section = [name or "Boshqa" for name in item_section]
-    # Pullikda ball bo'limlarga savol qiyinligi bo'yicha bo'linadi (qiyin savol — ko'proq ulush)
-    difficulties = rasch["difficulties"] if uses_rasch else [0.0] * len(items)
-    lowest = min(difficulties, default=0.0)
-    weights = [difficulty - lowest + 1.0 for difficulty in difficulties]
-
-    def split_sections(row_matrix: list[int], ball: float | None) -> dict:
-        if not section_names:
-            return {}
+    def split_sections(row_matrix: list[int]) -> dict:
+        """Har bo'lim bo'yicha to'g'ri yechilgan savollar foizi (Algebra 60%, Geometriya 35% ...)."""
         result = {}
-        if ball is not None:
-            total_weight = sum(weight for weight, solved in zip(weights, row_matrix) if solved)
-            for name in section_names:
-                part = sum(w for w, solved, sec in zip(weights, row_matrix, item_section) if solved and sec == name)
-                result[name] = round(ball * part / total_weight, 2) if total_weight else 0.0
-            return result
         for name in section_names:
             in_section = [solved for solved, sec in zip(row_matrix, item_section) if sec == name]
             result[name] = round(sum(in_section) / len(in_section) * 100, 1) if in_section else 0.0
@@ -945,7 +954,7 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             "seconds": attempt.seconds,
             "ball": score,
             "grade": grade_for(score) if uses_rasch else _school_grade(attempt.percent),
-            "sections": split_sections(row_matrix, score),
+            "sections": split_sections(row_matrix),
         }
         for (attempt, name), score, row_matrix in zip(results, scores, matrix)
     ]
@@ -1060,8 +1069,8 @@ def _stat_tiles(summary: dict, styles: dict, width: float):
     if summary.get("uses_rasch"):
         tiles = [
             ("ISHTIROKCHILAR", f"{summary['participants']}", ""),
-            ("O'RTACHA BALL", f"{summary['avg_ball']:.2f}", f"o'rtacha foiz {summary['avg_percent']}%"),
-            ("ENG YUQORI BALL", f"{summary['max_ball']:.2f}", summary["max_name"]),
+            ("O'RTACHA BALL", f"{summary['avg_ball'] or 0:.2f}", f"o'rtacha foiz {summary['avg_percent']}%"),
+            ("ENG YUQORI BALL", f"{summary['max_ball'] or 0:.2f}", summary["max_name"]),
             ("A+ VA A", f"{summary['top_count']} ta", f"ishtirokchilarning {summary['top_share']}%"),
         ]
     else:
@@ -1221,7 +1230,7 @@ def _section_results_table(rows: list[dict], styles: dict, width: float, uses_ra
     data = [[Paragraph(f"<font color='white'><b>{xml_escape(text)}</b></font>", centered if index != 1 else styles["cell"])
              for index, text in enumerate(header)]]
     for row in rows:
-        values = [f"{row['sections'].get(name, 0):g}" + ("" if uses_rasch else "%") for name in section_names]
+        values = [f"{row['sections'].get(name, 0):g}%" for name in section_names]
         total = f"{row['ball']:.2f}" if uses_rasch else f"{row['percent']}%"
         data.append([
             Paragraph(str(row["rank"]), centered),
@@ -1297,8 +1306,7 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
              for index, text in enumerate(header)]]
     for row in rows:
         if section_names:
-            unit = "" if uses_rasch else "%"
-            middle_values = [f"{row['sections'].get(name, 0):g}{unit}" for name in section_names]
+            middle_values = [f"{row['sections'].get(name, 0):g}%" for name in section_names]
         else:
             middle_values = [f"{row['correct']}/{row['total']}"] + ([f"{row['percent']}%"] if uses_rasch else [])
         total = f"{row['ball']:.2f}" if uses_rasch else f"{row['percent']}%"
@@ -3496,8 +3504,7 @@ def generate_certificates_pdf(db: Session, test: Test, teacher: Teacher, attempt
         # Bo'limlar va to'g'ri javoblar
         details = [f"To'g'ri javoblar: {row['correct']}/{row['total']}", f"O'rin: {row['rank']}"]
         if section_names:
-            unit = "" if uses_rasch else "%"
-            details.insert(0, "  ·  ".join(f"{name}: {row['sections'].get(name, 0):g}{unit}" for name in section_names))
+            details.insert(0, "  ·  ".join(f"{name}: {row['sections'].get(name, 0):g}%" for name in section_names))
         pdf.setFillColor(colors.HexColor("#374151"))
         pdf.setFont(REPORT_FONT, 13)
         for index, line in enumerate(details):
@@ -3529,7 +3536,7 @@ def set_test_sections(test_id: int, body: SectionsIn, teacher: Teacher = Depends
         sections = parse_sections(body.text)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error))
-    test.sections = json.dumps(sections, ensure_ascii=False) if sections else ""
+    test.sections = json.dumps(sections, ensure_ascii=False)  # bo'sh bo'lsa "[]" — shablon qo'llanmaydi
     db.commit()
     return {"sections": sections, "text": sections_text(sections)}
 

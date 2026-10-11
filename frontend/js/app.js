@@ -6487,7 +6487,7 @@ async function renderResultsTab(selectedId) {
           ${escapeHtml(row.name)}
           <small class="result-meta">${
             results.section_names?.length
-              ? results.section_names.map((name) => `${escapeHtml(name)}: ${row.sections[name]}${usesRasch ? "" : "%"}`).join(" • ")
+              ? results.section_names.map((name) => `${escapeHtml(name)}: ${row.sections[name]}%`).join(" • ")
               : `✅ ${row.correct} • ❌ ${row.wrong} • ${row.percent}%`
           }</small>
         </span>

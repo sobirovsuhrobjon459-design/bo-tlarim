@@ -779,35 +779,22 @@ def test_rasch_balli_orin_va_daraja():
     finally:
         restore()
 
-    # Bepul test — Rasch yo'q: to'g'ri javoblar bo'yicha o'rin, 5 ballik baho
+    # Har qanday test (pullik bo'lmasa ham) — Rasch balli va Milliy sertifikat darajalari
     results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
     rows = results["rows"]
-    assert results["uses_rasch"] is False
+    assert results["uses_rasch"] is True
     assert [row["rank"] for row in rows] == [1, 1, 3], rows
-    assert rows[0]["ball"] is None and rows[0]["correct"] == 1 and rows[2]["correct"] == 0, rows
-    assert rows[0]["grade"] == "2" and results["summary"]["avg_ball"] is None, rows  # 1/4 = 25%
-    assert results["summary"]["participants"] == 3, results["summary"]
+    assert rows[0]["correct"] == 1 and rows[2]["correct"] == 0, rows
+    assert rows[0]["ball"] > rows[2]["ball"] and rows[0]["grade"] in ("A+", "A", "B+", "B", "C+", "C", "NC"), rows
+    assert all(0 <= row["ball"] <= 100 for row in rows), rows
+    assert results["summary"]["participants"] == 3 and results["summary"]["avg_ball"] is not None, results["summary"]
     pdf = client.get(f"/api/teacher/tests/{created['id']}/pdf", headers=as_user(555))
     assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF"), pdf.status_code
-
-    # Pullik test — Rasch balli (75 ballik shkala), Milliy sertifikat darajalari
-    session = SessionLocal()
-    try:
-        from backend.database import Test as DbTest
-        test_row = session.get(DbTest, created["id"])
-        test_row.price = 5000
-        session.commit()
-        paid = main.build_rasch_report(session, test_row)
-    finally:
-        session.close()
-    assert paid["uses_rasch"] is True
-    assert paid["rows"][0]["ball"] > paid["rows"][2]["ball"] and paid["rows"][0]["grade"] in ("A+", "A", "B+", "B", "C+", "C", "NC")
-    assert all(0 <= row["ball"] <= 100 for row in paid["rows"]), paid["rows"]
     assert grade_for(30) == "NC" and grade_for(46) == "C"
 
 
 def test_bolimlar_va_sertifikat():
-    """Bo'limlar (Algebra/Geometriya): foiz (bepul) va Rasch ballining bo'linishi (pullik); sertifikat PDF."""
+    """Bo'limlar (Algebra/Geometriya) — har bo'lim bo'yicha foiz; sertifikat PDF."""
     assert main.parse_sections("Algebra: 1-2\nGeometriya: 3, 4") == [
         {"name": "Algebra", "numbers": [1, 2]}, {"name": "Geometriya", "numbers": [3, 4]}]
     for bad in ("Algebra 1-2", "Algebra: x", "Algebra: 5-2"):
@@ -848,18 +835,30 @@ def test_bolimlar_va_sertifikat():
                      headers=as_user(555))
     assert one.status_code == 200
 
-    # Pullik: Rasch balli bo'limlarga bo'linadi, yig'indisi umumiy ballga teng
-    session = SessionLocal()
-    try:
-        from backend.database import Test as DbTest
-        test_row = session.get(DbTest, created["id"])
-        test_row.price = 5000
-        session.commit()
-        paid = main.build_rasch_report(session, test_row)
-    finally:
-        session.close()
-    for row in paid["rows"]:
-        assert abs(sum(row["sections"].values()) - row["ball"]) < 0.05, row
+    # "Bo'limsiz" ataylab tanlansa — bo'limlar chiqmaydi
+    client.put(f"/api/teacher/tests/{created['id']}/sections", json={"text": ""}, headers=as_user(555))
+    cleared = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
+    assert cleared["section_names"] == [], cleared["section_names"]
+
+
+def test_milliy_sertifikat_matematika_bolimlari_ozi_qollanadi():
+    """45 savolli matematika testida bo'lim belgilanmasa — Algebra/Geometriya shablon bo'yicha, foizda."""
+    reset_database()
+    register_teacher()
+    key = [{"number": n, "question_type": "single", "option_count": 4, "correct": "A"} for n in range(1, 46)]
+    created = create_test(key_questions=key)
+    answers = {str(n): "A" for n in range(1, 24)}  # faqat 1-23 (hammasi Algebra) to'g'ri
+    started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901)).json()
+    client.post(f"/api/attempts/{started['attempt_id']}/finish", json={"answers": answers}, headers=as_user(901))
+
+    results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
+    assert results["section_names"] == ["Algebra", "Geometriya"], results["section_names"]
+    row = results["rows"][0]
+    assert row["sections"] == {"Algebra": round(23 / 31 * 100, 1), "Geometriya": 0.0}, row["sections"]
+
+    # Boshqa fan yoki savollar soni boshqa bo'lsa — shablon qo'llanmaydi
+    other = create_test(subject="Fizika", key_questions=key)
+    assert client.get(f"/api/teacher/tests/{other['id']}/results", headers=as_user(555)).json()["section_names"] == []
 
 
 def test_pdf_hisobot_kirill_ismlar_va_yopilgan_test():
