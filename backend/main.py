@@ -4075,8 +4075,8 @@ def _test_payment_caption(payment: Payment, test: Test, student: User) -> str:
         + (f" (@{student.username})" if student.username else "")
         + f"\nTest: «{test.title}» (kod: {test.code})\n"
         f"Summa: {_format_sum(payment.amount)} so'm\n\n"
-        "Kartangizga shu summa tushganini tekshirib, tasdiqlang. "
-        "Tasdiqlasangiz, o'quvchiga test ochiladi."
+        "Kartangizga shu summa tushganini tekshiring. "
+        "\"Ruxsat berish\" bosilsa, shu o'quvchi testga kira oladi."
     )
 
 
@@ -4090,8 +4090,8 @@ def _send_test_receipt_to_teacher(payment: Payment, test: Test, student: User, i
             "caption": _test_payment_caption(payment, test, student),
             "reply_markup": json.dumps({
                 "inline_keyboard": [[
-                    {"text": "✅ Pul tushdi", "callback_data": f"tpay_approve:{payment.id}"},
-                    {"text": "❌ Rad etish", "callback_data": f"tpay_reject:{payment.id}"},
+                    {"text": "✅ Ruxsat berish", "callback_data": f"tpay_approve:{payment.id}"},
+                    {"text": "❌ Ruxsat yo'q", "callback_data": f"tpay_reject:{payment.id}"},
                 ]]
             }),
         },
@@ -4179,7 +4179,7 @@ def decide_test_payment(db: Session, payment_id: int, approve: bool, teacher_tg_
         _notify_user(student.tg_id, f"✅ «{test.title}» testi uchun to'lovingiz tasdiqlandi!\n\n"
                                     f"Endi testni boshlashingiz mumkin. Test kodi: {test.code}")
         logging.getLogger("backend").info("Test to'lovi tasdiqlandi: payment=%s", payment.id)
-        return True, f"✅ Tasdiqlandi: {student.full_name} — «{test.title}», {amount_text} so'm. Unga test ochildi."
+        return True, f"✅ Ruxsat berildi: {student.full_name} — «{test.title}», {amount_text} so'm. U testga kira oladi."
 
     payment.status = "cancelled"
     payment.cancelled_at = utcnow()
@@ -4188,7 +4188,7 @@ def decide_test_payment(db: Session, payment_id: int, approve: bool, teacher_tg_
                                 "Chek noto'g'ri yoki kartaga pul tushmagan bo'lishi mumkin. "
                                 "Savol bo'lsa, o'qituvchingizga yozing. Qayta chek yuborishingiz mumkin.")
     logging.getLogger("backend").info("Test to'lovi rad etildi: payment=%s", payment.id)
-    return True, f"❌ Rad etildi: {student.full_name} — «{test.title}», {amount_text} so'm"
+    return True, f"❌ Ruxsat berilmadi: {student.full_name} — «{test.title}», {amount_text} so'm"
 
 
 @app.get("/api/teacher/test-payments")
@@ -4213,6 +4213,7 @@ def list_test_payments(teacher: Teacher = Depends(get_current_teacher), db: Sess
             "test_code": test.code,
             "student": student.full_name,
             "username": student.username,
+            "photo_url": student.photo_url,
             "has_receipt": bool(payment.receipt_file_id),
         }
         for payment, test, student in rows

@@ -24,7 +24,7 @@ _STUDENT = """👨‍🎓 <b>TEST TOPSHIRUVCHI UCHUN</b>
 3️⃣ Test kartasida <b>📋 Shartlar</b> chiqadi:
    • kanalga obuna (✅ / ❌);
    • boshlanish va tugash vaqti;
-   • pullik bo'lsa — narxni o'qituvchi kartasiga o'tkazib, <b>chek rasmini</b> yuborasiz; o'qituvchi tasdiqlagach test ochiladi va botda xabar keladi.
+   • pullik bo'lsa — narxni o'qituvchi kartasiga o'tkazasiz, <b>✅ Ha, to'ladim</b> ni bosib <b>chekni</b> joylaysiz; o'qituvchi ruxsat bergach testga kirasiz va botda xabar keladi.
    Shart bajarilmagan bo'lsa, tugma orqali bajaring va <b>🔄 Tekshirish</b> ni bosing.
 4️⃣ <b>▶️ Testni boshlash</b> — barcha savollar bitta sahifada. Javobni bosib belgilaysiz, yozma javoblar uchun matematik klaviatura bor.
 5️⃣ <b>Yakunlash</b> — javoblaringiz o'qituvchiga yuboriladi.
@@ -73,9 +73,9 @@ _CREDITS = """🎫 <b>KREDIT</b>
 💳 <b>Pullik test qanday ishlaydi:</b>
 1️⃣ Bosh sahifada <b>➕ Karta qo'shish</b> — karta raqamingiz va ism-familiyangiz.
 2️⃣ Test yaratishda <b>Pullik test</b> va narxini tanlang.
-3️⃣ O'quvchi pulni kartangizga o'tkazib, <b>chek rasmini</b> yuboradi — chek botga <b>✅ Pul tushdi / ❌ Rad etish</b> tugmalari bilan keladi.
-4️⃣ Kartangizga pul tushganini tekshirib <b>✅</b> bosing — o'quvchiga test ochiladi va unga xabar boradi.
-Pul to'g'ridan-to'g'ri sizga tushadi, platforma ushlamaydi. Cheklar ilovada ham: <b>🧾 Cheklar</b>.
+3️⃣ O'quvchi pulni kartangizga o'tkazib, <b>✅ Ha, to'ladim</b> ni bosadi va <b>chekni</b> ilovaga joylaydi — chek botga <b>✅ Ruxsat berish / ❌ Ruxsat yo'q</b> tugmalari bilan keladi.
+4️⃣ Kartangizga pul tushganini tekshirib <b>✅ Ruxsat berish</b> ni bosing — o'sha o'quvchi testga kira oladi va unga xabar boradi.
+Pul to'g'ridan-to'g'ri sizga tushadi, platforma ushlamaydi. Ilovada ham: <b>🧾 Cheklar</b> — o'quvchi profili, cheki va ruxsat tugmalari bitta joyda.
 
 • <b>🛒 Kredit sotib olish</b> — qancha ko'p olsangiz, shuncha arzon:
   1–100 ta — 1 200 so'm, 101–150 — 1 000, 151–300 — 650, 301–500 — 500, 501+ — 450 so'm (1 dona).

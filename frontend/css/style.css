@@ -3023,3 +3023,26 @@ body.keyboard-open .fab {
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
 }
+
+/* Ruxsat so'rovi: o'quvchi profili, chek va tugmalar bitta konteynerda */
+.payment-student {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.payment-receipt {
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  padding: 8px;
+  text-align: center;
+}
+
+.payment-receipt img {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  border-radius: 10px;
+  cursor: zoom-in;
+}

@@ -4563,7 +4563,7 @@ function renderTestFound(test) {
 function studentPaymentHtml(test) {
   const recheck = `<button class="btn btn-ghost" id="recheck-payment-button">🔄 To'lovni tekshirish</button>`;
   if (test.card_payment_pending) {
-    return `<div class="notice">⏳ Chekingiz o'qituvchiga yuborildi. U kartasiga pul tushganini tekshirib tasdiqlagach, test ochiladi va botda xabar keladi.</div>${recheck}`;
+    return `<div class="notice">⏳ Chekingiz o'qituvchiga yuborildi. U chekni ko'rib ruxsat bergach, testga kira olasiz — botda xabar keladi.</div>${recheck}`;
   }
 
   const card = test.teacher_card;
@@ -4572,12 +4572,15 @@ function studentPaymentHtml(test) {
          <p style="margin:0 0 6px"><b>1.</b> <b>${formatNumber(test.price)} so'm</b>ni o'qituvchi kartasiga o'tkazing:</p>
          <p style="margin:0"><span class="copy-code" data-copy="${escapeHtml(card.number.replace(/\s/g, ""))}" style="font-size:18px;letter-spacing:1px"><b>${escapeHtml(card.number)}</b>${COPY_ICON}</span></p>
          <p class="subtitle" style="margin:2px 0 10px">${escapeHtml(card.holder)}</p>
-         <p style="margin:0 0 6px"><b>2.</b> To'lov chekining rasmini (skrinshot) tanlang:</p>
-         <input id="test-receipt-input" type="file" accept="image/*" hidden />
-         <label for="test-receipt-input" class="btn btn-ghost" id="test-receipt-label" style="display:block;text-align:center;cursor:pointer">🧾 Chek rasmini tanlash</label>
-         <img id="test-receipt-preview" alt="" hidden style="max-width:100%;max-height:220px;border-radius:10px;margin:6px 0;display:block" />
-         <p style="margin:8px 0 6px"><b>3.</b> Yuboring — o'qituvchi tasdiqlagach, test ochiladi.</p>
-         <button class="btn" id="send-test-receipt-button">📤 Chekni yuborish</button>
+         <button class="btn" id="paid-yes-button">✅ Ha, to'ladim</button>
+         <div id="receipt-step" hidden>
+           <p style="margin:4px 0 6px"><b>2.</b> To'lov chekini (skrinshot) shu yerga joylang:</p>
+           <input id="test-receipt-input" type="file" accept="image/*" hidden />
+           <label for="test-receipt-input" class="btn btn-ghost" id="test-receipt-label" style="display:block;text-align:center;cursor:pointer">🧾 Chek rasmini tanlash</label>
+           <img id="test-receipt-preview" alt="" hidden style="max-width:100%;max-height:220px;border-radius:10px;margin:6px 0;display:block" />
+           <p style="margin:8px 0 6px"><b>3.</b> Yuboring — o'qituvchi chekni ko'rib ruxsat bergach, testga kira olasiz.</p>
+           <button class="btn" id="send-test-receipt-button">📤 Chekni o'qituvchiga yuborish</button>
+         </div>
        </div>`
     : "";
   const providerButtons = (test.payment_providers || [])
@@ -4596,6 +4599,13 @@ function studentPaymentHtml(test) {
 function wireStudentCardPayment(test) {
   const input = document.getElementById("test-receipt-input");
   if (!input) return;
+  // "Ha, to'ladim" bosilgandagina chek joylash qadami ochiladi
+  document.getElementById("paid-yes-button").addEventListener("click", (event) => {
+    event.currentTarget.hidden = true;
+    const step = document.getElementById("receipt-step");
+    step.hidden = false;
+    step.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
   const preview = document.getElementById("test-receipt-preview");
   let receiptData = null;
 
@@ -4623,7 +4633,7 @@ function wireStudentCardPayment(test) {
       if (!receiptData) throw new Error("Avval chek rasmini tanlang");
       if (!(await askConfirm(`${formatNumber(test.price)} so'm uchun chek o'qituvchiga yuborilsinmi?`))) return;
       await api(`/api/tests/${test.code}/pay-card`, { method: "POST", body: { receipt_base64: receiptData } });
-      showToast("✅ Chek yuborildi. O'qituvchi tasdiqlagach, botda xabar keladi");
+      showToast("✅ Chek yuborildi. O'qituvchi ruxsat bergach, botda xabar keladi");
       renderTestFound(await api(`/api/tests/${test.code}`));
     })
   );
@@ -5185,7 +5195,7 @@ function drawTeacherDashboard(me, stats, tests) {
       <div class="card-body" style="width:100%">
         <div class="row-between">
           <span>💳 Pullik test to'lovlari</span>
-          ${stats.pending_payments ? `<span class="badge badge-purple">${stats.pending_payments} ta chek kutmoqda</span>` : ""}
+          ${stats.pending_payments ? `<span class="badge badge-purple">${stats.pending_payments} ta ruxsat kutmoqda</span>` : ""}
         </div>
         <p>${
           stats.card
@@ -5291,27 +5301,37 @@ async function renderTestPaymentsPage() {
   const data = await api("/api/teacher/test-payments");
   const statusBadge = (status) =>
     status === "paid"
-      ? `<span class="badge badge-green">✅ Tasdiqlangan</span>`
-      : `<span class="badge badge-gray">❌ Rad etilgan</span>`;
+      ? `<span class="badge badge-green">✅ Ruxsat berilgan</span>`
+      : `<span class="badge badge-gray">❌ Ruxsat yo'q</span>`;
 
+  // Har bir so'rov — bitta konteyner: o'quvchi profili, chek rasmi (o'zi ochiladi) va ruxsat tugmalari
   const pendingCards =
     data.pending
       .map(
         (item) => `
-          <div class="card" style="cursor:default" data-payment-id="${item.id}">
+          <div class="card payment-request" style="cursor:default" data-payment-id="${item.id}" data-student="${escapeHtml(item.student)}">
             <div class="card-body" style="width:100%">
-              <div class="row-between"><b>${escapeHtml(item.student)}</b><b>${formatNumber(item.amount)} so'm</b></div>
-              <p class="subtitle" style="margin:2px 0 8px">«${escapeHtml(item.test_title)}» · ${formatDateTime(item.created_at)}</p>
-              <img data-receipt-image alt="Chek" hidden style="max-width:100%;max-height:360px;border-radius:10px;margin-bottom:8px;display:block" />
-              ${item.has_receipt ? `<button class="btn btn-ghost" data-action="receipt">🧾 Chekni ko'rish</button>` : ""}
-              <div class="contact-actions">
-                <button class="btn" data-action="approve">✅ Pul tushdi</button>
-                <button class="btn btn-ghost" data-action="reject">❌ Rad etish</button>
+              <div class="payment-student">
+                ${memberAvatarHtml({ name: item.student, photo_url: item.photo_url }, 46)}
+                <div style="min-width:0;flex:1">
+                  <b>${escapeHtml(item.student)}</b>
+                  <p class="subtitle" style="margin:0">${item.username ? `@${escapeHtml(item.username)} · ` : ""}${formatDateTime(item.created_at)}</p>
+                </div>
+                <b style="white-space:nowrap">${formatNumber(item.amount)} so'm</b>
+              </div>
+              <p class="subtitle" style="margin:8px 0">📝 «${escapeHtml(item.test_title)}» (kod: ${escapeHtml(item.test_code)})</p>
+              <div class="payment-receipt">
+                <img data-receipt-image alt="Chek" hidden />
+                <p class="subtitle" data-receipt-status style="margin:0">${item.has_receipt ? "⏳ Chek yuklanmoqda…" : "Chek yo'q"}</p>
+              </div>
+              <div class="contact-actions" style="margin-top:10px">
+                <button class="btn" data-action="approve">✅ Ruxsat berish</button>
+                <button class="btn btn-ghost" data-action="reject">❌ Ruxsat yo'q</button>
               </div>
             </div>
           </div>`
       )
-      .join("") || `<p class="subtitle">Tasdiq kutayotgan chek yo'q ✨</p>`;
+      .join("") || `<p class="subtitle">Ruxsat kutayotgan o'quvchi yo'q ✨</p>`;
 
   const recentRows = data.recent
     .map(
@@ -5325,9 +5345,9 @@ async function renderTestPaymentsPage() {
 
   showPage(`
     <button class="back-button" data-action="dashboard">←</button>
-    <h2>🧾 Test to'lovlari</h2>
-    <p class="subtitle" style="margin-top:-6px">Kartangizga pul tushganini tekshirib tasdiqlang — o'quvchiga test ochiladi va botda xabar boradi.</p>
-    <h3>Tasdiq kutmoqda (${data.pending.length})</h3>
+    <h2>🧾 Ruxsat so'rovlari</h2>
+    <p class="subtitle" style="margin-top:-6px">Chekni ko'ring va kartangizga pul tushganini tekshiring. "Ruxsat berish" bosilsa, o'sha o'quvchi testga kira oladi va unga botda xabar boradi.</p>
+    <h3>Kutmoqda (${data.pending.length})</h3>
     ${pendingCards}
     ${recentRows ? `<h3>Oxirgi to'lovlar</h3>${recentRows}` : ""}
   `);
@@ -5335,32 +5355,41 @@ async function renderTestPaymentsPage() {
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
   document.querySelectorAll("[data-payment-id]").forEach((card) => {
     const paymentId = card.dataset.paymentId;
-    const name = card.querySelector("b").textContent;
-    card.querySelector('[data-action="receipt"]')?.addEventListener(
-      "click",
-      guarded(async () => {
-        const button = card.querySelector('[data-action="receipt"]');
-        const image = card.querySelector("[data-receipt-image]");
-        image.src = await fetchProtectedImage(`/api/teacher/test-payments/${paymentId}/receipt`);
-        image.hidden = false;
-        button.hidden = true;
-      })
-    );
+    const name = card.dataset.student;
+    const image = card.querySelector("[data-receipt-image]");
+    const status = card.querySelector("[data-receipt-status]");
+
+    // Chek darhol ochiladi — o'qituvchi alohida tugma bosmaydi
+    if (status.textContent.includes("yuklanmoqda")) {
+      fetchProtectedImage(`/api/teacher/test-payments/${paymentId}/receipt`)
+        .then((url) => {
+          image.src = url;
+          image.hidden = false;
+          status.hidden = true;
+        })
+        .catch(() => {
+          status.textContent = "Chekni yuklab bo'lmadi — botdagi xabarda ko'ring";
+        });
+    }
+    // Bosilsa — to'liq o'lchamda
+    image.addEventListener("click", () => openSheet(`<img src="${image.src}" alt="Chek" style="width:100%;border-radius:10px" />
+      <button class="btn btn-ghost" data-sheet-close style="margin-top:10px">Yopish</button>`));
+
     card.querySelector('[data-action="approve"]').addEventListener(
       "click",
       guarded(async () => {
-        if (!(await askConfirm(`Kartangizga pul tushganini tekshirdingizmi? ${name}ga test ochiladi.`))) return;
+        if (!(await askConfirm(`Kartangizga pul tushganini tekshirdingizmi? ${name} testga kira oladi.`))) return;
         await api(`/api/teacher/test-payments/${paymentId}/approve`, { method: "POST", body: {} });
-        showToast("✅ Tasdiqlandi — o'quvchiga test ochildi");
+        showToast(`✅ Ruxsat berildi — ${name} testga kira oladi`);
         await renderTestPaymentsPage();
       })
     );
     card.querySelector('[data-action="reject"]').addEventListener(
       "click",
       guarded(async () => {
-        if (!(await askConfirm(`${name}ning to'lovi rad etilsinmi? Unga xabar boradi.`))) return;
+        if (!(await askConfirm(`${name}ga ruxsat berilmasinmi? Unga botda xabar boradi.`))) return;
         await api(`/api/teacher/test-payments/${paymentId}/reject`, { method: "POST", body: {} });
-        showToast("❌ Rad etildi");
+        showToast("❌ Ruxsat berilmadi");
         await renderTestPaymentsPage();
       })
     );
