@@ -195,6 +195,14 @@ function formatDateTime(isoString) {
   return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} - ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function utcIsoToLocalInput(isoString) {
+  // localTimeToUtcIso ning teskarisi: <input type="datetime-local"> uchun mahalliy vaqt
+  const date = parseUtc(isoString);
+  if (!date) return "";
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function localTimeToUtcIso(value) {
   // <input type="datetime-local"> mahalliy vaqtni beradi — uni backend
   // kutayotgan UTC ko'rinishiga o'tkazamiz.
@@ -6172,6 +6180,68 @@ async function saveNewTest() {
 
 /* ---------- 4.1) Test sahifasi (yaratilgandan keyin ochiladi) ---------- */
 
+/*
+  Testni tahrirlash: nomi, davomiyligi, boshlanish/tugash vaqti.
+  "+15 daq / +30 daq / +1 soat" — tugash vaqtini bir bosishda cho'zish
+  (vaqt belgilanmagan bo'lsa — hozirdan boshlab). O'quvchilar ishlay
+  boshlagan bo'lsa, davomiylikni faqat uzaytirish mumkin (server ham tekshiradi).
+*/
+function openTestEditSheet(test) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 10px">✏️ Testni tahrirlash</h3>
+    <label class="field-label" style="margin:0">Test nomi
+      <input class="input" id="edit-test-title" maxlength="200" value="${escapeHtml(test.title)}" style="margin:4px 0 0" /></label>
+    <label class="field-label">Davomiyligi (daqiqa)
+      <input class="input" id="edit-test-duration" type="number" min="${test.has_attempts ? test.duration : 1}" max="300"
+             value="${test.duration}" style="margin:4px 0 0" /></label>
+    ${test.has_attempts ? `<p class="subtitle" style="margin:-4px 0 6px;font-size:12px">O'quvchilar ishlay boshlagan — faqat uzaytirish mumkin</p>` : ""}
+    <label class="field-label">Boshlanish vaqti
+      <input class="input" id="edit-test-start" type="datetime-local" value="${utcIsoToLocalInput(test.start_time)}"
+             ${test.has_attempts ? "disabled" : ""} style="margin:4px 0 0" /></label>
+    <label class="field-label">Tugash vaqti
+      <input class="input" id="edit-test-end" type="datetime-local" value="${utcIsoToLocalInput(test.end_time)}" style="margin:4px 0 0" /></label>
+    <div class="contact-actions" style="margin-top:8px">
+      <button type="button" class="share-pill" data-extend="15">+15 daq</button>
+      <button type="button" class="share-pill" data-extend="30">+30 daq</button>
+      <button type="button" class="share-pill" data-extend="60">+1 soat</button>
+      <button type="button" class="share-pill" id="edit-test-no-end">Cheklovsiz</button>
+    </div>
+    <button class="btn" id="edit-test-save" style="margin-top:12px">💾 Saqlash</button>
+    <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
+  `);
+
+  const endInput = sheet.querySelector("#edit-test-end");
+  sheet.querySelectorAll("[data-extend]").forEach((button) => {
+    button.addEventListener("click", () => {
+      // Tugash vaqti o'tib ketgan yoki yo'q bo'lsa — hozirdan boshlab cho'ziladi
+      const current = endInput.value ? new Date(endInput.value) : null;
+      const base = current && current > new Date() ? current : new Date();
+      base.setMinutes(base.getMinutes() + Number(button.dataset.extend));
+      endInput.value = utcIsoToLocalInput(base.toISOString());
+      telegram?.HapticFeedback?.selectionChanged?.();
+    });
+  });
+  sheet.querySelector("#edit-test-no-end").addEventListener("click", () => {
+    endInput.value = "";
+  });
+
+  sheet.querySelector("#edit-test-save").addEventListener(
+    "click",
+    guarded(async () => {
+      const body = {
+        title: sheet.querySelector("#edit-test-title").value.trim(),
+        duration: Number(sheet.querySelector("#edit-test-duration").value) || test.duration,
+        end_time: localTimeToUtcIso(endInput.value),
+      };
+      if (!test.has_attempts) body.start_time = localTimeToUtcIso(sheet.querySelector("#edit-test-start").value);
+      const saved = await api(`/api/teacher/tests/${test.id}`, { method: "PATCH", body });
+      close();
+      showToast(saved.reopened ? "✅ Saqlandi — test qayta ochildi" : "✅ Saqlandi");
+      await renderTestDetail(test.id);
+    })
+  );
+}
+
 async function renderTestDetail(testId) {
   const test = await api(`/api/teacher/tests/${testId}`);
   const isClosedTest = test.enrollment_type === "closed";
@@ -6214,6 +6284,12 @@ async function renderTestDetail(testId) {
         ? `<p class="subtitle">📢 Majburiy obuna: <b>${testChannels(test).map(escapeHtml).join(", ")}</b></p>`
         : ""
     }
+    <p class="subtitle" style="margin-top:-4px">
+      ⏱ ${test.duration} daqiqa${test.start_time ? ` · boshlanish: ${formatDateTime(test.start_time)}` : ""}${
+        test.end_time ? ` · tugash: <b>${formatDateTime(test.end_time)}</b>` : ""
+      }
+    </p>
+    <button class="btn btn-ghost" id="edit-test-button">✏️ Tahrirlash (nomi, vaqti)</button>
 
     ${
       isClosedTest
@@ -6244,6 +6320,7 @@ async function renderTestDetail(testId) {
   `);
 
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
+  document.getElementById("edit-test-button").addEventListener("click", () => openTestEditSheet(test));
 
   document.getElementById("answer-sheet-button")?.addEventListener(
     "click",

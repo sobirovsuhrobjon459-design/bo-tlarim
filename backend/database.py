@@ -770,6 +770,18 @@ class FinishIn(BaseModel):
     answers: dict[str, str] = {}
 
 
+class TestEditIn(BaseModel):
+    """
+    O'qituvchi testni yaratgandan keyin tahrirlaydi: nomi va vaqtlari.
+    Faqat yuborilgan maydonlar o'zgaradi (start_time/end_time ga null — cheklovni olib tashlash).
+    """
+
+    title: str | None = Field(None, min_length=2, max_length=200)
+    duration: int | None = Field(None, ge=1, le=300)
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+
+
 class PriceUpdate(BaseModel):
     """O'qituvchi testni yaratgandan keyin narxini o'zgartirganda yuboriladi."""
 

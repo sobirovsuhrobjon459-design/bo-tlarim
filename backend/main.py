@@ -125,6 +125,7 @@ from .database import (
     TeacherRegisterIn,
     Test,
     TestIn,
+    TestEditIn,
     User,
     WithdrawalRequest,
     WithdrawalRequestIn,
@@ -3145,9 +3146,82 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
         "status": test.status,
         "created_at": test.created_at,
         "count": _question_count(test),
+        "duration": test.duration,
+        "start_time": test.start_time,
+        "end_time": test.end_time,
+        "has_attempts": _test_has_attempts(db, test),
         "students": students,
         "filled": filled,
         "missing": len(students) - filled,
+    }
+
+
+def _test_has_attempts(db: Session, test: Test) -> bool:
+    """O'quvchilardan kimdir testni boshlagan yoki tugatganmi (o'qituvchi qo'shgan ismlar hisobga olinmaydi)."""
+    return bool(db.scalar(
+        select(Attempt.id).where(Attempt.test_id == test.id, Attempt.user_id.is_not(None)).limit(1)
+    ))
+
+
+def _as_utc_naive(moment: datetime | None) -> datetime | None:
+    """Bazada vaqt UTC'da, mintaqasiz saqlanadi."""
+    if moment is not None and moment.tzinfo is not None:
+        moment = moment.astimezone(timezone.utc).replace(tzinfo=None)
+    return moment
+
+
+@app.patch("/api/teacher/tests/{test_id}")
+def edit_test(test_id: int, body: TestEditIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """
+    Testni tahrirlash: nomi, davomiyligi, boshlanish va tugash vaqti.
+
+    O'quvchilar ishlay boshlagan bo'lsa — ularga zarar yetmasligi uchun:
+    davomiylik faqat UZAYTIRILADI, boshlanish vaqti o'zgarmaydi.
+    Tugash vaqti o'tib, test o'zi yopilgan bo'lsa — vaqt cho'zilganda qayta ochiladi.
+    """
+
+    test = _get_own_test(db, teacher, test_id)
+    fields = body.model_fields_set
+    started = _test_has_attempts(db, test)
+    now = utcnow()
+
+    start_time = _as_utc_naive(body.start_time) if "start_time" in fields else test.start_time
+    end_time = _as_utc_naive(body.end_time) if "end_time" in fields else test.end_time
+
+    if "duration" in fields and body.duration is not None and started and body.duration < test.duration:
+        raise HTTPException(
+            status_code=409,
+            detail=f"O'quvchilar testni ishlay boshlagan — davomiylikni faqat uzaytirish mumkin (hozir {test.duration} daqiqa)",
+        )
+    if "start_time" in fields and started and start_time != test.start_time:
+        raise HTTPException(status_code=409, detail="O'quvchilar testni boshlagan — boshlanish vaqtini o'zgartirib bo'lmaydi")
+    if "end_time" in fields and end_time is not None and end_time != test.end_time and end_time <= now:
+        raise HTTPException(status_code=422, detail="Tugash vaqti kelajakda bo'lishi kerak")
+    if start_time and end_time and end_time <= start_time:
+        raise HTTPException(status_code=422, detail="Tugash vaqti boshlanish vaqtidan keyin bo'lishi kerak")
+
+    if "title" in fields and body.title:
+        test.title = " ".join(body.title.split())
+    if "duration" in fields and body.duration is not None:
+        test.duration = body.duration
+    test.start_time, test.end_time = start_time, end_time
+
+    # Vaqti tugab o'zi yopilgan test cho'zilsa — qayta ochiladi (o'qituvchi aynan shuni xohlaydi)
+    reopened = False
+    if "end_time" in fields and test.status == "closed" and (end_time is None or end_time > now):
+        test.status = "active"
+        test.results_sent_at = None
+        reopened = True
+
+    db.commit()
+    logging.getLogger("backend").info("Test tahrirlandi: id=%s maydonlar=%s", test.id, sorted(fields))
+    return {
+        "title": test.title,
+        "duration": test.duration,
+        "start_time": test.start_time,
+        "end_time": test.end_time,
+        "status": test.status,
+        "reopened": reopened,
     }
 
 

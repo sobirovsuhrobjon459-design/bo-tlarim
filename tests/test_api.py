@@ -3397,6 +3397,40 @@ def test_oquvchi_yakunlangan_testini_koradi():
     assert client.get(url, headers=as_user(902)).status_code == 404
 
 
+def test_oqituvchi_testni_tahrirlaydi_va_vaqtini_chozadi():
+    reset_database()
+    register_teacher(tg_id=555)
+    created = create_test(tg_id=555)
+    url = f"/api/teacher/tests/{created['id']}"
+    future = (utcnow() + timedelta(hours=2)).replace(microsecond=0).isoformat()
+
+    # Hali hech kim boshlamagan — hammasi o'zgaradi
+    edited = client.patch(url, json={"title": "  Yangi   nom ", "duration": 20, "end_time": future}, headers=as_user(555))
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["title"] == "Yangi nom" and edited.json()["duration"] == 20
+    assert client.patch(url, json={"duration": 99}, headers=as_user(556)).status_code in (403, 404)
+    past = (utcnow() - timedelta(minutes=5)).isoformat()
+    assert client.patch(url, json={"end_time": past}, headers=as_user(555)).status_code == 422
+
+    # O'quvchi boshladi — davomiylik faqat uzayadi, boshlanish vaqti o'zgarmaydi
+    client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(901))
+    assert client.get(url, headers=as_user(555)).json()["has_attempts"] is True
+    shorter = client.patch(url, json={"duration": 10}, headers=as_user(555))
+    assert shorter.status_code == 409 and "uzaytirish" in shorter.text, shorter.text
+    assert client.patch(url, json={"duration": 45}, headers=as_user(555)).json()["duration"] == 45
+    assert client.patch(url, json={"start_time": future}, headers=as_user(555)).status_code == 409
+
+    # Vaqti tugab yopilgan test cho'zilsa — qayta ochiladi
+    with SessionLocal() as session:
+        from backend.database import Test as DbTest
+        row = session.get(DbTest, created["id"])
+        row.status, row.results_sent_at = "closed", utcnow()
+        session.commit()
+    later = (utcnow() + timedelta(hours=3)).replace(microsecond=0).isoformat()
+    reopened = client.patch(url, json={"end_time": later}, headers=as_user(555)).json()
+    assert reopened["reopened"] is True and reopened["status"] == "active", reopened
+
+
 # ========== Ishga tushirgich ==========
 
 
