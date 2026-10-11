@@ -6762,17 +6762,23 @@ async function renderTestResults(testId) {
     )
     .join("");
 
-  const questionBlocks = stats.questions
-    .map(
-      (q, index) => `
-        <div class="card" style="cursor:default">
-          <div class="card-body">
-            <b>${index + 1}. ${escapeHtml(q.text)}</b>
-            <p>Bu savolga ${q.total} urinishdan ${q.wrong} tasi noto'g'ri javob berdi</p>
-          </div>
-        </div>`
-    )
-    .join("");
+  // Har bir savol — bitta ixcham qator: "41b  🟢 25  🔴 22".
+  // Kalit rejimida savol nomi o'zi raqam (41b), to'liq rejimda — tartib raqami va matni.
+  const questionBlocks = stats.questions.length
+    ? `<div class="question-stats">
+        <div class="question-stats-legend"><span class="stat-dot is-correct"></span>to'g'ri <span class="stat-dot is-wrong"></span>xato</div>
+        ${stats.questions
+          .map(
+            (q, index) => `
+              <div class="question-stat">
+                <span class="question-stat-label">${results.mode === "key" ? escapeHtml(q.text) : `${index + 1}. ${escapeHtml(q.text)}`}</span>
+                <span class="question-stat-count"><span class="stat-dot is-correct"></span>${q.total - q.wrong}</span>
+                <span class="question-stat-count"><span class="stat-dot is-wrong"></span>${q.wrong}</span>
+              </div>`
+          )
+          .join("")}
+      </div>`
+    : "";
 
   showPage(`
     <button class="back-button" data-action="test">←</button>
@@ -6799,7 +6805,7 @@ async function renderTestResults(testId) {
         ${tableRows}
       </table>
     </div>
-    <h3>Savollar bo'yicha xatolar</h3>
+    <h3>Savol statistikasi</h3>
     ${questionBlocks}
   `);
 
