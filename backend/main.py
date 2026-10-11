@@ -22,6 +22,7 @@ import hmac
 import io
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -3433,99 +3434,246 @@ def update_test_price(
     return {"id": test.id, "price": test.price}
 
 
-def generate_certificates_pdf(db: Session, test: Test, teacher: Teacher, attempt_id: int | None = None) -> bytes:
+CERTIFICATE_BG = colors.HexColor("#f7eedb")
+CERTIFICATE_PATTERN = colors.HexColor("#ecdcb8")
+CERTIFICATE_INK = colors.HexColor("#1f2937")
+CERTIFICATE_MUTED = colors.HexColor("#6b5d45")
+CERTIFICATE_ACCENT = colors.HexColor("#1f4e79")
+
+
+def _certificate_number(test: Test, row: dict) -> str:
+    """Platformaning o'z raqami (MT-kod-urinish). Davlat sertifikati raqamiga o'xshatilmaydi."""
+    return f"MT-{test.code}-{row['attempt_id']:05d}"
+
+
+def _draw_certificate_background(pdf, width: float, height: float) -> None:
+    """Och-sariq fon, burchaklarda yengil olti burchakli naqsh va ingichka ramka."""
+
+    pdf.setFillColor(CERTIFICATE_BG)
+    pdf.rect(0, 0, width, height, fill=1, stroke=0)
+
+    pdf.setStrokeColor(CERTIFICATE_PATTERN)
+    pdf.setLineWidth(1.2)
+    size = 26
+    for corner_x, corner_y in ((0, 0), (width, 0), (0, height), (width, height)):
+        sign_x = 1 if corner_x == 0 else -1
+        sign_y = 1 if corner_y == 0 else -1
+        for ring in range(1, 5):
+            for step in range(ring + 1):
+                cx = corner_x + sign_x * (ring * size * 1.5 - step * size * 0.8)
+                cy = corner_y + sign_y * (step * size * 1.6)
+                points = [(cx + size * 0.55 * math.cos(math.radians(60 * k)), cy + size * 0.55 * math.sin(math.radians(60 * k)))
+                          for k in range(7)]
+                path = pdf.beginPath()
+                path.moveTo(*points[0])
+                for point in points[1:]:
+                    path.lineTo(*point)
+                pdf.drawPath(path, stroke=1, fill=0)
+
+    pdf.setStrokeColor(colors.HexColor("#c9b07a"))
+    pdf.setLineWidth(1)
+    pdf.rect(18, 18, width - 36, height - 36)
+
+
+def _draw_certificate_page(pdf, test: Test, teacher: Teacher, row: dict, section_names: list[str], issued: str) -> None:
     """
-    Har bir o'quvchiga bir sahifali sertifikat (A4, yotiq). Bu MOCK test
-    sertifikati — o'qituvchi/o'quv markaz nomidan beriladi, rasmiy davlat
-    sertifikati emasligi aniq yozib qo'yiladi.
+    Bitta o'quvchining sertifikati (A4, tik). Tuzilishi Milliy sertifikatga
+    o'xshash (ma'lumotlar, ball, foiz, daraja, bo'limlar), lekin bu — MOCK test
+    sertifikati: davlat gerbi, agentlik nomi, rasmiy raqam yoki imzo yo'q va
+    rasmiy hujjat emasligi aniq yozib qo'yiladi.
     """
 
+    width, height = A4
+    left, right = 62, width - 62
+    _draw_certificate_background(pdf, width, height)
+
+    # Sarlavha: platforma belgisi va nomi
+    pdf.setFillColor(CERTIFICATE_ACCENT)
+    pdf.circle(width / 2, height - 82, 30, fill=1, stroke=0)
+    pdf.setFillColor(colors.white)
+    pdf.setFont(REPORT_FONT_BOLD, 22)
+    pdf.drawCentredString(width / 2, height - 90, "TP")
+    pdf.setFillColor(CERTIFICATE_INK)
+    pdf.setFont(REPORT_FONT_BOLD, 12)
+    pdf.drawCentredString(width / 2, height - 136, "TEST PLATFORMASI")
+    pdf.setFont(REPORT_FONT, 9.5)
+    pdf.setFillColor(CERTIFICATE_MUTED)
+    pdf.drawCentredString(width / 2, height - 150, "Mock (sinov) imtihon natijalari")
+    pdf.setStrokeColor(CERTIFICATE_INK)
+    pdf.setLineWidth(1.6)
+    pdf.line(left, height - 162, right, height - 162)
+
+    pdf.setFillColor(CERTIFICATE_INK)
+    pdf.setFont(REPORT_FONT_BOLD, 13.5)
+    pdf.drawCentredString(width / 2, height - 190, "FANNI BILISH DARAJASI")
+    pdf.drawCentredString(width / 2, height - 208, "TO'G'RISIDA MOCK SERTIFIKAT")
+
+    def field(y: float, label: str, value: str, bold: bool = True, size: float = 10.5) -> None:
+        pdf.setFillColor(CERTIFICATE_MUTED)
+        pdf.setFont(REPORT_FONT, 10)
+        pdf.drawString(left, y, label)
+        pdf.setFillColor(CERTIFICATE_INK)
+        pdf.setFont(REPORT_FONT_BOLD if bold else REPORT_FONT, size)
+        pdf.drawString(left + 215, y, value)
+
+    def divider(y: float) -> None:
+        pdf.setStrokeColor(colors.HexColor("#d8c79f"))
+        pdf.setLineWidth(0.8)
+        pdf.line(left, y, right, y)
+
+    field(height - 240, "Sertifikat raqami:", _certificate_number(test, row))
+    divider(height - 254)
+
+    # O'quvchi
+    field(height - 280, "Ism-familiyasi:", row["name"][:40].upper(), size=12)
+    field(height - 302, "Test:", f"«{test.title[:40]}»", bold=False)
+    field(height - 324, "Test kodi:", test.code, bold=False)
+    divider(height - 340)
+
+    # Natija
+    ball = f"{row['ball']:.1f}" if row.get("ball") is not None else "—"
+    field(height - 368, "Fan:", test.subject[:40])
+    field(height - 392, "Umumiy to'plagan bali:", ball, size=12)
+    field(height - 416, "To'g'ri javoblar foizi:", f"{row['percent']:g} %  ({row['correct']}/{row['total']})", size=12)
+    field(height - 440, "Sertifikat darajasi:", row["grade"], size=13)
+    field(height - 464, "Qatnashchilar orasidagi o'rni:", str(row["rank"]))
+
+    # Bo'limlar
+    y = height - 502
+    if section_names:
+        pdf.setFillColor(CERTIFICATE_INK)
+        pdf.setFont(REPORT_FONT_BOLD, 10.5)
+        pdf.drawString(left, y, "Bo'limlar bo'yicha test sinovi natijalari:")
+        pdf.setFont(REPORT_FONT, 10.5)
+        for name in section_names:
+            y -= 20
+            pdf.setFillColor(CERTIFICATE_INK)
+            pdf.drawString(left + 14, y, name)
+            pdf.drawRightString(right, y, f"{row['sections'].get(name, 0):g} %")
+            pdf.setStrokeColor(colors.HexColor("#e3d5b3"))
+            pdf.setLineWidth(0.5)
+            pdf.line(left + 14, y - 5, right, y - 5)
+
+    # Pastki qism: sana, o'qituvchi va ogohlantirish
+    pdf.setFillColor(CERTIFICATE_INK)
+    pdf.setFont(REPORT_FONT, 10)
+    pdf.drawString(left, 150, f"Berilgan sanasi: {issued}")
+    pdf.drawRightString(right, 150, f"O'qituvchi: {teacher.user.full_name[:40]}")
+    divider(132)
+    pdf.setFillColor(CERTIFICATE_MUTED)
+    pdf.setFont(REPORT_FONT_ITALIC, 8.5)
+    pdf.drawCentredString(width / 2, 112, "Ushbu hujjat o'quv (mock) test natijasini ko'rsatadi va RASMIY DAVLAT SERTIFIKATI HISOBLANMAYDI.")
+    pdf.drawCentredString(width / 2, 100, "Ball Rasch modeli bo'yicha shu testning qatnashchilariga nisbatan hisoblangan.")
+
+
+def _certificate_rows(db: Session, test: Test, attempt_id: int | None = None) -> tuple[list[dict], list[str]]:
     report = build_rasch_report(db, test)
     rows = [row for row in report["rows"] if attempt_id is None or row["attempt_id"] == attempt_id]
     if not rows:
         raise HTTPException(status_code=404, detail="Natija topilmadi")
-    uses_rasch = report["uses_rasch"]
-    section_names = report["section_names"]
+    return rows, report["section_names"]
 
-    from reportlab.lib.pagesizes import landscape
 
-    page_width, page_height = landscape(A4)
+def _render_certificates(test: Test, teacher: Teacher, rows: list[dict], section_names: list[str]) -> bytes:
     buffer = io.BytesIO()
-    pdf = pdf_canvas.Canvas(buffer, pagesize=(page_width, page_height))
+    pdf = pdf_canvas.Canvas(buffer, pagesize=A4)
     pdf.setTitle(f"{test.title} — sertifikatlar")
-    blue, gold, muted = colors.HexColor("#1f4e79"), colors.HexColor("#b8860b"), colors.HexColor("#6b7280")
-    center = page_width / 2
-    issued = datetime.now().strftime("%d.%m.%Y")
-
+    issued = (utcnow() + TASHKENT_OFFSET).strftime("%d.%m.%Y")
     for row in rows:
-        # Ramka
-        pdf.setStrokeColor(blue)
-        pdf.setLineWidth(6)
-        pdf.rect(24, 24, page_width - 48, page_height - 48)
-        pdf.setStrokeColor(gold)
-        pdf.setLineWidth(1.5)
-        pdf.rect(36, 36, page_width - 72, page_height - 72)
-
-        pdf.setFillColor(blue)
-        pdf.setFont(REPORT_FONT_BOLD, 40)
-        pdf.drawCentredString(center, page_height - 110, "SERTIFIKAT")
-        pdf.setFillColor(gold)
-        pdf.setFont(REPORT_FONT, 14)
-        pdf.drawCentredString(center, page_height - 134, "MOCK TEST NATIJASI")
-
-        pdf.setFillColor(muted)
-        pdf.setFont(REPORT_FONT, 13)
-        pdf.drawCentredString(center, page_height - 178, "Ushbu sertifikat")
-        pdf.setFillColor(colors.HexColor("#111827"))
-        pdf.setFont(REPORT_FONT_BOLD, 30)
-        pdf.drawCentredString(center, page_height - 218, row["name"][:48])
-        pdf.setLineWidth(1)
-        pdf.setStrokeColor(colors.HexColor("#d1d5db"))
-        pdf.line(center - 220, page_height - 230, center + 220, page_height - 230)
-        pdf.setFillColor(muted)
-        pdf.setFont(REPORT_FONT, 13)
-        pdf.drawCentredString(center, page_height - 254, f"«{test.title}» ({test.subject}) testida qatnashib, quyidagi natijani qayd etgani uchun beriladi")
-
-        # Asosiy natija
-        main_value = f"{row['ball']:.2f}" if uses_rasch else f"{row['percent']}%"
-        main_label = "BALL" if uses_rasch else "NATIJA"
-        grade_label = "DARAJA" if uses_rasch else "BAHO"
-        box_y = page_height - 360
-        for offset, (label, value) in zip((-140, 140), ((main_label, main_value), (grade_label, row["grade"]))):
-            pdf.setFillColor(colors.HexColor("#f0f3f7"))
-            pdf.roundRect(center + offset - 110, box_y, 220, 80, 10, fill=1, stroke=0)
-            pdf.setFillColor(muted)
-            pdf.setFont(REPORT_FONT, 11)
-            pdf.drawCentredString(center + offset, box_y + 58, label)
-            pdf.setFillColor(blue)
-            pdf.setFont(REPORT_FONT_BOLD, 30)
-            pdf.drawCentredString(center + offset, box_y + 18, value)
-
-        # Bo'limlar va to'g'ri javoblar
-        details = [f"To'g'ri javoblar: {row['correct']}/{row['total']}", f"O'rin: {row['rank']}"]
-        if section_names:
-            details.insert(0, "  ·  ".join(f"{name}: {row['sections'].get(name, 0):g}%" for name in section_names))
-        pdf.setFillColor(colors.HexColor("#374151"))
-        pdf.setFont(REPORT_FONT, 13)
-        for index, line in enumerate(details):
-            pdf.drawCentredString(center, box_y - 26 - index * 20, line)
-
-        # Imzo va sana
-        pdf.setFillColor(colors.HexColor("#111827"))
-        pdf.setFont(REPORT_FONT, 12)
-        pdf.drawString(80, 110, f"O'qituvchi: {teacher.user.full_name}")
-        pdf.line(80, 104, 330, 104)
-        pdf.drawRightString(page_width - 80, 110, f"Sana: {issued}")
-        pdf.setFillColor(muted)
-        pdf.setFont(REPORT_FONT_ITALIC, 9.5)
-        pdf.drawCentredString(
-            center, 62,
-            "Ushbu sertifikat o'quv (mock) test natijasini tasdiqlaydi va rasmiy davlat sertifikati hisoblanmaydi.",
-        )
+        _draw_certificate_page(pdf, test, teacher, row, section_names, issued)
         pdf.showPage()
-
     pdf.save()
     return buffer.getvalue()
+
+
+def generate_certificates_pdf(db: Session, test: Test, teacher: Teacher, attempt_id: int | None = None) -> bytes:
+    """Har bir o'quvchiga bir sahifali MOCK sertifikat (A4, tik). attempt_id berilsa — faqat bittasi."""
+
+    rows, section_names = _certificate_rows(db, test, attempt_id)
+    return _render_certificates(test, teacher, rows, section_names)
+
+
+# Hozir yuborilayotgan testlar — tugma ikki marta bosilsa, o'quvchilarga ikki marta bormasin
+_certificates_in_progress: set[int] = set()
+_certificates_lock = threading.Lock()
+
+
+def _certificate_caption(test: Test, row: dict) -> str:
+    return (
+        f"🎓 «{test.title}» testi natijangiz\n\n"
+        f"📊 Ball: {row['ball']:.1f}\n"
+        f"🏅 Daraja: {row['grade']}\n"
+        f"✅ To'g'ri javoblar: {row['correct']}/{row['total']} ({row['percent']:g}%)\n"
+        f"🏆 O'rin: {row['rank']}"
+    )
+
+
+def _deliver_student_certificates(test_id: int, teacher_chat_id: int, jobs: list[tuple[int, str, bytes, str]]) -> None:
+    """Fonda: har bir o'quvchiga o'z sertifikati, oxirida o'qituvchiga qisqa hisobot."""
+
+    sent, failed = 0, []
+    try:
+        for chat_id, name, pdf_bytes, caption in jobs:
+            try:
+                _send_pdf_to_telegram(chat_id, "sertifikat.pdf", pdf_bytes, caption)
+                sent += 1
+            except Exception:
+                failed.append(name)
+            time.sleep(0.05)  # Telegram cheklovi: sekundiga ~30 xabar
+        text = f"🎓 Sertifikatlar yuborildi: {sent} ta o'quvchiga."
+        if failed:
+            text += (f"\n\n⚠️ {len(failed)} ta o'quvchiga yetmadi (botni bloklagan yoki /start bosmagan):\n"
+                     + "\n".join(f"• {name}" for name in failed[:30]))
+        try:
+            httpx.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                       json={"chat_id": teacher_chat_id, "text": text}, timeout=10)
+        except Exception:
+            logging.getLogger("backend").warning("Sertifikat hisoboti o'qituvchiga yuborilmadi", exc_info=True)
+    finally:
+        with _certificates_lock:
+            _certificates_in_progress.discard(test_id)
+
+
+@app.post("/api/teacher/tests/{test_id}/certificates/send-students")
+def send_certificates_to_students(test_id: int, teacher: Teacher = Depends(get_current_teacher),
+                                  user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Testni ishlagan har bir o'quvchining bot chatiga uning o'z sertifikati
+    (PDF: ball, foiz, daraja va bo'limlar) yuboriladi. O'qituvchi qo'lda qo'shgan
+    (Telegram'siz) o'quvchilarga yuborib bo'lmaydi — ular o'tkazib yuboriladi.
+    Yuborish fonda bajariladi, oxirida o'qituvchiga hisobot keladi.
+    """
+
+    test = _get_own_test(db, teacher, test_id)
+    rows, section_names = _certificate_rows(db, test)
+
+    attempt_users = dict(db.execute(
+        select(Attempt.id, User.tg_id).join(User, User.id == Attempt.user_id)
+        .where(Attempt.id.in_([row["attempt_id"] for row in rows]))
+    ).all())
+    targets = [row for row in rows if row["attempt_id"] in attempt_users]
+    if not targets:
+        raise HTTPException(status_code=409, detail="Telegram orqali ishlagan o'quvchi yo'q — yuboradigan hech kim topilmadi")
+
+    with _certificates_lock:
+        if test.id in _certificates_in_progress:
+            raise HTTPException(status_code=409, detail="Sertifikatlar hozir yuborilmoqda — biroz kuting")
+        _certificates_in_progress.add(test.id)
+
+    try:
+        jobs = [
+            (attempt_users[row["attempt_id"]], row["name"],
+             _render_certificates(test, teacher, [row], section_names), _certificate_caption(test, row))
+            for row in targets
+        ]
+    except Exception:
+        with _certificates_lock:
+            _certificates_in_progress.discard(test.id)
+        raise
+
+    threading.Thread(target=_deliver_student_certificates, args=(test.id, user.tg_id, jobs), daemon=True).start()
+    logging.getLogger("backend").info("Sertifikatlar o'quvchilarga yuborilmoqda: test=%s, %s ta", test.id, len(jobs))
+    return {"queued": len(jobs), "skipped": len(rows) - len(targets)}
 
 
 @app.put("/api/teacher/tests/{test_id}/sections")

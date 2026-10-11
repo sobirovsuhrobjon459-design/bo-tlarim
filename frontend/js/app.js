@@ -6531,6 +6531,7 @@ async function renderResultsTab(selectedId) {
       <button class="btn btn-ghost" id="results-sections-button">🧩 Bo'limlar${results.section_names?.length ? ` (${results.section_names.length})` : ""}</button>
       <button class="btn btn-ghost" id="results-certificates-button">🎓 Sertifikatlar</button>
     </div>
+    <button class="btn btn-ghost" id="results-send-students-button" style="margin-top:10px">📨 Sertifikatlarni o'quvchilarga yuborish</button>
 
     <div class="row-between" style="margin:18px 0 8px">
       <span class="section-label" style="margin:0">ISHTIROKCHILAR (O'RIN BO'YICHA)</span>
@@ -6551,6 +6552,26 @@ async function renderResultsTab(selectedId) {
     })
   );
   document.getElementById("results-sections-button").addEventListener("click", () => openSectionsSheet(testId, results));
+  // Har bir o'quvchiga o'z sertifikati bot chatiga boradi — qaytarib bo'lmaydi, shuning uchun so'raladi
+  document.getElementById("results-send-students-button").addEventListener(
+    "click",
+    guarded(async () => {
+      if (!results.rows.length) throw new Error("Hali natija yo'q");
+      const sure = await askConfirm(
+        `${results.rows.length} ta o'quvchining har biriga o'z sertifikati (ball, foiz, daraja) bot orqali yuborilsinmi?
+
+` +
+          "Ball qatnashchilarga nisbatan hisoblanadi — test yakunlangandan keyin yuborgan ma'qul."
+      );
+      if (!sure) return;
+      const sent = await api(`/api/teacher/tests/${testId}/certificates/send-students`, { method: "POST" });
+      showToast(
+        `📨 ${sent.queued} ta o'quvchiga yuborilmoqda` +
+          (sent.skipped ? ` (${sent.skipped} tasi Telegram'siz — o'tkazib yuborildi)` : "") +
+          ". Tugagach, botda hisobot keladi."
+      );
+    })
+  );
 
   document.querySelectorAll("[data-detail-id]").forEach((line) => {
     line.addEventListener(

@@ -3308,6 +3308,53 @@ def test_test_kodini_taxmin_qilish_cheklanadi():
     assert client.get(f"/api/tests/{created['code']}", headers=as_user(902)).status_code == 200
 
 
+def test_sertifikatlar_oquvchilarga_yuboriladi():
+    """Har bir Telegram o'quvchisiga o'z sertifikati; qo'lda qo'shilgan o'tkaziladi; o'qituvchiga hisobot."""
+    reset_database()
+    register_teacher(tg_id=555)
+    created = create_test(tg_id=555)
+    sent, restore = _capture_result_notices()
+    try:
+        for tg_id, answer in ((901, "B"), (902, "A")):
+            started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(tg_id)).json()
+            client.post(f"/api/attempts/{started['attempt_id']}/finish", json={"answers": {"1": answer}}, headers=as_user(tg_id))
+    finally:
+        restore()
+    # Telegram'siz (qog'ozda ishlagan) o'quvchi — unga yuborib bo'lmaydi
+    with SessionLocal() as session:
+        session.add(Attempt(test_id=created["id"], offline_name="Qog'ozda Ishlagan", status="done",
+                            correct=1, wrong=3, percent=25.0, finished_at=utcnow()))
+        session.commit()
+
+    pdfs, messages = [], []
+
+    class InstantThread:  # fon ipi o'rniga darhol bajariladi
+        def __init__(self, target, args, daemon):
+            self.target, self.args = target, args
+
+        def start(self):
+            self.target(*self.args)
+
+    originals = (main._send_pdf_to_telegram, main.threading.Thread, main.httpx.post)
+    main._send_pdf_to_telegram = lambda chat_id, name, data, caption="": pdfs.append((chat_id, data, caption))
+    main.threading.Thread = InstantThread
+    main.httpx.post = lambda url, json=None, **kw: messages.append(json)
+    try:
+        # Begona o'qituvchi yubora olmaydi
+        register_teacher(tg_id=556)
+        assert client.post(f"/api/teacher/tests/{created['id']}/certificates/send-students",
+                           headers=as_user(556)).status_code == 404
+        response = client.post(f"/api/teacher/tests/{created['id']}/certificates/send-students", headers=as_user(555))
+    finally:
+        main._send_pdf_to_telegram, main.threading.Thread, main.httpx.post = originals
+
+    assert response.status_code == 200 and response.json() == {"queued": 2, "skipped": 1}, response.text
+    assert sorted(chat_id for chat_id, _, _ in pdfs) == [901, 902], pdfs
+    assert all(data.startswith(b"%PDF") and "Daraja:" in caption for _, data, caption in pdfs)
+    assert messages and messages[-1]["chat_id"] == 555 and "2 ta" in messages[-1]["text"], messages
+    assert not main._certificates_in_progress
+
+
 # ========== Ishga tushirgich ==========
 
 
