@@ -3641,10 +3641,17 @@ def send_certificates_to_students(test_id: int, teacher: Teacher = Depends(get_c
     Testni ishlagan har bir o'quvchining bot chatiga uning o'z sertifikati
     (PDF: ball, foiz, daraja va bo'limlar) yuboriladi. O'qituvchi qo'lda qo'shgan
     (Telegram'siz) o'quvchilarga yuborib bo'lmaydi — ular o'tkazib yuboriladi.
-    Yuborish fonda bajariladi, oxirida o'qituvchiga hisobot keladi.
+    Faqat yakunlangan testdan. Yuborish fonda bajariladi, oxirida o'qituvchiga hisobot keladi.
     """
 
     test = _get_own_test(db, teacher, test_id)
+    # Rasch balli qatnashchilarga nisbatan — test ochiq turganda yangi o'quvchi
+    # qo'shilsa, ballar o'zgaradi va yuborilgan sertifikat noto'g'ri bo'lib qoladi.
+    if test.status != "closed":
+        raise HTTPException(
+            status_code=409,
+            detail="Avval testni yakunlang (🏁 Yakunlash) — sertifikatlar faqat yakunlangan testdan yuboriladi",
+        )
     rows, section_names = _certificate_rows(db, test)
 
     attempt_users = dict(db.execute(

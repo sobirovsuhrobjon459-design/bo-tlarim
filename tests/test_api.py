@@ -3344,6 +3344,14 @@ def test_sertifikatlar_oquvchilarga_yuboriladi():
         register_teacher(tg_id=556)
         assert client.post(f"/api/teacher/tests/{created['id']}/certificates/send-students",
                            headers=as_user(556)).status_code == 404
+        # Test hali ochiq — yuborilmaydi
+        still_open = client.post(f"/api/teacher/tests/{created['id']}/certificates/send-students", headers=as_user(555))
+        assert still_open.status_code == 409 and "yakunlang" in still_open.text, still_open.text
+        assert not pdfs
+        with SessionLocal() as session:
+            from backend.database import Test as DbTest
+            session.get(DbTest, created["id"]).status = "closed"
+            session.commit()
         response = client.post(f"/api/teacher/tests/{created['id']}/certificates/send-students", headers=as_user(555))
     finally:
         main._send_pdf_to_telegram, main.threading.Thread, main.httpx.post = originals

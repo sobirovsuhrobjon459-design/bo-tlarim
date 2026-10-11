@@ -6532,6 +6532,11 @@ async function renderResultsTab(selectedId) {
       <button class="btn btn-ghost" id="results-certificates-button">🎓 Sertifikatlar</button>
     </div>
     <button class="btn btn-ghost" id="results-send-students-button" style="margin-top:10px">📨 Sertifikatlarni o'quvchilarga yuborish</button>
+    ${
+      results.status === "closed"
+        ? ""
+        : `<p class="subtitle" style="margin:6px 4px 0;font-size:12px">🔒 Test yakunlangach yuborish mumkin bo'ladi</p>`
+    }
 
     <div class="row-between" style="margin:18px 0 8px">
       <span class="section-label" style="margin:0">ISHTIROKCHILAR (O'RIN BO'YICHA)</span>
@@ -6556,12 +6561,12 @@ async function renderResultsTab(selectedId) {
   document.getElementById("results-send-students-button").addEventListener(
     "click",
     guarded(async () => {
+      if (results.status !== "closed") {
+        throw new Error("Avval testni yakunlang (🏁 Yakunlash) — sertifikatlar faqat yakunlangan testdan yuboriladi");
+      }
       if (!results.rows.length) throw new Error("Hali natija yo'q");
       const sure = await askConfirm(
-        `${results.rows.length} ta o'quvchining har biriga o'z sertifikati (ball, foiz, daraja) bot orqali yuborilsinmi?
-
-` +
-          "Ball qatnashchilarga nisbatan hisoblanadi — test yakunlangandan keyin yuborgan ma'qul."
+        `${results.rows.length} ta o'quvchining har biriga o'z sertifikati (ball, foiz, daraja) bot orqali yuborilsinmi?`
       );
       if (!sure) return;
       const sent = await api(`/api/teacher/tests/${testId}/certificates/send-students`, { method: "POST" });
