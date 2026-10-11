@@ -23,11 +23,12 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     MenuButtonCommands,
     MenuButtonDefault,
     MenuButtonWebApp,
     Message,
-    ReplyKeyboardRemove,
+    ReplyKeyboardMarkup,
     WebAppInfo,
 )
 
@@ -59,6 +60,22 @@ if TOKEN_IS_SET and not WEBAPP_URL.startswith("https://"):
 # Almashtirish kerak bo'lsa, faqat shu ro'yxat o'zgartiriladi (Mini App'da ham shunday ro'yxat bor).
 SUPPORT_CONTACTS = ("saidjanovic", "Ulugbeck_dev")
 SUPPORT_TEXT = "💬 Murojaat uchun: " + ", ".join(f"@{name}" for name in SUPPORT_CONTACTS)
+
+# Pastdagi tugmalar (reply-klaviatura). Ular bor ekan, xabar maydonining o'ng
+# tomonida 2×2 kub belgisi chiqadi — u tugmalarni ochadi/yopadi. Mini App
+# baribir chapdagi PLAY orqali ochiladi; bu tugmalar faqat bot buyruqlari.
+GUIDE_BUTTON = "📘 Qo'llanma"
+RESTART_BUTTON = "🔄 Qayta ishga tushirish"
+SUPPORT_BUTTON = "💬 Admin bilan bog'lanish"
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text=GUIDE_BUTTON), KeyboardButton(text=RESTART_BUTTON)],
+        [KeyboardButton(text=SUPPORT_BUTTON)],
+    ],
+    resize_keyboard=True,
+    is_persistent=False,
+    input_field_placeholder="Tugmani tanlang yoki PLAY ni bosing",
+)
 
 # Token yo'q bo'lsa Bot() obyekti yaratilmaydi — aiogram tokenni darhol tekshiradi
 bot = Bot(token=BOT_TOKEN) if TOKEN_IS_SET else None
@@ -220,9 +237,9 @@ async def _open_bot(message: Message, payload: str) -> None:
         f"{SUPPORT_TEXT}"
     )
 
-    # Eski reply-keyboard PLAY tugmasi qolib ketgan bo'lsa, uni tozalaydi —
-    # endi Mini App faqat yagona, chat menyusidagi PLAY tugmasi orqali ochiladi.
-    await message.answer(welcome_text, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+    # Pastdagi tugmalar (Qo'llanma, Qayta ishga tushirish, Admin) — eski reply-keyboard
+    # PLAY tugmasi qolib ketgan bo'lsa, shu bilan almashadi. Mini App — chapdagi PLAY'da.
+    await message.answer(welcome_text, parse_mode="HTML", reply_markup=MAIN_KEYBOARD)
 
 
 @dispatcher.message(CommandStart())
@@ -246,7 +263,7 @@ async def handle_restart(message: Message) -> None:
     """
     /restart — botni "toza holatga" qaytaradi: PLAY tugmasi yo'qolgan, eski
     klaviatura qolib ketgan yoki bot javob bermayotgandek tuyulganda.
-    Obuna qayta tekshiriladi, PLAY tiklanadi va bosh xabar qayta chiqadi.
+    Obuna qayta tekshiriladi, PLAY tiklanadi va bosh xabar (pastdagi tugmalar bilan) qayta chiqadi.
     """
 
     logger.info("/restart: %s (tg_id=%s)", message.from_user.full_name, message.from_user.id)
@@ -352,6 +369,24 @@ async def handle_guide_role(callback: CallbackQuery) -> None:
 async def handle_guide_menu(callback: CallbackQuery) -> None:
     await callback.answer()
     await callback.message.answer(GUIDE_INTRO, parse_mode="HTML", reply_markup=_guide_roles_keyboard(), protect_content=True)
+
+
+@dispatcher.message(F.text == GUIDE_BUTTON)
+async def handle_guide_button(message: Message) -> None:
+    await handle_help(message)
+
+
+@dispatcher.message(F.text == RESTART_BUTTON)
+async def handle_restart_button(message: Message) -> None:
+    await handle_restart(message)
+
+
+@dispatcher.message(F.text == SUPPORT_BUTTON)
+async def handle_support_button(message: Message) -> None:
+    await message.answer(
+        f"{SUPPORT_TEXT}\n\nSavolingizni shu adminlardan biriga yozing — tez orada javob berishadi.",
+        reply_markup=MAIN_KEYBOARD,
+    )
 
 
 @dispatcher.message()
