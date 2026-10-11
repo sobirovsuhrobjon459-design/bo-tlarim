@@ -23,7 +23,8 @@ _STUDENT = """👨‍🎓 <b>TEST TOPSHIRUVCHI UCHUN</b>
 2️⃣ <b>🔍 Yangi test qidirish</b> → o'qituvchi bergan <b>test kodini</b> kiriting.
 3️⃣ Test kartasida <b>📋 Shartlar</b> chiqadi:
    • kanalga obuna (✅ / ❌);
-   • boshlanish va tugash vaqti.
+   • boshlanish va tugash vaqti;
+   • pullik bo'lsa — narxni o'qituvchi kartasiga o'tkazib, <b>chek rasmini</b> yuborasiz; o'qituvchi tasdiqlagach test ochiladi va botda xabar keladi.
    Shart bajarilmagan bo'lsa, tugma orqali bajaring va <b>🔄 Tekshirish</b> ni bosing.
 4️⃣ <b>▶️ Testni boshlash</b> — barcha savollar bitta sahifada. Javobni bosib belgilaysiz, yozma javoblar uchun matematik klaviatura bor.
 5️⃣ <b>Yakunlash</b> — javoblaringiz o'qituvchiga yuboriladi.
@@ -46,7 +47,7 @@ _TEST_CREATE = """🧑‍🏫 <b>TEST YARATISH</b>
    • test nomi, fan, davomiyligi;
    • boshlanish/tugash vaqti (ixtiyoriy);
    • <b>ochiq</b> (o'quvchi o'zi ishlaydi) yoki <b>yopiq</b> (qog'ozda ishlanadi, javoblarni siz kiritasiz);
-   • <b>bepul</b> yoki <b>pullik</b> (pullik — o'quvchi Payme/Click orqali to'lagach ishlaydi; to'lov tizimi ulangan bo'lsa);
+   • <b>bepul</b> yoki <b>pullik</b> (pullik — o'quvchi pulni <b>sizning kartangizga</b> o'tkazib, chek yuboradi; siz tasdiqlagach test ochiladi);
    • savollar soni, variantlar soni (A–D, A–F) va <b>to'g'ri javoblar kaliti</b>;
    • 🧩 <b>Geometriya savollari</b> (ixtiyoriy) — natijalar Algebra/Geometriya bo'yicha chiqadi.
 3️⃣ Saqlang — test <b>kodi</b> chiqadi. Kodni o'quvchilarga yuboring.
@@ -67,7 +68,14 @@ _TEST_RESULTS = """📊 <b>NATIJALAR VA SERTIFIKAT</b>
 
 _CREDITS = """🎫 <b>KREDIT</b>
 
-<b>Bepul</b> testda har bir o'quvchi natijasi uchun <b>1 kredit</b> sarflanadi. <b>Pullik</b> testda kredit sarflanmaydi — o'quvchi to'lagan pulning sizga tegishli qismi balansingizga tushadi.
+<b>Bepul</b> testda har bir o'quvchi natijasi uchun <b>1 kredit</b> sarflanadi. <b>Pullik</b> testda kredit sarflanmaydi.
+
+💳 <b>Pullik test qanday ishlaydi:</b>
+1️⃣ Bosh sahifada <b>➕ Karta qo'shish</b> — karta raqamingiz va ism-familiyangiz.
+2️⃣ Test yaratishda <b>Pullik test</b> va narxini tanlang.
+3️⃣ O'quvchi pulni kartangizga o'tkazib, <b>chek rasmini</b> yuboradi — chek botga <b>✅ Pul tushdi / ❌ Rad etish</b> tugmalari bilan keladi.
+4️⃣ Kartangizga pul tushganini tekshirib <b>✅</b> bosing — o'quvchiga test ochiladi va unga xabar boradi.
+Pul to'g'ridan-to'g'ri sizga tushadi, platforma ushlamaydi. Cheklar ilovada ham: <b>🧾 Cheklar</b>.
 
 • <b>🛒 Kredit sotib olish</b> — qancha ko'p olsangiz, shuncha arzon:
   1–100 ta — 1 200 so'm, 101–150 — 1 000, 151–300 — 650, 301–500 — 500, 501+ — 450 so'm (1 dona).

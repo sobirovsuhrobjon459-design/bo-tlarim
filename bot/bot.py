@@ -502,6 +502,44 @@ async def handle_card_topup_decision(callback: CallbackQuery) -> None:
     await callback.answer("Bajarildi")
 
 
+@dispatcher.callback_query(F.data.startswith("tpay_"))
+async def handle_test_payment_decision(callback: CallbackQuery) -> None:
+    """
+    O'qituvchi o'quvchining test chekidagi "✅ Pul tushdi" / "❌ Rad etish" tugmasini
+    bosganda. Kim bosganini backend tekshiradi: faqat o'sha testning o'qituvchisi.
+    """
+
+    from backend.database import SessionLocal
+
+    action, separator, payment_id_str = callback.data.partition(":")
+    if not separator or not payment_id_str.isdigit():
+        await callback.answer("Bu tugma eskirgan", show_alert=True)
+        return
+
+    from backend.main import decide_test_payment
+
+    def decide() -> tuple[bool, str]:
+        session = SessionLocal()
+        try:
+            return decide_test_payment(
+                session, int(payment_id_str), approve=action == "tpay_approve", teacher_tg_id=callback.from_user.id
+            )
+        finally:
+            session.close()
+
+    ok, message = await asyncio.to_thread(decide)
+    if not ok:
+        await callback.answer(message, show_alert=True)
+        return
+
+    try:
+        await callback.message.edit_caption(caption=message)
+    except Exception:
+        logger.warning("Test cheki xabarini yangilab bo'lmadi", exc_info=True)
+
+    await callback.answer("Bajarildi")
+
+
 async def _setup_menu_button() -> None:
     """Chat ichidagi doimiy PLAY tugmasini Mini App'ga ulaydi — Mini App'ni ochishning yagona yo'li shu."""
 

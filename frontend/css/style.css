@@ -1044,6 +1044,12 @@ table td {
 }
 
 /* Pastki menyu */
+/* "hidden" har doim yashiradi — elementning o'z display uslubi (masalan, chek
+   rasmidagi display:block) uni bekor qilib, bo'sh "buzilgan rasm" ko'rsatmasin */
+[hidden] {
+  display: none !important;
+}
+
 .bottom-nav[hidden] {
   display: none;
 }

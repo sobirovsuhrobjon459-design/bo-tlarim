@@ -663,12 +663,20 @@ function openExternalLink(url) {
 
 function askConfirm(message) {
   // Telegram ichida chiroyli dialog ko'rsatadi, oddiy brauzerda esa odatdagi confirm.
+  // showConfirm faqat Telegram 6.2+ da ishlaydi: eski versiyada xato beradi va
+  // javob hech qachon qaytmaydi — tugma "jim" qolardi. Shuning uchun versiya
+  // tekshiriladi va har qanday xatoda oddiy confirm'ga o'tiladi.
   return new Promise((resolve) => {
-    if (telegram?.showConfirm) {
-      telegram.showConfirm(message, (confirmed) => resolve(Boolean(confirmed)));
-    } else {
-      resolve(window.confirm(message));
+    const telegramConfirm = telegram?.showConfirm && telegram.isVersionAtLeast?.("6.2");
+    if (telegramConfirm) {
+      try {
+        telegram.showConfirm(message, (confirmed) => resolve(Boolean(confirmed)));
+        return;
+      } catch (_) {
+        /* pastdagi oddiy confirm */
+      }
     }
+    resolve(window.confirm(message));
   });
 }
 
@@ -4480,16 +4488,7 @@ function renderTestFound(test) {
     ? `<button class="btn" disabled>▶️ TESTNI BOSHLASH</button>`
     : test.paid
       ? `<button class="btn" id="start-test-button">▶️ TESTNI BOSHLASH</button>`
-      : // To'lov Payme sahifasida amalga oshadi va tasdiq serverga webhook
-        // orqali keladi — shuning uchun o'quvchi qaytib kelib holatni
-        // yangilashi uchun alohida tugma turadi.
-        `${(test.payment_providers?.length ? test.payment_providers : ["payme"])
-           .map(
-             (provider, index) =>
-               `<button class="btn ${index ? "btn-ghost" : ""}" data-test-pay="${provider}">${provider === "click" ? "🔵 Click" : "🅿️ Payme"} orqali ${formatNumber(test.price)} so'm to'lash</button>`
-           )
-           .join("")}
-         <button class="btn btn-ghost" id="recheck-payment-button">🔄 To'lovni tekshirish</button>`;
+      : studentPaymentHtml(test);
 
   document.getElementById("search-result").innerHTML = `
     <div class="card test-found" style="cursor:default">
@@ -4522,6 +4521,8 @@ function renderTestFound(test) {
     })
   );
 
+  wireStudentCardPayment(test);
+
   document.querySelectorAll("[data-test-pay]").forEach((button) => button.addEventListener(
     "click",
     guarded(async () => {
@@ -4550,6 +4551,80 @@ function renderTestFound(test) {
         showToast("To'lov hali tasdiqlanmadi, bir oz kutib qayta tekshiring");
       }
       renderTestFound(fresh);
+    })
+  );
+}
+
+/*
+  Pullik test, hali to'lanmagan: o'quvchi o'qituvchi kartasiga pul o'tkazadi va
+  chek yuboradi (o'qituvchi tasdiqlagach test ochiladi va botda xabar keladi).
+  Payme/Click ulangan bo'lsa, ularning tugmalari ham chiqadi.
+*/
+function studentPaymentHtml(test) {
+  const recheck = `<button class="btn btn-ghost" id="recheck-payment-button">🔄 To'lovni tekshirish</button>`;
+  if (test.card_payment_pending) {
+    return `<div class="notice">⏳ Chekingiz o'qituvchiga yuborildi. U kartasiga pul tushganini tekshirib tasdiqlagach, test ochiladi va botda xabar keladi.</div>${recheck}`;
+  }
+
+  const card = test.teacher_card;
+  const cardBlock = card
+    ? `<div class="panel" style="margin:10px 0 0">
+         <p style="margin:0 0 6px"><b>1.</b> <b>${formatNumber(test.price)} so'm</b>ni o'qituvchi kartasiga o'tkazing:</p>
+         <p style="margin:0"><span class="copy-code" data-copy="${escapeHtml(card.number.replace(/\s/g, ""))}" style="font-size:18px;letter-spacing:1px"><b>${escapeHtml(card.number)}</b>${COPY_ICON}</span></p>
+         <p class="subtitle" style="margin:2px 0 10px">${escapeHtml(card.holder)}</p>
+         <p style="margin:0 0 6px"><b>2.</b> To'lov chekining rasmini (skrinshot) tanlang:</p>
+         <input id="test-receipt-input" type="file" accept="image/*" hidden />
+         <label for="test-receipt-input" class="btn btn-ghost" id="test-receipt-label" style="display:block;text-align:center;cursor:pointer">🧾 Chek rasmini tanlash</label>
+         <img id="test-receipt-preview" alt="" hidden style="max-width:100%;max-height:220px;border-radius:10px;margin:6px 0;display:block" />
+         <p style="margin:8px 0 6px"><b>3.</b> Yuboring — o'qituvchi tasdiqlagach, test ochiladi.</p>
+         <button class="btn" id="send-test-receipt-button">📤 Chekni yuborish</button>
+       </div>`
+    : "";
+  const providerButtons = (test.payment_providers || [])
+    .map(
+      (provider) =>
+        `<button class="btn btn-ghost" data-test-pay="${provider}">${provider === "click" ? "🔵 Click" : "🅿️ Payme"} orqali ${formatNumber(test.price)} so'm to'lash</button>`
+    )
+    .join("");
+
+  if (!cardBlock && !providerButtons) {
+    return `<div class="notice">O'qituvchi hali to'lov usulini sozlamagan — u bilan bog'laning.</div>`;
+  }
+  return `${cardBlock}${providerButtons}${providerButtons ? recheck : ""}`;
+}
+
+function wireStudentCardPayment(test) {
+  const input = document.getElementById("test-receipt-input");
+  if (!input) return;
+  const preview = document.getElementById("test-receipt-preview");
+  let receiptData = null;
+
+  input.addEventListener(
+    "change",
+    guarded(async () => {
+      const file = input.files?.[0];
+      receiptData = null;
+      preview.hidden = true;
+      if (!file) return;
+      if (!file.type.startsWith("image/")) {
+        input.value = "";
+        throw new Error("Chek rasm bo'lishi kerak (skrinshot yoki foto)");
+      }
+      receiptData = await compressImage(file);
+      preview.src = receiptData;
+      preview.hidden = false;
+      document.getElementById("test-receipt-label").textContent = "🔄 Boshqa rasm tanlash";
+    })
+  );
+
+  document.getElementById("send-test-receipt-button").addEventListener(
+    "click",
+    guarded(async () => {
+      if (!receiptData) throw new Error("Avval chek rasmini tanlang");
+      if (!(await askConfirm(`${formatNumber(test.price)} so'm uchun chek o'qituvchiga yuborilsinmi?`))) return;
+      await api(`/api/tests/${test.code}/pay-card`, { method: "POST", body: { receipt_base64: receiptData } });
+      showToast("✅ Chek yuborildi. O'qituvchi tasdiqlagach, botda xabar keladi");
+      renderTestFound(await api(`/api/tests/${test.code}`));
     })
   );
 }
@@ -5107,10 +5182,26 @@ function drawTeacherDashboard(me, stats, tests) {
       <div class="stat-tile">🏆<span class="stat-value">${stats.max}%</span>Eng yuqori</div>
     </div>
     <div class="card" style="cursor:default">
-      <div class="card-body">
-        <div class="row-between"><span>💰 Balansingiz</span><b>${formatNumber(stats.balance)} so'm</b></div>
-        <p>Pullik testlardan tushgan daromad</p>
-        <button class="btn btn-ghost" id="withdraw-button">💸 Pul yechish</button>
+      <div class="card-body" style="width:100%">
+        <div class="row-between">
+          <span>💳 Pullik test to'lovlari</span>
+          ${stats.pending_payments ? `<span class="badge badge-purple">${stats.pending_payments} ta chek kutmoqda</span>` : ""}
+        </div>
+        <p>${
+          stats.card
+            ? `O'quvchilar pulni kartangizga o'tkazadi: <b>${escapeHtml(stats.card.number)}</b>`
+            : "Pullik test uchun karta raqamingizni kiriting — o'quvchilar pulni to'g'ridan-to'g'ri sizga o'tkazadi."
+        }</p>
+        <div class="contact-actions">
+          <button class="btn ${stats.pending_payments ? "" : "btn-ghost"}" id="test-payments-button">🧾 Cheklar${stats.pending_payments ? ` (${stats.pending_payments})` : ""}</button>
+          <button class="btn btn-ghost" id="card-settings-button">${stats.card ? "✏️ Karta" : "➕ Karta qo'shish"}</button>
+        </div>
+        ${
+          stats.balance > 0
+            ? `<div class="row-between" style="margin-top:10px"><span class="subtitle" style="margin:0">Payme/Click balansi: <b>${formatNumber(stats.balance)} so'm</b></span>
+               <button class="btn btn-ghost" id="withdraw-button" style="width:auto;padding:6px 12px;margin:0">💸 Yechish</button></div>`
+            : ""
+        }
       </div>
     </div>
     <div class="card" style="cursor:default">
@@ -5133,7 +5224,9 @@ function drawTeacherDashboard(me, stats, tests) {
     "click",
     guarded(() => renderEditName(me, renderTeacherDashboard))
   );
-  document.getElementById("withdraw-button").addEventListener("click", guarded(renderWithdrawalForm));
+  document.getElementById("withdraw-button")?.addEventListener("click", guarded(renderWithdrawalForm));
+  document.getElementById("test-payments-button").addEventListener("click", guarded(renderTestPaymentsPage));
+  document.getElementById("card-settings-button").addEventListener("click", () => openCardSettingsSheet(renderTeacherDashboard));
   document.getElementById("buy-credit-button").addEventListener("click", guarded(renderCreditPurchaseForm));
   document.getElementById("new-test-button").addEventListener("click", () => renderNewTestForm("rash"));
 
@@ -5150,6 +5243,128 @@ function drawTeacherDashboard(me, stats, tests) {
   });
 
   renderTeacherTestList(tests);
+}
+
+/*
+  O'qituvchining kartasi — pullik test pullari shu kartaga to'g'ridan-to'g'ri
+  o'tkaziladi (platforma pulni ushlamaydi, kredit ishlatilmaydi).
+*/
+async function openCardSettingsSheet(onSaved) {
+  const current = await api("/api/teacher/card");
+  const formatCard = (value) => value.replace(/\D/g, "").slice(0, 16).replace(/(\d{4})(?=\d)/g, "$1 ");
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 4px">💳 Karta raqamingiz</h3>
+    <p class="subtitle" style="margin:0 0 10px">Pullik testda o'quvchilar pulni shu kartaga o'tkazib, chek yuboradi. Siz botda tasdiqlaysiz.</p>
+    <label class="field-label" style="margin:0">Karta raqami
+      <input class="input" id="card-number-input" inputmode="numeric" autocomplete="cc-number" maxlength="19"
+             placeholder="8600 1234 5678 9012" value="${escapeHtml(formatCard(current.card_number))}" style="margin:4px 0 0;letter-spacing:1px" /></label>
+    <label class="field-label">Karta egasi (ism familiya)
+      <input class="input" id="card-holder-input" maxlength="100" placeholder="Ali Valiyev"
+             value="${escapeHtml(current.card_holder)}" style="margin:4px 0 0" /></label>
+    <button class="btn" id="card-save-button" style="margin-top:12px">💾 Saqlash</button>
+    <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
+  `);
+  const numberInput = sheet.querySelector("#card-number-input");
+  numberInput.addEventListener("input", () => {
+    numberInput.value = formatCard(numberInput.value);
+  });
+  sheet.querySelector("#card-save-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const cardNumber = numberInput.value.replace(/\D/g, "");
+      const cardHolder = sheet.querySelector("#card-holder-input").value.trim();
+      if (cardNumber.length !== 16) throw new Error("Karta raqami 16 ta raqam bo'lishi kerak");
+      if (cardHolder.length < 3) throw new Error("Karta egasining ism-familiyasini kiriting");
+      await api("/api/teacher/card", { method: "PUT", body: { card_number: cardNumber, card_holder: cardHolder } });
+      close();
+      showToast("✅ Karta saqlandi");
+      await onSaved?.();
+    })
+  );
+}
+
+/*
+  O'quvchilar yuborgan cheklar. Asosan o'qituvchi chekni botda ko'rib, o'sha
+  yerda ✅/❌ bosadi — bu sahifa zaxira yo'l (xabar o'tkazib yuborilgan bo'lsa).
+*/
+async function renderTestPaymentsPage() {
+  const data = await api("/api/teacher/test-payments");
+  const statusBadge = (status) =>
+    status === "paid"
+      ? `<span class="badge badge-green">✅ Tasdiqlangan</span>`
+      : `<span class="badge badge-gray">❌ Rad etilgan</span>`;
+
+  const pendingCards =
+    data.pending
+      .map(
+        (item) => `
+          <div class="card" style="cursor:default" data-payment-id="${item.id}">
+            <div class="card-body" style="width:100%">
+              <div class="row-between"><b>${escapeHtml(item.student)}</b><b>${formatNumber(item.amount)} so'm</b></div>
+              <p class="subtitle" style="margin:2px 0 8px">«${escapeHtml(item.test_title)}» · ${formatDateTime(item.created_at)}</p>
+              <img data-receipt-image alt="Chek" hidden style="max-width:100%;max-height:360px;border-radius:10px;margin-bottom:8px;display:block" />
+              ${item.has_receipt ? `<button class="btn btn-ghost" data-action="receipt">🧾 Chekni ko'rish</button>` : ""}
+              <div class="contact-actions">
+                <button class="btn" data-action="approve">✅ Pul tushdi</button>
+                <button class="btn btn-ghost" data-action="reject">❌ Rad etish</button>
+              </div>
+            </div>
+          </div>`
+      )
+      .join("") || `<p class="subtitle">Tasdiq kutayotgan chek yo'q ✨</p>`;
+
+  const recentRows = data.recent
+    .map(
+      (item) => `
+        <div class="list-row">
+          <div><b>${escapeHtml(item.student)}</b><p class="subtitle" style="margin:2px 0 0">«${escapeHtml(item.test_title)}» · ${formatNumber(item.amount)} so'm</p></div>
+          ${statusBadge(item.status)}
+        </div>`
+    )
+    .join("");
+
+  showPage(`
+    <button class="back-button" data-action="dashboard">←</button>
+    <h2>🧾 Test to'lovlari</h2>
+    <p class="subtitle" style="margin-top:-6px">Kartangizga pul tushganini tekshirib tasdiqlang — o'quvchiga test ochiladi va botda xabar boradi.</p>
+    <h3>Tasdiq kutmoqda (${data.pending.length})</h3>
+    ${pendingCards}
+    ${recentRows ? `<h3>Oxirgi to'lovlar</h3>${recentRows}` : ""}
+  `);
+
+  document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
+  document.querySelectorAll("[data-payment-id]").forEach((card) => {
+    const paymentId = card.dataset.paymentId;
+    const name = card.querySelector("b").textContent;
+    card.querySelector('[data-action="receipt"]')?.addEventListener(
+      "click",
+      guarded(async () => {
+        const button = card.querySelector('[data-action="receipt"]');
+        const image = card.querySelector("[data-receipt-image]");
+        image.src = await fetchProtectedImage(`/api/teacher/test-payments/${paymentId}/receipt`);
+        image.hidden = false;
+        button.hidden = true;
+      })
+    );
+    card.querySelector('[data-action="approve"]').addEventListener(
+      "click",
+      guarded(async () => {
+        if (!(await askConfirm(`Kartangizga pul tushganini tekshirdingizmi? ${name}ga test ochiladi.`))) return;
+        await api(`/api/teacher/test-payments/${paymentId}/approve`, { method: "POST", body: {} });
+        showToast("✅ Tasdiqlandi — o'quvchiga test ochildi");
+        await renderTestPaymentsPage();
+      })
+    );
+    card.querySelector('[data-action="reject"]').addEventListener(
+      "click",
+      guarded(async () => {
+        if (!(await askConfirm(`${name}ning to'lovi rad etilsinmi? Unga xabar boradi.`))) return;
+        await api(`/api/teacher/test-payments/${paymentId}/reject`, { method: "POST", body: {} });
+        showToast("❌ Rad etildi");
+        await renderTestPaymentsPage();
+      })
+    );
+  });
 }
 
 function renderTeacherTestList(tests) {
@@ -5668,10 +5883,10 @@ function renderNewTestForm(testType, draft = {}) {
     <div id="price-wrapper" style="display:${draft.paid ? "block" : "none"};margin-bottom:16px">
       <input class="input" id="field-price" type="number" min="0" step="1000"
              value="${draft.price ?? 0}" placeholder="Narxi (so'm)" style="margin:0" />
-      <!-- To'lov tizimi (Payme/Click) ulanmagan bo'lsagina ko'rsatiladi (pastda /api/me orqali tekshiriladi) -->
-      <div class="notice" id="paid-unavailable-notice" style="margin-top:8px" hidden>
-        ⚠️ Onlayn to'lov (Payme/Click) hali ulanmagan, shuning uchun pullik test yaratib bo'lmaydi.
-        Hozircha bepul test yarating — to'lov ulangach, shu yerda narx qo'yish mumkin bo'ladi.
+      <!-- O'quvchilar pulni o'qituvchi kartasiga o'tkazadi (pastda /api/teacher/card dan to'ldiriladi) -->
+      <div class="row-between" style="margin-top:8px;gap:10px">
+        <span class="subtitle" id="price-card-summary" style="margin:0;min-width:0">💳 Karta tekshirilmoqda…</span>
+        <button type="button" class="btn btn-ghost" id="price-card-button" style="width:auto;padding:6px 12px;margin:0">Karta</button>
       </div>
     </div>
     </div>
@@ -5831,14 +6046,21 @@ function renderNewTestForm(testType, draft = {}) {
     selectOpenEnrollment(); // pullik test faqat ochiq bo'ladi
   });
 
-  // To'lov tizimi ulanmagan bo'lsa — ogohlantirish va narx maydoni o'chiriladi
-  api("/api/me")
-    .then((me) => {
-      if ((me.payment_providers || []).length) return;
-      document.getElementById("paid-unavailable-notice").hidden = false;
-      document.getElementById("field-price").disabled = true;
-    })
-    .catch(() => {});
+  // Pullik test: o'quvchilar pulni shu kartaga o'tkazadi — karta bo'lmasa, shu yerda kiritiladi
+  const priceCardSummary = document.getElementById("price-card-summary");
+  const priceCardButton = document.getElementById("price-card-button");
+  const refreshPriceCard = async () => {
+    const card = await api("/api/teacher/card").catch(() => null);
+    if (!priceCardSummary.isConnected) return;
+    newTestHasCard = Boolean(card?.card_number);
+    priceCardSummary.innerHTML = newTestHasCard
+      ? `💳 Pul shu kartaga tushadi: <b>${escapeHtml(card.card_number.replace(/(\d{4})(?=\d)/g, "$1 "))}</b>`
+      : `⚠️ Karta raqamingizni kiriting — o'quvchilar pulni unga o'tkazadi`;
+    priceCardButton.textContent = newTestHasCard ? "✏️ O'zgartirish" : "➕ Kiritish";
+    priceCardButton.classList.toggle("btn-ghost", newTestHasCard);
+  };
+  refreshPriceCard();
+  priceCardButton.addEventListener("click", () => openCardSettingsSheet(refreshPriceCard));
 
 
   const enrollmentToggle = document.getElementById("enrollment-toggle");
@@ -6111,6 +6333,7 @@ function handleAnswerCellTap(event) {
 
 // Test yaratish formasida tanlangan bo'limlar (saqlashda testga yoziladi)
 let newTestSections = { text: "", picked: [], pickedName: "Geometriya", restName: "Algebra" };
+let newTestHasCard = false; // pullik test uchun o'qituvchi kartasi kiritilganmi
 
 async function saveNewTest() {
   const titleValue = document.getElementById("field-title").value.trim();
@@ -6130,6 +6353,9 @@ async function saveNewTest() {
 
   if (isPaid && price <= 0) {
     throw new Error("Pullik test uchun narxini kiriting");
+  }
+  if (isPaid && !newTestHasCard) {
+    throw new Error("Pullik test uchun avval karta raqamingizni kiriting (narx ostidagi «➕ Kiritish»)");
   }
 
   const body = {

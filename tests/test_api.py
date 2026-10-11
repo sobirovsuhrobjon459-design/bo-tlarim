@@ -301,7 +301,7 @@ def test_notogri_kalit_qabul_qilinmaydi():
 
 
 def test_pullik_test_tolov_tizimisiz_yaratilmaydi():
-    """Hech qaysi to'lov tizimi (Payme, Click) ulanmagan bo'lsa, pullik test yaratilmaydi."""
+    """Payme/Click ulanmagan va o'qituvchi kartasi yo'q bo'lsa, pullik test yaratilmaydi (karta so'raladi)."""
     reset_database()
     register_teacher()
 
@@ -324,7 +324,7 @@ def test_pullik_test_tolov_tizimisiz_yaratilmaydi():
             },
             headers=as_user(555),
         )
-        assert response.status_code == 503, response.text
+        assert response.status_code == 422 and "karta" in response.text, response.text
     finally:
         main.PAYME_MERCHANT_ID = original
         main.CLICK_SERVICE_ID = original_click
@@ -3429,6 +3429,126 @@ def test_oqituvchi_testni_tahrirlaydi_va_vaqtini_chozadi():
     later = (utcnow() + timedelta(hours=3)).replace(microsecond=0).isoformat()
     reopened = client.patch(url, json={"end_time": later}, headers=as_user(555)).json()
     assert reopened["reopened"] is True and reopened["status"] == "active", reopened
+
+
+# ========== Pullik test: o'quvchi o'qituvchi kartasiga to'laydi (chek bilan) ==========
+
+
+class CardPaymentTelegramStub:
+    """O'qituvchiga ketadigan chek va foydalanuvchilarga xabarlarni ushlab qoladi."""
+
+    def __init__(self, fail: bool = False):
+        self.fail = fail
+        self.receipts: list[tuple[int, str]] = []  # (o'qituvchi chat_id, izoh)
+        self.messages: list[tuple[int, str]] = []
+
+    def __enter__(self):
+        self._send, self._notify, self._providers = main._send_test_receipt_to_teacher, main._notify_user, main._enabled_providers
+
+        def send(payment, test, student, image, mime, extension):
+            if self.fail:
+                raise RuntimeError("Telegram javob bermadi")
+            self.receipts.append((test.teacher.user.tg_id, main._test_payment_caption(payment, test, student)))
+            return f"file-{payment.id}"
+
+        main._send_test_receipt_to_teacher = send
+        main._notify_user = lambda chat_id, text: self.messages.append((chat_id, text))
+        main._enabled_providers = lambda: []  # Payme/Click ulanmagan — faqat karta
+        return self
+
+    def __exit__(self, *exc):
+        main._send_test_receipt_to_teacher, main._notify_user, main._enabled_providers = self._send, self._notify, self._providers
+
+
+def _pay_card(code: str, tg_id: int, receipt: str = FAKE_RECEIPT):
+    return client.post(f"/api/tests/{code}/pay-card", json={"receipt_base64": receipt}, headers=as_user(tg_id))
+
+
+def test_pullik_test_oquvchi_oqituvchi_kartasiga_tolaydi():
+    reset_database()
+    register_teacher(tg_id=555)
+    register_teacher(tg_id=556)
+    credits_before = credits_of(555)
+
+    with CardPaymentTelegramStub() as tg:
+        # Karta yo'q — pullik test yaratilmaydi; noto'g'ri karta qabul qilinmaydi
+        no_card = client.post("/api/teacher/tests", headers=as_user(555), json={
+            "title": "Pullik", "subject": "Matematika", "mode": "key", "price": 15000,
+            "key_questions": [{"number": 1, "question_type": "single", "option_count": 4, "correct": "B"}]})
+        assert no_card.status_code == 422 and "karta" in no_card.text, no_card.text
+        assert client.put("/api/teacher/card", json={"card_number": "8600 1234 5678", "card_holder": "Ali Valiyev"},
+                          headers=as_user(555)).status_code == 422
+        card = client.put("/api/teacher/card", json={"card_number": "8600-1234 5678 9012", "card_holder": "  Ali   Valiyev "},
+                          headers=as_user(555))
+        assert card.status_code == 200 and card.json() == {"card_number": "8600123456789012", "card_holder": "Ali Valiyev"}
+
+        created = create_test(tg_id=555, price=15000)
+        code = created["code"]
+
+        # O'quvchi test kartasida o'qituvchi kartasini ko'radi; to'lamasdan boshlay olmaydi
+        info = client.get(f"/api/tests/{code}", headers=as_user(901)).json()
+        assert info["paid"] is False and info["card_payment_pending"] is False
+        assert info["teacher_card"] == {"number": "8600 1234 5678 9012", "holder": "Ali Valiyev"}, info
+        assert client.post(f"/api/tests/{code}/start", json={}, headers=as_user(901)).status_code == 402
+
+        # Rasm bo'lmagan chek rad etiladi
+        bad = _pay_card(code, 901, base64.b64encode(b"not an image" * 20).decode())
+        assert bad.status_code == 422, bad.text
+
+        # Chek yuboriladi — o'qituvchiga boradi, ikkinchisi kutish paytida qabul qilinmaydi
+        sent = _pay_card(code, 901)
+        assert sent.status_code == 200 and sent.json()["pending"] is True, sent.text
+        payment_id = sent.json()["payment_id"]
+        assert tg.receipts and tg.receipts[0][0] == 555 and "15 000" in tg.receipts[0][1], tg.receipts
+        assert _pay_card(code, 901).status_code == 409
+        assert client.get(f"/api/tests/{code}", headers=as_user(901)).json()["card_payment_pending"] is True
+        assert client.post(f"/api/tests/{code}/start", json={}, headers=as_user(901)).status_code == 402
+
+        # Payme/Click bu to'lovni to'lay olmaydi (ikki marta to'lanmasin)
+        with SessionLocal() as session:
+            assert main._payme_find_order_by_account({"account": {"payment_id": payment_id}}, session) is None
+            assert main._click_find_order(session, f"t{payment_id}") is None
+
+        # Boshqa o'qituvchi tasdiqlay olmaydi — na ilovada, na bot tugmasida
+        assert client.post(f"/api/teacher/test-payments/{payment_id}/approve", headers=as_user(556)).status_code == 404
+        with SessionLocal() as session:
+            ok, _ = main.decide_test_payment(session, payment_id, approve=True, teacher_tg_id=556)
+            assert ok is False
+        assert client.get(f"/api/tests/{code}", headers=as_user(901)).json()["paid"] is False
+
+        # O'z o'qituvchisi ro'yxatda ko'radi va tasdiqlaydi — o'quvchiga xabar, test ochiladi
+        listing = client.get("/api/teacher/test-payments", headers=as_user(555)).json()
+        assert [item["id"] for item in listing["pending"]] == [payment_id], listing
+        approved = client.post(f"/api/teacher/test-payments/{payment_id}/approve", headers=as_user(555))
+        assert approved.status_code == 200, approved.text
+        assert tg.messages and tg.messages[-1][0] == 901 and code in tg.messages[-1][1], tg.messages
+        assert client.post(f"/api/teacher/test-payments/{payment_id}/approve", headers=as_user(555)).status_code == 409
+        assert client.get(f"/api/tests/{code}", headers=as_user(901)).json()["paid"] is True
+
+        # Test ishlanadi: o'qituvchidan kredit yechilmaydi, platforma balansiga ham pul yozilmaydi
+        started = client.post(f"/api/tests/{code}/start", json={}, headers=as_user(901))
+        assert started.status_code == 200, started.text
+        sent_notices, restore = _capture_result_notices()
+        try:
+            client.post(f"/api/attempts/{started.json()['attempt_id']}/finish", json={"answers": {"1": "B"}}, headers=as_user(901))
+        finally:
+            restore()
+        balance = client.get("/api/teacher/balance", headers=as_user(555)).json()
+        assert balance["credits"] == credits_before and balance["balance"] == 0, balance
+
+        # Rad etilsa — o'quvchiga xabar, test yopiq qoladi, qayta chek yuborish mumkin
+        second = _pay_card(code, 902).json()["payment_id"]
+        rejected = client.post(f"/api/teacher/test-payments/{second}/reject", headers=as_user(555))
+        assert rejected.status_code == 200 and tg.messages[-1][0] == 902 and "tasdiqlanmadi" in tg.messages[-1][1]
+        assert client.get(f"/api/tests/{code}", headers=as_user(902)).json()["paid"] is False
+        assert _pay_card(code, 902).status_code == 200
+
+    # Chek o'qituvchiga yetmasa — saqlanmaydi, o'quvchi qayta urina oladi
+    with CardPaymentTelegramStub(fail=True):
+        failed = _pay_card(code, 903)
+        assert failed.status_code == 502, failed.text
+    with CardPaymentTelegramStub():
+        assert _pay_card(code, 903).status_code == 200
 
 
 # ========== Ishga tushirgich ==========

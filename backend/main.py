@@ -126,6 +126,8 @@ from .database import (
     Test,
     TestIn,
     TestEditIn,
+    TeacherCardIn,
+    TestCardPaymentIn,
     User,
     WithdrawalRequest,
     WithdrawalRequestIn,
@@ -169,6 +171,7 @@ def _add_missing_columns() -> None:
         },
         "test_attempts": {"offline_name": "VARCHAR(200)", "saved_answers": "TEXT"},
         "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)"},
+        "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)"},
         "school_classes": {"curator_user_id": "INTEGER"},
         "private_schools": {"monthly_fee": "INTEGER DEFAULT 0"},
         "class_students": {"discount_percent": "INTEGER DEFAULT 0"},
@@ -186,6 +189,7 @@ def _add_missing_columns() -> None:
             "performed_at": "TIMESTAMP",
             "cancelled_at": "TIMESTAMP",
             "click_trans_id": "VARCHAR(50)",
+            "receipt_file_id": "VARCHAR(200)",
         },
         "credit_purchases": {
             "method": "VARCHAR(10) DEFAULT 'payme'",
@@ -2685,6 +2689,12 @@ def teacher_overview(teacher: Teacher = Depends(get_current_teacher), db: Sessio
         "max": max((a.percent for a in attempts), default=0),
         "balance": teacher.balance,
         "credits": teacher.credits,
+        # Pullik test: karta kiritilganmi va nechta chek tasdiq kutyapti
+        "card": _teacher_card_view(teacher),
+        "pending_payments": db.scalar(
+            select(func.count()).select_from(Payment).join(Test, Test.id == Payment.test_id)
+            .where(Test.teacher_id == teacher.id, Payment.provider == "card", Payment.status == "pending")
+        ) or 0,
     }
 
 
@@ -3059,11 +3069,8 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         raise HTTPException(status_code=422, detail="Kamida bitta savol kiriting")
     if body.price > 0 and body.enrollment_type == "closed":
         raise HTTPException(status_code=422, detail="Pullik testlar faqat ochiq test sifatida yaratiladi")
-    if body.price > 0 and not _enabled_providers():
-        raise HTTPException(
-            status_code=503,
-            detail="To'lov tizimi hali ulanmagan — hozircha faqat bepul test yaratish mumkin",
-        )
+    if body.price > 0 and not _can_sell_tests(teacher):
+        raise HTTPException(status_code=422, detail="Pullik test uchun avval karta raqamingizni kiriting")
 
     # Majburiy obuna so'ralgan bo'lsa, bot kanalni haqiqatan tekshira olishini
     # SHU YERDA aniqlaymiz. Aks holda o'qituvchi testni tarqatib yuborgandan
@@ -3543,8 +3550,8 @@ def update_test_price(
     # testni keyin pullik qilib, to'lov tizimini chetlab o'tish mumkin bo'lardi.
     if body.price > 0 and test.enrollment_type == "closed":
         raise HTTPException(status_code=422, detail="Yopiq testni pullik qilib bo'lmaydi")
-    if body.price > 0 and not _enabled_providers():
-        raise HTTPException(status_code=503, detail="To'lov tizimi hali ulanmagan — testni pullik qilib bo'lmaydi")
+    if body.price > 0 and not _can_sell_tests(teacher):
+        raise HTTPException(status_code=422, detail="Pullik test uchun avval karta raqamingizni kiriting")
 
     test.price = body.price
     db.commit()
@@ -3955,6 +3962,9 @@ def get_test(code: str, user: User = Depends(get_current_user), db: Session = De
         "duration": test.duration,
         "price": test.price,
         "paid": _is_paid(db, user, test),
+        # Karta orqali to'lov: o'qituvchi kartasi va o'quvchining tekshirilayotgan cheki
+        "teacher_card": _teacher_card_view(test.teacher) if test.price > 0 else None,
+        "card_payment_pending": test.price > 0 and _pending_card_payment(db, user, test) is not None,
         "enrollment_type": test.enrollment_type,
         "required_channel": test.required_channel,
         "required_channels": _required_channels(test),
@@ -4005,6 +4015,255 @@ def pay_for_test(code: str, provider: str = "payme", user: User = Depends(get_cu
         "amount": payment.amount,
         "checkout_url": _checkout_url(provider, payment, payment.amount),
     }
+
+
+# ========== 6.1) Pullik test: o'quvchi o'qituvchining kartasiga to'laydi ==========
+#
+# Platforma pulni ushlamaydi va kredit ishlatilmaydi: o'quvchi pulni o'qituvchining
+# kartasiga o'zi o'tkazadi va chek rasmini yuboradi. Chek botda o'qituvchiga
+# ✅/❌ tugmalari bilan boradi; o'qituvchi kartasiga pul tushganini ko'rib
+# tasdiqlaydi — shundagina o'quvchiga test ochiladi va unga xabar boradi.
+# Har bir qadam faqat "pending" holatdagi to'lovni o'zgartiradi (qulf bilan),
+# shuning uchun tugma ikki marta bosilsa ham hech narsa ikki marta bo'lmaydi.
+
+
+def _format_card(number: str) -> str:
+    return " ".join(number[index:index + 4] for index in range(0, len(number), 4))
+
+
+def _can_sell_tests(teacher: Teacher) -> bool:
+    """Pullik test: karta raqami kiritilgan (yoki Payme/Click ulangan) bo'lsa."""
+    return bool(teacher.card_number and BOT_TOKEN) or bool(_enabled_providers())
+
+
+def _teacher_card_view(teacher: Teacher | None) -> dict | None:
+    if not teacher or not teacher.card_number:
+        return None
+    return {"number": _format_card(teacher.card_number), "holder": teacher.card_holder or ""}
+
+
+def _pending_card_payment(db: Session, user: User, test: Test) -> Payment | None:
+    return db.scalar(
+        select(Payment).where(
+            Payment.user_id == user.id,
+            Payment.test_id == test.id,
+            Payment.provider == "card",
+            Payment.status == "pending",
+        )
+    )
+
+
+@app.get("/api/teacher/card")
+def get_teacher_card(teacher: Teacher = Depends(get_current_teacher)):
+    return {"card_number": teacher.card_number or "", "card_holder": teacher.card_holder or ""}
+
+
+@app.put("/api/teacher/card")
+def set_teacher_card(body: TeacherCardIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """O'quvchilar pullik test uchun pulni shu kartaga o'tkazadi."""
+    teacher.card_number = body.card_number
+    teacher.card_holder = body.card_holder
+    db.commit()
+    logging.getLogger("backend").info("O'qituvchi kartasi yangilandi: teacher=%s", teacher.id)
+    return {"card_number": teacher.card_number, "card_holder": teacher.card_holder}
+
+
+def _test_payment_caption(payment: Payment, test: Test, student: User) -> str:
+    return (
+        "💳 Test uchun to'lov cheki\n\n"
+        f"O'quvchi: {student.full_name}"
+        + (f" (@{student.username})" if student.username else "")
+        + f"\nTest: «{test.title}» (kod: {test.code})\n"
+        f"Summa: {_format_sum(payment.amount)} so'm\n\n"
+        "Kartangizga shu summa tushganini tekshirib, tasdiqlang. "
+        "Tasdiqlasangiz, o'quvchiga test ochiladi."
+    )
+
+
+def _send_test_receipt_to_teacher(payment: Payment, test: Test, student: User, image: bytes, mime: str, extension: str) -> str:
+    """Chekni o'qituvchining Telegram chatiga ✅/❌ tugmalari bilan yuboradi; file_id qaytaradi."""
+
+    response = httpx.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+        data={
+            "chat_id": test.teacher.user.tg_id,
+            "caption": _test_payment_caption(payment, test, student),
+            "reply_markup": json.dumps({
+                "inline_keyboard": [[
+                    {"text": "✅ Pul tushdi", "callback_data": f"tpay_approve:{payment.id}"},
+                    {"text": "❌ Rad etish", "callback_data": f"tpay_reject:{payment.id}"},
+                ]]
+            }),
+        },
+        files={"photo": (f"chek_{payment.id}.{extension}", image, mime)},
+        timeout=30,
+    )
+    data = response.json()
+    if not data.get("ok"):
+        raise RuntimeError(data.get("description") or "Telegram rasmni qabul qilmadi")
+    return data["result"]["photo"][-1]["file_id"]
+
+
+def _notify_user(chat_id: int, text: str) -> None:
+    """Bot orqali xabar. Yetmasa ham jarayon to'xtamaydi (masalan, botni bloklagan)."""
+    try:
+        httpx.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=10)
+    except Exception:
+        logging.getLogger("backend").warning("Foydalanuvchiga xabar yuborilmadi", exc_info=True)
+
+
+@app.post("/api/tests/{code}/pay-card")
+def pay_test_by_card(code: str, body: TestCardPaymentIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """O'quvchi o'qituvchi kartasiga pul o'tkazgach, chek rasmini yuboradi."""
+
+    test = _get_test_by_code(db, code, user)
+    if test.price <= 0:
+        raise HTTPException(status_code=400, detail="Bu test bepul — to'lov kerak emas")
+    if _is_paid(db, user, test):
+        return {"paid": True}
+    if test.enrollment_type == "closed" or test.status == "closed" or (test.end_time and utcnow() > test.end_time):
+        raise HTTPException(status_code=403, detail="Bu testga to'lov qabul qilinmaydi (yopiq yoki tugagan)")
+    teacher = test.teacher
+    if not teacher or not teacher.card_number or not BOT_TOKEN:
+        raise HTTPException(status_code=409, detail="O'qituvchi karta raqamini kiritmagan — u bilan bog'laning")
+
+    # Bir vaqtda bitta tekshirilayotgan chek — bir xil chekni qayta-qayta yuborib bo'lmasin
+    db.scalar(select(User.id).where(User.id == user.id).with_for_update())
+    if _pending_card_payment(db, user, test):
+        raise HTTPException(status_code=409, detail="Chekingiz o'qituvchiga yuborilgan — u tasdiqlashini kuting")
+
+    image, mime, extension = _decode_receipt(body.receipt_base64)
+    payment = Payment(user_id=user.id, test_id=test.id, amount=test.price, status="pending", provider="card")
+    db.add(payment)
+    db.commit()
+
+    try:
+        payment.receipt_file_id = _send_test_receipt_to_teacher(payment, test, user, image, mime, extension)
+        db.commit()
+    except Exception:
+        # O'qituvchi chekni ko'rmasa, hech qachon tasdiqlanmaydi — so'rov iz sifatida qoladi
+        logging.getLogger("backend").warning("Test cheki o'qituvchiga yuborilmadi", exc_info=True)
+        payment.status = "failed"
+        db.commit()
+        raise HTTPException(
+            status_code=502,
+            detail="Chek o'qituvchiga yetmadi (u botni ishga tushirmagan bo'lishi mumkin). Biroz keyin qayta urinib ko'ring",
+        )
+
+    logging.getLogger("backend").info("Test cheki yuborildi: payment=%s test=%s user=%s", payment.id, test.id, user.id)
+    return {"paid": False, "pending": True, "payment_id": payment.id}
+
+
+def decide_test_payment(db: Session, payment_id: int, approve: bool, teacher_tg_id: int) -> tuple[bool, str]:
+    """
+    O'qituvchi o'quvchining chekini tasdiqlaydi yoki rad etadi (bot tugmasi
+    yoki ilova). Faqat o'sha testning o'qituvchisi va faqat "pending" to'lov.
+    (muvaffaqiyatli_mi, o'qituvchiga ko'rsatiladigan matn) qaytaradi.
+    """
+
+    payment = db.scalar(select(Payment).where(Payment.id == payment_id).with_for_update())
+    if not payment or payment.provider != "card":
+        return False, "To'lov topilmadi"
+    test = db.get(Test, payment.test_id)
+    if not test or not test.teacher or test.teacher.user.tg_id != teacher_tg_id:
+        return False, "Bu to'lov sizning testingizga tegishli emas"
+    if payment.status != "pending":
+        return False, "Bu to'lov allaqachon ko'rib chiqilgan"
+
+    student = db.get(User, payment.user_id)
+    amount_text = _format_sum(payment.amount)
+    if approve:
+        payment.status = "paid"
+        payment.performed_at = utcnow()
+        db.commit()
+        _notify_user(student.tg_id, f"✅ «{test.title}» testi uchun to'lovingiz tasdiqlandi!\n\n"
+                                    f"Endi testni boshlashingiz mumkin. Test kodi: {test.code}")
+        logging.getLogger("backend").info("Test to'lovi tasdiqlandi: payment=%s", payment.id)
+        return True, f"✅ Tasdiqlandi: {student.full_name} — «{test.title}», {amount_text} so'm. Unga test ochildi."
+
+    payment.status = "cancelled"
+    payment.cancelled_at = utcnow()
+    db.commit()
+    _notify_user(student.tg_id, f"❌ «{test.title}» testi uchun {amount_text} so'mlik to'lovingiz tasdiqlanmadi.\n\n"
+                                "Chek noto'g'ri yoki kartaga pul tushmagan bo'lishi mumkin. "
+                                "Savol bo'lsa, o'qituvchingizga yozing. Qayta chek yuborishingiz mumkin.")
+    logging.getLogger("backend").info("Test to'lovi rad etildi: payment=%s", payment.id)
+    return True, f"❌ Rad etildi: {student.full_name} — «{test.title}», {amount_text} so'm"
+
+
+@app.get("/api/teacher/test-payments")
+def list_test_payments(teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """O'qituvchi testlariga karta orqali qilingan to'lovlar: tasdiq kutayotganlar va oxirgi 50 tasi."""
+
+    rows = db.execute(
+        select(Payment, Test, User)
+        .join(Test, Test.id == Payment.test_id)
+        .join(User, User.id == Payment.user_id)
+        .where(Test.teacher_id == teacher.id, Payment.provider == "card", Payment.status.in_(("pending", "paid", "cancelled")))
+        .order_by((Payment.status == "pending").desc(), Payment.id.desc())
+        .limit(200)
+    ).all()
+    items = [
+        {
+            "id": payment.id,
+            "status": payment.status,
+            "amount": payment.amount,
+            "created_at": payment.created_at,
+            "test_title": test.title,
+            "test_code": test.code,
+            "student": student.full_name,
+            "username": student.username,
+            "has_receipt": bool(payment.receipt_file_id),
+        }
+        for payment, test, student in rows
+    ]
+    pending = [item for item in items if item["status"] == "pending"]
+    return {"pending": pending, "recent": [item for item in items if item["status"] != "pending"][:50]}
+
+
+def _own_test_payment(db: Session, teacher: Teacher, payment_id: int) -> Payment:
+    payment = db.get(Payment, payment_id)
+    test = db.get(Test, payment.test_id) if payment else None
+    if not payment or payment.provider != "card" or not test or test.teacher_id != teacher.id:
+        raise HTTPException(status_code=404, detail="To'lov topilmadi")
+    return payment
+
+
+@app.get("/api/teacher/test-payments/{payment_id}/receipt")
+def test_payment_receipt(payment_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """Chek rasmi — Telegram'dan file_id orqali olinadi (serverda saqlanmaydi)."""
+
+    payment = _own_test_payment(db, teacher, payment_id)
+    if not payment.receipt_file_id:
+        raise HTTPException(status_code=404, detail="Chek topilmadi")
+    try:
+        file_info = httpx.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getFile",
+                              params={"file_id": payment.receipt_file_id}, timeout=15).json()
+        image = httpx.get(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info['result']['file_path']}", timeout=30)
+        image.raise_for_status()
+    except Exception:
+        logging.getLogger("backend").warning("Test cheki Telegram'dan olinmadi", exc_info=True)
+        raise HTTPException(status_code=502, detail="Chek rasmini olib bo'lmadi")
+    return StreamingResponse(io.BytesIO(image.content), media_type=image.headers.get("content-type", "image/jpeg"),
+                             headers={"Cache-Control": "private, no-store"})
+
+
+@app.post("/api/teacher/test-payments/{payment_id}/approve")
+def approve_test_payment(payment_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    _own_test_payment(db, teacher, payment_id)
+    ok, message = decide_test_payment(db, payment_id, approve=True, teacher_tg_id=teacher.user.tg_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail=message)
+    return {"ok": True, "message": message}
+
+
+@app.post("/api/teacher/test-payments/{payment_id}/reject")
+def reject_test_payment(payment_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    _own_test_payment(db, teacher, payment_id)
+    ok, message = decide_test_payment(db, payment_id, approve=False, teacher_tg_id=teacher.user.tg_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail=message)
+    return {"ok": True, "message": message}
 
 
 @app.post("/api/tests/{code}/start")
@@ -6496,7 +6755,13 @@ def _click_find_order(db: Session, ref: str):
     if not ref or ref[0] not in "ct" or not ref[1:].isdigit():
         return None
     model = CreditPurchase if ref[0] == "c" else Payment
-    return db.get(model, int(ref[1:]), with_for_update=True)  # takroriy so'rov ikki marta yozmasin
+    order = db.get(model, int(ref[1:]), with_for_update=True)  # takroriy so'rov ikki marta yozmasin
+    # Chek bilan tasdiqlanadigan (karta) buyurtmalarni Click to'lay olmaydi — ikki marta to'lanmasin
+    if isinstance(order, CreditPurchase) and order.method == "card":
+        return None
+    if isinstance(order, Payment) and order.provider == "card":
+        return None
+    return order
 
 
 def _click_amount_ok(form: dict, order) -> bool:
@@ -6638,6 +6903,9 @@ def _payme_find_order_by_account(params: dict, db: Session):
         # tasdig'ini kutadi. Aks holda bitta buyurtma ikki yo'l bilan (chek +
         # Payme) ikki marta kredit olishi mumkin edi.
         if isinstance(order, CreditPurchase) and order.method != "payme":
+            return None
+        # O'qituvchi kartasiga chek bilan qilingan to'lovni ham Payme to'lay olmaydi
+        if isinstance(order, Payment) and order.provider == "card":
             return None
         # O'chirilgan (arxivlangan) testga yangi to'lov qabul qilinmaydi
         if isinstance(order, Payment):

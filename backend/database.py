@@ -142,6 +142,11 @@ class Teacher(Base):
     # Kredit balansi: bepul testda har bir o'quvchi natijasi uchun 1 dona sarflanadi.
     credits: Mapped[int] = mapped_column(default=0)
 
+    # Pullik test: o'quvchi pulni shu kartaga TO'G'RIDAN-TO'G'RI o'tkazadi va chek
+    # yuboradi, o'qituvchi tasdiqlaydi (platforma pulni ushlamaydi).
+    card_number: Mapped[str | None] = mapped_column(String(30), default=None)
+    card_holder: Mapped[str | None] = mapped_column(String(100), default=None)
+
     user: Mapped["User"] = relationship()
     tests: Mapped[list["Test"]] = relationship(back_populates="teacher")
 
@@ -365,8 +370,11 @@ class Payment(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     test_id: Mapped[int] = mapped_column(ForeignKey("tests.id"), index=True)
     amount: Mapped[int] = mapped_column(default=0)
-    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | paid | cancelled
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | paid | cancelled | failed
+    # payme | click | card (o'qituvchi kartasiga to'g'ridan-to'g'ri, chek bilan)
     provider: Mapped[str] = mapped_column(String(20), default="payme")
+    # Karta to'lovi cheki — Telegram'dagi file_id (rasm serverda saqlanmaydi)
+    receipt_file_id: Mapped[str | None] = mapped_column(String(200), default=None)
     payme_transaction_id: Mapped[str | None] = mapped_column(String(50), default=None, unique=True, index=True)
     click_trans_id: Mapped[str | None] = mapped_column(String(50), default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
@@ -780,6 +788,28 @@ class TestEditIn(BaseModel):
     duration: int | None = Field(None, ge=1, le=300)
     start_time: datetime | None = None
     end_time: datetime | None = None
+
+
+class TeacherCardIn(BaseModel):
+    """O'qituvchining karta raqami — pullik test pullari shu kartaga o'tkaziladi."""
+
+    card_number: str = Field(min_length=16, max_length=30)
+    card_holder: str = Field(min_length=3, max_length=100)
+
+    @model_validator(mode="after")
+    def normalize(self) -> "TeacherCardIn":
+        digits = re.sub(r"[\s-]", "", self.card_number)
+        if not re.fullmatch(r"\d{16}", digits):
+            raise ValueError("Karta raqami 16 ta raqamdan iborat bo'lishi kerak")
+        self.card_number = digits
+        self.card_holder = " ".join(self.card_holder.split())
+        return self
+
+
+class TestCardPaymentIn(BaseModel):
+    """O'quvchi o'qituvchi kartasiga pul o'tkazgach, chek rasmini yuboradi."""
+
+    receipt_base64: str = Field(min_length=100, max_length=7_000_000)
 
 
 class PriceUpdate(BaseModel):
