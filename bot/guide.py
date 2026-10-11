@@ -46,6 +46,7 @@ _TEST_CREATE = """🧑‍🏫 <b>TEST YARATISH</b>
    • test nomi, fan, davomiyligi;
    • boshlanish/tugash vaqti (ixtiyoriy);
    • <b>ochiq</b> (o'quvchi o'zi ishlaydi) yoki <b>yopiq</b> (qog'ozda ishlanadi, javoblarni siz kiritasiz);
+   • <b>bepul</b> yoki <b>pullik</b> (pullik — o'quvchi Payme/Click orqali to'lagach ishlaydi; to'lov tizimi ulangan bo'lsa);
    • savollar soni, variantlar soni (A–D, A–F) va <b>to'g'ri javoblar kaliti</b>;
    • 🧩 <b>Geometriya savollari</b> (ixtiyoriy) — natijalar Algebra/Geometriya bo'yicha chiqadi.
 3️⃣ Saqlang — test <b>kodi</b> chiqadi. Kodni o'quvchilarga yuboring.
@@ -66,7 +67,7 @@ _TEST_RESULTS = """📊 <b>NATIJALAR VA SERTIFIKAT</b>
 
 _CREDITS = """🎫 <b>KREDIT</b>
 
-Har bir o'quvchi natijasi uchun <b>1 kredit</b> sarflanadi (o'quvchi hech narsa to'lamaydi).
+<b>Bepul</b> testda har bir o'quvchi natijasi uchun <b>1 kredit</b> sarflanadi. <b>Pullik</b> testda kredit sarflanmaydi — o'quvchi to'lagan pulning sizga tegishli qismi balansingizga tushadi.
 
 • <b>🛒 Kredit sotib olish</b> — qancha ko'p olsangiz, shuncha arzon:
   1–100 ta — 1 200 so'm, 101–150 — 1 000, 151–300 — 650, 301–500 — 500, 501+ — 450 so'm (1 dona).
