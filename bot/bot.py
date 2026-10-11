@@ -241,11 +241,25 @@ async def handle_start(message: Message, command: CommandObject) -> None:
     await _open_bot(message, payload)
 
 
+def _play_menu_button():
+    """Mini App'ni ochadigan PLAY tugmasi (WEBAPP_URL noto'g'ri bo'lsa — umumiy sozlama)."""
+
+    if WEBAPP_URL.startswith("https://"):
+        return MenuButtonWebApp(text="PLAY", web_app=WebAppInfo(url=WEBAPP_URL))
+    return MenuButtonDefault()
+
+
 async def _restore_play_button(chat_id: int) -> None:
-    """Obuna bo'lgan foydalanuvchiga PLAY tugmasini qaytaradi (umumiy sozlamaga)."""
+    """
+    Obuna bo'lgan foydalanuvchiga PLAY tugmasini qaytaradi.
+
+    MUHIM: bu yerda MenuButtonDefault() emas, aynan PLAY (MenuButtonWebApp)
+    o'rnatiladi. Default umumiy sozlamaga tayanadi va Telegram ba'zan uni
+    PLAY emas, oddiy "Menyu" (buyruqlar ro'yxati) qilib ko'rsatadi.
+    """
 
     try:
-        await bot.set_chat_menu_button(chat_id=chat_id, menu_button=MenuButtonDefault())
+        await bot.set_chat_menu_button(chat_id=chat_id, menu_button=_play_menu_button())
     except Exception:
         logger.warning("PLAY tugmasini qaytarib bo'lmadi", exc_info=True)
 
@@ -406,9 +420,7 @@ async def _setup_menu_button() -> None:
         return
 
     try:
-        await bot.set_chat_menu_button(
-            menu_button=MenuButtonWebApp(text="PLAY", web_app=WebAppInfo(url=WEBAPP_URL))
-        )
+        await bot.set_chat_menu_button(menu_button=_play_menu_button())
     except Exception:
         # Internet uzilgan yoki Telegram javob bermagan bo'lishi mumkin. Bu
         # botning ishlashiga to'sqinlik qilmasligi kerak — tugma avvalgi
