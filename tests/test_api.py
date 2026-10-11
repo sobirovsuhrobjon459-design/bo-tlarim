@@ -856,9 +856,11 @@ def test_milliy_sertifikat_matematika_bolimlari_ozi_qollanadi():
     row = results["rows"][0]
     assert row["sections"] == {"Algebra": round(23 / 31 * 100, 1), "Geometriya": 0.0}, row["sections"]
 
-    # Boshqa fan yoki savollar soni boshqa bo'lsa — shablon qo'llanmaydi
-    other = create_test(subject="Fizika", key_questions=key)
+    # Pasporti yo'q fan yoki savollar soni boshqa bo'lsa — shablon qo'llanmaydi
+    other = create_test(subject="Informatika", key_questions=key)
     assert client.get(f"/api/teacher/tests/{other['id']}/results", headers=as_user(555)).json()["section_names"] == []
+    short = create_test(subject="Fizika", key_questions=key[:30])
+    assert client.get(f"/api/teacher/tests/{short['id']}/results", headers=as_user(555)).json()["section_names"] == []
 
 
 def test_pdf_hisobot_kirill_ismlar_va_yopilgan_test():
@@ -3549,6 +3551,70 @@ def test_pullik_test_oquvchi_oqituvchi_kartasiga_tolaydi():
         assert failed.status_code == 502, failed.text
     with CardPaymentTelegramStub():
         assert _pay_card(code, 903).status_code == 200
+
+
+def _subject_key(subject: str) -> list[dict]:
+    """Fan pasporti bo'yicha to'liq javoblar kaliti (a/b qismlari bilan)."""
+    from backend.subjects import subject_config
+
+    config = subject_config(subject)
+    key = [{"number": n, "question_type": "single", "option_count": config["options"].get(n, 4), "correct": "A"}
+           for n in range(1, config["tests"] + 1)]
+    for n in range(config["tests"] + 1, config["tests"] + config["written"] + 1):
+        if config["parts"] == 2:
+            key += [{"number": len(key) + 1, "label": f"{n}a", "question_type": "text", "correct": "1"},
+                    {"number": len(key) + 2, "label": f"{n}b", "question_type": "text", "correct": "2"}]
+        else:
+            key.append({"number": len(key) + 1, "label": str(n), "question_type": "text", "correct": "1"})
+    return key
+
+
+def test_har_fan_milliy_sertifikat_pasporti_boyicha_ishlaydi():
+    """Har bir fan: bo'limlar shablondan, natija/PDF/sertifikat bo'limlar bilan, klaviatura fanga mos."""
+    from backend.subjects import SUBJECTS
+
+    reset_database()
+    register_teacher()
+    expected_keyboard = {"Matematika": "math", "Fizika": "math", "Kimyo": "math", "Biologiya": "text",
+                         "Tarix": "text", "Geografiya": "text", "Rus tili": "text"}
+    assert set(SUBJECTS) == set(expected_keyboard)
+    for index, (subject, config) in enumerate(SUBJECTS.items()):
+        created = create_test(subject=subject, key_questions=_subject_key(subject), duration=config["duration"])
+        sent, restore = _capture_result_notices()
+        try:
+            started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(7000 + index))
+            assert started.status_code == 200, (subject, started.text)
+            assert started.json()["keyboard"] == expected_keyboard[subject], subject
+            assert len(started.json()["questions"]) == config["tests"] + config["written"], subject
+            client.post(f"/api/attempts/{started.json()['attempt_id']}/finish", json={"answers": {"1": "A", "2": "A"}},
+                        headers=as_user(7000 + index))
+        finally:
+            restore()
+
+        results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
+        assert results["section_names"] == [name for name, _ in config["sections"]], (subject, results["section_names"])
+        row = results["rows"][0]
+        assert set(row["sections"]) == set(results["section_names"]) and row["grade"], (subject, row)
+        assert sum(1 for value in row["sections"].values() if value > 0) >= 1, (subject, row["sections"])
+
+        for url in (f"/api/teacher/tests/{created['id']}/pdf", f"/api/teacher/tests/{created['id']}/certificates"):
+            pdf = client.get(url, headers=as_user(555))
+            assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF"), (subject, url)
+
+        questions = client.get(f"/api/teacher/tests/{created['id']}/questions", headers=as_user(555)).json()
+        assert questions["keyboard"] == expected_keyboard[subject], subject
+
+    # Ko'p bo'limni qo'lda ham saqlash mumkin (Fizikada 6 ta)
+    saved = client.put(f"/api/teacher/tests/{created['id']}/sections", headers=as_user(555),
+                       json={"text": "\n".join(f"{name}: {n}-{n + 4}" for name, n in zip("ABCDEF", range(1, 31, 5)))})
+    assert saved.status_code == 200 and len(saved.json()["sections"]) == 6, saved.text
+
+
+def test_sahifada_fanlar_pasporti_bor():
+    html = client.get("/").text
+    config_at, app_at = html.find("window.SUBJECTS_CONFIG"), html.find('src="/js/app.js')
+    assert 0 < config_at < app_at, (config_at, app_at)
+    assert '"Fizika"' in html and '"keyboard": "text"' in html
 
 
 # ========== Ishga tushirgich ==========

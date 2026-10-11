@@ -315,11 +315,18 @@ function showToast(message) {
   (qarang: backend _normalize_text_answer).
 */
 
+// Yozma javob klaviaturasi fanga qarab: "math" (√, kasr, π — Matematika, Fizika,
+// Kimyo) yoki "text" (oddiy harflar — Biologiya, Tarix, Geografiya, Rus tili).
+// Har bir sahifa (test ishlash, kalit kiritish) o'zi o'rnatadi — fanlar pasporti
+// serverda: backend/subjects.py.
+let answerKeyboard = "math";
+
 function isMathLiveReady() {
   return Boolean(window.customElements?.get("math-field") && window.mathVirtualKeyboard);
 }
 
 function answerInputHint() {
+  if (answerKeyboard === "text") return "Javobni oddiy yozing (so'z yoki son)";
   return isMathLiveReady()
     ? "Maydonga bosing — matematik klaviatura ochiladi (√, kasr, daraja, π)"
     : "Yozish namunalari: 2sqrt3 · pi/5 · 1/2 · x^2 · 0,5";
@@ -358,6 +365,11 @@ function latexToPlain(value) {
 }
 
 function mathFieldHtml(initialValue, extraAttributes = "") {
+  if (answerKeyboard === "text") {
+    // Oddiy matn: telefonning odatiy klaviaturasi (matematik belgilar kerak emas)
+    return `<input class="input math-input text-answer" type="text" autocomplete="off" spellcheck="false"
+                   enterkeyhint="done" value="${escapeHtml(latexToPlain(initialValue))}" ${extraAttributes} />`;
+  }
   if (isMathLiveReady()) {
     return `<math-field class="math-input" math-virtual-keyboard-policy="manual" ${extraAttributes}>${escapeHtml(
       initialValue || ""
@@ -588,7 +600,7 @@ window.customElements?.whenDefined?.("math-field").then(() => {
     if (!isMathLiveReady()) return;
     setupMathKeyboardWatchers();
 
-    document.querySelectorAll("input.math-input").forEach((input) => {
+    document.querySelectorAll("input.math-input:not(.text-answer)").forEach((input) => {
       const holder = document.createElement("div");
       holder.innerHTML = mathFieldHtml(input.value);
       const replacement = holder.firstElementChild;
@@ -4737,6 +4749,7 @@ async function startTest(code) {
   const serverAnswers = data.answers || {};
   const localAnswers = readLocalAnswers(data.attempt_id);
 
+  answerKeyboard = data.keyboard || "math";
   quizState = {
     attemptId: data.attempt_id,
     mode: data.mode,
@@ -5815,18 +5828,50 @@ const SUBJECTS = [
   "Boshqa fan",
 ];
 
-// Milliy sertifikatda har bir fanning o'z tuzilishi bor. Bu yerda faqat
-// farq qiladigan joyi yoziladi — qolgani Rash testning standartidan olinadi.
-// "options" — qaysi savolda nechta variant bo'lishi ({savol: variantlar soni}).
-const SUBJECT_PRESETS = {
-  Matematika: {
-    testCount: 35,
-    options: { 33: 6, 34: 6, 35: 6 },
-    textCount: 10,
-    textParts: 2,
-    note: "Matematika: 35 ta test (33-35 savollar A-F), 10 ta yozma (a, b)",
-  },
-};
+// Milliy sertifikatda har bir fanning o'z tuzilishi bor. U BITTA joyda —
+// serverdagi backend/subjects.py — va sahifaga window.SUBJECTS_CONFIG bo'lib keladi
+// (savollar soni, A–F savollar, yozma savollar, vaqt, klaviatura, bo'limlar).
+const SUBJECT_PRESETS = Object.fromEntries(
+  Object.entries(window.SUBJECTS_CONFIG || {}).map(([name, config]) => [
+    name,
+    {
+      testCount: config.tests,
+      options: config.options || {},
+      textCount: config.written,
+      textParts: config.parts,
+      duration: config.duration,
+      keyboard: config.keyboard,
+      sections: config.sections || [],
+      note: config.note,
+    },
+  ])
+);
+
+// "1-10, 36-38" → [1..10, 36, 37, 38]
+function rangesToNumbers(ranges) {
+  return String(ranges || "")
+    .split(",")
+    .map((chunk) => chunk.trim())
+    .filter(Boolean)
+    .flatMap((chunk) => {
+      const [low, high] = chunk.split("-").map((value) => Number(value.trim()));
+      return Array.from({ length: (high || low) - low + 1 }, (_, index) => low + index);
+    });
+}
+
+// Fan shablonidagi bo'limlar → [{name, numbers}] ("qolgani" — boshqalarga kirmagan savollar)
+function subjectSections(subject, numbers) {
+  const sections = SUBJECT_PRESETS[subject]?.sections || [];
+  const explicit = sections.filter((section) => section.ranges).flatMap((section) => rangesToNumbers(section.ranges));
+  return sections.map((section) => ({
+    name: section.name,
+    numbers: section.ranges ? rangesToNumbers(section.ranges) : numbers.filter((number) => !explicit.includes(number)),
+  }));
+}
+
+function sectionsToText(sections) {
+  return sections.map((section) => `${section.name}: ${compressNumbers(section.numbers)}`).join("\n");
+}
 
 function subjectStructure(subject, typePreset) {
   const preset = SUBJECT_PRESETS[subject] || {};
@@ -5835,6 +5880,8 @@ function subjectStructure(subject, typePreset) {
     textCount: preset.textCount ?? typePreset.textCount,
     textParts: preset.textParts ?? typePreset.textParts,
     options: preset.options || {},
+    duration: preset.duration,
+    keyboard: preset.keyboard || "math",
     note: preset.note || "",
   };
 }
@@ -5875,6 +5922,8 @@ function renderNewTestForm(testType, draft = {}) {
 
   // Fan bo'yicha tuzilish faqat Rash testda (Milliy sertifikat mockida) qo'llanadi
   const structure = type === "rash" ? subjectStructure(draft.subject || SUBJECTS[0], preset) : { ...preset, options: {}, note: "" };
+  // Kalitdagi yozma javoblar ham fanga mos klaviatura bilan kiritiladi
+  answerKeyboard = SUBJECT_PRESETS[draft.subject || SUBJECTS[0]]?.keyboard || "math";
 
   const header = `
     ${pageHeader("Yangi test")}
@@ -5994,7 +6043,7 @@ function renderNewTestForm(testType, draft = {}) {
          data-option-overrides='${JSON.stringify(structure.options)}'></div>
     <div class="panel" style="margin-top:12px;padding:10px 14px">
       <div class="row-between" style="gap:10px">
-        <span style="min-width:0"><b>🧩 Geometriya:</b> <span id="geometry-summary"></span></span>
+        <span style="min-width:0"><b>🧩 Bo'limlar:</b> <span id="geometry-summary"></span></span>
         <button class="btn btn-ghost" id="pick-geometry-button" style="width:auto;padding:6px 12px;margin:0">Belgilash</button>
       </div>
     </div>`;
@@ -6029,6 +6078,8 @@ function renderNewTestForm(testType, draft = {}) {
     const next = subjectStructure(subjectSelect.value, preset);
     const container = document.getElementById("key-questions-container");
 
+    answerKeyboard = next.keyboard;
+    if (next.duration) document.getElementById("field-duration").value = next.duration;
     document.getElementById("field-test-count").value = next.testCount;
     document.getElementById("field-text-count").value = next.textCount;
     container.dataset.defaultParts = next.textParts;
@@ -6133,9 +6184,10 @@ function renderNewTestForm(testType, draft = {}) {
 
   document.getElementById("save-test-button").addEventListener("click", guarded(saveNewTest));
 
-  // Geometriya savollari — kalit qatorlaridagi savol raqamlari bo'yicha tanlanadi.
-  // 45 savolli matematika testida o'qituvchi hech narsa bosmaydi: server Milliy
-  // sertifikat bo'linishini (24–30, 33–35, 41–44) o'zi qo'llaydi — bu yerda faqat ko'rsatiladi.
+  // Bo'limlar — fanning Milliy sertifikat bo'limlari (pasportdan). Test tuzilishi
+  // shablonga mos bo'lsa, o'qituvchi hech narsa bosmaydi: server bo'limlarni o'zi
+  // qo'llaydi (bu yerda faqat ko'rsatiladi). Ikki bo'limli fanda (Matematika) —
+  // raqamlarni bosib belgilash oynasi, ko'p bo'limlida — matn muharriri.
   newTestSections = { text: "", picked: [], pickedName: "Geometriya", restName: "Algebra" };
   const geometrySummary = document.getElementById("geometry-summary");
   const geometryButton = document.getElementById("pick-geometry-button");
@@ -6145,14 +6197,20 @@ function renderNewTestForm(testType, draft = {}) {
         .map((row) => parseInt(row.dataset.label, 10))
         .filter((number) => number > 0)
     )].sort((a, b) => a - b);
-  const NATIONAL_MATH_GEOMETRY = [24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 41, 42, 43, 44];
-  const isNationalMath = () => keyNumbers().length === 45 && subjectSelect.value.toLowerCase().includes("matem");
+  const templateSections = () => {
+    const preset = SUBJECT_PRESETS[subjectSelect.value];
+    if (!preset?.sections?.length) return [];
+    const numbers = keyNumbers();
+    if (numbers.length !== preset.testCount + preset.textCount) return [];
+    return subjectSections(subjectSelect.value, numbers);
+  };
   const refreshGeometrySummary = () => {
+    const template = templateSections();
     if (newTestSections.text) {
-      geometrySummary.textContent = compressNumbers(newTestSections.picked);
+      geometrySummary.textContent = newTestSections.summary || compressNumbers(newTestSections.picked);
       geometryButton.textContent = "O'zgartirish";
-    } else if (isNationalMath() && !newTestSections.cleared) {
-      geometrySummary.textContent = "avtomatik ✅ (24–30, 33–35, 41–44)";
+    } else if (template.length && !newTestSections.cleared) {
+      geometrySummary.textContent = `avtomatik ✅ (${template.map((section) => section.name).join(", ")})`;
       geometryButton.textContent = "O'zgartirish";
     } else {
       geometrySummary.textContent = "yo'q";
@@ -6160,7 +6218,10 @@ function renderNewTestForm(testType, draft = {}) {
     }
   };
   refreshGeometrySummary();
-  subjectSelect.addEventListener("change", refreshGeometrySummary);
+  subjectSelect.addEventListener("change", () => {
+    newTestSections = { text: "", picked: [], pickedName: "Geometriya", restName: "Algebra" };
+    refreshGeometrySummary();
+  });
   new MutationObserver(refreshGeometrySummary).observe(document.getElementById("key-questions-container"), { childList: true, subtree: true });
   geometryButton.addEventListener("click", () => {
     const numbers = keyNumbers();
@@ -6168,20 +6229,28 @@ function renderNewTestForm(testType, draft = {}) {
       showToast("Avval savollar sonini kiriting");
       return;
     }
+    const template = newTestSections.text || newTestSections.cleared ? [] : templateSections();
+    const onSave = async (choice) => {
+      // "Bo'limsiz" ataylab tanlansa — server shablonni ham qo'llamasligi uchun eslab qolinadi
+      newTestSections = { ...choice, cleared: !choice.text };
+      refreshGeometrySummary();
+    };
+
+    if (template.length > 2 || newTestSections.multi) {
+      openSectionsTextSheet({
+        text: newTestSections.text || sectionsToText(template),
+        onSave: async (text) =>
+          onSave({ text, multi: true, summary: text ? text.split("\n").map((line) => line.split(":")[0]).join(", ") : "" }),
+      });
+      return;
+    }
     openNumberPicker({
       numbers,
-      // Avtomatik holatda oyna shablon bilan ochiladi — o'qituvchi faqat farqini o'zgartiradi
-      picked: (newTestSections.text || newTestSections.cleared || !isNationalMath()
-        ? newTestSections.picked
-        : NATIONAL_MATH_GEOMETRY
-      ).filter((number) => numbers.includes(number)),
-      pickedName: newTestSections.pickedName,
-      restName: newTestSections.restName,
-      onSave: async (choice) => {
-        // "Bo'limsiz" ataylab tanlansa — server shablonni ham qo'llamasligi uchun eslab qolinadi
-        newTestSections = { ...choice, cleared: !choice.text };
-        refreshGeometrySummary();
-      },
+      // Shablon bo'yicha oyna belgilangan holda ochiladi — o'qituvchi faqat farqini o'zgartiradi
+      picked: (template.length === 2 ? template[1].numbers : newTestSections.picked).filter((number) => numbers.includes(number)),
+      pickedName: template.length === 2 ? template[1].name : newTestSections.pickedName,
+      restName: template.length === 2 ? template[0].name : newTestSections.restName,
+      onSave,
     });
   });
   document.getElementById("build-key-rows-button").addEventListener("click", () => buildKeyQuestionRows());
@@ -6799,6 +6868,7 @@ async function renderStudentAnswersForm(testId, attemptId) {
     api(`/api/teacher/tests/${testId}/students/${attemptId}/answers`),
   ]);
 
+  answerKeyboard = structure.keyboard || "math";
   // Tanlangan javoblar shu yerda yig'iladi: {savol_ref: "B"} yoki {savol_ref: "A,C"}
   const answers = { ...saved.answers };
 
@@ -7266,8 +7336,50 @@ function openNumberPicker({ numbers, picked: initial = [], pickedName = "Geometr
 }
 
 // Natijalar sahifasidan — saqlangan testning bo'limlari
+/*
+  Ko'p bo'limli fanlar (Fizika — 6 ta) uchun: har qator "Nomi: 1-10, 36-38".
+  Server qatorlarni tekshiradi (noto'g'ri bo'lsa — tushunarli xabar).
+*/
+function openSectionsTextSheet({ text, onSave, allowClear = true }) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 4px">🧩 Bo'limlar</h3>
+    <p class="subtitle" style="margin:0 0 10px">Har qatorda bitta bo'lim: <b>Nomi: savollar</b> (masalan, <i>Mexanika: 1-10, 36-38</i>).</p>
+    <textarea class="input" id="sections-text" rows="8" style="font-family:inherit;line-height:1.5">${escapeHtml(text)}</textarea>
+    <button class="btn" id="sections-text-save" style="margin-top:10px">💾 Saqlash</button>
+    <div class="contact-actions" style="margin-top:8px">
+      ${allowClear ? `<button class="btn btn-ghost" id="sections-text-clear">Bo'limsiz</button>` : ""}
+      <button class="btn btn-ghost" data-sheet-close>Yopish</button>
+    </div>
+  `);
+  sheet.querySelector("#sections-text-save").addEventListener(
+    "click",
+    guarded(async () => {
+      const value = sheet.querySelector("#sections-text").value.trim();
+      if (!value) throw new Error("Kamida bitta bo'lim yozing (yoki «Bo'limsiz» ni bosing)");
+      await onSave(value);
+      close();
+    })
+  );
+  sheet.querySelector("#sections-text-clear")?.addEventListener(
+    "click",
+    guarded(async () => {
+      await onSave("");
+      close();
+    })
+  );
+}
+
 function openSectionsSheet(testId, results) {
   const saved = results.sections || [];
+  const saveText = async (text) => {
+    await api(`/api/teacher/tests/${testId}/sections`, { method: "PUT", body: { text } });
+    showToast(text ? "✅ Bo'limlar saqlandi" : "Bo'limlar olib tashlandi");
+    setTimeout(() => renderResultsTab(testId), 0);
+  };
+  if (saved.length > 2) {
+    openSectionsTextSheet({ text: results.sections_text || "", onSave: saveText });
+    return;
+  }
   openNumberPicker({
     numbers: results.question_numbers || [],
     picked: saved.length >= 2 ? saved[1].numbers : [],

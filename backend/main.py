@@ -54,6 +54,7 @@ from sqlalchemy import String, case, cast, delete, distinct, func, inspect, or_,
 from sqlalchemy.orm import Session, selectinload
 
 from .rasch import grade_for, rasch_scores
+from .subjects import default_sections, frontend_config, subject_keyboard
 from .regions import REGIONS, is_valid_location
 from .student_import import names_from_rows, parse_student_file, rows_from_text
 from .auth import (
@@ -802,7 +803,7 @@ def _rasch_items(test: Test) -> list[tuple[int, str]]:
     return items
 
 
-MAX_SECTIONS = 4
+MAX_SECTIONS = 8  # Fizikada 6 ta bo'lim bor
 
 
 def parse_sections(text: str) -> list[dict]:
@@ -841,21 +842,12 @@ def parse_sections(text: str) -> list[dict]:
     return sections
 
 
-# Milliy sertifikat (UZBMB) matematika testi: 45 savol, geometriya — 24–30, 33–35, 41–44
-NATIONAL_MATH_QUESTIONS = 45
-NATIONAL_MATH_GEOMETRY = [*range(24, 31), 33, 34, 35, 41, 42, 43, 44]
-
-
 def _default_sections(test: Test) -> list[dict]:
     """
-    O'qituvchi bo'limlarni belgilamagan 45 savolli matematika testida
-    Algebra/Geometriya Milliy sertifikat shabloni bo'yicha o'zi ajratiladi.
+    O'qituvchi bo'limlarni belgilamagan bo'lsa — fanning Milliy sertifikat
+    bo'limlari (backend/subjects.py), test tuzilishi shablonga mos kelsa.
     """
-
-    if "matem" not in (test.subject or "").lower() or _question_count(test) != NATIONAL_MATH_QUESTIONS:
-        return []
-    algebra = [number for number in range(1, NATIONAL_MATH_QUESTIONS + 1) if number not in NATIONAL_MATH_GEOMETRY]
-    return [{"name": "Algebra", "numbers": algebra}, {"name": "Geometriya", "numbers": NATIONAL_MATH_GEOMETRY}]
+    return default_sections(test.subject, _question_count(test))
 
 
 def _test_sections(test: Test) -> list[dict]:
@@ -1308,7 +1300,11 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
         middle = ["To'g'ri", "Foiz"] if uses_rasch else ["To'g'ri"]
     total_title = "Ball" if uses_rasch else "Foiz"
     header = ["№", "Ism Familiya", *middle, total_title, "Baho"]
-    data = [[Paragraph(f"<font color='white'><b>{xml_escape(text)}</b></font>", styles["cell"] if index == 1 else centered)
+    # Ko'p bo'limda (Fizika — 6 ta) ustunlar tor: sarlavha kichikroq shriftda,
+    # aks holda "Mexanika" kabi so'zlar o'rtasidan bo'linib ketardi
+    many = len(middle) > 4
+    head_center = ParagraphStyle("grid_head", parent=centered, fontSize=7, leading=8.5) if many else centered
+    data = [[Paragraph(f"<font color='white'><b>{xml_escape(text)}</b></font>", styles["cell"] if index == 1 else head_center)
              for index, text in enumerate(header)]]
     for row in rows:
         if section_names:
@@ -1324,7 +1320,8 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
             Paragraph(f"<font color='white'><b>{xml_escape(row['grade'])}</b></font>", centered),
         ])
 
-    other = 0.13
+    # Bo'limlar ko'p bo'lsa (Fizikada 6 ta) ustunlar torayadi — ism ustuniga kamida 24% qoladi
+    other = min(0.13, (1 - 0.07 - 0.24) / (len(middle) + 2))
     name_share = 1 - 0.07 - other * (len(middle) + 2)
     widths = [0.07, name_share, *([other] * (len(middle) + 2))]
     table = Table(data, colWidths=[width * share for share in widths], repeatRows=1)
@@ -1335,6 +1332,8 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
         ("TOPPADDING", (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]
+    if many:
+        commands += [("LEFTPADDING", (2, 0), (-1, -1), 2), ("RIGHTPADDING", (2, 0), (-1, -1), 2)]
     for index, row in enumerate(rows, start=1):
         if index % 2 == 0:
             commands.append(("BACKGROUND", (0, index), (-2, index), REPORT_TILE_BG))
@@ -3535,7 +3534,7 @@ def teacher_test_questions(test_id: int, teacher: Teacher = Depends(get_current_
             for q in test.questions
         ]
 
-    return {"mode": test.mode, "questions": questions}
+    return {"mode": test.mode, "keyboard": subject_keyboard(test.subject), "questions": questions}
 
 
 @app.patch("/api/teacher/tests/{test_id}/price")
@@ -4360,6 +4359,7 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
     return {
         "attempt_id": attempt.id,
         "mode": test.mode,
+        "keyboard": subject_keyboard(test.subject),  # "math" (√, kasr) yoki "text" (oddiy harflar)
         "duration": test.duration,
         "remaining": remaining_seconds,
         "questions": questions_payload,
@@ -7467,6 +7467,13 @@ def serve_index():
     version = _asset_version()
     for asset in ("/js/app.js", "/css/style.css"):
         html = html.replace(f'"{asset}"', f'"{asset}?v={version}"')
+
+    # Fanlar pasporti (backend/subjects.py) — ilova test shablonini va klaviaturani shundan oladi
+    subjects_json = json.dumps(frontend_config(), ensure_ascii=False).replace("</", "<\\/")
+    html = html.replace(
+        f'<script src="/js/app.js?v={version}">',
+        f'<script>window.SUBJECTS_CONFIG = {subjects_json};</script>\n  <script src="/js/app.js?v={version}">',
+    )
 
     return HTMLResponse(
         html,

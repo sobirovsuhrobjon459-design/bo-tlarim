@@ -49,7 +49,7 @@ _TEST_CREATE = """🧑‍🏫 <b>TEST YARATISH</b>
    • <b>ochiq</b> (o'quvchi o'zi ishlaydi) yoki <b>yopiq</b> (qog'ozda ishlanadi, javoblarni siz kiritasiz);
    • <b>bepul</b> yoki <b>pullik</b> (pullik — o'quvchi pulni <b>sizning kartangizga</b> o'tkazib, chek yuboradi; siz tasdiqlagach test ochiladi);
    • savollar soni, variantlar soni (A–D, A–F) va <b>to'g'ri javoblar kaliti</b>;
-   • 🧩 <b>Geometriya savollari</b> (ixtiyoriy) — natijalar Algebra/Geometriya bo'yicha chiqadi.
+   • fan tanlanganda savollar soni, vaqt va <b>🧩 bo'limlar</b> Milliy sertifikat bo'yicha o'zi qo'yiladi (Matematika, Fizika, Kimyo, Biologiya, Tarix, Geografiya, Rus tili).
 3️⃣ Saqlang — test <b>kodi</b> chiqadi. Kodni o'quvchilarga yuboring.
 
 📢 <b>Majburiy obuna:</b> barcha testlarda @sukhrobmath kanaliga obuna shart. Xohlasangiz, o'z kanalingizni ham qo'shasiz — bot u yerda <b>administrator</b> bo'lishi kerak."""
@@ -58,7 +58,7 @@ _TEST_CREATE = """🧑‍🏫 <b>TEST YARATISH</b>
 _TEST_RESULTS = """📊 <b>NATIJALAR VA SERTIFIKAT</b>
 
 • Natijalar <b>Rasch modeli</b> bo'yicha (Milliy sertifikat uslubida) hisoblanadi: har bir o'quvchiga <b>ball</b> va <b>daraja</b> (A+, A, B+, B, C+, C yoki NC).
-• 45 savolli matematika testida <b>Algebra</b> va <b>Geometriya</b> foizi alohida chiqadi. Bo'linishni <b>🧩 Bo'limlar</b> tugmasi bilan o'zgartirasiz.
+• Har bir <b>bo'lim</b> foizi alohida chiqadi (masalan, Fizikada Mexanika, Optika…; Matematikada Algebra, Geometriya). Bo'linishni <b>🧩 Bo'limlar</b> tugmasi bilan o'zgartirasiz.
 • <b>🏁 Yakunlash va natijalarni olish</b> — PDF hisobot bot orqali sizga keladi.
 • <b>🎓 Sertifikat</b> — har bir o'quvchiga ball va darajasi yozilgan sertifikat (PDF).
 • Natijalar o'quvchilarga ko'rsatilmaydi — faqat sizga keladi.
