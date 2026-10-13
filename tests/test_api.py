@@ -3721,7 +3721,7 @@ def test_yangi_foydalanuvchi_bir_vaqtdagi_sorovlarda_xato_bermaydi():
 
     session.scalar = racing_scalar
     try:
-        user = auth.get_current_user(x_init_data="", x_dev_user="4321", db=session)
+        user = auth.get_current_user(x_init_data="", x_dev_user="4321", db=session, x_app_session="")
         assert user.tg_id == 4321 and user.full_name == "Birinchi"
     finally:
         session.close()
@@ -4195,3 +4195,42 @@ def test_referal_yangi_oqituvchi_uchun_kredit():
 
     stats = client.get("/api/teacher/stats", headers=as_user(555)).json()["referral"]
     assert (stats["invited"], stats["joined"], stats["earned"]) == (2, 2, 20), stats
+
+
+def test_android_ilovaga_bot_orqali_kirish():
+    from datetime import timedelta
+
+    from backend.database import AppLogin
+
+    reset_database()
+    started = client.post("/api/app-login").json()
+    token = started["token"]
+    assert started["link"] == f"https://t.me/test_platform_bot?start=login_{token}", started
+    assert client.get(f"/api/app-login/{token}").json() == {"status": "pending"}
+    assert client.get("/api/me", headers={"X-App-Session": "soxta"}).status_code == 401
+
+    with SessionLocal() as session:
+        assert main.confirm_app_login(session, "yoq-token", 4242, "Ilova Odam", "ilova")[0] is False
+        assert main.confirm_app_login(session, token, 4242, "Ilova Odam", "ilova")[0] is True
+        assert main.confirm_app_login(session, token, 9999, "Boshqa", None)[0] is False  # qayta tasdiqlab bo'lmaydi
+
+    granted = client.get(f"/api/app-login/{token}").json()
+    assert granted["status"] == "ok" and granted["session"], granted
+    assert client.get(f"/api/app-login/{token}").status_code == 410  # seans faqat bir marta
+
+    headers = {"X-App-Session": granted["session"]}
+    me = client.get("/api/me", headers=headers)
+    assert me.status_code == 200 and me.json()["tg_id"] == 4242, me.text
+    assert client.post("/api/teacher/register", json={"first_name": "Ilova", "last_name": "Odam"}, headers=headers).status_code == 200
+
+    assert client.post("/api/app-logout", headers=headers).status_code == 200
+    assert client.get("/api/me", headers=headers).status_code == 401
+
+    # 10 daqiqadan eski so'rov — eskirgan
+    old = client.post("/api/app-login").json()["token"]
+    with SessionLocal() as session:
+        login = session.query(AppLogin).filter(AppLogin.token == old).one()
+        login.created_at = login.created_at - timedelta(minutes=11)
+        session.commit()
+        assert main.confirm_app_login(session, old, 4242, "Ilova Odam", None)[0] is False
+    assert client.get(f"/api/app-login/{old}").status_code == 410

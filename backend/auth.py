@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .database import ADMIN_ID, BOT_TOKEN, DEV_MODE, SessionLocal, Teacher, User
+from .database import ADMIN_ID, BOT_TOKEN, DEV_MODE, AppSession, SessionLocal, Teacher, User
 
 INIT_DATA_MAX_AGE_SECONDS = 24 * 60 * 60  # 1 kun
 
@@ -97,10 +97,15 @@ def get_db():
         session.close()
 
 
+def app_session_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def get_current_user(
     x_init_data: str = Header(default=""),
     x_dev_user: str = Header(default=""),
     db: Session = Depends(get_db),
+    x_app_session: str = Header(default=""),
 ) -> User:
     """
     So'rov header'idagi Telegram initData'ni tekshiradi va shu foydalanuvchini
@@ -115,6 +120,15 @@ def get_current_user(
             telegram_user = validate_init_data(x_init_data)
         except InitDataError as error:
             raise HTTPException(status_code=401, detail=str(error))
+    elif x_app_session:
+        # Android ilova: bot orqali tasdiqlangan seans (qarang: main.py, "Android ilovaga kirish")
+        session = db.scalar(
+            select(AppSession).where(AppSession.token_hash == app_session_hash(x_app_session), AppSession.revoked_at.is_(None))
+        )
+        user = db.get(User, session.user_id) if session else None
+        if not user:
+            raise HTTPException(status_code=401, detail="Seans tugagan — ilovaga qaytadan kiring")
+        return user
     elif DEV_MODE and x_dev_user:
         # Faqat lokal sinov uchun: Telegram'siz, oddiy brauzerda tekshirish imkoni
         telegram_user = {"id": int(x_dev_user), "first_name": "Dev", "last_name": x_dev_user}

@@ -221,6 +221,11 @@ async def _show_subscribe_gate(message: Message, missing: list[str], payload: st
 async def _open_bot(message: Message, payload: str) -> None:
     """Obuna tasdiqlangan foydalanuvchi: PLAY tugmasi va salomlashish (yoki taklif)."""
 
+    if payload.startswith("login_"):
+        token = payload[len("login_"):]
+        if 10 <= len(token) <= 40 and all(char.isalnum() or char in "-_" for char in token):
+            await _ask_app_login(message, token)
+            return
     if payload.startswith("inv_"):
         token = payload[len("inv_"):]
         if token.isalnum() and 6 <= len(token) <= 40:
@@ -416,6 +421,42 @@ async def handle_money(message: Message) -> None:
             InlineKeyboardButton(text=f"💸 {_money(amount)} so'mni yechish", callback_data="wd_request")
         ]])
     await message.answer(text, reply_markup=markup)
+
+
+async def _ask_app_login(message: Message, token: str) -> None:
+    """Android ilovadan "Telegram orqali kirish" bosildi — shu akkaunt bilan kirishni tasdiqlash."""
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"applogin:{token}")
+    ]])
+    await message.answer(
+        "📱 <b>TestWay ilovasiga kirish</b>\n\n"
+        "Ilovaga shu Telegram akkauntingiz bilan kirasiz — testlar, natijalar va kreditlar bir xil bo'ladi.\n\n"
+        "⚠️ Faqat HOZIR o'zingiz ilovada «Telegram orqali kirish»ni bosgan bo'lsangiz tasdiqlang. "
+        "Bu havolani sizga boshqa odam yuborgan bo'lsa — bosmang.",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
+@dispatcher.callback_query(F.data.startswith("applogin:"))
+async def handle_app_login(callback: CallbackQuery) -> None:
+    from backend.database import SessionLocal
+    from backend.main import confirm_app_login
+
+    token = callback.data.split(":", 1)[1]
+    user = callback.from_user
+
+    def confirm() -> tuple[bool, str]:
+        with SessionLocal() as session:
+            return confirm_app_login(session, token, user.id, user.full_name, user.username)
+
+    ok, text = await asyncio.to_thread(confirm)
+    try:
+        await callback.message.edit_text(text)
+    except Exception:
+        await callback.message.answer(text)
+    await callback.answer("✅ Tasdiqlandi" if ok else "Eskirgan", show_alert=not ok)
 
 
 @dispatcher.callback_query(F.data == "wd_request")

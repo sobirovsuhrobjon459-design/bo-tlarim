@@ -37,7 +37,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -60,6 +60,7 @@ from .subjects import default_sections, frontend_config, subject_keyboard
 from .regions import REGIONS, is_valid_location
 from .student_import import names_from_rows, parse_student_file, rows_from_text
 from .auth import (
+    app_session_hash,
     get_current_admin,
     get_current_teacher,
     get_current_user,
@@ -78,6 +79,8 @@ from .database import (
     PLATFORM_COMMISSION_PERCENT,
     REFERRAL_CREDITS,
     WELCOME_CREDITS,
+    AppLogin,
+    AppSession,
     Referral,
     Attempt,
     Attendance,
@@ -3052,6 +3055,76 @@ def reward_referral(db: Session, user: User) -> None:
         args=(referrer_chat, f"🎉 Siz taklif qilgan {name} o'qituvchi sifatida qo'shildi — sizga +{REFERRAL_CREDITS} kredit!"),
         daemon=True,
     ).start()
+
+
+# ---------- Android ilovaga (APK) bot orqali kirish ----------
+# 1) Ilova POST /api/app-login — bir martalik token va bot havolasini oladi.
+# 2) Foydalanuvchi botda (start=login_TOKEN) "Tasdiqlash"ni bosadi.
+# 3) Ilova GET /api/app-login/TOKEN ni so'rab turadi — tasdiqlangach BIR MARTA seans beriladi.
+APP_LOGIN_TTL = timedelta(minutes=10)
+
+
+@app.post("/api/app-login")
+def start_app_login(db: Session = Depends(get_db)):
+    username = _bot_username()
+    if not username:
+        raise HTTPException(status_code=503, detail="Bot hozir javob bermayapti — birozdan keyin urinib ko'ring")
+    token = secrets.token_urlsafe(16)
+    db.add(AppLogin(token=token))
+    db.commit()
+    return {"token": token, "link": f"https://t.me/{username}?start=login_{token}",
+            "expires_in": int(APP_LOGIN_TTL.total_seconds())}
+
+
+def _app_login_expired(login: AppLogin) -> bool:
+    return utcnow() - login.created_at > APP_LOGIN_TTL
+
+
+@app.get("/api/app-login/{token}")
+def poll_app_login(token: str, db: Session = Depends(get_db)):
+    login = db.scalar(select(AppLogin).where(AppLogin.token == token))
+    if not login or login.consumed_at or _app_login_expired(login):
+        raise HTTPException(status_code=410, detail="Kirish havolasi eskirdi — qaytadan urinib ko'ring")
+    if not login.confirmed_at:
+        return {"status": "pending"}
+    # Seans faqat bir marta beriladi (ikki so'rov bir vaqtda kelsa ham)
+    claimed = db.execute(
+        update(AppLogin).where(AppLogin.id == login.id, AppLogin.consumed_at.is_(None)).values(consumed_at=utcnow()),
+        execution_options={"synchronize_session": False},
+    ).rowcount
+    if claimed != 1:
+        db.rollback()
+        raise HTTPException(status_code=410, detail="Kirish havolasi eskirdi — qaytadan urinib ko'ring")
+    session_token = secrets.token_urlsafe(32)
+    db.add(AppSession(token_hash=app_session_hash(session_token), user_id=login.user_id))
+    db.commit()
+    return {"status": "ok", "session": session_token}
+
+
+@app.post("/api/app-logout")
+def app_logout(x_app_session: str = Header(default=""), db: Session = Depends(get_db)):
+    if x_app_session:
+        db.execute(
+            update(AppSession)
+            .where(AppSession.token_hash == app_session_hash(x_app_session), AppSession.revoked_at.is_(None))
+            .values(revoked_at=utcnow()),
+            execution_options={"synchronize_session": False},
+        )
+        db.commit()
+    return {"ok": True}
+
+
+def confirm_app_login(db: Session, token: str, tg_id: int, full_name: str, username: str | None) -> tuple[bool, str]:
+    """Bot: foydalanuvchi "Tasdiqlash"ni bosdi — kirish shu Telegram akkauntiga bog'lanadi."""
+
+    login = db.scalar(select(AppLogin).where(AppLogin.token == token))
+    if not login or login.confirmed_at or _app_login_expired(login):
+        return False, "❗️ Bu kirish so'rovi eskirgan. Ilovada «Telegram orqali kirish»ni qaytadan bosing."
+    remember_bot_user(db, tg_id, full_name, username)
+    user = db.scalar(select(User).where(User.tg_id == tg_id))
+    login.user_id, login.confirmed_at = user.id, utcnow()
+    db.commit()
+    return True, "✅ Tasdiqlandi! Ilovaga qayting — kirish avtomatik bo'ladi."
 
 
 def _referral_view(db: Session, teacher: Teacher) -> dict:

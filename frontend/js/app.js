@@ -12,6 +12,45 @@
 const appElement = document.getElementById("app");
 const telegram = window.Telegram?.WebApp;
 
+/*
+  Android ilova (APK): sayt WebView ichida ochiladi, user-agent'ga "TestWayApp"
+  qo'shiladi. Telegram yo'q — kirish bot orqali tasdiqlanadi va seans tokeni
+  shu telefonda saqlanadi (X-App-Session header'i bilan yuboriladi).
+*/
+const IN_APP = /TestWayApp/i.test(navigator.userAgent);
+const APP_SESSION_KEY = "app-session";
+let appSession = "";
+try {
+  appSession = localStorage.getItem(APP_SESSION_KEY) || "";
+} catch (_) {
+  /* xotira yopiq — har safar kiriladi */
+}
+
+function setAppSession(value) {
+  appSession = value || "";
+  try {
+    if (appSession) localStorage.setItem(APP_SESSION_KEY, appSession);
+    else localStorage.removeItem(APP_SESSION_KEY);
+  } catch (_) {
+    /* xotira yopiq */
+  }
+}
+
+// Har bir so'rov uchun kimligini bildiruvchi header'lar
+function authHeaders() {
+  const headers = { "X-Init-Data": telegram?.initData || "" };
+  if (!telegram?.initData) {
+    if (appSession) headers["X-App-Session"] = appSession;
+    else headers["X-Dev-User"] = DEV_USER_ID;
+  }
+  return headers;
+}
+
+// Telegram akkaunti aniq (Mini App yoki ilova) — fayllar bot chatiga yuboriladi
+function sendsViaBot() {
+  return Boolean(telegram?.initData || appSession);
+}
+
 /* ---------- 0) Telegram tema (dark/light) ---------- */
 
 function applyTheme() {
@@ -117,12 +156,7 @@ async function api(path, { method = "GET", body, keepalive = false } = {}) {
   // Alohida o'qituvchi tokeni yo'q — Telegram initData o'zi kifoya,
   // "o'qituvchi" ekanligi backend'da shu odamga tegishli Teacher yozuvi
   // borligi orqali aniqlanadi.
-  const headers = {
-    "X-Init-Data": telegram?.initData || "",
-  };
-  if (!telegram?.initData) {
-    headers["X-Dev-User"] = DEV_USER_ID;
-  }
+  const headers = authHeaders();
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
   }
@@ -148,6 +182,11 @@ async function api(path, { method = "GET", body, keepalive = false } = {}) {
 
     // Holat kodi xatoga biriktiriladi: chaqiruvchi ayrim xatolarni
     // (masalan "obuna bo'lmagansiz") alohida ko'rsatishi uchun kerak.
+    // Ilovada seans tugagan (chiqilgan yoki bekor qilingan) — qaytadan kirish
+    if (response.status === 401 && IN_APP && appSession && !telegram?.initData) {
+      setAppSession("");
+      renderAppLogin();
+    }
     const error = new Error(message);
     error.status = response.status;
     throw error;
@@ -740,6 +779,12 @@ function openExternalLink(url) {
   // ochilishi kerak, qolganlari (masalan Payme to'lov sahifasi) brauzerda.
   if (!url) return;
 
+  // Ilovada havolani Android o'zi ochadi (t.me — Telegram ilovasida, qolgani brauzerda)
+  if (IN_APP && !telegram?.initData) {
+    window.open(url, "_blank");
+    return;
+  }
+
   const isTelegramLink = /^https?:\/\/t\.me\//.test(url);
 
   if (isTelegramLink && telegram?.openTelegramLink) {
@@ -1098,7 +1143,10 @@ function renderHome(userName, backendOk) {
 
     ${statusHtml}
     ${supportCardHtml(undefined, { bottom: true })}
+    ${IN_APP && appSession ? `<button class="btn btn-ghost" id="app-logout-button" style="margin-top:12px">🚪 Akkauntdan chiqish</button>` : ""}
   `);
+
+  document.getElementById("app-logout-button")?.addEventListener("click", guarded(appLogout));
 
   document.querySelector('[data-action="school-folder"]').addEventListener("click", renderSchoolFolder);
   document.querySelector('[data-action="tests"]').addEventListener("click", renderTestFolder);
@@ -2048,7 +2096,7 @@ function gradeBadge(grade) {
 }
 
 async function sendClassTest(test, format) {
-  if (telegram?.initData) {
+  if (sendsViaBot()) {
     await api(`/api/class-tests/${test.id}/send?format=${format}`, { method: "POST", body: {} });
     showToast(`✅ ${format === "image" ? "Rasm" : "PDF"} bot chatiga yuborildi`);
   } else {
@@ -2436,7 +2484,7 @@ function renderAttendanceForm(schoolClass, existing = null) {
 }
 
 async function downloadFile(path, fileName) {
-  const response = await fetch(path, { headers: { "X-Init-Data": telegram?.initData || "", "X-Dev-User": DEV_USER_ID } });
+  const response = await fetch(path, { headers: authHeaders() });
   if (!response.ok) throw new Error("Faylni yuklab bo'lmadi");
   const link = document.createElement("a");
   link.href = URL.createObjectURL(await response.blob());
@@ -2457,7 +2505,7 @@ async function sendAttendance(attendance, format) {
   }
 
   // Rasm va PDF — bot sizning chatingizga yuboradi, u yerdan guruhga "Uzatish" qilasiz
-  if (telegram?.initData) {
+  if (sendsViaBot()) {
     await api(`/api/attendance/${attendance.id}/send?format=${format}`, { method: "POST", body: {} });
     showToast(`✅ ${format === "image" ? "Rasm" : "PDF"} bot chatiga yuborildi`);
   } else {
@@ -4108,6 +4156,8 @@ async function loadHome() {
   } catch (error) {
     isAdmin = false;
     isTeacher = false;
+    // Ilovada seans tugagan bo'lsa — kirish sahifasi allaqachon chiqqan
+    if (IN_APP && !telegram?.initData && !appSession) return;
     renderHome(null, false);
   }
 }
@@ -4339,7 +4389,7 @@ async function renderAdminDashboard() {
   document.getElementById("backup-button").addEventListener(
     "click",
     guarded(async () => {
-      if (telegram?.initData) {
+      if (sendsViaBot()) {
         await api("/api/admin/backup", { method: "POST", body: {} });
         showToast("💾 Zaxira nusxa Telegramga yuborildi");
       } else {
@@ -4411,10 +4461,7 @@ async function renderAdminDashboard() {
 
 async function fetchProtectedImage(path) {
   // api() bilan bir xil autentifikatsiya header'lari, lekin javob JSON emas, rasm
-  const headers = { "X-Init-Data": telegram?.initData || "" };
-  if (!telegram?.initData) headers["X-Dev-User"] = DEV_USER_ID;
-
-  const response = await fetch(path, { headers });
+  const response = await fetch(path, { headers: authHeaders() });
   if (!response.ok) throw new Error("Chek rasmini olib bo'lmadi");
 
   return URL.createObjectURL(await response.blob());
@@ -8018,13 +8065,13 @@ async function deliverPdf(basePath, fileName, sentMessage) {
 
   // Telegram ichida fayl yuklab olish cheklangan — shuning uchun PDF bot
   // orqali chatga yuboriladi. Oddiy brauzerda esa odatdagidek yuklab olinadi.
-  if (telegram?.initData) {
+  if (sendsViaBot()) {
     await api(`${path}/send${querySuffix}`, { method: "POST", body: {} });
     showToast(sentMessage);
     return;
   }
 
-  const response = await fetch(basePath, { headers: { "X-Dev-User": DEV_USER_ID } });
+  const response = await fetch(basePath, { headers: authHeaders() });
   if (!response.ok) throw new Error("PDF yuklab bo'lmadi");
 
   const blob = await response.blob();
@@ -8142,11 +8189,90 @@ function renderChannelGate(missing) {
   );
 }
 
-loadHome()
-  .then(() => {
-    // Bo'limlar ma'lumoti darhol fonda yuklanadi — foydalanuvchi bosguncha tayyor tursin
-    prefetchSchoolData();
-    prefetchSectionData();
-    return checkChannelGate();
-  })
-  .then((allowed) => allowed && openPendingSchoolInvite());
+/* ---------- Android ilova: bot orqali kirish ---------- */
+let appLoginPoll = null;
+
+function renderAppLogin(errorText = "") {
+  clearInterval(appLoginPoll);
+  showPage(`
+    <div style="text-align:center;padding-top:40px">
+      <div class="result-number">📱</div>
+      <h1 style="margin:8px 0">TestWay</h1>
+      <p class="subtitle">Telegram akkauntingiz bilan kiring — testlar, natijalar va kreditlar Telegram'dagi bilan bir xil bo'ladi.</p>
+    </div>
+    <button class="btn" id="app-login-button" style="margin-top:24px">✈️ Telegram orqali kirish</button>
+    <p class="subtitle" id="app-login-status" style="text-align:center;margin-top:14px">${escapeHtml(errorText)}</p>
+  `);
+  document.getElementById("app-login-button").addEventListener("click", guarded(startAppLogin));
+}
+
+async function startAppLogin() {
+  const status = document.getElementById("app-login-status");
+  const { token, link, expires_in: expiresIn } = await api("/api/app-login", { method: "POST", body: {} });
+  window.open(link, "_blank");
+  status.textContent = "Botda «✅ Tasdiqlash» tugmasini bosing, so'ng shu yerga qayting…";
+
+  const deadline = Date.now() + expiresIn * 1000;
+  clearInterval(appLoginPoll);
+  appLoginPoll = setInterval(async () => {
+    if (Date.now() > deadline) {
+      renderAppLogin("Vaqt tugadi — qaytadan urinib ko'ring.");
+      return;
+    }
+    try {
+      const result = await api(`/api/app-login/${encodeURIComponent(token)}`);
+      if (result.status !== "ok") return;
+      clearInterval(appLoginPoll);
+      setAppSession(result.session);
+      startApp();
+    } catch (error) {
+      if (error.status === 410) renderAppLogin(error.message);
+    }
+  }, 2000);
+}
+
+async function appLogout() {
+  if (!(await askConfirm("Akkauntdan chiqasizmi?"))) return;
+  try {
+    await api("/api/app-logout", { method: "POST", body: {} });
+  } catch (_) {
+    /* internet bo'lmasa ham — telefondagi seans o'chiriladi */
+  }
+  setAppSession("");
+  homeSnapshot = null;
+  pageDataCache.clear();
+  renderAppLogin();
+}
+
+// Android'ning "orqaga" tugmasi (ilova shu funksiyani chaqiradi):
+// true — ilova ichida orqaga qaytildi, false — ilovadan chiqish mumkin.
+window.appBack = () => {
+  const sheet = document.querySelector(".sheet-backdrop");
+  if (sheet) {
+    (sheet.querySelector("[data-sheet-close]") || sheet).click();
+    return true;
+  }
+  const back = !exitRootPage && appElement.querySelector(".back-button, [data-action='home']");
+  if (back) {
+    back.click();
+    return true;
+  }
+  return false;
+};
+
+function startApp() {
+  if (IN_APP && !telegram?.initData && !appSession) {
+    renderAppLogin();
+    return;
+  }
+  loadHome()
+    .then(() => {
+      // Bo'limlar ma'lumoti darhol fonda yuklanadi — foydalanuvchi bosguncha tayyor tursin
+      prefetchSchoolData();
+      prefetchSectionData();
+      return checkChannelGate();
+    })
+    .then((allowed) => allowed && openPendingSchoolInvite());
+}
+
+startApp();

@@ -664,6 +664,37 @@ class PromoCode(Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
+class AppLogin(Base):
+    """
+    Android ilovaga (APK) bot orqali kirish: ilova bir martalik token oladi,
+    foydalanuvchi botda "Tasdiqlash"ni bosadi, ilova esa shundan keyin seans oladi.
+    """
+
+    __tablename__ = "app_logins"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
+    confirmed_at: Mapped[datetime | None] = mapped_column(default=None)
+    consumed_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
+class AppSession(Base):
+    """
+    Android ilova seansi. Tokenning o'zi saqlanmaydi — faqat SHA-256 izi:
+    baza ochilib qolsa ham seansni o'g'irlab bo'lmaydi. Chiqilganda — revoked_at.
+    """
+
+    __tablename__ = "app_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    revoked_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
 class Referral(Base):
     """
     Referal: o'qituvchi o'z havolasi (t.me/bot?start=ref_ID) bilan yangi odam olib keldi.
