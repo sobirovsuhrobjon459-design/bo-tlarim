@@ -4022,6 +4022,9 @@ def test_kredit_uchun_ikki_karta_korsatiladi():
     try:
         cards = client.get("/api/teacher/balance", headers=as_user(555)).json()["admin_cards"]
         assert cards == ["8600 1234 5678 9012", "9860 1111 2222 3333"], cards
+        main.ADMIN_CARD_NUMBER = "9860,3501,4880,5707"  # vergul bilan yozilsa ham — bitta karta
+        cards = client.get("/api/teacher/balance", headers=as_user(555)).json()["admin_cards"]
+        assert cards == ["9860 3501 4880 5707"], cards
     finally:
         main.ADMIN_CARD_NUMBER = original
     assert client.get("/api/teacher/balance", headers=as_user(555)).json()["admin_cards"] == ["8600 1234 5678 9012"]

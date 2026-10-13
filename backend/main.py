@@ -2920,8 +2920,7 @@ def teacher_balance(teacher: Teacher = Depends(get_current_teacher)):
         "balance": teacher.balance,
         "credits": teacher.credits,
         "admin_card": ADMIN_CARD_NUMBER,
-        # Bir nechta karta bo'lishi mumkin: ADMIN_CARD_NUMBER="8600 ...; 9860 ..."
-        "admin_cards": [card.strip() for card in re.split(r"[;,|]", ADMIN_CARD_NUMBER) if card.strip()],
+        "admin_cards": _admin_cards(),
         "credit_price_tiers": CREDIT_PRICE_TIERS_DISPLAY,
         # Qaysi to'lov usullari ishlayapti — frontend faqat shularni ko'rsatadi
         "payme_enabled": bool(PAYME_MERCHANT_ID),
@@ -3072,6 +3071,17 @@ RECEIPT_SIGNATURES = {
     b"RIFF": ("image/webp", "webp"),
 }
 RECEIPT_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _admin_cards() -> list[str]:
+    """
+    ADMIN_CARD_NUMBER'dagi kartalar. Qanday yozilgani muhim emas ("9860,3501,4880,5707",
+    "8600 1234 5678 9012; 9860 ..."): raqamlar 16 tadan bo'linib, "9860 3501 4880 5707" bo'ladi.
+    """
+    digits = re.sub(r"\D", "", ADMIN_CARD_NUMBER)
+    if not digits or len(digits) % 16:
+        return [ADMIN_CARD_NUMBER.strip()] if ADMIN_CARD_NUMBER.strip() else []
+    return [_format_card(digits[index:index + 16]) for index in range(0, len(digits), 16)]
 
 
 def _card_topup_enabled() -> bool:
