@@ -301,6 +301,43 @@ try {
   /* eski Telegram versiyasi */
 }
 
+/*
+  Sahifa animatsiyasi faqat YANGI sahifa ochilganda: o'sha sahifa fonda yangi
+  ma'lumot bilan qayta chizilsa (sarlavha o'zgarmagan), qayta o'ynamaydi —
+  aks holda har yangilanishda ekran "miltillardi".
+*/
+let lastPageSignature = "";
+const reducedMotion = () => Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+
+function animatePageEntrance(page) {
+  const heading = page.querySelector("h1, h2");
+  const signature = heading ? heading.textContent.trim() : page.textContent.trim().slice(0, 60);
+  const isNewPage = signature !== lastPageSignature;
+  lastPageSignature = signature;
+  if (!isNewPage || reducedMotion()) return;
+
+  page.classList.add("page-enter");
+  Array.from(page.children).forEach((child, index) => child.style.setProperty("--i", Math.min(index, 8)));
+  // Statistika raqamlari 0 dan sanab chiqadi (12, 43.7%, 8)
+  page.querySelectorAll(".hero-stat b, .stat-value").forEach((element) => {
+    const match = element.textContent.trim().match(/^(\d+(?:\.\d+)?)(%?)$/);
+    if (!match || element.children.length) return;
+    const target = Number(match[1]);
+    const decimals = (match[1].split(".")[1] || "").length;
+    const suffix = match[2];
+    if (!target) return;
+    const started = performance.now();
+    const step = (now) => {
+      const progress = Math.min(1, (now - started) / 800);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      element.textContent = `${(target * eased).toFixed(decimals)}${suffix}`;
+      if (progress < 1 && element.isConnected) requestAnimationFrame(step);
+    };
+    element.textContent = `${(0).toFixed(decimals)}${suffix}`;
+    requestAnimationFrame(step);
+  });
+}
+
 function showPage(html, { exitRoot = false } = {}) {
   // Menyu avval yashiriladi — kerak bo'lsa, sahifa o'zi qaytadan ko'rsatadi.
   // Ikkalasi bitta qadamda bo'lgani uchun ekranda miltillash sezilmaydi.
@@ -311,6 +348,7 @@ function showPage(html, { exitRoot = false } = {}) {
   // Ochiq matematik klaviatura yangi sahifa ustida qolib ketmasin
   if (activeMathField || window.mathVirtualKeyboard?.visible) closeMathKeyboard();
   appElement.innerHTML = `<div class="page">${html}</div>`;
+  animatePageEntrance(appElement.firstElementChild);
   window.scrollTo(0, 0);
   exitRootPage = exitRoot;
   syncTelegramBackButton();

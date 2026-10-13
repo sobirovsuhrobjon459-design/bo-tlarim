@@ -723,3 +723,76 @@ select:focus {
 :root {
   color-scheme: light;
 }
+
+/* ========== Sahifa animatsiyalari ==========
+   Yangi sahifa ochilganda bloklar ketma-ket (har biri 45 ms keyin) pastdan
+   ko'tarilib chiqadi. "backwards" — animatsiya tugagach transform qolmaydi,
+   shuning uchun ichidagi fixed elementlar (menyu, oyna) joyidan siljimaydi. */
+.page.page-enter {
+  animation: none;
+}
+
+.page-enter > * {
+  animation: page-rise 0.46s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+
+@keyframes page-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Bosilganda — yumshoq "prujina": kichrayib, sakrab qaytadi */
+.btn,
+.card,
+.tab,
+.hero-stat,
+.stat-tile {
+  transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease, background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.btn:active,
+.tab:active,
+.hero-stat:active,
+.stat-tile:active {
+  transform: scale(0.95);
+  transition-duration: 0.08s;
+}
+
+.card:active {
+  transform: scale(0.975);
+  transition-duration: 0.08s;
+}
+
+/* Pastki menyu: tanlangan bo'lim ikonkasi bir sakraydi */
+.nav-item.active .nav-icon {
+  animation: nav-pop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes nav-pop {
+  0% { transform: scale(0.8); }
+  60% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter > *,
+  .nav-item.active .nav-icon {
+    animation: none !important;
+  }
+
+  .btn,
+  .card,
+  .tab,
+  .hero-stat,
+  .stat-tile {
+    transition: none;
+  }
+}
