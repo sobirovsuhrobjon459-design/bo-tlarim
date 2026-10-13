@@ -2632,33 +2632,20 @@ body.keyboard-open .fab {
   opacity: 0.55;
 }
 
-.grade-badge {
+/* Sinf testi darajasi (A+ … NC) — kichik rangli belgi */
+.grade-chip {
   display: inline-grid;
   place-items: center;
-  width: 28px;
+  min-width: 34px;
   height: 28px;
+  padding: 0 6px;
+  font-size: 13px;
   font-weight: 800;
   color: #fff;
   border-radius: 8px;
 }
 
-.grade-badge.g5 {
-  background: #16a34a;
-}
-
-.grade-badge.g4 {
-  background: #2563eb;
-}
-
-.grade-badge.g3 {
-  background: #d97706;
-}
-
-.grade-badge.g2 {
-  background: #dc2626;
-}
-
-.grade-badge.none {
+.grade-chip.none {
   color: var(--color-text-muted);
   background: none;
 }

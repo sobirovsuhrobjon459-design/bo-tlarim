@@ -1849,8 +1849,8 @@ def test_sinf_test_natijalari():
     test = created.json()
     rows = test["scores"]
     assert [r["name"] for r in rows] == ["Ali Valiyev", "Hasan Husanov", "Vali Aliyev", "Olim Karimov"], rows
-    assert rows[0]["percent"] == 90 and rows[0]["grade"] == 5 and rows[0]["rank"] == 1 and rows[1]["rank"] == 1
-    assert rows[2]["percent"] == 60 and rows[2]["grade"] == 3 and rows[2]["rank"] == 3
+    assert rows[0]["percent"] == 90 and rows[0]["grade"] == "A+" and rows[0]["rank"] == 1 and rows[1]["rank"] == 1
+    assert rows[2]["percent"] == 60 and rows[2]["grade"] == "B+" and rows[2]["rank"] == 3
     assert rows[3]["score"] is None and "rank" not in rows[3]
     assert test["participants"] == 3 and test["average_percent"] == 80, test
 

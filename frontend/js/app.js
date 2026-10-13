@@ -2005,8 +2005,8 @@ async function renderClassResultsTab(schoolClass) {
 }
 
 function gradeBadge(grade) {
-  if (!grade) return `<span class="grade-badge none">—</span>`;
-  return `<span class="grade-badge g${grade}">${grade}</span>`;
+  if (!grade) return `<span class="grade-chip none">—</span>`;
+  return `<span class="grade-chip" style="background:${GRADE_COLORS[grade] || GRADE_COLORS.NC}">${escapeHtml(grade)}</span>`;
 }
 
 async function sendClassTest(test, format) {
@@ -2038,7 +2038,7 @@ async function renderClassTestDetail(testId, schoolClass, onBack = null) {
     </div>
 
     <div class="panel score-table">
-      <div class="score-row score-head"><span>#</span><span>O'quvchi</span><span>Ball</span><span>%</span><span>Baho</span></div>
+      <div class="score-row score-head"><span>#</span><span>O'quvchi</span><span>Ball</span><span>%</span><span>Daraja</span></div>
       ${test.scores
         .map(
           (row) => `
@@ -2052,7 +2052,7 @@ async function renderClassTestDetail(testId, schoolClass, onBack = null) {
         )
         .join("")}
     </div>
-    <p class="subtitle" style="margin:8px 4px 0">Baho: 86%+ — 5, 71%+ — 4, 56%+ — 3, qolgani — 2.</p>
+    <p class="subtitle" style="margin:8px 4px 0">Daraja: 70%+ — A+, 65%+ — A, 60%+ — B+, 55%+ — B, 50%+ — C+, 46%+ — C, qolgani — NC.</p>
 
     <p class="section-label" style="margin-top:18px">YUBORISH VA CHOP ETISH</p>
     <div class="contact-actions">

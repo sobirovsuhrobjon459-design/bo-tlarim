@@ -6354,15 +6354,9 @@ def delete_attendance(attendance_id: int, user: User = Depends(get_current_user)
 # ---------- Sinf test natijalari (o'qituvchi kiritadi) ----------
 
 
-def _grade(percent: float) -> int:
-    """Foizdan baho: 86%+ — 5, 71%+ — 4, 56%+ — 3, qolgani — 2."""
-    if percent >= 86:
-        return 5
-    if percent >= 71:
-        return 4
-    if percent >= 56:
-        return 3
-    return 2
+def _grade(percent: float) -> str:
+    """Foizdan Milliy sertifikat darajasi: 70%+ — A+, 65 — A, 60 — B+, 55 — B, 50 — C+, 46 — C, qolgani — NC."""
+    return grade_for(percent)
 
 
 def _can_see_class_test(test: ClassTest, member: SchoolMember) -> bool:
@@ -6490,7 +6484,9 @@ def edit_class_test(test_id: int, body: ClassTestIn, user: User = Depends(get_cu
     return _class_test_view(db, test, member)
 
 
-GRADE_COLORS = {5: "#16a34a", 4: "#2563eb", 3: "#d97706", 2: "#dc2626"}
+GRADE_COLORS = {"A+": "#15803d", "A": "#16a34a", "B+": "#2563eb", "B": "#3b82f6", "C+": "#b45309", "C": "#d97706",
+                "NC": "#6b7280"}
+CLASS_GRADE_NOTE = "Daraja: 70% va yuqori — A+, 65% — A, 60% — B+, 55% — B, 50% — C+, 46% — C, qolgani — NC."
 
 
 def _class_test_context(db: Session, test: ClassTest, member: SchoolMember) -> dict:
@@ -6519,7 +6515,7 @@ def class_test_pdf(context: dict) -> bytes:
     summary = (f"O'qituvchi: {context['teacher_name']}   ·   Qatnashdi: {context['participants']} / {context['total']}   ·   "
                f"O'rtacha: {_fmt_number(context['average_percent'] or 0)}%")
 
-    header = ["№", "F.I.Sh.", "Ball", "%", "Baho"]
+    header = ["№", "F.I.Sh.", "Ball", "%", "Daraja"]
     data = [[Paragraph(f"<font color='white'>{xml_escape(text)}</font>", styles["cell_bold"]) for text in header]]
     for row in context["scores"]:
         absent = row["score"] is None
@@ -6546,7 +6542,7 @@ def class_test_pdf(context: dict) -> bytes:
         Spacer(1, 10),
         table,
         Spacer(1, 8),
-        Paragraph("Baho: 86% va yuqori — 5, 71% — 4, 56% — 3, qolgani — 2.", styles["meta"]),
+        Paragraph(CLASS_GRADE_NOTE, styles["meta"]),
     ])
     return buffer.getvalue()
 
@@ -6641,8 +6637,9 @@ def class_test_image(context: dict) -> bytes:
         draw.rounded_rectangle([panel_left, table_top - 6, panel_right, table_top + len(rows) * (row_height + gap) - gap + 6],
                                radius=18, fill="#e4edf3")
 
-    # 5 va 4 — yashil, 3 — sariq, 2 — qizil
-    bar_colors = {5: ("#0e9f6e", "#34d399"), 4: ("#0e9f6e", "#34d399"), 3: ("#c48a0a", "#f2c94c"), 2: ("#d9483b", "#f59e8b")}
+    # A+ … B — yashil, C+ va C — sariq, NC — qizil
+    green, gold = ("#0e9f6e", "#34d399"), ("#c48a0a", "#f2c94c")
+    bar_colors = {"A+": green, "A": green, "B+": green, "B": green, "C+": gold, "C": gold, "NC": ("#d9483b", "#f59e8b")}
     for index, row in enumerate(rows):
         top = table_top + index * (row_height + gap)
         middle = top + row_height // 2
@@ -6672,7 +6669,7 @@ def class_test_image(context: dict) -> bytes:
         percent = max(0.0, min(100.0, float(row["percent"])))
         draw.text((percent_x, middle), f"{percent:.1f}%", font=name_font, fill="#111c2b", anchor="mm")
 
-        start, end = bar_colors.get(row["grade"], bar_colors[2])
+        start, end = bar_colors.get(row["grade"], bar_colors["NC"])
         length = max(30, int((bar_right - bar_left) * percent / 100))
         bar_mask = Image.new("L", (length, 30), 0)
         ImageDraw.Draw(bar_mask).rounded_rectangle([0, 0, length - 1, 29], radius=15, fill=255)
