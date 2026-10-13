@@ -2656,6 +2656,14 @@ _notice_worker: threading.Thread | None = None
 def _telegram_send_message(chat_id: int, text: str, reply_markup: dict | None = None, parse_mode: str | None = None) -> bool:
     """sendMessage: 429 bo'lsa — Telegram aytgan vaqtcha kutib qayta urinadi. Yetkazilsa True."""
 
+    return _telegram_send_status(chat_id, text, reply_markup, parse_mode)[0] == 200
+
+
+def _telegram_send_status(
+    chat_id: int, text: str, reply_markup: dict | None = None, parse_mode: str | None = None
+) -> tuple[int, str]:
+    """sendMessage: Telegram javobining kodi va izohi (200 — yetkazildi, 0 — ulanib bo'lmadi)."""
+
     logger = logging.getLogger("backend")
     body = {"chat_id": chat_id, "text": text}
     if reply_markup:
@@ -2679,9 +2687,8 @@ def _telegram_send_message(chat_id: int, text: str, reply_markup: dict | None = 
         if response.status_code != 200:
             # 400/403 — chat yo'q yoki botni bloklagan: qayta urinishdan foyda yo'q
             logger.warning("Xabar yetmadi (%s): %s", response.status_code, response.text[:200])
-            return False
-        return True
-    return False
+        return response.status_code, response.text[:200]
+    return 0, ""
 
 
 def _notice_chunks(texts: list[str]) -> list[str]:
@@ -3465,11 +3472,11 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
 BROADCAST_INTERVAL = 0.05
 
 
-def _broadcast_text(test: Test, teacher_user: User) -> str:
+def _broadcast_text(test: Test, teacher_user: User, profile_link: bool = True) -> str:
     """Bot foydalanuvchilariga boradigan e'lon: test, pullik/bepul va kim ochgani (profil havolasi)."""
 
     name = html_escape(teacher_user.full_name or "O'qituvchi")
-    profile = f'<a href="tg://user?id={teacher_user.tg_id}">{name}</a>'
+    profile = f'<a href="tg://user?id={teacher_user.tg_id}">{name}</a>' if profile_link else f"<b>{name}</b>"
     if teacher_user.username:
         profile += f" (@{html_escape(teacher_user.username)})"
     price = f"💰 Pullik — {_format_sum(test.price)} so'm" if test.price > 0 else "🆓 Bepul"
@@ -3502,13 +3509,27 @@ def _run_broadcast(test_id: int) -> None:
     with SessionLocal() as session:
         test = session.get(Test, test_id)
         teacher_user = test.teacher.user
-        text, markup, code = _broadcast_text(test, teacher_user), _broadcast_button(test.code), test.code
+        markup, code = _broadcast_button(test.code), test.code
+        # Telegram xabarni ko'rinishi uchun rad etsa (400 — profil havolasi yoki tugma),
+        # keyingi soddaroq ko'rinishga o'tamiz: e'lon umuman ketmay qolmasin
+        variants = [
+            (_broadcast_text(test, teacher_user), markup),
+            (_broadcast_text(test, teacher_user, profile_link=False), markup),
+            (_broadcast_text(test, teacher_user, profile_link=False), None),
+        ]
         teacher_tg_id = teacher_user.tg_id
         chat_ids = session.scalars(select(User.tg_id).where(User.tg_id != teacher_tg_id).order_by(User.id)).all()
 
-    delivered = 0
+    delivered, variant = 0, 0
     for chat_id in chat_ids:
-        if _telegram_send_message(chat_id, text, markup, parse_mode="HTML"):
+        while True:
+            text, buttons = variants[variant]
+            status, error = _telegram_send_status(chat_id, text, buttons, parse_mode="HTML")
+            # "chat not found" kabi xato faqat shu odamga tegishli — ko'rinishni o'zgartirmaymiz
+            if status != 400 or "chat not found" in error.lower() or variant == len(variants) - 1:
+                break
+            variant += 1
+        if status == 200:
             delivered += 1
         time.sleep(BROADCAST_INTERVAL)
     logger.info("E'lon yuborildi: test=%s, %s/%s", test_id, delivered, len(chat_ids))

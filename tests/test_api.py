@@ -3992,9 +3992,10 @@ def test_test_hammaga_elon_qilinadi():
     created = create_test(price=15_000, title="Tarix <mock>")
 
     started, sent = [], []
-    original_start, original_send = main._start_broadcast, main._telegram_send_message
+    original_start, original_send, original_status = main._start_broadcast, main._telegram_send_message, main._telegram_send_status
     main._start_broadcast = started.append
     main._telegram_send_message = lambda chat_id, text, markup=None, parse_mode=None: sent.append((chat_id, text, markup)) or True
+    main._telegram_send_status = lambda chat_id, text, markup=None, parse_mode=None: sent.append((chat_id, text, markup)) or (200, "")
     try:
         url = f"/api/teacher/tests/{created['id']}/broadcast"
         assert client.post(url, json={}, headers=as_user(901)).status_code in (403, 404)  # boshqa odam
@@ -4014,8 +4015,27 @@ def test_test_hammaga_elon_qilinadi():
 
         closed = create_test(enrollment_type="closed")
         assert client.post(f"/api/teacher/tests/{closed['id']}/broadcast", json={}, headers=as_user(555)).status_code == 409
+
+        # Telegram profil havolasini rad etsa — havolasiz ko'rinishda baribir yetkaziladi;
+        # "chat not found" esa faqat o'sha odamga tegishli, ko'rinish o'zgarmaydi
+        client.get("/api/me", headers=as_user(903))
+        attempts = []
+
+        def picky(chat_id, text, markup=None, parse_mode=None):
+            attempts.append((chat_id, "tg://user" in text, markup is not None))
+            if chat_id == 901:
+                return 400, '{"description":"Bad Request: chat not found"}'
+            if "tg://user" in text:
+                return 400, '{"description":"Bad Request: unsupported start tag"}'
+            return 200, ""
+
+        main._telegram_send_status = picky
+        sent.clear()
+        main._run_broadcast(created["id"])
+        assert attempts == [(901, True, True), (902, True, True), (902, False, True), (903, False, True)], attempts
+        assert "2 ta" in sent[-1][1], sent
     finally:
-        main._start_broadcast, main._telegram_send_message = original_start, original_send
+        main._start_broadcast, main._telegram_send_message, main._telegram_send_status = original_start, original_send, original_status
 
 
 def test_kredit_uchun_ikki_karta_korsatiladi():
@@ -4107,3 +4127,17 @@ def main_runner() -> int:
 if __name__ == "__main__":
     print(f"Baza: {DB_PATH}\n")
     sys.exit(main_runner())
+
+
+def test_start_bosgan_foydalanuvchi_saqlanadi():
+    from bot.bot import _remember_user
+
+    reset_database()
+    _remember_user(777, "Botdagi Odam", "odam")
+    _remember_user(777, "Botdagi Odam", "odam")  # ikkinchi /start — takror yozilmaydi
+    me = client.get("/api/me", headers=as_user(777))
+    assert me.status_code == 200, me.text
+    from backend.database import User
+
+    with SessionLocal() as session:
+        assert session.query(User).filter(User.tg_id == 777).count() == 1
