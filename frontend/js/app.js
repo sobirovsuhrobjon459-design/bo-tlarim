@@ -6776,9 +6776,10 @@ async function saveNewTest() {
   (vaqt belgilanmagan bo'lsa — hozirdan boshlab). O'quvchilar ishlay
   boshlagan bo'lsa, davomiylikni faqat uzaytirish mumkin (server ham tekshiradi).
 */
-function openTestEditSheet(test) {
+function openTestEditSheet(test, reopenHint = false) {
   const { sheet, close } = openSheet(`
-    <h3 style="margin:0 0 10px">✏️ Testni tahrirlash</h3>
+    <h3 style="margin:0 0 10px">${reopenHint ? "🔓 Testni qayta ochish" : "✏️ Testni tahrirlash"}</h3>
+    ${reopenHint ? `<div class="notice" style="margin:0 0 10px">Test vaqti tugagan — qayta ochish uchun yangi tugash vaqtini tanlang (masalan «+1 soat» yoki «Cheklovsiz»).</div>` : ""}
     <label class="field-label" style="margin:0">Test nomi
       <input class="input" id="edit-test-title" maxlength="200" value="${escapeHtml(test.title)}" style="margin:4px 0 0" /></label>
     <label class="field-label">Davomiyligi (daqiqa)
@@ -6985,6 +6986,11 @@ async function renderTestDetail(testId) {
   document.getElementById("reopen-button")?.addEventListener(
     "click",
     guarded(async () => {
+      // Tugash vaqti o'tib ketgan bo'lsa — faqat holatni o'zgartirish yetmaydi, yangi vaqt kerak
+      if (test.end_time && parseUtc(test.end_time) <= new Date()) {
+        openTestEditSheet(test, true);
+        return;
+      }
       const reopened = await api(`/api/teacher/tests/${testId}/reopen`, { method: "POST" });
       showToast(`🔓 Test qayta ochildi — yangi kod: ${reopened.code}`);
       await renderTestDetail(testId);

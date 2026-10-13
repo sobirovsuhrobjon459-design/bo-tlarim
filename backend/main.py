@@ -3697,6 +3697,9 @@ def reopen_test(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
     test = _get_own_test(db, teacher, test_id)
     test.status = "active"
     test.code = _new_test_code(db)  # qayta ochilgan test — yangi kod bilan
+    # Tugash vaqti o'tib ketgan bo'lsa — test baribir "vaqti tugagan" bo'lib qolmasin
+    if test.end_time and test.end_time <= utcnow():
+        test.end_time = None
 
     # Hisobot "allaqachon yuborilgan" belgisi ham tozalanadi — aks holda test
     # qayta yakunlanganda, yangi o'quvchilar natijasi bilan hisobot kelmay qolardi.

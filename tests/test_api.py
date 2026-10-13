@@ -3924,6 +3924,23 @@ def test_click_payme_pul_balansga_tushadi_va_botdan_yechiladi():
         main._send_result_notice, main._notify_admin_about_withdrawal = original_notice, original_admin
 
 
+def test_vaqti_tugagan_test_qayta_ochilsa_ishlaydi():
+    reset_database()
+    register_teacher()
+    created = create_test()
+    with SessionLocal() as session:
+        from backend.database import Test as DbTest
+        row = session.get(DbTest, created["id"])
+        row.status, row.end_time = "closed", utcnow() - timedelta(hours=1)
+        session.commit()
+
+    reopened = client.post(f"/api/teacher/tests/{created['id']}/reopen", headers=as_user(555)).json()
+    info = client.get(f"/api/tests/{reopened['code']}", headers=as_user(901)).json()
+    assert info["end_time"] is None, info
+    started = client.post(f"/api/tests/{reopened['code']}/start", json={}, headers=as_user(901))
+    assert started.status_code == 200, started.text
+
+
 # ========== Ishga tushirgich ==========
 
 
