@@ -3976,6 +3976,9 @@ def test_sozli_javob_chiziqcha_va_rim_raqami_bilan_ham_togri():
     # Matematik javoblar qat'iy qoladi: chiziqcha — minus
     assert not ok("x1", "x-1") and not ok("3", "-3") and ok("x - 1", "x-1")
     assert ok("2sqrt(3)", r"2\sqrt{3}") and not ok("23", "2-3")
+    # So'zli kalitda ham raqam oldidagi minus saqlanadi
+    assert not ok("3 metr", "-3 metr") and not ok("-5 gradus", "5 gradus")
+    assert ok("−3 metr", "-3 metr") and ok("- 3 metr", "-3 metr") and ok("21 - asr", "21 asr")
 
 
 def test_test_hammaga_elon_qilinadi():
@@ -4028,6 +4031,36 @@ def test_kredit_uchun_ikki_karta_korsatiladi():
     finally:
         main.ADMIN_CARD_NUMBER = original
     assert client.get("/api/teacher/balance", headers=as_user(555)).json()["admin_cards"] == ["8600 1234 5678 9012"]
+
+
+def test_yozma_javob_notogrisi_hech_qachon_togri_bolib_ketmaydi():
+    """Pullik test: noto'g'ri javob to'g'ri deb olinmasin (va to'g'risi yo'qolmasin)."""
+    ok = main._text_answer_is_correct
+    wrong = [  # (o'quvchi, kalit) — HAR BIRI xato bo'lishi shart
+        ("3", "-3"), ("-3", "3"), ("x1", "x-1"), ("x+1", "x-1"), ("23", "2(3)"), ("2-3", "2(-3)"),
+        ("23", "2*3"), ("2", "2^2"), ("x2", "x^2"), ("1/2", "2"), ("12", "1/2"), ("35", "3,5"), ("0,5", "5"),
+        ("2√3", "3√2"), ("√3/2", "√(3/2)"), ("π/5", "5π"), ("-1", "1"), ("1", "-1"), ("10", "1"), ("1.5", "15"),
+        ("35 mln", "3,5 mln"), ("12 qism", "1/2 qism"), ("12 asr", "1 2 asr"), ("3 metr", "-3 metr"),
+        ("5 gradus", "-5 gradus"), ("20-asr", "21-asr"), ("XX asr", "21 asr"), ("XXII asr", "21 asr"),
+        ("Bolqon", "Bolqon urushi"), ("Temir", "Temur"), ("Buxoro", "Xiva"), ("1990", "1991"),
+        ("1991-yil", "1990-yil"), ("Amir Temur", "Temur Malik"), ("", "5"), ("   ", "Temur"), ("A", "5"),
+        # Tasodifiy sinov (fuzz) topgan holatlar
+        ("-3^2", "(-3)^2"), ("π/2√2", "π/(2√2)"), ("1/2π", "1/2*pi"), ("π/-2x", "π/-(2x)"), ("2^2x", "2^(2x)"),
+        ("3,5-5 qism", "3,5, -5 qism"), ("0,5-3 asr", "0,5 -3 asr"),
+    ]
+    for student, correct in wrong:
+        assert not ok(student, correct), f"XATO TO'G'RI BO'LIB KETDI: {student!r} ~ {correct!r}"
+
+    right = [  # (o'quvchi, kalit) — har biri to'g'ri bo'lishi kerak
+        ("-3", "-3"), ("x - 1", "x-1"), ("2sqrt(3)", r"2\sqrt{3}"), ("0.5", "0,5"), ("pi/5", r"\frac{\pi}{5}"),
+        ("2*pi", "2π"), ("x^2", "x²"), ("√(3)", "√3"), ("12 000", "12000"), ("ln(2)", "ln2"), ("sin(x)", "sinx"),
+        ("21-asr", "21 asr"), ("XXI asr", "21 asr"), ("xix-asr", "19 asr"), ("21 Asr.", "21 asr"),
+        ("Bolqon-urushi", "Bolqon urushi"), ("«Temur tuzuklari»", "Temur tuzuklari"), ("3.5 mln", "3,5 mln"),
+        ("Farg‘ona", "Farg'ona"), ("fargʻona", "FARG'ONA"), ("−3 metr", "-3 metr"), ("1991-yil", "1991 yil"),
+        ("Mavarounnahr", "Movarounnahr|Mavarounnahr"), ("1/2", "0,5|1/2"),
+    ]
+    for student, correct in right:
+        assert ok(student, correct), f"to'g'ri javob o'tmadi: {student!r} ~ {correct!r}"
 
 
 # ========== Ishga tushirgich ==========

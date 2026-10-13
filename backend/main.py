@@ -2326,10 +2326,60 @@ def _split_accepted_variants(correct: str) -> list[str]:
     ]
 
 
+_FUNCTION_BEFORE_PATTERN = re.compile(r"(arcsin|arccos|arcctg|arctg|sin|cos|ctg|tg|tan|cot|log|lg|ln|exp)$")
+# Bitta "bo'lak": son, harf, π yoki ildiz ostidagi son/harf (daraja belgisi bilan ham)
+_PAREN_ATOM_PATTERN = re.compile(r"-?(\d+(\.\d+)?|[a-zπ]|√(\d+(\.\d+)?|[a-zπ]))[²³]?")
+
+
+def _current_term(before: str) -> str:
+    """
+    Qavsdan oldingi joriy ko'paytuvchilar zanjiri (oxirgi +, ( , = yoki AYIRISH minusidan keyingi qism).
+    Ishora minusi ("/-", "×-", boshidagi "-") zanjirni uzmaydi: "π/-(2x)" da "/" hali shu zanjirda.
+    """
+    for index in range(len(before) - 1, -1, -1):
+        char = before[index]
+        if char in "+(=":
+            return before[index + 1:]
+        if char == "-" and index > 0 and re.match(r"[0-9a-zπ)²³.!]", before[index - 1]):
+            return before[index + 1:]
+    return before
+
+
+def _drop_parens(match: re.Match) -> str:
+    """
+    Ortiqcha qavsni olib tashlaydi — faqat ifodaning QIYMATI o'zgarmasa:
+      "(3)" -> "3", "√(3)" -> "√3", "(π)/(5)" -> "π/5", "sin(x)" -> "sinx", "2(π)" -> "2π".
+    Saqlanadi: "2(3)" (=6, "23" emas), "2(-3)", "(-3)^2" (=9, "-3²" = -9 emas),
+    "π/(2√2)" ("π/2√2" emas), "2^(2x)", "1/2(π)".
+    """
+    before, inner, after = match.string[:match.start()], match.group(1), match.string[match.end():]
+    atom = bool(_PAREN_ATOM_PATTERN.fullmatch(inner))
+    if after[:1] in ("^", "²", "³") and not (atom and inner[0] != "-"):
+        return match.group(0)
+    if _FUNCTION_BEFORE_PATTERN.search(before):
+        return inner
+    last = before[-1:] if before else ""
+    if last in ("", "+", "-", "(", "=", "×"):
+        return inner if "/" not in _current_term(before) or atom else match.group(0)
+    if last in ("/", "√", "^"):
+        return inner if atom else match.group(0)
+    if re.fullmatch(r"[0-9a-zπ)²³.!]", last):
+        # Yashirin ko'paytirish: "2(π)" = "2π"; lekin son ("2(3)") va bo'lishdan keyin ("1/2(π)") — yo'q
+        if inner[0] in "-0123456789." or "/" in _current_term(before):
+            return match.group(0)
+        return inner
+    return match.group(0)
+
+
+def _drop_multiply_sign(match: re.Match) -> str:
+    """"2×π" -> "2π", lekin bo'lishdan keyin emas: "1/2×π" (= π/2) "1/2π" bilan bir xil emas."""
+    return match.group(0) if "/" in _current_term(match.string[:match.start()]) else ""
+
+
 def _strip_simple_parens(text: str) -> str:
     """Ortiqcha qavslarni olib tashlaydi (ichma-ich bo'lsa ham)."""
     for _ in range(10):
-        new_text = _SIMPLE_PARENS_PATTERN.sub(r"\1", text)
+        new_text = _SIMPLE_PARENS_PATTERN.sub(_drop_parens, text)
         if new_text == text:
             break
         text = new_text
@@ -2370,7 +2420,7 @@ def _normalize_text_answer(value: str) -> str:
     text = _SQUARE_PATTERN.sub("²", text)
     text = _CUBE_PATTERN.sub("³", text)
 
-    return _IMPLICIT_MULTIPLY_PATTERN.sub("", text)
+    return _IMPLICIT_MULTIPLY_PATTERN.sub(_drop_multiply_sign, text)
 
 
 # So'z bilan yoziladigan javoblar (Tarix atamalari, nomlar): "21-asr", "21 asr", "XXI asr" —
@@ -2380,6 +2430,7 @@ _MATH_WORDS_PATTERN = re.compile(
 )
 _WORD_PATTERN = re.compile(r"[^\W\d_]{3,}")
 _ROMAN_CENTURY_PATTERN = re.compile(r"\b([ivxlc]+)\s*-?\s*(?=asr)")
+_VALID_ROMAN_PATTERN = re.compile(r"c{0,3}(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})")
 _ROMAN_VALUES = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100}
 _APOSTROPHES = str.maketrans({"‘": "'", "’": "'", "ʻ": "'", "ʼ": "'", "`": "'", "´": "'"})
 
@@ -2398,24 +2449,49 @@ def _is_word_answer(correct: str) -> bool:
     return bool(_WORD_PATTERN.search(_MATH_WORDS_PATTERN.sub("", correct.lower())))
 
 
+def _roman_century(match: re.Match) -> str:
+    roman = match.group(1)
+    if not _VALID_ROMAN_PATTERN.fullmatch(roman):
+        return match.group(0)
+    return f"{_roman_to_int(roman)} "
+
+
 def _normalize_word_answer(value: str) -> str:
-    """So'zli javob: katta-kichik harf, bo'sh joy, chiziqcha, tinish belgilari hisobga olinmaydi."""
+    """
+    So'zli javob ("21-asr", "Amir Temur"): katta-kichik harf, bo'sh joy, so'z oldidagi
+    chiziqcha, qo'shtirnoq va tinish belgilari hisobga olinmaydi. Sonlarga tegilmaydi:
+    "3,5" ≠ "35", "1/2" ≠ "12", "1 2" ≠ "12", "-3" ≠ "3".
+    """
     text = (value or "").lower().translate(_APOSTROPHES)
-    text = _ROMAN_CENTURY_PATTERN.sub(lambda match: f"{_roman_to_int(match.group(1))} ", text)  # XXI asr -> 21 asr
-    return re.sub(r"[^\w']|_", "", text)
+    text = _ROMAN_CENTURY_PATTERN.sub(_roman_century, text)  # XXI asr -> 21 asr
+    text = re.sub(r"[−–—]", "-", text)
+    text = re.sub(r"(?<=\d),(?=\d)", ".", text)  # o'nli kasr: 3,5 = 3.5
+    # Chiziqcha faqat so'z oldida olib tashlanadi ("21-asr", "Rus-turk"); raqam yoki bitta harf oldida — minus
+    text = re.sub(r"(?<=[^\W_])\s*-\s*(?=[^\W\d_]{2,})", "", text)
+    # Tinish belgilari va qo'shtirnoq — bo'shliqqa (sonlar ichidagi "." bundan mustasno)
+    text = re.sub(r"(?<!\d)\.|\.(?!\d)|[,;:!?\"«»“”„]", " ", text)
+    # Bo'shliqlar olib tashlanadi, faqat ikki son orasidagisi bitta bo'shliq bo'lib qoladi ("1 2" ≠ "12")
+    # (son va keyingi son yoki manfiy son orasida ham: "3,5, -5" — ikki son, "3,5-5" — ayirma)
+    text = re.sub(r"(?<=\d)\s+(?=-?\d)", "\x00", text)
+    text = re.sub(r"\s+", "", text).replace("\x00", " ")
+    return text.replace("_", "")
 
 
 def _text_answer_is_correct(student_answer: str, correct: str) -> bool:
-    normalized_answer = _normalize_text_answer(student_answer)
-    if not normalized_answer:
+    """
+    Har bir qabul qilinadigan variant o'z qoidasi bilan solishtiriladi:
+    so'zli kalit ("21 asr") — so'z qoidasi bilan, matematik kalit ("2√3", "-3") — matematik qoida bilan.
+    """
+    if not (student_answer or "").strip():
         return False
-    variants = _split_accepted_variants(correct)
-    if normalized_answer in {_normalize_text_answer(variant) for variant in variants}:
-        return True
-    word_answer = _normalize_word_answer(student_answer)
-    return bool(word_answer) and any(
-        _is_word_answer(variant) and _normalize_word_answer(variant) == word_answer for variant in variants
-    )
+    math_answer, word_answer = _normalize_text_answer(student_answer), _normalize_word_answer(student_answer)
+    for variant in _split_accepted_variants(correct):
+        if _is_word_answer(variant):
+            if word_answer and _normalize_word_answer(variant) == word_answer:
+                return True
+        elif math_answer and _normalize_text_answer(variant) == math_answer:
+            return True
+    return False
 
 
 def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str, str]) -> int:
