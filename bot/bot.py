@@ -614,12 +614,17 @@ async def _setup_menu_button() -> None:
 
     # "/" bosilganda chiqadigan buyruqlar ro'yxati
     try:
-        await bot.set_my_commands([
+        from backend.main import _enabled_providers
+
+        commands = [
             BotCommand(command="start", description="Botni ishga tushirish"),
             BotCommand(command="yordam", description="Qo'llanma va ilova haqida"),
             BotCommand(command="restart", description="Botni qayta ishga tushirish"),
-            BotCommand(command="pul", description="O'qituvchi: balans va pulni yechish"),
-        ])
+        ]
+        # Pul yechish faqat Click/Payme ulanganda ma'noli (pul platformaga tushadi)
+        if _enabled_providers():
+            commands.append(BotCommand(command="pul", description="O'qituvchi: balans va pulni yechish"))
+        await bot.set_my_commands(commands)
     except Exception:
         logger.warning("Buyruqlar ro'yxatini sozlab bo'lmadi", exc_info=True)
 
