@@ -379,6 +379,10 @@ class Payment(Base):
     provider: Mapped[str] = mapped_column(String(20), default="payme")
     # Karta to'lovi cheki — Telegram'dagi file_id (rasm serverda saqlanmaydi)
     receipt_file_id: Mapped[str | None] = mapped_column(String(200), default=None)
+    # O'qituvchi chatidagi chek xabari (qadash/qadovdan olish uchun) va eslatmalar hisobi
+    receipt_message_id: Mapped[int | None] = mapped_column(default=None)
+    reminded_at: Mapped[datetime | None] = mapped_column(default=None)
+    reminder_count: Mapped[int] = mapped_column(default=0)
     payme_transaction_id: Mapped[str | None] = mapped_column(String(50), default=None, unique=True, index=True)
     click_trans_id: Mapped[str | None] = mapped_column(String(50), default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)

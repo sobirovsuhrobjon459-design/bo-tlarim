@@ -3932,6 +3932,8 @@ function applyHomeData(me) {
   isTeacher = Boolean(me.is_teacher);
 }
 
+let openedFromLink = false; // ?open=... havolasi faqat birinchi ochilishda ishlaydi
+
 async function loadHome() {
   if (homeSnapshot) {
     renderHome(homeSnapshot.full_name || null, true);
@@ -3945,6 +3947,12 @@ async function loadHome() {
     homeSnapshot = me;
     applyHomeData(me);
     renderHome(me.full_name || null, true);
+    // Bot eslatmasidagi "🧾 Cheklarni ko'rish" tugmasi — to'g'ridan-to'g'ri cheklar sahifasi (bir marta)
+    if (new URLSearchParams(window.location.search).get("open") === "payments" && me.is_teacher && !openedFromLink) {
+      openedFromLink = true;
+      isTeacher = true;
+      await renderTestPaymentsPage();
+    }
   } catch (error) {
     isAdmin = false;
     isTeacher = false;
@@ -4384,44 +4392,101 @@ function drawStudentHome(me, attempts) {
   O'quvchi o'zi topshirgan testni ko'radi (test yakunlangach): ball, daraja,
   o'rin, bo'limlar va har bir savolda nimani belgilagani / to'g'risi nima edi.
 */
+// Milliy sertifikat darajalari ranglari (natija sahifasi nishoni)
+const GRADE_COLORS = {
+  "A+": "#15803d", A: "#16a34a", "B+": "#2563eb", B: "#3b82f6", "C+": "#b45309", C: "#d97706", NC: "#6b7280",
+};
+
+// 0 dan qiymatgacha silliq sanab chiqadi (harakatsiz rejimda — darhol)
+function countUp(element, target, decimals = 1, duration = 900) {
+  if (!element) return;
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+    element.textContent = target.toFixed(decimals);
+    return;
+  }
+  const started = performance.now();
+  const step = (now) => {
+    const progress = Math.min(1, (now - started) / duration);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    element.textContent = (target * eased).toFixed(decimals);
+    if (progress < 1 && element.isConnected) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+/*
+  O'quvchi o'zi topshirgan testni ko'radi (test yakunlangach): daraja nishoni,
+  ball (sanab chiqadi), o'rin, bo'limlar chizig'i va har savol tahlili
+  ("Faqat xatolar" bilan).
+*/
 async function renderMyAttemptReview(attemptId) {
   const review = await api(`/api/me/attempts/${attemptId}/review`);
 
-  const rows = review.questions
-    .map(
-      (question) => `
+  const rowHtml = (question) => `
         <div class="answer-row ${question.is_correct ? "" : "wrong"}">
           <b>${escapeHtml(question.label)}</b>
           <span>${question.is_correct ? "✅" : "❌"} ${escapeHtml(latexToPlain(question.chosen))}</span>
           ${question.is_correct ? "" : `<span class="right-answer">to'g'ri: ${escapeHtml(latexToPlain(question.correct))}</span>`}
-        </div>`
-    )
-    .join("");
-
+        </div>`;
+  const wrongCount = review.questions.filter((question) => !question.is_correct).length;
   const sections = Object.entries(review.sections || {});
+  const gradeColor = GRADE_COLORS[review.grade] || "var(--color-primary)";
 
   showPage(`
     <button class="back-button" data-action="back">←</button>
-    <h2>${escapeHtml(review.title)}</h2>
-    <p class="subtitle" style="margin-top:-6px">${escapeHtml(review.subject)}</p>
+    <div class="review-hero">
+      ${
+        review.grade
+          ? `<div class="grade-badge" style="--grade-color:${gradeColor}"><span>${escapeHtml(review.grade)}</span><small>daraja</small></div>`
+          : ""
+      }
+      <h2 style="margin:12px 0 2px">${escapeHtml(review.title)}</h2>
+      <p class="subtitle" style="margin:0">${escapeHtml(review.subject)}</p>
+    </div>
     <div class="stats-grid">
-      ${review.ball != null ? `<div class="stat-tile"><span class="stat-value">${review.ball.toFixed(1)}</span>Ball</div>` : ""}
-      ${review.grade ? `<div class="stat-tile"><span class="stat-value">${escapeHtml(review.grade)}</span>Daraja</div>` : ""}
+      ${review.ball != null ? `<div class="stat-tile"><span class="stat-value" id="review-ball">0.0</span>Ball</div>` : ""}
       <div class="stat-tile"><span class="stat-value">${review.correct}/${review.total}</span>To'g'ri (${review.percent}%)</div>
       ${review.rank ? `<div class="stat-tile"><span class="stat-value">${review.rank}</span>O'rin (${review.participants} tadan)</div>` : ""}
     </div>
     ${
       sections.length
-        ? `<p class="subtitle" style="margin:0 0 12px">${sections
-            .map(([name, value]) => `${escapeHtml(name)}: <b>${value}%</b>`)
-            .join(" · ")}</p>`
+        ? `<div class="panel section-bars">
+             <p class="section-label" style="margin:0 0 10px">BO'LIMLAR BO'YICHA</p>
+             ${sections
+               .map(
+                 ([name, value]) => `
+                   <div class="section-bar">
+                     <div class="row-between"><span>${escapeHtml(name)}</span><b>${value}%</b></div>
+                     <div class="progress-track" style="margin:4px 0 0"><div class="progress-fill" data-width="${Math.min(100, Number(value) || 0)}" style="width:0"></div></div>
+                   </div>`
+               )
+               .join("")}
+           </div>`
         : ""
     }
-    <h3>Javoblaringiz</h3>
-    ${rows}
+    <div class="row-between" style="margin:18px 0 8px">
+      <h3 style="margin:0">Javoblaringiz</h3>
+      ${wrongCount ? `<button type="button" class="share-pill" id="only-wrong-button">❌ Faqat xatolar (${wrongCount})</button>` : ""}
+    </div>
+    <div id="review-answers">${review.questions.map(rowHtml).join("")}</div>
   `);
 
   document.querySelector('[data-action="back"]').addEventListener("click", guarded(renderStudentHome));
+  if (review.ball != null) countUp(document.getElementById("review-ball"), review.ball, 1);
+  // Bo'lim chiziqlari 0 dan o'sib chiqadi
+  requestAnimationFrame(() =>
+    document.querySelectorAll(".section-bars .progress-fill").forEach((bar) => {
+      bar.style.width = `${bar.dataset.width}%`;
+    })
+  );
+
+  let onlyWrong = false;
+  document.getElementById("only-wrong-button")?.addEventListener("click", (event) => {
+    onlyWrong = !onlyWrong;
+    const list = onlyWrong ? review.questions.filter((question) => !question.is_correct) : review.questions;
+    document.getElementById("review-answers").innerHTML = list.map(rowHtml).join("");
+    event.currentTarget.textContent = onlyWrong ? "📋 Hammasini ko'rsatish" : `❌ Faqat xatolar (${wrongCount})`;
+  });
 }
 
 function renderEditName(me, onDone) {
@@ -4575,7 +4640,10 @@ function renderTestFound(test) {
 function studentPaymentHtml(test) {
   const recheck = `<button class="btn btn-ghost" id="recheck-payment-button">🔄 To'lovni tekshirish</button>`;
   if (test.card_payment_pending) {
-    return `<div class="notice">⏳ Chekingiz o'qituvchiga yuborildi. U chekni ko'rib ruxsat bergach, testga kira olasiz — botda xabar keladi.</div>${recheck}`;
+    return `<div class="notice">⏳ Chekingiz o'qituvchiga yuborildi. U chekni ko'rib ruxsat bergach, testga kira olasiz — botda xabar keladi.</div>
+      ${recheck}
+      <button class="btn btn-ghost" id="remind-teacher-button">🔔 O'qituvchiga eslatish</button>
+      <p class="subtitle" style="margin:4px 4px 0;font-size:12px">Uzoq javob bo'lmasa — chekingiz o'qituvchiga qayta yuboriladi (10 daqiqadan keyin).</p>`;
   }
 
   const card = test.teacher_card;
@@ -4609,6 +4677,14 @@ function studentPaymentHtml(test) {
 }
 
 function wireStudentCardPayment(test) {
+  document.getElementById("remind-teacher-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      await api(`/api/tests/${test.code}/pay-card/remind`, { method: "POST", body: {} });
+      showToast("🔔 O'qituvchiga eslatildi — chekingiz unga qayta yuborildi");
+    })
+  );
+
   const input = document.getElementById("test-receipt-input");
   if (!input) return;
   // "Ha, to'ladim" bosilgandagina chek joylash qadami ochiladi
@@ -4820,10 +4896,18 @@ function scheduleAnswerSave() {
   // ya'ni aloqa butunlay yo'q bo'lsa ham javoblar yo'qolmaydi.
   writeLocalAnswers(quizState.attemptId, quizState.answers);
 
-  // Serverga esa bir oz kutib, bir yo'la yuboriladi — har bosishda alohida
-  // so'rov yuborilsa, sekin internetda ilova sudralib qolardi.
-  clearTimeout(quizState.saveTimerId);
-  quizState.saveTimerId = setTimeout(() => saveAnswersNow(), 800);
+  // Serverga esa ko'pi bilan 4 soniyada BIR marta, bir yo'la yuboriladi.
+  // O'quvchi javob varaqasini tez to'ldirsa, har bosish alohida so'rov bo'lib,
+  // imtihonda yuzlab o'quvchi serverni bo'g'ib qo'yardi (yuklama sinovida
+  // so'rovlarning 60%i shu edi). Taymer har bosishda qayta boshlanmaydi —
+  // shuning uchun to'xtovsiz belgilayotganda ham javob 4 s ichida serverda bo'ladi.
+  // Ilova yopilsa/fonga o'tsa — darhol yuboriladi (pastda: visibilitychange, pagehide).
+  if (!quizState.saveTimerId) {
+    quizState.saveTimerId = setTimeout(() => {
+      if (quizState) quizState.saveTimerId = null;
+      saveAnswersNow();
+    }, 4000);
+  }
 }
 
 async function saveAnswersNow({ keepalive = false } = {}) {
@@ -4840,9 +4924,15 @@ async function saveAnswersNow({ keepalive = false } = {}) {
     });
     quizState.savedSnapshot = snapshot;
   } catch (_) {
-    // Internet uzilgan bo'lishi mumkin — javoblar telefon xotirasida va
-    // ekranda saqlanib turadi, keyingi o'zgarishda yana yuborishga urinadi.
-    // O'quvchini bezovta qilmaymiz.
+    // Internet uzilgan yoki server band (503) — javoblar telefon xotirasida va
+    // ekranda saqlanib turadi. O'quvchini bezovta qilmaymiz: 10 s dan keyin
+    // o'zimiz qayta urinamiz (yangi javob belgilanishini kutmasdan).
+    if (quizState && !quizState.finished && !quizState.saveTimerId && !keepalive) {
+      quizState.saveTimerId = setTimeout(() => {
+        if (quizState) quizState.saveTimerId = null;
+        saveAnswersNow();
+      }, 10000);
+    }
   }
 }
 
@@ -4914,21 +5004,44 @@ function renderFullQuizQuestion() {
   sahifada, "Keyingi" bosish shart emas. O'quvchi istalgan savolga qaytib,
   javobini o'zgartira oladi. Tepada taymer va nechta savol belgilangani turadi.
 */
-function quizAnswerRefs() {
-  return quizState.questions.flatMap((question) => (question.parts || [{ ref: question.number }]).map((part) => part.ref));
-}
-
 function updateAnsweredCounter() {
-  const refs = quizAnswerRefs();
-  const answered = refs.filter((ref) => String(quizState.answers[ref] || "").trim()).length;
+  // Savollar bo'yicha sanaladi (a/b qismli yozma savol — BITTA savol, hamma qismi
+  // to'ldirilganda javob berilgan): ilgari "12 / 55" chiqardi, test esa 45 savollik.
+  const filled = (ref) => String(quizState.answers[ref] || "").trim() !== "";
+  const total = quizState.questions.length;
+  const answered = quizState.questions.filter((question) =>
+    (question.parts || [{ ref: question.number ?? question.id }]).every((part) => filled(part.ref))
+  ).length;
 
   const counter = document.getElementById("answered-counter");
-  if (counter) counter.textContent = `${answered} / ${refs.length} belgilandi`;
+  if (counter) counter.textContent = `✅ ${answered}/${total}`;
 
   const fill = document.getElementById("answered-progress");
-  if (fill) fill.style.width = `${refs.length ? Math.round((answered / refs.length) * 100) : 0}%`;
+  if (fill) fill.style.width = `${total ? Math.round((answered / total) * 100) : 0}%`;
 
-  return { answered, total: refs.length };
+  // Javob berilgan savol raqami ✓ bilan ajralib turadi — o'quvchi qolganlarini tez topadi
+  document.querySelectorAll(".answer-sheet .sheet-row").forEach((row) => {
+    const rowRefs = [...row.querySelectorAll("[data-ref]")].map((element) => element.dataset.ref);
+    const done = rowRefs.length > 0 && rowRefs.every((ref) => String(quizState.answers[ref] || "").trim());
+    row.classList.toggle("is-answered", done);
+  });
+  const jump = document.getElementById("jump-unanswered");
+  if (jump) {
+    jump.hidden = answered >= total;
+    jump.textContent = `⤵ Javobsiz: ${total - answered}`;
+  }
+
+  return { answered, total };
+}
+
+// Birinchi javob berilmagan savolga o'tadi va uni qisqa yoritadi
+function jumpToUnanswered() {
+  const row = [...document.querySelectorAll(".answer-sheet .sheet-row")].find((item) => !item.classList.contains("is-answered"));
+  if (!row) return;
+  row.scrollIntoView({ behavior: "smooth", block: "center" });
+  row.classList.remove("is-flash");
+  void row.offsetWidth; // animatsiyani qayta boshlash uchun
+  row.classList.add("is-flash");
 }
 
 function renderKeyQuizQuestion() {
@@ -4981,7 +5094,8 @@ function renderKeyQuizQuestion() {
     <div class="quiz-sticky">
       <div class="row-between">
         <b id="answered-counter"></b>
-        <b id="quiz-timer"></b>
+        <button type="button" class="jump-unanswered" id="jump-unanswered" hidden></button>
+        <b id="quiz-timer" class="quiz-timer"></b>
       </div>
       <div class="progress-track" style="margin-bottom:0"><div class="progress-fill" id="answered-progress"></div></div>
     </div>
@@ -4994,6 +5108,7 @@ function renderKeyQuizQuestion() {
 
   updateAnsweredCounter();
   setExitProtection(true); // test paytida Mini App tasodifan yopilmasin
+  document.getElementById("jump-unanswered").addEventListener("click", jumpToUnanswered);
 
   // Bitta tinglovchi butun varaq uchun — 45 ta savolda ham tez ishlaydi
   appElement.querySelector(".answer-sheet").addEventListener("click", (event) => {
@@ -5016,6 +5131,11 @@ function renderKeyQuizQuestion() {
     } else {
       group.querySelectorAll(".sheet-option").forEach((item) => item.classList.toggle("selected", item === button));
       quizState.answers[ref] = letter;
+    }
+    if (button.classList.contains("selected")) {
+      button.classList.remove("just-picked");
+      void button.offsetWidth;
+      button.classList.add("just-picked");
     }
 
     telegram?.HapticFeedback?.selectionChanged?.();
@@ -5061,6 +5181,18 @@ async function updateQuizTimer() {
 
   const secondsLeft = Math.max(0, Math.round((quizState.endsAt - Date.now()) / 1000));
   timerEl.textContent = "⏱️ " + formatDuration(secondsLeft);
+  timerEl.classList.toggle("is-warning", secondsLeft <= 600 && secondsLeft > 120);
+  timerEl.classList.toggle("is-danger", secondsLeft <= 120);
+
+  // Bir martalik eslatma: 10 va 2 daqiqa qolganda (test boshida allaqachon kam bo'lsa — aytilmaydi)
+  quizState.timeWarnings = quizState.timeWarnings || {};
+  for (const [limit, text] of [[600, "⏰ 10 daqiqa qoldi"], [120, "⏰ 2 daqiqa qoldi — javoblarni tekshiring"]]) {
+    if (secondsLeft <= limit && secondsLeft > limit - 5 && !quizState.timeWarnings[limit]) {
+      quizState.timeWarnings[limit] = true;
+      showToast(text);
+      telegram?.HapticFeedback?.notificationOccurred?.("warning");
+    }
+  }
 
   if (secondsLeft <= 0 && !quizState.finished) {
     await finishQuiz();
@@ -5073,6 +5205,7 @@ async function finishQuiz() {
 
   clearInterval(quizTimerId);
   clearTimeout(quizState.saveTimerId);
+  quizState.saveTimerId = null; // yakunlash muvaffaqiyatsiz bo'lsa, saqlash keyin ham ishlashi uchun
 
   try {
     const result = await api(`/api/attempts/${quizState.attemptId}/finish`, {
@@ -5103,20 +5236,53 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("pagehide", () => saveAnswersNow({ keepalive: true }));
 
 function renderQuizResult(result) {
-  // Natija (ball, foiz) o'quvchiga ko'rsatilmaydi — u o'qituvchiga yuboriladi
+  // Natija (ball, foiz) hozir ko'rsatilmaydi — test yakunlangach "Yakunlangan
+  // testlar" bo'limida ochiladi (qarang: renderMyAttemptReview).
+  const { answered, total } = quizState ? updateAnsweredCounter() : { answered: 0, total: 0 };
+  const title = result?.test_title ? `«${escapeHtml(result.test_title)}»` : "";
+
   showPage(`
-    <div class="result-number pop">✅</div>
-    <h2 style="text-align:center">TEST YAKUNLANDI!</h2>
+    <div class="finish-hero">
+      <svg class="finish-check" viewBox="0 0 96 96" aria-hidden="true">
+        <circle class="finish-check-ring" cx="48" cy="48" r="42" />
+        <path class="finish-check-mark" d="M30 50 l12 12 l24 -26" />
+      </svg>
+      <h2>Test yakunlandi!</h2>
+      ${title ? `<p class="subtitle" style="margin:0">${title}</p>` : ""}
+      ${total ? `<div class="finish-stat"><b>${answered}</b> / ${total} savolga javob berdingiz</div>` : ""}
+    </div>
     <div class="card" style="cursor:default">
       <div class="card-body">
-        <p style="margin:0">Javoblaringiz qabul qilindi va o'qituvchingizga yuborildi.</p>
-        <p class="subtitle" style="margin:8px 0 0">Natijani o'qituvchingizdan bilib olasiz.</p>
+        <p style="margin:0">✅ Javoblaringiz qabul qilindi va o'qituvchingizga yuborildi.</p>
+        <p class="subtitle" style="margin:8px 0 0">📊 Natijangiz (ball, daraja, har savol tahlili) test yakunlangach
+          <b>Yakunlangan testlar</b> bo'limida ochiladi.</p>
       </div>
     </div>
-    <button class="btn" id="home-button">🏠 Bosh sahifa</button>
+    <button class="btn" id="my-tests-button">📋 Mening testlarim</button>
+    <button class="btn btn-ghost" id="home-button">🏠 Bosh sahifa</button>
   `);
 
+  launchConfetti();
+  telegram?.HapticFeedback?.notificationOccurred?.("success");
+  document.getElementById("my-tests-button").addEventListener("click", guarded(renderStudentHome));
   document.getElementById("home-button").addEventListener("click", loadHome);
+}
+
+// Yengil konfetti: 28 ta rangli bo'lakcha 2.6 s tushadi va o'zi o'chadi (harakatsiz rejimda — yo'q)
+function launchConfetti() {
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+  const layer = document.createElement("div");
+  layer.className = "confetti-layer";
+  const colors = ["#6366f1", "#22d3ee", "#22c55e", "#f59e0b", "#ef4444", "#a855f7"];
+  layer.innerHTML = Array.from({ length: 28 }, (_, index) => {
+    const left = Math.round(Math.random() * 100);
+    const delay = (Math.random() * 0.5).toFixed(2);
+    const duration = (1.8 + Math.random() * 0.9).toFixed(2);
+    const drift = Math.round(Math.random() * 80 - 40);
+    return `<i style="left:${left}%;background:${colors[index % colors.length]};animation-delay:${delay}s;animation-duration:${duration}s;--drift:${drift}px"></i>`;
+  }).join("");
+  document.body.appendChild(layer);
+  setTimeout(() => layer.remove(), 3200);
 }
 
 /* ---------- 4) O'qituvchi oqimi ---------- */

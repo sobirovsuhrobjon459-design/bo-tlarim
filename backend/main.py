@@ -140,6 +140,7 @@ from .database import (
     withdraw_balance,
 )
 from bot.bot import run_bot
+from bot.config import WEBAPP_URL
 
 # ========== 1) Ilova sozlash ==========
 
@@ -192,6 +193,9 @@ def _add_missing_columns() -> None:
             "cancelled_at": "TIMESTAMP",
             "click_trans_id": "VARCHAR(50)",
             "receipt_file_id": "VARCHAR(200)",
+            "receipt_message_id": "BIGINT",
+            "reminded_at": "TIMESTAMP",
+            "reminder_count": "INTEGER DEFAULT 0",
         },
         "credit_purchases": {
             "method": "VARCHAR(10) DEFAULT 'payme'",
@@ -321,6 +325,45 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Test Platformasi API", lifespan=lifespan)
 # JS/CSS fayllar siqilib yuboriladi (~320 KB → ~70 KB) — ilova tezroq ochiladi
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+class AutosaveLoadShedding:
+    """
+    Haddan tashqari yuklamada server qotib qolmasligi uchun.
+
+    Yuklama sinovi (0.1 CPU, 200 o'quvchi): protsessor ulgurmay, so'rovlar navbatda
+    baza ulanishini 60 s kutib xato bilan tugar, server umuman javob bermay qolardi.
+    Endi bir vaqtda ishlanayotgan so'rovlar AUTOSAVE_SHED_AT dan oshsa, eng kam
+    muhim so'rov — oraliq avtosaqlash (/api/attempts/{id}/answers) — darhol 503
+    oladi. Bu xavfsiz: javoblar telefon xotirasida turadi, keyingi saqlashda yoki
+    yakunlashda (finish hamma javobni yuboradi) serverga yetadi. Ilovani ochish,
+    testni boshlash, yakunlash — o'taveradi.
+    """
+
+    def __init__(self, asgi_app, shed_at: int = 40):
+        self.app = asgi_app
+        self.shed_at = shed_at
+        self.in_flight = 0
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        if (self.in_flight >= self.shed_at and scope.get("method") == "POST"
+                and path.startswith("/api/attempts/") and path.endswith("/answers")):
+            await JSONResponse({"detail": "Server band — javoblar keyinroq saqlanadi"}, status_code=503,
+                               headers={"Retry-After": "10"})(scope, receive, send)
+            return
+        self.in_flight += 1
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            self.in_flight -= 1
+
+
+AUTOSAVE_SHED_AT = 40  # anyio ip havzasi (40) to'lganda — avtosaqlashlar kutmaydi
+app.add_middleware(AutosaveLoadShedding, shed_at=AUTOSAVE_SHED_AT)
 
 
 @app.get("/api/health")
@@ -527,6 +570,9 @@ def _finish_expired_tests_once() -> None:
             test.status = "closed"
             send_results_to_teacher(session, test)
         session.commit()
+
+        if BOT_TOKEN:
+            _remind_pending_payments(session)
     finally:
         session.close()
 
@@ -4036,6 +4082,7 @@ def get_test(code: str, user: User = Depends(get_current_user), db: Session = De
     """O'quvchi test kodini kiritganda, testning umumiy ma'lumotini qaytaradi."""
 
     test = _get_test_by_code(db, code, user)
+    pending = _pending_card_payment(db, user, test) if test.price > 0 else None
 
     return {
         "code": test.code,
@@ -4047,7 +4094,8 @@ def get_test(code: str, user: User = Depends(get_current_user), db: Session = De
         "paid": _is_paid(db, user, test),
         # Karta orqali to'lov: o'qituvchi kartasi va o'quvchining tekshirilayotgan cheki
         "teacher_card": _teacher_card_view(test.teacher) if test.price > 0 else None,
-        "card_payment_pending": test.price > 0 and _pending_card_payment(db, user, test) is not None,
+        "card_payment_pending": pending is not None,
+        "card_payment_since": pending.created_at if pending else None,  # "eslatish" tugmasi uchun
         "enrollment_type": test.enrollment_type,
         "required_channel": test.required_channel,
         "required_channels": _required_channels(test),
@@ -4163,28 +4211,122 @@ def _test_payment_caption(payment: Payment, test: Test, student: User) -> str:
     )
 
 
-def _send_test_receipt_to_teacher(payment: Payment, test: Test, student: User, image: bytes, mime: str, extension: str) -> str:
-    """Chekni o'qituvchining Telegram chatiga ✅/❌ tugmalari bilan yuboradi; file_id qaytaradi."""
+def _post_receipt_photo(payment: Payment, test: Test, student: User, caption_prefix: str = "",
+                        image: bytes | None = None, mime: str = "", extension: str = "") -> str:
+    """
+    Chekni o'qituvchi chatiga ✅/❌ tugmalari bilan yuboradi va xabarni QADAYDI
+    (chat tepasida turadi — e'tibordan chetda qolmasin). Rasm — birinchi marta
+    fayl, qayta yuborishda (eslatma) Telegram'dagi file_id. file_id qaytaradi.
+    """
 
-    response = httpx.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-        data={
-            "chat_id": test.teacher.user.tg_id,
-            "caption": _test_payment_caption(payment, test, student),
-            "reply_markup": json.dumps({
-                "inline_keyboard": [[
-                    {"text": "✅ Ruxsat berish", "callback_data": f"tpay_approve:{payment.id}"},
-                    {"text": "❌ Ruxsat yo'q", "callback_data": f"tpay_reject:{payment.id}"},
-                ]]
-            }),
-        },
-        files={"photo": (f"chek_{payment.id}.{extension}", image, mime)},
-        timeout=30,
-    )
-    data = response.json()
-    if not data.get("ok"):
-        raise RuntimeError(data.get("description") or "Telegram rasmni qabul qilmadi")
-    return data["result"]["photo"][-1]["file_id"]
+    chat_id = test.teacher.user.tg_id
+    data = {
+        "chat_id": chat_id,
+        "caption": (caption_prefix + _test_payment_caption(payment, test, student))[:1024],
+        "reply_markup": json.dumps({
+            "inline_keyboard": [[
+                {"text": "✅ Ruxsat berish", "callback_data": f"tpay_approve:{payment.id}"},
+                {"text": "❌ Ruxsat yo'q", "callback_data": f"tpay_reject:{payment.id}"},
+            ]]
+        }),
+    }
+    files = None
+    if image is not None:
+        files = {"photo": (f"chek_{payment.id}.{extension}", image, mime)}
+    else:
+        data["photo"] = payment.receipt_file_id
+    response = httpx.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", data=data, files=files, timeout=30)
+    result = response.json()
+    if not result.get("ok"):
+        raise RuntimeError(result.get("description") or "Telegram rasmni qabul qilmadi")
+
+    # Eski qadalgan nusxa olinadi, yangisi qadaladi (qadab bo'lmasa ham jarayon to'xtamaydi)
+    _telegram_pin(chat_id, payment.receipt_message_id, pin=False)
+    payment.receipt_message_id = result["result"]["message_id"]
+    _telegram_pin(chat_id, payment.receipt_message_id, pin=True)
+    return result["result"]["photo"][-1]["file_id"]
+
+
+def _telegram_pin(chat_id: int, message_id: int | None, pin: bool) -> None:
+    if not message_id:
+        return
+    try:
+        httpx.post(f"https://api.telegram.org/bot{BOT_TOKEN}/{'pinChatMessage' if pin else 'unpinChatMessage'}",
+                   json={"chat_id": chat_id, "message_id": message_id, "disable_notification": False}, timeout=10)
+    except Exception:
+        logging.getLogger("backend").warning("Xabarni qadab/qadovdan olib bo'lmadi", exc_info=True)
+
+
+def _send_test_receipt_to_teacher(payment: Payment, test: Test, student: User, image: bytes, mime: str, extension: str) -> str:
+    """Chekni o'qituvchining Telegram chatiga ✅/❌ tugmalari bilan yuboradi (qadaladi); file_id qaytaradi."""
+    return _post_receipt_photo(payment, test, student, image=image, mime=mime, extension=extension)
+
+
+def _payments_button() -> dict | None:
+    """Eslatmadagi tugma — ilovani to'g'ridan-to'g'ri cheklar sahifasida ochadi."""
+    if not WEBAPP_URL.startswith("https://"):
+        return None
+    separator = "&" if "?" in WEBAPP_URL else "?"
+    return {"inline_keyboard": [[{"text": "🧾 Cheklarni ko'rish", "web_app": {"url": f"{WEBAPP_URL}{separator}open=payments"}}]]}
+
+
+# Eslatma: chek 15 daqiqa javobsiz qolsa, keyin har 2 soatda, ko'pi bilan 3 marta
+REMINDER_FIRST_AFTER = timedelta(minutes=15)
+REMINDER_REPEAT_AFTER = timedelta(hours=2)
+REMINDER_MAX = 3
+
+
+def _remind_pending_payments(db: Session) -> int:
+    """Fonda: javobsiz qolgan cheklar haqida o'qituvchiga bitta jamlangan eslatma. Yuborilganlar soni."""
+
+    now = utcnow()
+    rows = db.execute(
+        select(Payment, Test, User)
+        .join(Test, Test.id == Payment.test_id)
+        .join(User, User.id == Payment.user_id)
+        .where(
+            Payment.provider == "card",
+            Payment.status == "pending",
+            Payment.created_at <= now - REMINDER_FIRST_AFTER,
+            Payment.reminder_count < REMINDER_MAX,
+            or_(Payment.reminded_at.is_(None), Payment.reminded_at <= now - REMINDER_REPEAT_AFTER),
+        )
+        .order_by(Payment.id)
+    ).all()
+
+    by_teacher: dict[int, list] = {}
+    for payment, test, student in rows:
+        if test.teacher and test.deleted_at is None:
+            by_teacher.setdefault(test.teacher.user.tg_id, []).append((payment, test, student))
+
+    sent = 0
+    for chat_id, items in by_teacher.items():
+        lines = [f"⏳ {len(items)} ta o'quvchi to'lov cheki bilan ruxsat kutmoqda:", ""]
+        for payment, test, student in items[:15]:
+            minutes = int((now - payment.created_at).total_seconds() // 60)
+            waited = f"{minutes // 60} soat {minutes % 60} daq" if minutes >= 60 else f"{minutes} daq"
+            lines.append(f"• {student.full_name} — «{test.title}», {_format_sum(payment.amount)} so'm ({waited} oldin)")
+        if len(items) > 15:
+            lines.append(f"… va yana {len(items) - 15} ta")
+        lines += ["", "Kartangizga pul tushganini tekshirib, chekdagi ✅ yoki ❌ ni bosing."]
+        body = {"chat_id": chat_id, "text": "\n".join(lines)}
+        button = _payments_button()
+        if button:
+            body["reply_markup"] = button
+        try:
+            response = httpx.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=body, timeout=15)
+            delivered = response.status_code == 200
+        except Exception:
+            delivered = False
+        if not delivered:
+            logging.getLogger("backend").warning("Chek eslatmasi o'qituvchiga yetmadi (chat %s)", chat_id)
+            continue
+        for payment, _, _ in items:
+            payment.reminded_at = now
+            payment.reminder_count = (payment.reminder_count or 0) + 1
+        sent += 1
+    db.commit()
+    return sent
 
 
 def _notify_user(chat_id: int, text: str) -> None:
@@ -4237,6 +4379,38 @@ def pay_test_by_card(code: str, body: TestCardPaymentIn, user: User = Depends(ge
     return {"paid": False, "pending": True, "payment_id": payment.id}
 
 
+STUDENT_REMIND_AFTER = timedelta(minutes=10)
+STUDENT_REMIND_EVERY = timedelta(minutes=30)
+
+
+@app.post("/api/tests/{code}/pay-card/remind")
+def remind_teacher_about_payment(code: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    O'quvchi chekini o'qituvchiga QAYTA yuboradi (chat oxiriga, qadalgan holda) —
+    o'qituvchi uzoq javob bermasa. Chek yuborilgach 10 daqiqadan keyin, 30 daqiqada bir marta.
+    """
+
+    test = _get_test_by_code(db, code, user)
+    payment = _pending_card_payment(db, user, test)
+    if not payment or not payment.receipt_file_id:
+        raise HTTPException(status_code=404, detail="Tekshirilayotgan chek topilmadi")
+    now = utcnow()
+    if now - payment.created_at < STUDENT_REMIND_AFTER:
+        minutes = int((STUDENT_REMIND_AFTER - (now - payment.created_at)).total_seconds() // 60) + 1
+        raise HTTPException(status_code=429, detail=f"O'qituvchi chekni hali ko'rmagan bo'lishi mumkin — {minutes} daqiqadan keyin eslating")
+    if payment.reminded_at and now - payment.reminded_at < STUDENT_REMIND_EVERY:
+        raise HTTPException(status_code=429, detail="Yaqinda eslatildi — biroz kuting")
+    try:
+        _post_receipt_photo(payment, test, user, caption_prefix="🔔 O'quvchi eslatmoqda!\n\n")
+    except Exception:
+        logging.getLogger("backend").warning("Eslatma chek o'qituvchiga yuborilmadi", exc_info=True)
+        raise HTTPException(status_code=502, detail="Eslatma yetmadi, biroz keyin qayta urinib ko'ring")
+    payment.reminded_at = now
+    payment.reminder_count = (payment.reminder_count or 0) + 1
+    db.commit()
+    return {"ok": True}
+
+
 def decide_test_payment(db: Session, payment_id: int, approve: bool, teacher_tg_id: int) -> tuple[bool, str]:
     """
     O'qituvchi o'quvchining chekini tasdiqlaydi yoki rad etadi (bot tugmasi
@@ -4255,6 +4429,7 @@ def decide_test_payment(db: Session, payment_id: int, approve: bool, teacher_tg_
 
     student = db.get(User, payment.user_id)
     amount_text = _format_sum(payment.amount)
+    _telegram_pin(test.teacher.user.tg_id, payment.receipt_message_id, pin=False)
     if approve:
         payment.status = "paid"
         payment.performed_at = utcnow()

@@ -21,6 +21,7 @@ import tempfile
 import traceback
 import urllib.parse
 from datetime import timedelta
+from types import SimpleNamespace
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -3699,6 +3700,118 @@ def test_yangi_foydalanuvchi_bir_vaqtdagi_sorovlarda_xato_bermaydi():
         assert user.tg_id == 4321 and user.full_name == "Birinchi"
     finally:
         session.close()
+
+
+def test_haddan_tashqari_yuklamada_faqat_avtosaqlash_kutadi():
+    """Server band bo'lsa: avtosaqlash darhol 503 oladi, qolgan so'rovlar (yakunlash ham) o'taveradi."""
+    import asyncio
+
+    reached = []
+
+    async def inner(scope, receive, send):
+        reached.append(scope["path"])
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    shedder = main.AutosaveLoadShedding(inner, shed_at=2)
+
+    async def request(method, path):
+        statuses = []
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                statuses.append(message["status"])
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        await shedder({"type": "http", "method": method, "path": path, "headers": []}, receive, send)
+        return statuses[0]
+
+    async def scenario():
+        assert await request("POST", "/api/attempts/5/answers") == 200  # band emas — o'tadi
+        shedder.in_flight = 2  # band
+        results = {
+            "saqlash": await request("POST", "/api/attempts/5/answers"),
+            "yakunlash": await request("POST", "/api/attempts/5/finish"),
+            "boshlash": await request("POST", "/api/tests/ABCD/start"),
+            "ochish": await request("GET", "/api/me"),
+        }
+        return results
+
+    results = asyncio.run(scenario())
+    assert results == {"saqlash": 503, "yakunlash": 200, "boshlash": 200, "ochish": 200}, results
+    assert "/api/attempts/5/finish" in reached and reached.count("/api/attempts/5/answers") == 1
+    assert shedder.in_flight == 2  # hisoblagich to'g'ri qaytdi
+
+
+def test_chek_eslatmalari_oqituvchi_etiboridan_chetda_qolmaydi():
+    """Javobsiz chek: 15 daqiqadan keyin eslatma, 2 soatda takror, ko'pi bilan 3; o'quvchi ham eslata oladi."""
+    from backend.database import Payment
+
+    reset_database()
+    register_teacher(tg_id=555)
+    with CardPaymentTelegramStub():
+        client.put("/api/teacher/card", json={"card_number": "8600123456789012", "card_holder": "Ali Valiyev"},
+                   headers=as_user(555))
+        code = create_test(tg_id=555, price=10000)["code"]
+        payment_id = _pay_card(code, 901).json()["payment_id"]
+
+        sent = []
+        original_post = main.httpx.post
+        main.httpx.post = lambda url, **kwargs: (sent.append((url, kwargs.get("json") or kwargs.get("data"))),
+                                                 SimpleNamespace(status_code=200, json=lambda: {"ok": True}))[1]
+
+        def age(minutes=0, reminded_hours_ago=None):
+            with SessionLocal() as session:
+                payment = session.get(Payment, payment_id)
+                payment.created_at = utcnow() - timedelta(minutes=minutes)
+                if reminded_hours_ago is not None:
+                    payment.reminded_at = utcnow() - timedelta(hours=reminded_hours_ago)
+                session.commit()
+
+        def remind():
+            sent.clear()
+            with SessionLocal() as session:
+                main._remind_pending_payments(session)
+            return [body for url, body in sent if url.endswith("/sendMessage")]
+
+        try:
+            # O'quvchi juda erta eslatsa — kutishni so'raymiz
+            early = client.post(f"/api/tests/{code}/pay-card/remind", headers=as_user(901))
+            assert early.status_code == 429 and "daqiqadan keyin" in early.text, early.text
+            assert remind() == []  # 15 daqiqa o'tmagan
+
+            age(minutes=20)
+            messages = remind()
+            assert len(messages) == 1 and messages[0]["chat_id"] == 555, messages
+            assert "1 ta o'quvchi" in messages[0]["text"] and "10 000" in messages[0]["text"], messages[0]["text"]
+            assert remind() == []  # 2 soat o'tmaguncha takrorlanmaydi
+
+            for _ in range(2):
+                age(minutes=300, reminded_hours_ago=3)
+                assert len(remind()) == 1
+            age(minutes=600, reminded_hours_ago=3)
+            assert remind() == []  # 3 tadan ortiq emas
+
+            # O'quvchi eslatadi: chek qayta yuboriladi (yaqinda eslatilgan bo'lsa — kutadi)
+            age(minutes=60, reminded_hours_ago=1)
+            resent = []
+            original_photo = main._post_receipt_photo
+            main._post_receipt_photo = lambda *args, **kwargs: resent.append(kwargs.get("caption_prefix")) or "file"
+            try:
+                assert client.post(f"/api/tests/{code}/pay-card/remind", headers=as_user(901)).status_code == 200
+                assert resent and "eslatmoqda" in resent[0]
+                assert client.post(f"/api/tests/{code}/pay-card/remind", headers=as_user(901)).status_code == 429
+            finally:
+                main._post_receipt_photo = original_photo
+
+            # Ruxsat berilgach — eslatma to'xtaydi
+            client.post(f"/api/teacher/test-payments/{payment_id}/approve", headers=as_user(555))
+            age(minutes=600, reminded_hours_ago=5)
+            assert remind() == []
+        finally:
+            main.httpx.post = original_post
 
 
 # ========== Ishga tushirgich ==========
