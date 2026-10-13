@@ -2920,6 +2920,8 @@ def teacher_balance(teacher: Teacher = Depends(get_current_teacher)):
         "balance": teacher.balance,
         "credits": teacher.credits,
         "admin_card": ADMIN_CARD_NUMBER,
+        # Bir nechta karta bo'lishi mumkin: ADMIN_CARD_NUMBER="8600 ...; 9860 ..."
+        "admin_cards": [card.strip() for card in re.split(r"[;,|]", ADMIN_CARD_NUMBER) if card.strip()],
         "credit_price_tiers": CREDIT_PRICE_TIERS_DISPLAY,
         # Qaysi to'lov usullari ishlayapti — frontend faqat shularni ko'rsatadi
         "payme_enabled": bool(PAYME_MERCHANT_ID),

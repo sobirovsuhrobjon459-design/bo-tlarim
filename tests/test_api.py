@@ -4014,6 +4014,19 @@ def test_test_hammaga_elon_qilinadi():
         main._start_broadcast, main._telegram_send_message = original_start, original_send
 
 
+def test_kredit_uchun_ikki_karta_korsatiladi():
+    reset_database()
+    register_teacher()
+    original = main.ADMIN_CARD_NUMBER
+    main.ADMIN_CARD_NUMBER = "8600 1234 5678 9012; 9860 1111 2222 3333"
+    try:
+        cards = client.get("/api/teacher/balance", headers=as_user(555)).json()["admin_cards"]
+        assert cards == ["8600 1234 5678 9012", "9860 1111 2222 3333"], cards
+    finally:
+        main.ADMIN_CARD_NUMBER = original
+    assert client.get("/api/teacher/balance", headers=as_user(555)).json()["admin_cards"] == ["8600 1234 5678 9012"]
+
+
 # ========== Ishga tushirgich ==========
 
 

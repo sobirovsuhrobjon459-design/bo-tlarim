@@ -5783,8 +5783,10 @@ async function renderCreditPurchaseForm() {
               ? `<p>⏳ Oldingi to'lovingiz tekshirilmoqda. Admin tasdiqlagach, kredit hisobingizga
                  o'zi tushadi va bot sizga xabar beradi.</p>`
               : `
-                <p><b>1.</b> Quyidagi kartaga <b id="card-amount">—</b> o'tkazing:</p>
-                ${copyCodeChip(escapeHtml(balanceInfo.admin_card))}
+                <p><b>1.</b> ${(balanceInfo.admin_cards || []).length > 1 ? "Quyidagi kartalardan biriga" : "Quyidagi kartaga"} <b id="card-amount">—</b> o'tkazing:</p>
+                ${(balanceInfo.admin_cards || [balanceInfo.admin_card])
+                  .map((card) => `<div style="margin:4px 0">${copyCodeChip(escapeHtml(card))}</div>`)
+                  .join("")}
                 <p style="margin-top:12px"><b>2.</b> To'lov chekining rasmini (skrinshot) tanlang:</p>
                 <!-- Brauzerning o'z fayl tugmasi telefon tilida ("Выберите файл")
                      chiqadi — uni yashirib, o'rniga o'zimizning tugmani qo'yamiz -->
