@@ -2236,6 +2236,13 @@ TEXT_ANSWER_REPLACEMENTS = [
     ("÷", "/"),
     ("−", "-"),
     ("–", "-"),
+    # Tutuq belgisi (atamalar: "Farg'ona", "O'zbekiston") — telefonlarda har xil
+    ("‘", "'"),
+    ("’", "'"),
+    ("ʻ", "'"),
+    ("ʼ", "'"),
+    ("`", "'"),
+    ("´", "'"),
 ]
 
 

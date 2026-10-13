@@ -3850,6 +3850,15 @@ def test_bot_xabarlari_oxirida_kutilayotgan_chek_eslatiladi():
     assert "ruxsat kutmoqda" not in other[1] and other[2] is None
 
 
+def test_tarix_atamasi_tutuq_belgisi_har_xil_bolsa_ham_togri():
+    from backend.main import _normalize_text_answer as norm
+
+    # O'quvchi telefonda "'" yozadi, kalitda "‘" yoki "ʻ" bo'lishi mumkin
+    assert norm("Farg'ona") == norm("Farg‘ona") == norm("Fargʻona") == norm("Farg`ona")
+    assert norm("Qo‘qon xonligi") == norm("qo'qon xonligi")
+    assert norm("Farg'ona") != norm("Fargona")
+
+
 # ========== Ishga tushirgich ==========
 
 
