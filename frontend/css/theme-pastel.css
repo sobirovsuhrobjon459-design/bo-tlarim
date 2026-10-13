@@ -677,3 +677,8 @@ select:focus {
 .btn {
   text-transform: none;
 }
+
+/* Ilova doim yorug' — brauzerning o'z elementlari (sana, ro'yxat) ham qorong'i bo'lmasin */
+:root {
+  color-scheme: light;
+}

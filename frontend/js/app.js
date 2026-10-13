@@ -15,11 +15,18 @@ const telegram = window.Telegram?.WebApp;
 /* ---------- 0) Telegram tema (dark/light) ---------- */
 
 function applyTheme() {
-  const isDark = telegram
-    ? telegram.colorScheme === "dark"
-    : window.matchMedia("(prefers-color-scheme: dark)").matches;
-
-  document.documentElement.setAttribute("data-theme", isDark ? "dark" : "light");
+  // Ilova doim yorug' (oq) ko'rinadi — Telegram qorong'i rejimda bo'lsa ham
+  document.documentElement.setAttribute("data-theme", "light");
+  try {
+    // Telegram'ning tepa paneli va fon rangi ham ilovaga mos (oq) bo'lsin
+    if (telegram?.isVersionAtLeast?.("6.1")) {
+      telegram.setHeaderColor?.("#f2f2fa");
+      telegram.setBackgroundColor?.("#f2f2fa");
+    }
+    if (telegram?.isVersionAtLeast?.("7.10")) telegram.setBottomBarColor?.("#f2f2fa");
+  } catch (_) {
+    /* eski Telegram versiyasi */
+  }
 }
 
 if (telegram) {
