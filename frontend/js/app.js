@@ -4623,21 +4623,28 @@ function renderTestFound(test) {
   }
 
   const actionButton = blockedMessage
-    ? `<button class="btn" disabled>▶️ TESTNI BOSHLASH</button>`
+    ? `<button class="btn btn-sun" disabled>▶️ TESTNI BOSHLASH</button>`
     : test.paid
-      ? `<button class="btn" id="start-test-button">▶️ TESTNI BOSHLASH</button>`
+      ? `<button class="btn btn-sun" id="start-test-button">▶️ TESTNI BOSHLASH</button>`
       : studentPaymentHtml(test);
 
   document.getElementById("search-result").innerHTML = `
-    <div class="card test-found" style="cursor:default">
-      <div class="card-body" style="width:100%">
-        <h3 style="margin:0">${escapeHtml(test.title)}</h3>
-        <p class="subtitle" style="margin:4px 0 0">${test.count} ta savol · ${test.duration} daqiqa · ${priceLabel}</p>
-        ${blockedMessage ? `<p class="test-blocked">${blockedMessage}</p>` : ""}
+    <section class="hero-card test-found">
+      <div class="hero-who">
+        <div class="hero-hello">${escapeHtml(test.title)}</div>
+        <div class="hero-chips">
+          ${test.subject ? `<span class="hero-chip">${escapeHtml(test.subject)}</span>` : ""}
+          <span class="hero-chip">${test.count} ta savol</span>
+          <span class="hero-chip">⏱ ${test.duration} daqiqa</span>
+          <span class="hero-chip is-sun">${priceLabel}</span>
+        </div>
+      </div>
+      ${blockedMessage ? `<p class="test-blocked">${blockedMessage}</p>` : ""}
+      <div class="hero-light">
         ${channelRowsHtml(test)}
         ${actionButton}
       </div>
-    </div>
+    </section>
   `;
 
   wireChannelRows(test);
@@ -6969,22 +6976,29 @@ async function renderTestDetail(testId) {
           </div>`;
 
   showPage(`
-    <button class="back-button" data-action="dashboard">←</button>
-    <h2 style="text-align:center">${escapeHtml(test.title)}</h2>
-    <div class="row-between" style="margin-bottom:14px">
-      <div>${testBadges(test)}</div>
-      <span class="subtitle" style="margin:0">Kod: ${copyCodeChip(test.code)}</span>
+    <div class="page-header">
+      <button class="back-button" data-action="dashboard" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">Test</h2>
     </div>
-    ${
-      testChannels(test).length
-        ? `<p class="subtitle">📢 Majburiy obuna: <b>${testChannels(test).map(escapeHtml).join(", ")}</b></p>`
-        : ""
-    }
-    <p class="subtitle" style="margin-top:-4px">
-      ⏱ ${test.duration} daqiqa${test.start_time ? ` · boshlanish: ${formatDateTime(test.start_time)}` : ""}${
-        test.end_time ? ` · tugash: <b>${formatDateTime(test.end_time)}</b>` : ""
+    <section class="hero-card">
+      <div class="hero-who">
+        <div class="hero-hello">${escapeHtml(test.title)}</div>
+        <div class="hero-chips">${testBadges(test)}<span class="hero-chip">⏱ ${test.duration} daqiqa</span></div>
+      </div>
+      <div class="hero-code-row">
+        <span>Test kodi</span>
+        ${copyCodeChip(test.code)}
+      </div>
+      ${
+        test.start_time || test.end_time || testChannels(test).length
+          ? `<div class="hero-meta">
+               ${test.start_time ? `<span>🕒 Boshlanish: ${formatDateTime(test.start_time)}</span>` : ""}
+               ${test.end_time ? `<span>⏳ Tugash: <b>${formatDateTime(test.end_time)}</b></span>` : ""}
+               ${testChannels(test).length ? `<span>📢 Obuna: <b>${testChannels(test).map(escapeHtml).join(", ")}</b></span>` : ""}
+             </div>`
+          : ""
       }
-    </p>
+    </section>
     <button class="btn btn-ghost" id="edit-test-button">✏️ Tahrirlash (nomi, vaqti)</button>
 
     ${

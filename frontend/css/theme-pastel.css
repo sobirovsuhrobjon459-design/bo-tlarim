@@ -568,3 +568,112 @@ select:focus {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ---------- Ichki sahifalar ---------- */
+
+/* Asosiy karta ichidagi yorliqlar (test turi va holati) */
+.hero-card .badge {
+  margin-left: 0;
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.hero-card .test-blocked {
+  margin: 0;
+  color: var(--sun);
+}
+
+/* Hero ichidagi oq bloklar (kanallar, to'lov) — o'z rangida qoladi */
+.hero-light {
+  display: grid;
+  gap: 10px;
+}
+
+.hero-light .channel-rows,
+.hero-light .panel,
+.hero-light .notice {
+  color: var(--color-text);
+}
+
+.hero-light .subtitle {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.hero-light .panel .subtitle,
+.hero-light .notice .subtitle {
+  color: var(--color-text-muted);
+}
+
+.hero-light .btn + .btn,
+.hero-light .btn {
+  margin-top: 0;
+}
+
+/* Test kodi — yirik sariq yorliq */
+.hero-code-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.08);
+  font-weight: 800;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.hero-code-row .copy-code {
+  padding: 6px 14px;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  color: #151b3d;
+  background: var(--sun);
+  border: 0;
+}
+
+.hero-code-row .copy-code svg {
+  width: 16px;
+  height: 16px;
+}
+
+.hero-meta {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.hero-meta b {
+  color: #ffffff;
+}
+
+/* Test ishlash: A/B/C/D — dumaloq, tanlangani to'q */
+.sheet-option {
+  width: 44px;
+  height: 44px;
+  max-width: 44px;
+  flex: 0 0 44px;
+  border-radius: 50%;
+  font-weight: 900;
+  background: var(--color-surface);
+  border: 2px solid var(--color-border);
+}
+
+.sheet-option.selected {
+  color: var(--btn-fg);
+  background: var(--btn-bg);
+  border-color: var(--btn-bg);
+  box-shadow: 0 6px 14px -8px rgba(21, 27, 61, 0.8);
+}
+
+.sheet-options {
+  gap: 8px;
+}
+
+/* Natijalar sahifasidagi "PDF hisobot" kabi katta tugmalar — biroz yengilroq yozuv */
+.btn {
+  text-transform: none;
+}
