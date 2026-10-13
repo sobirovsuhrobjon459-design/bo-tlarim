@@ -351,6 +351,25 @@ def test_yopiq_testni_pullik_qilib_bolmaydi():
     assert response.status_code == 422, response.text
 
 
+def test_pullik_test_narxi_5000_dan_100000_gacha():
+    reset_database()
+    register_teacher()
+    client.put("/api/teacher/card", json={"card_number": "8600123412341234", "card_holder": "Test"},
+               headers=as_user(555))
+    for bad in (4999, 100_001):
+        body = {"title": "Pullik", "subject": "Matematika", "mode": "key", "price": bad,
+                "key_questions": [{"number": 1, "question_type": "single", "option_count": 4, "correct": "A"}]}
+        response = client.post("/api/teacher/tests", json=body, headers=as_user(555))
+        assert response.status_code == 422, response.text
+    created = create_test(price=100_000)
+    assert create_test(price=5000)["code"]
+    for bad in (1000, 200_000):
+        response = client.patch(f"/api/teacher/tests/{created['id']}/price", json={"price": bad}, headers=as_user(555))
+        assert response.status_code == 422, response.text
+    response = client.patch(f"/api/teacher/tests/{created['id']}/price", json={"price": 0}, headers=as_user(555))
+    assert response.status_code == 200, response.text
+
+
 # ========== 3) Javoblarni tekshirish ==========
 
 

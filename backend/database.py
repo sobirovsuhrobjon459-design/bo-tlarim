@@ -761,11 +761,21 @@ class KeyQuestionIn(BaseModel):
         return self
 
 
+# Pullik test narxi (so'm): 0 — bepul, aks holda shu oraliqda
+TEST_PRICE_MIN = 5_000
+TEST_PRICE_MAX = 100_000
+
+
+def _check_test_price(price: int) -> None:
+    if price and not TEST_PRICE_MIN <= price <= TEST_PRICE_MAX:
+        raise ValueError(f"Narx {TEST_PRICE_MIN:,} — {TEST_PRICE_MAX:,} so'm oralig'ida bo'lishi kerak".replace(",", " "))
+
+
 class TestIn(BaseModel):
     title: str = Field(min_length=2, max_length=200)
     subject: str = Field(min_length=2, max_length=100)
     topic: str = Field("", max_length=200)
-    price: int = Field(0, ge=0, le=10_000_000)
+    price: int = Field(0, ge=0, le=TEST_PRICE_MAX)
     duration: int = Field(30, ge=1, le=300)
     mode: str = Field("full", pattern="^(full|key)$")
 
@@ -778,6 +788,11 @@ class TestIn(BaseModel):
 
     questions: list[QuestionIn] = Field(default_factory=list, max_length=300)
     key_questions: list[KeyQuestionIn] = Field(default_factory=list, max_length=300)
+
+    @model_validator(mode="after")
+    def check_price(self) -> "TestIn":
+        _check_test_price(self.price)
+        return self
 
 
 class FinishIn(BaseModel):
@@ -823,7 +838,12 @@ class TestCardPaymentIn(BaseModel):
 class PriceUpdate(BaseModel):
     """O'qituvchi testni yaratgandan keyin narxini o'zgartirganda yuboriladi."""
 
-    price: int = Field(ge=0, le=10_000_000)
+    price: int = Field(ge=0, le=TEST_PRICE_MAX)
+
+    @model_validator(mode="after")
+    def check_price(self) -> "PriceUpdate":
+        _check_test_price(self.price)
+        return self
 
 
 class WithdrawalRequestIn(BaseModel):

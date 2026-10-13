@@ -6164,8 +6164,8 @@ function renderNewTestForm(testType, draft = {}) {
     <div id="price-toggle" data-value="${draft.paid ? "paid" : "free"}" hidden></div>
     <div id="price-wrapper" style="display:${draft.paid ? "block" : "none"};margin:0 0 14px">
       <label class="field-label" for="field-price" style="margin-top:0">Narxi (so'm)</label>
-      <input class="input" id="field-price" type="number" min="0" step="1000"
-             value="${draft.price || ""}" placeholder="Masalan, 15000" style="margin:0" />
+      <input class="input" id="field-price" type="number" min="${PRICE_MIN}" max="${PRICE_MAX}" step="1000"
+             value="${draft.price || ""}" placeholder="5 000 — 100 000" style="margin:0" />
       <!-- O'quvchilar pulni o'qituvchi kartasiga o'tkazadi (pastda /api/teacher/card dan to'ldiriladi) -->
       <div class="row-between" style="margin-top:8px;gap:10px">
         <span class="subtitle" id="price-card-summary" style="margin:0;min-width:0">💳 Karta tekshirilmoqda…</span>
@@ -6694,6 +6694,7 @@ async function saveNewTest() {
   if (isPaid && price <= 0) {
     throw new Error("Pullik test uchun narxini kiriting");
   }
+  if (isPaid) checkPrice(price);
   if (isPaid && !newTestHasCard) {
     throw new Error("Pullik test uchun avval karta raqamingizni kiriting (narx ostidagi «➕ Karta kiritish»)");
   }
@@ -7727,9 +7728,19 @@ async function renderTestResults(testId) {
   });
 }
 
+// Pullik test narxi: 5 000 — 100 000 so'm (serverda ham shunday tekshiriladi)
+const PRICE_MIN = 5000;
+const PRICE_MAX = 100000;
+
+function checkPrice(price) {
+  if (price < PRICE_MIN || price > PRICE_MAX) {
+    throw new Error(`Narx ${formatNumber(PRICE_MIN)} — ${formatNumber(PRICE_MAX)} so'm oralig'ida bo'lishi kerak`);
+  }
+}
+
 function showPriceEditor(testId, currentPrice) {
   document.getElementById("price-card").innerHTML = `
-    <input class="input" id="new-price-input" type="number" min="0" step="500" value="${currentPrice}" placeholder="Yangi narx (so'm, 0 = bepul)" style="margin:0" />
+    <input class="input" id="new-price-input" type="number" min="0" max="${PRICE_MAX}" step="1000" value="${currentPrice}" placeholder="5 000 — 100 000 (0 = bepul)" style="margin:0" />
     <button class="btn" id="save-price-button" style="width:auto;padding:10px 16px">💾 Saqlash</button>
   `;
   document.getElementById("save-price-button").addEventListener("click", guarded(() => saveNewPrice(testId)));
@@ -7737,6 +7748,7 @@ function showPriceEditor(testId, currentPrice) {
 
 async function saveNewPrice(testId) {
   const newPrice = Number(document.getElementById("new-price-input").value) || 0;
+  if (newPrice) checkPrice(newPrice);
   await api(`/api/teacher/tests/${testId}/price`, { method: "PATCH", body: { price: newPrice } });
   showToast("✅ Narx yangilandi");
   await renderTestResults(testId);
