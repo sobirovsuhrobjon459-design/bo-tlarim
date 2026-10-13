@@ -754,7 +754,7 @@ function showBottomNav(activeTab) {
         });
 
         if (tab === "create") {
-          renderNewTestForm("rash");
+          renderNewTestKindChoice();
           return;
         }
 
@@ -5441,7 +5441,7 @@ function drawTeacherDashboard(me, stats, tests) {
   document.getElementById("test-payments-button").addEventListener("click", guarded(renderTestPaymentsPage));
   document.getElementById("card-settings-button").addEventListener("click", () => openCardSettingsSheet(renderTeacherDashboard));
   document.getElementById("buy-credit-button").addEventListener("click", guarded(renderCreditPurchaseForm));
-  document.getElementById("new-test-button").addEventListener("click", () => renderNewTestForm("rash"));
+  document.getElementById("new-test-button").addEventListener("click", () => renderNewTestKindChoice());
 
   // Tab almashganda faqat ro'yxat qayta chiziladi — testlar allaqachon
   // yuklangan. Ilgari butun sahifa serverdan qayta olinib, 1–2 soniya
@@ -6103,6 +6103,28 @@ const TEST_TYPES = {
   },
 };
 
+/*
+  Test yaratish 1-qadam: o'quvchilardan pul olinadimi? Tanlov formaning ichida
+  emas — alohida so'raladi va formaning tepasida yozilib turadi.
+  draft — "O'zgartirish" bosilganda formada kiritilganlar saqlanib qoladi.
+*/
+function renderNewTestKindChoice(draft = {}, testType = "rash") {
+  showPage(`
+    ${pageHeader("Yangi test")}
+    <h3 style="margin:4px 0 4px">O'quvchilardan test uchun pul olasizmi?</h3>
+    <p class="subtitle" style="margin:0 0 14px">Keyin ham o'zgartirish mumkin.</p>
+    ${roleCard("kind-paid", "💰", "PULLIK TEST", "O'quvchilar to'lab ishlaydi — pul to'g'ridan-to'g'ri kartangizga tushadi")}
+    ${roleCard("kind-free", "🆓", "BEPUL TEST", "O'quvchilar bepul ishlaydi — har bir natija uchun sizdan 1 kredit")}
+  `);
+  wireTeacherChrome("create");
+  document.querySelector('[data-action="kind-paid"]').addEventListener("click", () =>
+    renderNewTestForm(testType, { ...draft, paid: true })
+  );
+  document.querySelector('[data-action="kind-free"]').addEventListener("click", () =>
+    renderNewTestForm(testType, { ...draft, paid: false })
+  );
+}
+
 function renderNewTestForm(testType, draft = {}) {
   const type = TEST_TYPES[testType] ? testType : "rash";
   const preset = TEST_TYPES[type];
@@ -6120,6 +6142,29 @@ function renderNewTestForm(testType, draft = {}) {
   const header = `
     ${pageHeader("Yangi test")}
 
+    <div class="test-kind-banner ${draft.paid ? "is-paid" : "is-free"}">
+      <div style="min-width:0">
+        <b>${draft.paid ? "💰 Pullik test" : "🆓 Bepul test"}</b>
+        <p class="subtitle" style="margin:2px 0 0">${
+          draft.paid
+            ? "O'quvchilar to'lab ishlaydi — pul kartangizga tushadi"
+            : "O'quvchilar bepul ishlaydi — har natija uchun 1 kredit"
+        }</p>
+      </div>
+      <button type="button" class="share-pill" id="change-kind-button">O'zgartirish</button>
+    </div>
+    <div id="price-toggle" data-value="${draft.paid ? "paid" : "free"}" hidden></div>
+    <div id="price-wrapper" style="display:${draft.paid ? "block" : "none"};margin:0 0 14px">
+      <label class="field-label" for="field-price" style="margin-top:0">Narxi (so'm)</label>
+      <input class="input" id="field-price" type="number" min="0" step="1000"
+             value="${draft.price || ""}" placeholder="Masalan, 15000" style="margin:0" />
+      <!-- O'quvchilar pulni o'qituvchi kartasiga o'tkazadi (pastda /api/teacher/card dan to'ldiriladi) -->
+      <div class="row-between" style="margin-top:8px;gap:10px">
+        <span class="subtitle" id="price-card-summary" style="margin:0;min-width:0">💳 Karta tekshirilmoqda…</span>
+        <button type="button" class="btn btn-ghost" id="price-card-button" style="width:auto;padding:6px 12px;margin:0">Karta</button>
+      </div>
+    </div>
+
     <input class="input" id="field-title" placeholder="Test nomini kiriting" value="${escapeHtml(draft.title || "")}" />
 
     <label class="field-label" for="field-type">Test turi</label>
@@ -6135,30 +6180,6 @@ function renderNewTestForm(testType, draft = {}) {
       ${subjectOptions}
     </select>
     <p class="subtitle" id="subject-note" style="margin:-6px 0 0">${structure.note}</p>
-
-    <div id="price-block">
-    <p class="field-label" style="margin-top:14px">Test bepulmi yoki pullikmi?</p>
-    <div class="row-between" id="price-toggle" data-value="${draft.paid ? "paid" : "free"}" style="gap:8px;margin-bottom:6px">
-      <button type="button" class="btn ${draft.paid ? "btn-ghost" : ""}" id="price-free-button" style="flex:1">Bepul test</button>
-      <button type="button" class="btn ${draft.paid ? "" : "btn-ghost"}" id="price-paid-button" style="flex:1">Pullik test</button>
-    </div>
-    <p class="subtitle" id="price-hint" style="margin-bottom:6px">
-      ${
-        draft.paid
-          ? "O'quvchi to'lov qilgandan keyin testni ishlaydi"
-          : "O'quvchilar bepul ishlaydi. Har bir natija uchun sizdan 1 kredit yechiladi."
-      }
-    </p>
-    <div id="price-wrapper" style="display:${draft.paid ? "block" : "none"};margin-bottom:16px">
-      <input class="input" id="field-price" type="number" min="0" step="1000"
-             value="${draft.price ?? 0}" placeholder="Narxi (so'm)" style="margin:0" />
-      <!-- O'quvchilar pulni o'qituvchi kartasiga o'tkazadi (pastda /api/teacher/card dan to'ldiriladi) -->
-      <div class="row-between" style="margin-top:8px;gap:10px">
-        <span class="subtitle" id="price-card-summary" style="margin:0;min-width:0">💳 Karta tekshirilmoqda…</span>
-        <button type="button" class="btn btn-ghost" id="price-card-button" style="width:auto;padding:6px 12px;margin:0">Karta</button>
-      </div>
-    </div>
-    </div>
 
     <p class="field-label" style="margin-top:14px">Testga qo'shilish turi</p>
     <div class="row-between" id="enrollment-toggle" data-value="${draft.enrollment || "open"}" style="gap:8px;margin-bottom:6px">
@@ -6296,27 +6317,10 @@ function renderNewTestForm(testType, draft = {}) {
     renderNewTestForm(event.target.value, carried);
   });
 
-  const priceToggle = document.getElementById("price-toggle");
-  const priceFreeButton = document.getElementById("price-free-button");
-  const pricePaidButton = document.getElementById("price-paid-button");
-  const priceHint = document.getElementById("price-hint");
-  const priceWrapper = document.getElementById("price-wrapper");
-
-  priceFreeButton.addEventListener("click", () => {
-    priceToggle.dataset.value = "free";
-    priceFreeButton.classList.remove("btn-ghost");
-    pricePaidButton.classList.add("btn-ghost");
-    priceWrapper.style.display = "none";
-    priceHint.textContent = "O'quvchilar bepul ishlaydi. Har bir natija uchun sizdan 1 kredit yechiladi.";
-  });
-
-  pricePaidButton.addEventListener("click", () => {
-    priceToggle.dataset.value = "paid";
-    pricePaidButton.classList.remove("btn-ghost");
-    priceFreeButton.classList.add("btn-ghost");
-    priceWrapper.style.display = "block";
-    priceHint.textContent = "O'quvchi to'lov qilgandan keyin testni ishlaydi";
-    selectOpenEnrollment(); // pullik test faqat ochiq bo'ladi
+  // "O'zgartirish" — tanlov ekraniga qaytadi, formada kiritilganlar saqlanadi
+  document.getElementById("change-kind-button").addEventListener("click", () => {
+    const carried = collectTestFormDraft();
+    renderNewTestKindChoice(carried, document.getElementById("field-type").value);
   });
 
   // Pullik test: o'quvchilar pulni shu kartaga o'tkazadi — karta bo'lmasa, shu yerda kiritiladi
@@ -6329,7 +6333,7 @@ function renderNewTestForm(testType, draft = {}) {
     priceCardSummary.innerHTML = newTestHasCard
       ? `💳 Pul shu kartaga tushadi: <b>${escapeHtml(card.card_number.replace(/(\d{4})(?=\d)/g, "$1 "))}</b>`
       : `⚠️ Karta raqamingizni kiriting — o'quvchilar pulni unga o'tkazadi`;
-    priceCardButton.textContent = newTestHasCard ? "✏️ O'zgartirish" : "➕ Kiritish";
+    priceCardButton.textContent = newTestHasCard ? "✏️ Karta" : "➕ Karta kiritish";
     priceCardButton.classList.toggle("btn-ghost", newTestHasCard);
   };
   refreshPriceCard();
@@ -6349,9 +6353,10 @@ function renderNewTestForm(testType, draft = {}) {
   }
 
   enrollmentOpenButton.addEventListener("click", selectOpenEnrollment);
+  if (draft.paid) selectOpenEnrollment(); // pullik test faqat ochiq bo'ladi
   enrollmentClosedButton.addEventListener("click", () => {
     // Pullik test faqat ochiq bo'ladi — o'quvchi o'zi to'lab, o'zi ishlaydi.
-    if (priceToggle.dataset.value === "paid") {
+    if (document.getElementById("price-toggle").dataset.value === "paid") {
       showToast("Pullik test faqat ochiq bo'ladi");
       return;
     }
@@ -6686,7 +6691,7 @@ async function saveNewTest() {
     throw new Error("Pullik test uchun narxini kiriting");
   }
   if (isPaid && !newTestHasCard) {
-    throw new Error("Pullik test uchun avval karta raqamingizni kiriting (narx ostidagi «➕ Kiritish»)");
+    throw new Error("Pullik test uchun avval karta raqamingizni kiriting (narx ostidagi «➕ Karta kiritish»)");
   }
 
   const body = {
