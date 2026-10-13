@@ -8050,6 +8050,110 @@ def _asset_version() -> str:
     return format(int(latest), "x")
 
 
+# ========== Ommaviy oferta (Payme/Click arizasi uchun ochiq sahifa) ==========
+
+# Ijrochi (YaTT) rekvizitlari — Render → Environment'da beriladi, kodda saqlanmaydi
+LEGAL_NAME = os.getenv("LEGAL_NAME", "").strip()
+LEGAL_INN = os.getenv("LEGAL_INN", "").strip()
+LEGAL_PHONE = os.getenv("LEGAL_PHONE", "").strip()
+LEGAL_EMAIL = os.getenv("LEGAL_EMAIL", "").strip()
+LEGAL_ADDRESS = os.getenv("LEGAL_ADDRESS", "").strip()
+LEGAL_BOT = os.getenv("LEGAL_BOT", "").strip()
+
+
+def _oferta_html() -> str:
+    from .database import TEST_PRICE_MAX, TEST_PRICE_MIN
+
+    def value(text: str) -> str:
+        return html_escape(text) if text else "<span class='blank'>__________</span>"
+
+    tiers = "".join(
+        f"<tr><td>{low}{'–' + str(high) if high else '+'} ta</td><td>{_format_sum(price)} so'm</td></tr>"
+        for low, high, price in CREDIT_PRICE_TIERS
+    )
+    share = 100 - PLATFORM_COMMISSION_PERCENT
+    service = html_escape(LEGAL_BOT) if LEGAL_BOT else "Telegram bot va Mini App"
+    return f"""<!doctype html>
+<html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ommaviy oferta</title>
+<style>
+  :root {{ color-scheme: light; --ink: #151b3d; --muted: #5d6385; --line: #e3e5f0; --bg: #f6f6fb }}
+  body {{ margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif }}
+  main {{ max-width: 760px; margin: 0 auto; padding: 28px 18px 60px; background: #fff; min-height: 100vh; box-sizing: border-box }}
+  h1 {{ font-size: 26px; line-height: 1.25; margin: 0 0 6px }}
+  h2 {{ font-size: 18px; margin: 28px 0 8px }}
+  p, li {{ margin: 0 0 8px }}
+  .muted {{ color: var(--muted); font-size: 14px }}
+  table {{ border-collapse: collapse; width: 100%; max-width: 420px; margin: 8px 0 }}
+  td {{ border: 1px solid var(--line); padding: 7px 10px; font-variant-numeric: tabular-nums }}
+  .req td:first-child {{ color: var(--muted); width: 40% }}
+  .blank {{ color: #c0392b }}
+</style></head><body><main>
+<h1>Ommaviy oferta — onlayn test platformasi xizmatlari</h1>
+<p class="muted">Ushbu hujjat O'zbekiston Respublikasi Fuqarolik kodeksining 367–370-moddalariga muvofiq ommaviy oferta hisoblanadi.
+Xizmatdan foydalanish yoki to'lov qilish — oferta shartlarini to'liq qabul qilish (aksept) demakdir.</p>
+
+<h2>1. Taraflar</h2>
+<p><b>Ijrochi:</b> yakka tartibdagi tadbirkor {value(LEGAL_NAME)}, STIR {value(LEGAL_INN)}.</p>
+<p><b>Foydalanuvchi:</b> xizmatdan {service} orqali foydalanayotgan har qanday shaxs — o'qituvchi yoki o'quvchi.</p>
+
+<h2>2. Xizmatlar</h2>
+<ul>
+  <li>O'qituvchi uchun: onlayn test yaratish, o'quvchilarga tarqatish, natijalarni avtomatik tekshirish, Rasch modeli bo'yicha ball, hisobot (PDF) va sertifikatlar.</li>
+  <li>O'quvchi uchun: test ishlash, natija va savollar tahlilini ko'rish.</li>
+  <li>Xizmat Telegram Mini App orqali, internet mavjud bo'lganda ko'rsatiladi.</li>
+</ul>
+
+<h2>3. Kreditlar va narxlar</h2>
+<p>Bepul testda har bir o'quvchi natijasi uchun o'qituvchi hisobidan 1 kredit yechiladi. Kredit narxi (1 dona uchun):</p>
+<table>{tiers}</table>
+<p>Narx sotib olinadigan kreditlar soniga qarab yuqoridagi jadval bo'yicha hisoblanadi va to'lovdan oldin ko'rsatiladi.</p>
+
+<h2>4. Pullik testlar</h2>
+<p>O'qituvchi o'z testiga {_format_sum(TEST_PRICE_MIN)} — {_format_sum(TEST_PRICE_MAX)} so'm oralig'ida narx belgilashi mumkin.
+To'lov Payme yoki Click orqali amalga oshirilganda, to'lov summasining {share}% o'qituvchi balansiga yoziladi,
+{PLATFORM_COMMISSION_PERCENT}% — platforma xizmat haqi. O'qituvchi balansdagi mablag'ni o'z kartasiga yechib olish uchun so'rov yuboradi.</p>
+
+<h2>5. To'lov tartibi</h2>
+<ul>
+  <li>To'lovlar Payme yoki Click to'lov tizimlari orqali, O'zbekiston so'mida qabul qilinadi.</li>
+  <li>Karta ma'lumotlari faqat to'lov tizimi sahifasida kiritiladi; Ijrochi ularni ko'rmaydi va saqlamaydi.</li>
+  <li>To'lov tasdiqlangach, kredit yoki testga ruxsat avtomatik beriladi.</li>
+</ul>
+
+<h2>6. Pulni qaytarish</h2>
+<ul>
+  <li>Sotib olingan, lekin ishlatilmagan kreditlar uchun to'lovdan keyin 14 kun ichida murojaat qilinsa, ishlatilmagan qism uchun pul qaytariladi.</li>
+  <li>Texnik nosozlik sababli xizmat ko'rsatilmagan bo'lsa (masalan, to'lov o'tdi, lekin test ochilmadi), pul to'liq qaytariladi.</li>
+  <li>Pul to'lov qilingan kartaga, to'lov tizimi qoidalariga ko'ra 3–10 ish kuni ichida qaytariladi.</li>
+</ul>
+
+<h2>7. Shaxsiy ma'lumotlar</h2>
+<p>Ijrochi faqat xizmat uchun zarur ma'lumotlarni (Telegram ID, ism, test natijalari) saqlaydi va ularni uchinchi shaxslarga bermaydi,
+qonunchilikda nazarda tutilgan hollar bundan mustasno.</p>
+
+<h2>8. Javobgarlik</h2>
+<p>Ijrochi Telegram, internet provayderi yoki to'lov tizimlari ishidagi uzilishlar uchun javobgar emas. Test savollari va
+to'g'ri javoblar mazmuni uchun testni yaratgan o'qituvchi javobgar.</p>
+
+<h2>9. Ijrochi rekvizitlari va aloqa</h2>
+<table class="req">
+  <tr><td>YaTT</td><td>{value(LEGAL_NAME)}</td></tr>
+  <tr><td>STIR</td><td>{value(LEGAL_INN)}</td></tr>
+  <tr><td>Manzil</td><td>{value(LEGAL_ADDRESS)}</td></tr>
+  <tr><td>Telefon</td><td>{value(LEGAL_PHONE)}</td></tr>
+  <tr><td>E-mail</td><td>{value(LEGAL_EMAIL)}</td></tr>
+  <tr><td>Xizmat</td><td>{service}</td></tr>
+</table>
+</main></body></html>"""
+
+
+@app.get("/oferta", include_in_schema=False)
+def oferta_page():
+    """Ommaviy oferta — Telegram'siz ochiladi (Payme/Click arizasiga havola)."""
+    return HTMLResponse(_oferta_html())
+
+
 @app.get("/", include_in_schema=False)
 def serve_index():
     """Bosh sahifa: har safar yangi tekshiriladi va fayl havolalari versiyalanadi."""

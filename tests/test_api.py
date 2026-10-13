@@ -4064,6 +4064,20 @@ def test_yozma_javob_notogrisi_hech_qachon_togri_bolib_ketmaydi():
         assert ok(student, correct), f"to'g'ri javob o'tmadi: {student!r} ~ {correct!r}"
 
 
+def test_oferta_sahifasi_ochiq_va_narxlar_koddan():
+    response = client.get("/oferta")  # Telegram'siz, avtorizatsiyasiz
+    assert response.status_code == 200 and "text/html" in response.headers["content-type"]
+    text = response.text
+    assert "Ommaviy oferta" in text and "1 200 so'm" in text and "450 so'm" in text, text[:300]
+    assert "5 000" in text and "100 000" in text and f"{main.PLATFORM_COMMISSION_PERCENT}%" in text
+    original = main.LEGAL_NAME
+    main.LEGAL_NAME = "Sinov <YaTT>"
+    try:
+        assert "Sinov &lt;YaTT&gt;" in client.get("/oferta").text
+    finally:
+        main.LEGAL_NAME = original
+
+
 # ========== Ishga tushirgich ==========
 
 
