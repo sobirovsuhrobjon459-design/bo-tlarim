@@ -3963,6 +3963,21 @@ def test_karta_muddati_kiritiladi_oquvchiga_korinmaydi():
     assert "08/30" not in json.dumps(info)
 
 
+def test_sozli_javob_chiziqcha_va_rim_raqami_bilan_ham_togri():
+    ok = main._text_answer_is_correct
+    # O'qituvchi "21 asr" — o'quvchi har xil yozadi
+    for student in ("21-asr", "21asr", "21 - asr", "XXI asr", "xxi-asr", "21 Asr."):
+        assert ok(student, "21 asr"), student
+    assert ok("21 asr", "XXI asr") and ok("XIX asr", "19-asr")
+    assert ok("Bolqon urushi", "Bolqon-urushi") and ok("Amir Temur", "amir  temur")
+    assert ok("Farg‘ona", "Farg'ona") and ok("Qo'qon xonligi", "qo‘qon xonligi")
+    assert ok("Bolqon urushi", "Rus-turk urushi|Bolqon urushi")
+    assert not ok("20-asr", "21 asr") and not ok("", "21 asr") and not ok("Bolqon", "Bolqon urushi")
+    # Matematik javoblar qat'iy qoladi: chiziqcha — minus
+    assert not ok("x1", "x-1") and not ok("3", "-3") and ok("x - 1", "x-1")
+    assert ok("2sqrt(3)", r"2\sqrt{3}") and not ok("23", "2-3")
+
+
 # ========== Ishga tushirgich ==========
 
 

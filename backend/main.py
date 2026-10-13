@@ -2371,6 +2371,51 @@ def _normalize_text_answer(value: str) -> str:
     return _IMPLICIT_MULTIPLY_PATTERN.sub("", text)
 
 
+# So'z bilan yoziladigan javoblar (Tarix atamalari, nomlar): "21-asr", "21 asr", "XXI asr" —
+# bittasi. Matematik javoblarga tegmaydi: ularda "x-1" va "x1" har xil.
+_MATH_WORDS_PATTERN = re.compile(
+    r"arcsin|arccos|arcctg|arctg|sqrt|ildiz|frac|left|right|cdot|times|degree|circ|sin|cos|ctg|tg|tan|cot|log|lg|ln|lim|exp|pi"
+)
+_WORD_PATTERN = re.compile(r"[^\W\d_]{3,}")
+_ROMAN_CENTURY_PATTERN = re.compile(r"\b([ivxlc]+)\s*-?\s*(?=asr)")
+_ROMAN_VALUES = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100}
+_APOSTROPHES = str.maketrans({"‘": "'", "’": "'", "ʻ": "'", "ʼ": "'", "`": "'", "´": "'"})
+
+
+def _roman_to_int(roman: str) -> int:
+    total = 0
+    for index, char in enumerate(roman):
+        value = _ROMAN_VALUES[char]
+        following = _ROMAN_VALUES[roman[index + 1]] if index + 1 < len(roman) else 0
+        total += -value if value < following else value
+    return total
+
+
+def _is_word_answer(correct: str) -> bool:
+    """Kalit so'z bilan yozilganmi (kamida 3 harfli so'z, matematik belgilar emas)."""
+    return bool(_WORD_PATTERN.search(_MATH_WORDS_PATTERN.sub("", correct.lower())))
+
+
+def _normalize_word_answer(value: str) -> str:
+    """So'zli javob: katta-kichik harf, bo'sh joy, chiziqcha, tinish belgilari hisobga olinmaydi."""
+    text = (value or "").lower().translate(_APOSTROPHES)
+    text = _ROMAN_CENTURY_PATTERN.sub(lambda match: f"{_roman_to_int(match.group(1))} ", text)  # XXI asr -> 21 asr
+    return re.sub(r"[^\w']|_", "", text)
+
+
+def _text_answer_is_correct(student_answer: str, correct: str) -> bool:
+    normalized_answer = _normalize_text_answer(student_answer)
+    if not normalized_answer:
+        return False
+    variants = _split_accepted_variants(correct)
+    if normalized_answer in {_normalize_text_answer(variant) for variant in variants}:
+        return True
+    word_answer = _normalize_word_answer(student_answer)
+    return bool(word_answer) and any(
+        _is_word_answer(variant) and _normalize_word_answer(variant) == word_answer for variant in variants
+    )
+
+
 def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str, str]) -> int:
     """
     Javoblarni tekshirib, har biri uchun StudentAnswer yozuvini yaratadi.
@@ -2397,11 +2442,7 @@ def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str,
             elif key_question.question_type == "text":
                 # Yozma javob: yozilish farqlari hisobga olinmaydi (qarang: _normalize_text_answer),
                 # o'qituvchi kiritgan variantlardan biriga mos kelsa yetarli.
-                normalized_answer = _normalize_text_answer(student_answer)
-                accepted_variants = {
-                    _normalize_text_answer(variant) for variant in _split_accepted_variants(key_question.correct)
-                }
-                is_correct = bool(normalized_answer) and normalized_answer in accepted_variants
+                is_correct = _text_answer_is_correct(student_answer, key_question.correct)
                 chosen_value = student_answer.strip()[:300] or None
             else:
                 raw_answer = student_answer.upper().replace(" ", "")
