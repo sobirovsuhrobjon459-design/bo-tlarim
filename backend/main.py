@@ -2822,6 +2822,7 @@ def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)
         "id": user.id,
         "full_name": user.full_name,
         "tg_id": user.tg_id,
+        "photo_url": user.photo_url,
         "is_admin": bool(ADMIN_ID) and user.tg_id == ADMIN_ID,
         "is_teacher": is_teacher,
         "default_channels": DEFAULT_REQUIRED_CHANNELS,

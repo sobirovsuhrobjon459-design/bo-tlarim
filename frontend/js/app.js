@@ -4502,7 +4502,7 @@ function drawStudentHome(me, attempts) {
     ${pageHeader("Testlar")}
     <section class="hero-card">
       <div class="hero-top">
-        <div class="hero-avatar">${escapeHtml(initialsOf(me.full_name))}</div>
+        ${heroAvatarHtml(me)}
         <div class="hero-who">
           <div class="hero-hello">Salom, ${escapeHtml((me.full_name || "").split(" ")[0] || "do'stim")}!</div>
           <div class="hero-chips">
@@ -5550,6 +5550,16 @@ function initialsOf(fullName) {
   return (letters.join("") || "?").toUpperCase();
 }
 
+// Telegram profil rasmi; rasm yo'q yoki ochilmasa — ism-familiya bosh harflari ("US")
+function heroAvatarHtml(me) {
+  const initials = escapeHtml(initialsOf(me.full_name));
+  const photo = me.photo_url || telegram?.initDataUnsafe?.user?.photo_url;
+  if (!photo) return `<div class="hero-avatar">${initials}</div>`;
+  return `<div class="hero-avatar has-photo"><img src="${escapeHtml(photo)}" alt=""
+            onerror="this.parentElement.classList.remove('has-photo');this.replaceWith(document.createTextNode(this.dataset.initials))"
+            data-initials="${initials}" /></div>`;
+}
+
 function drawTeacherDashboard(me, stats, tests) {
   rememberTeacherArea(true);
   showPage(`
@@ -5559,7 +5569,7 @@ function drawTeacherDashboard(me, stats, tests) {
     </div>
     <section class="hero-card">
       <div class="hero-top">
-        <div class="hero-avatar">${escapeHtml(initialsOf(me.full_name))}</div>
+        ${heroAvatarHtml(me)}
         <div class="hero-who">
           <div class="hero-hello">Salom, ${escapeHtml((me.full_name || "").split(" ")[0] || "ustoz")}!</div>
           <div class="hero-chips">
