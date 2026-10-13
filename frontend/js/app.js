@@ -752,10 +752,14 @@ function copyCodeChip(code) {
 }
 
 // O'qituvchi bo'limining pastki menyusi: Testlar | Yaratish | Natijalar
+// Pastki menyu ikonkalari — chiziqli SVG (rangi matn rangidan olinadi)
+const NAV_SVG = (path) =>
+  `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+
 const TEACHER_TABS = [
-  { id: "tests", label: "Testlar", icon: "☰" },
-  { id: "create", label: "Yaratish", icon: "＋" },
-  { id: "results", label: "Natijalar", icon: "▥" },
+  { id: "tests", label: "Testlar", icon: NAV_SVG('<rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h8M8 16h5"/>') },
+  { id: "create", label: "Yaratish", icon: NAV_SVG('<path d="M12 5v14M5 12h14"/>') },
+  { id: "results", label: "Natijalar", icon: NAV_SVG('<path d="M5 20V11M12 20V5M19 20v-6"/>') },
 ];
 
 function navMarkup() {

@@ -323,38 +323,55 @@ select:focus {
 /* ---------- Pastki menyu — suzuvchi, o'rtada ko'tarilgan tugma ---------- */
 
 .bottom-nav {
-  left: 12px;
-  right: 12px;
-  bottom: calc(10px + env(safe-area-inset-bottom));
-  max-width: 496px;
-  padding: 8px 10px;
+  left: 14px;
+  right: 14px;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  max-width: 492px;
+  height: 68px;
+  padding: 0 8px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-items: stretch;
   border: 1px solid var(--color-border);
-  border-radius: 30px;
+  border-radius: 24px;
   background: var(--color-surface);
-  box-shadow: 0 18px 40px -18px rgba(21, 27, 61, 0.45);
   overflow: visible;
-}
-
-[data-theme="dark"] .bottom-nav {
-  border-color: transparent;
+  /* Menyu ostidan sahifa ko'rinib qolmasin: pastga va yonlarga fon rangida "yopqich" */
+  box-shadow:
+    0 14px 30px -14px rgba(21, 27, 61, 0.35),
+    0 24px 0 14px var(--color-bg);
 }
 
 .nav-item {
-  gap: 4px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  padding: 0 0 10px;
+  font-size: 11.5px;
   font-weight: 800;
-  font-size: 12px;
-  border-radius: 20px;
+  color: var(--color-text-muted);
   background: none;
+  border-radius: 18px;
 }
 
 .nav-item .nav-icon {
-  width: 40px;
-  height: 40px;
+  width: 46px;
+  height: 30px;
   display: grid;
   place-items: center;
-  border-radius: 50%;
+  border-radius: 999px;
   font-size: 18px;
-  transition: background-color 0.15s ease, transform 0.15s ease;
+  line-height: 1;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.nav-item .nav-icon svg {
+  width: 22px;
+  height: 22px;
 }
 
 .nav-item.active {
@@ -363,29 +380,53 @@ select:focus {
 }
 
 .nav-item.active .nav-icon {
+  color: var(--color-text);
   background: var(--peach);
-  transform: scale(1.04);
 }
 
-/* O'rtadagi "Yaratish" — ko'tarilgan sariq doira */
+/* O'rtadagi "Yaratish": ikonka menyu ustiga chiqadi, yozuv boshqalari bilan bir qatorda */
+/* Ikonka joyi bo'sh qoladi — yozuv boshqalari bilan bir chiziqda */
+.nav-item[data-nav="create"]::after {
+  content: "";
+  order: -1;
+  height: 30px;
+}
+
 .nav-item[data-nav="create"] .nav-icon {
-  width: 62px;
-  height: 62px;
-  margin-top: -32px;
-  font-size: 30px;
-  font-weight: 700;
+  position: absolute;
+  top: -24px;
+  left: 50%;
+  width: 56px;
+  height: 56px;
+  margin-left: -28px;
+  border-radius: 50%;
   color: #151b3d;
-  background: radial-gradient(circle at 35% 30%, #ffe27a, var(--sun) 55%, var(--sun-deep));
-  border: 5px solid var(--color-bg);
-  box-shadow: 0 12px 22px -10px rgba(242, 183, 5, 0.75);
+  background: linear-gradient(160deg, #ffe17a, var(--sun) 50%, var(--sun-deep));
+  box-shadow:
+    0 10px 20px -8px rgba(242, 183, 5, 0.7),
+    0 0 0 4px var(--color-surface);
+}
+
+.nav-item[data-nav="create"] .nav-icon svg {
+  width: 26px;
+  height: 26px;
+  stroke-width: 2.6;
 }
 
 .nav-item[data-nav="create"].active .nav-icon {
-  transform: scale(1.06);
+  background: linear-gradient(160deg, #ffe17a, var(--sun) 50%, var(--sun-deep));
+}
+
+.nav-item:active .nav-icon {
+  transform: scale(0.94);
+}
+
+.nav-item[data-nav="create"]:active .nav-icon {
+  transform: scale(0.94);
 }
 
 #app {
-  padding-bottom: calc(118px + var(--keyboard-height, 0px));
+  padding-bottom: calc(112px + var(--keyboard-height, 0px));
 }
 
 /* ---------- Asosiy blok (hero) — o'qituvchi va o'quvchi bosh sahifasi ---------- */
