@@ -3934,6 +3934,28 @@ function applyHomeData(me) {
 
 let openedFromLink = false; // ?open=... havolasi faqat birinchi ochilishda ishlaydi
 
+// O'qituvchi ilovani ochganda: o'quvchilar to'lab, ruxsat kutayotgan bo'lsa — darhol oyna
+function showPendingPaymentsPrompt(count) {
+  const { sheet, close } = openSheet(`
+    <div style="text-align:center;padding:6px 0 4px">
+      <div style="font-size:44px">🧾</div>
+      <h3 style="margin:6px 0 4px">${count} ta o'quvchi to'lov qildi</h3>
+      <p class="subtitle" style="margin:0 0 14px">Ular sizning ruxsatingizni kutmoqda — ruxsat bermaguningizcha testga kira olmaydi.</p>
+    </div>
+    <button class="btn" id="pending-open-button">Cheklarni ko'rish</button>
+    <button class="btn btn-ghost" data-sheet-close>Keyinroq</button>
+  `);
+  telegram?.HapticFeedback?.notificationOccurred?.("warning");
+  sheet.querySelector("#pending-open-button").addEventListener(
+    "click",
+    guarded(async () => {
+      close();
+      isTeacher = true;
+      await renderTestPaymentsPage();
+    })
+  );
+}
+
 async function loadHome() {
   if (homeSnapshot) {
     renderHome(homeSnapshot.full_name || null, true);
@@ -3952,6 +3974,8 @@ async function loadHome() {
       openedFromLink = true;
       isTeacher = true;
       await renderTestPaymentsPage();
+    } else if (me.is_teacher && me.pending_payments > 0) {
+      showPendingPaymentsPrompt(me.pending_payments);
     }
   } catch (error) {
     isAdmin = false;

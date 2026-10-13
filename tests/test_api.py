@@ -3655,7 +3655,7 @@ def test_natija_xabarlari_navbat_bilan_yetkaziladi():
 
     sent: list[tuple[int, str, float]] = []
     originals = (main._telegram_send_message, main.NOTICE_BATCH_WINDOW, main.NOTICE_CHAT_INTERVAL, main.BOT_TOKEN)
-    main._telegram_send_message = lambda chat, text: sent.append((chat, text, _time.monotonic())) or True
+    main._telegram_send_message = lambda chat, text, markup=None: sent.append((chat, text, _time.monotonic())) or True
     main.NOTICE_BATCH_WINDOW, main.NOTICE_CHAT_INTERVAL = 0.2, 0.3
     try:
         for index in range(300):
@@ -3746,7 +3746,7 @@ def test_haddan_tashqari_yuklamada_faqat_avtosaqlash_kutadi():
 
 
 def test_chek_eslatmalari_oqituvchi_etiboridan_chetda_qolmaydi():
-    """Javobsiz chek: 15 daqiqadan keyin eslatma, 2 soatda takror, ko'pi bilan 3; o'quvchi ham eslata oladi."""
+    """Javobsiz chek: 5 daqiqadan keyin eslatma, 30 daqiqada takror, ko'pi bilan 6; o'quvchi ham eslata oladi."""
     from backend.database import Payment
 
     reset_database()
@@ -3780,19 +3780,23 @@ def test_chek_eslatmalari_oqituvchi_etiboridan_chetda_qolmaydi():
             # O'quvchi juda erta eslatsa — kutishni so'raymiz
             early = client.post(f"/api/tests/{code}/pay-card/remind", headers=as_user(901))
             assert early.status_code == 429 and "daqiqadan keyin" in early.text, early.text
-            assert remind() == []  # 15 daqiqa o'tmagan
+            assert remind() == []  # 5 daqiqa o'tmagan
 
             age(minutes=20)
             messages = remind()
             assert len(messages) == 1 and messages[0]["chat_id"] == 555, messages
             assert "1 ta o'quvchi" in messages[0]["text"] and "10 000" in messages[0]["text"], messages[0]["text"]
-            assert remind() == []  # 2 soat o'tmaguncha takrorlanmaydi
+            assert remind() == []  # 30 daqiqa o'tmaguncha takrorlanmaydi
 
-            for _ in range(2):
-                age(minutes=300, reminded_hours_ago=3)
+            # /api/me — o'qituvchi ilovani ochganda "N ta ruxsat kutmoqda" oynasi uchun
+            assert client.get("/api/me", headers=as_user(555)).json()["pending_payments"] == 1
+            assert client.get("/api/me", headers=as_user(901)).json()["pending_payments"] == 0
+
+            for _ in range(5):
+                age(minutes=300, reminded_hours_ago=1)
                 assert len(remind()) == 1
-            age(minutes=600, reminded_hours_ago=3)
-            assert remind() == []  # 3 tadan ortiq emas
+            age(minutes=600, reminded_hours_ago=1)
+            assert remind() == []  # 6 tadan ortiq emas
 
             # O'quvchi eslatadi: chek qayta yuboriladi (yaqinda eslatilgan bo'lsa — kutadi)
             age(minutes=60, reminded_hours_ago=1)
@@ -3812,6 +3816,38 @@ def test_chek_eslatmalari_oqituvchi_etiboridan_chetda_qolmaydi():
             assert remind() == []
         finally:
             main.httpx.post = original_post
+
+
+def test_bot_xabarlari_oxirida_kutilayotgan_chek_eslatiladi():
+    """O'qituvchiga natija xabari ketganda, ruxsat kutayotgan chek bo'lsa — xabar oxirida eslatma va tugma."""
+    import time as _time
+
+    reset_database()
+    register_teacher(tg_id=555)
+    with CardPaymentTelegramStub():
+        client.put("/api/teacher/card", json={"card_number": "8600123456789012", "card_holder": "Ali Valiyev"},
+                   headers=as_user(555))
+        code = create_test(tg_id=555, price=10000)["code"]
+        _pay_card(code, 901)
+
+    sent = []
+    originals = (main._telegram_send_message, main.NOTICE_BATCH_WINDOW, main.WEBAPP_URL)
+    main._telegram_send_message = lambda chat, text, markup=None: sent.append((chat, text, markup)) or True
+    main.NOTICE_BATCH_WINDOW, main.WEBAPP_URL = 0.1, "https://example.com"
+    try:
+        main._send_result_notice((555, "📝 Yangi natija: Vali"))
+        main._send_result_notice((777, "boshqa o'qituvchi"))
+        deadline = _time.monotonic() + 10
+        while _time.monotonic() < deadline and len(sent) < 2:
+            _time.sleep(0.05)
+    finally:
+        main._telegram_send_message, main.NOTICE_BATCH_WINDOW, main.WEBAPP_URL = originals
+
+    teacher = next(item for item in sent if item[0] == 555)
+    assert "1 ta o'quvchi to'lov qildi va ruxsat kutmoqda" in teacher[1], teacher[1]
+    assert teacher[2] and "open=payments" in json.dumps(teacher[2]), teacher[2]
+    other = next(item for item in sent if item[0] == 777)
+    assert "ruxsat kutmoqda" not in other[1] and other[2] is None
 
 
 # ========== Ishga tushirgich ==========

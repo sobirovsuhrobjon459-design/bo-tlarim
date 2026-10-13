@@ -2527,14 +2527,16 @@ _notice_worker_lock = threading.Lock()
 _notice_worker: threading.Thread | None = None
 
 
-def _telegram_send_message(chat_id: int, text: str) -> bool:
+def _telegram_send_message(chat_id: int, text: str, reply_markup: dict | None = None) -> bool:
     """sendMessage: 429 bo'lsa — Telegram aytgan vaqtcha kutib qayta urinadi. Yetkazilsa True."""
 
     logger = logging.getLogger("backend")
+    body = {"chat_id": chat_id, "text": text}
+    if reply_markup:
+        body["reply_markup"] = reply_markup
     for _ in range(5):
         try:
-            response = httpx.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                                  json={"chat_id": chat_id, "text": text}, timeout=15)
+            response = httpx.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=body, timeout=15)
         except Exception:
             logger.warning("Telegram'ga ulanib bo'lmadi, qayta urinamiz", exc_info=True)
             time.sleep(2)
@@ -2584,13 +2586,42 @@ def _notice_worker_loop() -> None:
         for chat_id, text in batch:
             by_chat.setdefault(chat_id, []).append(text)
         for chat_id, texts in by_chat.items():
-            for chunk in _notice_chunks(texts):
+            chunks = _notice_chunks(texts)
+            footer = _pending_payments_footer(chat_id)
+            for index, chunk in enumerate(chunks):
                 wait = NOTICE_CHAT_INTERVAL - (time.monotonic() - last_sent.get(chat_id, 0.0))
                 if wait > 0:
                     time.sleep(wait)
-                if not _telegram_send_message(chat_id, chunk):
+                markup = None
+                if footer and index == len(chunks) - 1:  # oxirgi xabarga — chek eslatmasi
+                    chunk, markup = chunk + footer, _payments_button()
+                if not _telegram_send_message(chat_id, chunk, markup):
                     logging.getLogger("backend").warning("Natija xabari o'qituvchiga yetmadi (chat %s)", chat_id)
                 last_sent[chat_id] = time.monotonic()
+
+
+def _pending_count_for_chat(db: Session, chat_id: int) -> int:
+    """Shu Telegram chatidagi o'qituvchining testlariga kelgan, ruxsat kutayotgan cheklar soni."""
+    return db.scalar(
+        select(func.count()).select_from(Payment)
+        .join(Test, Test.id == Payment.test_id)
+        .join(Teacher, Teacher.id == Test.teacher_id)
+        .join(User, User.id == Teacher.user_id)
+        .where(User.tg_id == chat_id, Payment.provider == "card", Payment.status == "pending")
+    ) or 0
+
+
+def _pending_payments_footer(chat_id: int) -> str:
+    """Bot xabari oxiriga: "⏳ N ta o'quvchi ruxsat kutmoqda" — chek eslatmasi doim chat pastida tursin."""
+    try:
+        with SessionLocal() as session:
+            count = _pending_count_for_chat(session, chat_id)
+    except Exception:
+        return ""
+    if not count:
+        return ""
+    return (f"\n\n━━━━━━━━━━\n⏳ {count} ta o'quvchi to'lov qildi va ruxsat kutmoqda! "
+            "Chatda qadalgan chekni oching yoki pastdagi tugmani bosing.")
 
 
 def _send_result_notice(notice: tuple[int, str] | None) -> None:
@@ -2647,6 +2678,8 @@ def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)
     is_teacher = db.scalar(select(Teacher.id).where(Teacher.user_id == user.id)) is not None
 
     return {
+        # O'qituvchiga ilova ochilishi bilan "N ta o'quvchi ruxsat kutmoqda" oynasi
+        "pending_payments": _pending_count_for_chat(db, user.tg_id) if is_teacher else 0,
         "id": user.id,
         "full_name": user.full_name,
         "tg_id": user.tg_id,
@@ -4270,10 +4303,11 @@ def _payments_button() -> dict | None:
     return {"inline_keyboard": [[{"text": "🧾 Cheklarni ko'rish", "web_app": {"url": f"{WEBAPP_URL}{separator}open=payments"}}]]}
 
 
-# Eslatma: chek 15 daqiqa javobsiz qolsa, keyin har 2 soatda, ko'pi bilan 3 marta
-REMINDER_FIRST_AFTER = timedelta(minutes=15)
-REMINDER_REPEAT_AFTER = timedelta(hours=2)
-REMINDER_MAX = 3
+# Eslatma: chek 5 daqiqa javobsiz qolsa, keyin har 30 daqiqada, ko'pi bilan 6 marta —
+# o'quvchi pul to'lab, testga kira olmay qolmasin
+REMINDER_FIRST_AFTER = timedelta(minutes=5)
+REMINDER_REPEAT_AFTER = timedelta(minutes=30)
+REMINDER_MAX = 6
 
 
 def _remind_pending_payments(db: Session) -> int:
