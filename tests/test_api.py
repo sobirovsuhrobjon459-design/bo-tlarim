@@ -3632,7 +3632,8 @@ def test_har_fan_milliy_sertifikat_pasporti_boyicha_ishlaydi():
     reset_database()
     register_teacher()
     expected_keyboard = {"Matematika": "math", "Fizika": "math", "Kimyo": "math", "Biologiya": "text",
-                         "Tarix": "text", "Geografiya": "text", "Rus tili": "text"}
+                         "Tarix": "text", "Geografiya": "text", "Rus tili": "text",
+                         "Ona tili va adabiyot": "text"}
     assert set(SUBJECTS) == set(expected_keyboard)
     for index, (subject, config) in enumerate(SUBJECTS.items()):
         created = create_test(subject=subject, key_questions=_subject_key(subject), duration=config["duration"])

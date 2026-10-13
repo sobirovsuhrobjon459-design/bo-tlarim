@@ -6069,7 +6069,7 @@ const SUBJECTS = [
 
 // Test turiga qarab fanlar ro'yxati
 const SUBJECTS_BY_TYPE = {
-  rash: ["Tarix", "Matematika", "Kimyo", "Biologiya", "Huquq", "Fizika"],
+  rash: ["Tarix", "Matematika", "Kimyo", "Biologiya", "Huquq", "Fizika", "Ona tili va adabiyot"],
   boshlangich: SUBJECTS, // barcha fanlar
 };
 

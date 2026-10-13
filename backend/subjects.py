@@ -3,7 +3,7 @@ Fanlar "pasporti" — Milliy sertifikat (UZBMB) test tuzilishi, BITTA joyda.
 
 Manba: uzbmb.uz/page/fanlar — har bir fanning rasmiy test spetsifikatsiyasi
 (Matematika, Fizika, Tarix — 2024; Kimyo, Biologiya, Geografiya — 2025;
-Rus tili — 2024). Spetsifikatsiya o'zgarsa, faqat shu fayl yangilanadi —
+Rus tili, Ona tili va adabiyot — 2024). Spetsifikatsiya o'zgarsa, faqat shu fayl yangilanadi —
 server (bo'limlar, natijalar, PDF, sertifikat) ham, ilova (test yaratish
 shabloni, klaviatura) ham shu yerdan o'qiydi.
 
@@ -22,7 +22,7 @@ Maydonlar:
 
 Yozma ish (Kimyo, Biologiya 41–43) — har bandning YAKUNIY javobi o'qituvchi
 kalitiga solishtiriladi; Rasch'da har band alohida baholanadi (qisman ball).
-Rus tili 45 (insho) — matn, kalit bilan solishtirib bo'lmaydi, testga kirmaydi.
+Rus tili 45 (insho), Ona tili 45 (esse) — matn, kalit bilan solishtirib bo'lmaydi, testga kirmaydi.
 """
 
 MATCHING = {33: 6, 34: 6, 35: 6}  # moslashtirish topshiriqlari — A–F
@@ -93,6 +93,18 @@ SUBJECTS: dict[str, dict] = {
             ("Aralash", "33-35"),
         ],
         "note": "Geografiya: 35 ta test (33–35 — moslashtirish), 10 ta yozma (a, b), 150 daqiqa",
+    },
+    "Ona tili va adabiyot": {
+        "tests": 35, "options": MATCHING, "written": 9, "parts": 2, "duration": 180, "keyboard": "text",
+        "sections": [
+            ("Til (imlo, lug'at, grammatika)", "1-12"),
+            ("Adabiyot", "13-17"),
+            ("O'qish savodxonligi", "18-32"),
+            ("Moslashtirish", "33-35"),
+            ("Lingvistik va badiiy tahlil", "36-44"),
+        ],
+        "note": "Ona tili va adabiyot: 35 ta test (33–35 — moslashtirish), 9 ta yozma (a, b), 180 daqiqa. "
+                "45 (esse) imtihonchi baholaydi — ilovada tekshirilmaydi",
     },
     "Rus tili": {
         "tests": 35, "options": MATCHING, "written": 9, "parts": 2, "duration": 180, "keyboard": "text",
