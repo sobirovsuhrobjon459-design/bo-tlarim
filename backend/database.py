@@ -60,7 +60,7 @@ DEV_MODE = os.getenv("DEV_MODE", "0") == "1" and DATABASE_URL.startswith("sqlite
 ADMIN_ID = int(os.getenv("ADMIN_ID") or 0)
 
 # Pullik testda o'quvchi to'laganda, platforma ushlab qoladigan foiz (qolgani o'qituvchiga boradi).
-PLATFORM_COMMISSION_PERCENT = int(os.getenv("PLATFORM_COMMISSION_PERCENT") or 30)
+PLATFORM_COMMISSION_PERCENT = int(os.getenv("PLATFORM_COMMISSION_PERCENT") or 20)
 
 # Yangi o'qituvchi ro'yxatdan o'tganda beriladigan sovg'a kreditlar.
 # Har bir bepul test natijasi uchun 1 kredit sarflanadi.

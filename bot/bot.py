@@ -77,6 +77,10 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     input_field_placeholder="Tugmani tanlang yoki PLAY ni bosing",
 )
 
+def _money(amount: int) -> str:
+    return f"{amount:,}".replace(",", " ")
+
+
 # Token yo'q bo'lsa Bot() obyekti yaratilmaydi — aiogram tokenni darhol tekshiradi
 bot = Bot(token=BOT_TOKEN) if TOKEN_IS_SET else None
 dispatcher = Dispatcher()
@@ -376,6 +380,46 @@ async def handle_guide_button(message: Message) -> None:
     await handle_help(message)
 
 
+@dispatcher.message(Command("pul"))
+async def handle_money(message: Message) -> None:
+    """/pul — o'qituvchi balansi; Click/Payme orqali tushgan pulni shu yerdan yechib oladi."""
+
+    from backend.database import SessionLocal
+    from backend.main import bot_withdrawal_overview
+
+    def overview() -> tuple[str, int]:
+        with SessionLocal() as session:
+            return bot_withdrawal_overview(session, message.from_user.id)
+
+    text, amount = await asyncio.to_thread(overview)
+    markup = None
+    if amount > 0:
+        markup = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=f"💸 {_money(amount)} so'mni yechish", callback_data="wd_request")
+        ]])
+    await message.answer(text, reply_markup=markup)
+
+
+@dispatcher.callback_query(F.data == "wd_request")
+async def handle_money_request(callback: CallbackQuery) -> None:
+    from backend.database import SessionLocal
+    from backend.main import bot_request_withdrawal
+
+    def request() -> tuple[bool, str]:
+        with SessionLocal() as session:
+            return bot_request_withdrawal(session, callback.from_user.id)
+
+    ok, text = await asyncio.to_thread(request)
+    if not ok:
+        await callback.answer(text, show_alert=True)
+        return
+    try:
+        await callback.message.edit_text(text)
+    except Exception:
+        await callback.message.answer(text)
+    await callback.answer()
+
+
 @dispatcher.message(F.text == RESTART_BUTTON)
 async def handle_restart_button(message: Message) -> None:
     await handle_restart(message)
@@ -442,6 +486,13 @@ async def handle_withdrawal_decision(callback: CallbackQuery) -> None:
 
             request.status = "approved"
             session.commit()
+            try:
+                await callback.bot.send_message(
+                    teacher.user.tg_id,
+                    f"✅ {_money(request.amount)} so'm kartangizga o'tkazildi.\n💳 {request.card_number}",
+                )
+            except Exception:
+                logger.warning("O'qituvchiga pul yechilgani haqida xabar yuborilmadi", exc_info=True)
             await callback.message.edit_text(
                 f"✅ To'landi: {teacher_name} — {request.amount} so'm\n"
                 f"Karta: {request.card_number}\n"
@@ -450,6 +501,13 @@ async def handle_withdrawal_decision(callback: CallbackQuery) -> None:
         else:
             request.status = "rejected"
             session.commit()
+            try:
+                await callback.bot.send_message(
+                    teacher.user.tg_id,
+                    f"❌ {_money(request.amount)} so'm yechish so'rovi rad etildi. Savol bo'lsa — adminga yozing.\n{SUPPORT_TEXT}",
+                )
+            except Exception:
+                logger.warning("O'qituvchiga rad etilgani haqida xabar yuborilmadi", exc_info=True)
             await callback.message.edit_text(f"❌ Rad etildi: {teacher_name} — {request.amount} so'm")
     finally:
         session.close()
@@ -560,6 +618,7 @@ async def _setup_menu_button() -> None:
             BotCommand(command="start", description="Botni ishga tushirish"),
             BotCommand(command="yordam", description="Qo'llanma va ilova haqida"),
             BotCommand(command="restart", description="Botni qayta ishga tushirish"),
+            BotCommand(command="pul", description="O'qituvchi: balans va pulni yechish"),
         ])
     except Exception:
         logger.warning("Buyruqlar ro'yxatini sozlab bo'lmadi", exc_info=True)

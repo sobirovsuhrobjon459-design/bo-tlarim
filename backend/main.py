@@ -2902,6 +2902,57 @@ def create_withdrawal_request(
     return {"id": request.id, "status": request.status}
 
 
+def _teacher_by_tg_id(db: Session, tg_id: int, lock: bool = False) -> Teacher | None:
+    query = select(Teacher).join(User, User.id == Teacher.user_id).where(User.tg_id == tg_id)
+    return db.scalar(query.with_for_update() if lock else query)
+
+
+def _pending_withdrawal(db: Session, teacher: Teacher) -> WithdrawalRequest | None:
+    return db.scalar(
+        select(WithdrawalRequest).where(WithdrawalRequest.teacher_id == teacher.id, WithdrawalRequest.status == "pending")
+    )
+
+
+def bot_withdrawal_overview(db: Session, tg_id: int) -> tuple[str, int]:
+    """
+    Botdagi /pul: o'qituvchi balansi va kartasi. (matn, yechish mumkin bo'lgan summa) —
+    summa 0 bo'lsa, "Yechish" tugmasi chiqmaydi.
+    """
+
+    teacher = _teacher_by_tg_id(db, tg_id)
+    if not teacher:
+        return "Bu bo'lim faqat o'qituvchilar uchun.", 0
+    text = f"💰 Balansingiz: {_format_sum(teacher.balance)} so'm"
+    pending = _pending_withdrawal(db, teacher)
+    if pending:
+        return text + f"\n\n⏳ {_format_sum(pending.amount)} so'm yechish so'rovingiz admin tomonidan ko'rib chiqilmoqda.", 0
+    if teacher.balance <= 0:
+        return text + "\n\nO'quvchilar pullik testingizga Click/Payme orqali to'lasa, pul shu yerga tushadi.", 0
+    if not teacher.card_number:
+        return text + "\n\nPulni yechish uchun ilovada karta raqamingizni kiriting: PLAY → Pullik test → Karta.", 0
+    return text + f"\n💳 Karta: {_format_card(teacher.card_number)}\n\nPul shu kartaga o'tkaziladi.", teacher.balance
+
+
+def bot_request_withdrawal(db: Session, tg_id: int) -> tuple[bool, str]:
+    """Botdagi "💸 Yechish" tugmasi: butun balansni o'qituvchi kartasiga yechish so'rovi."""
+
+    teacher = _teacher_by_tg_id(db, tg_id, lock=True)  # ikki marta bosilsa — ikki so'rov bo'lmasin
+    if not teacher:
+        return False, "Bu bo'lim faqat o'qituvchilar uchun"
+    if _pending_withdrawal(db, teacher):
+        return False, "So'rovingiz allaqachon ko'rib chiqilmoqda"
+    if teacher.balance <= 0:
+        return False, "Balansda pul yo'q"
+    if not teacher.card_number:
+        return False, "Avval ilovada karta raqamingizni kiriting"
+    request = WithdrawalRequest(teacher_id=teacher.id, amount=teacher.balance, card_number=_format_card(teacher.card_number))
+    db.add(request)
+    db.commit()
+    _notify_admin_about_withdrawal(request, teacher)
+    return True, (f"✅ {_format_sum(request.amount)} so'm yechish so'rovi yuborildi.\n"
+                  f"💳 {request.card_number}\n\nAdmin pulni o'tkazgach, botda xabar keladi.")
+
+
 @app.get("/api/teacher/withdrawal-requests")
 def list_own_withdrawal_requests(teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
     """O'qituvchining o'zi yuborgan pul yechish so'rovlari tarixi."""
@@ -4133,7 +4184,8 @@ def get_test(code: str, user: User = Depends(get_current_user), db: Session = De
         "price": test.price,
         "paid": _is_paid(db, user, test),
         # Karta orqali to'lov: o'qituvchi kartasi va o'quvchining tekshirilayotgan cheki
-        "teacher_card": _teacher_card_view(test.teacher) if test.price > 0 else None,
+        # Click/Payme ulangan bo'lsa pul platformaga tushadi — karta ko'rsatilmaydi
+        "teacher_card": _teacher_card_view(test.teacher) if test.price > 0 and not _enabled_providers() else None,
         "card_payment_pending": pending is not None,
         "card_payment_since": pending.created_at if pending else None,  # "eslatish" tugmasi uchun
         "enrollment_type": test.enrollment_type,
@@ -4389,6 +4441,8 @@ def pay_test_by_card(code: str, body: TestCardPaymentIn, user: User = Depends(ge
         return {"paid": True}
     if test.enrollment_type == "closed" or test.status == "closed" or (test.end_time and utcnow() > test.end_time):
         raise HTTPException(status_code=403, detail="Bu testga to'lov qabul qilinmaydi (yopiq yoki tugagan)")
+    if _enabled_providers():
+        raise HTTPException(status_code=409, detail="Bu testga Click yoki Payme orqali to'lang")
     teacher = test.teacher
     if not teacher or not teacher.card_number or not BOT_TOKEN:
         raise HTTPException(status_code=409, detail="O'qituvchi karta raqamini kiritmagan — u bilan bog'laning")
@@ -7253,7 +7307,16 @@ def _payme_apply_paid(order) -> None:
         add_credits(order.teacher, order.credits)
         return
 
-    add_balance(order.test.teacher, _teacher_share(order.amount))
+    share = _teacher_share(order.amount)
+    add_balance(order.test.teacher, share)
+    # O'qituvchiga botda: pul balansga tushdi — /pul bilan yechib oladi
+    teacher_user = order.test.teacher.user if order.test.teacher else None
+    if teacher_user:
+        _send_result_notice((teacher_user.tg_id, (
+            f"💰 To'lov tushdi: «{order.test.title}» — {_format_sum(order.amount)} so'm\n"
+            f"Balansingizga: +{_format_sum(share)} so'm (platforma ulushi {PLATFORM_COMMISSION_PERCENT}%)\n"
+            "Pulni yechib olish: /pul"
+        )))
 
 
 def _payme_revert_paid(order) -> None:

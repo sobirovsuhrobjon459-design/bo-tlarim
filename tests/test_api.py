@@ -3878,6 +3878,47 @@ def test_tarix_atamasi_tutuq_belgisi_har_xil_bolsa_ham_togri():
     assert norm("Farg'ona") != norm("Fargona")
 
 
+def test_click_payme_pul_balansga_tushadi_va_botdan_yechiladi():
+    reset_database()
+    register_teacher()
+    client.put("/api/teacher/card", json={"card_number": "8600123412341234", "card_holder": "Ali"}, headers=as_user(555))
+    created = create_test(price=10_000)
+
+    # Click/Payme ulangan — o'quvchiga o'qituvchi kartasi ko'rsatilmaydi, chek qabul qilinmaydi
+    info = client.get(f"/api/tests/{created['code']}", headers=as_user(901)).json()
+    assert info["teacher_card"] is None and info["payment_providers"], info
+    assert _pay_card(created["code"], 901).status_code == 409
+
+    notices, admin_calls = [], []
+    original_notice, original_admin = main._send_result_notice, main._notify_admin_about_withdrawal
+    main._send_result_notice = notices.append
+    main._notify_admin_about_withdrawal = lambda request, teacher: admin_calls.append(request.amount)
+    try:
+        payment = client.post(f"/api/tests/{created['code']}/pay", json={}, headers=as_user(901)).json()
+        payme("CreateTransaction", {"id": "tx-w", "time": 1, "account": {"payment_id": str(payment["payment_id"])},
+                                    "amount": payment["amount"] * 100})
+        payme("PerformTransaction", {"id": "tx-w"})
+        assert balance_of() == 7000
+        assert notices and notices[0][0] == 555 and "+7 000 so'm" in notices[0][1] and "/pul" in notices[0][1], notices
+
+        with SessionLocal() as session:
+            text, amount = main.bot_withdrawal_overview(session, 555)
+            assert amount == 7000 and "7 000" in text and "8600 1234 1234 1234" in text, text
+            assert main.bot_withdrawal_overview(session, 901)[1] == 0  # o'qituvchi emas
+        with SessionLocal() as session:
+            ok, text = main.bot_request_withdrawal(session, 555)
+            assert ok and admin_calls == [7000], (text, admin_calls)
+        with SessionLocal() as session:
+            # Ikkinchi marta bosilsa — yangi so'rov yaratilmaydi
+            assert main.bot_request_withdrawal(session, 555)[0] is False
+            assert main.bot_withdrawal_overview(session, 555)[1] == 0
+            from sqlalchemy import func, select
+            from backend.database import WithdrawalRequest
+            assert session.scalar(select(func.count()).select_from(WithdrawalRequest)) == 1
+    finally:
+        main._send_result_notice, main._notify_admin_about_withdrawal = original_notice, original_admin
+
+
 # ========== Ishga tushirgich ==========
 
 

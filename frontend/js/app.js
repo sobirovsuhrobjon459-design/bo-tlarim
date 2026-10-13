@@ -6114,12 +6114,19 @@ const TEST_TYPES = {
   emas — alohida so'raladi va formaning tepasida yozilib turadi.
   draft — "O'zgartirish" bosilganda formada kiritilganlar saqlanib qoladi.
 */
+// Click/Payme ulangan bo'lsa pul platformaga (balansga) tushadi, aks holda — o'qituvchi kartasiga
+function paidTestHint() {
+  return homeSnapshot?.payment_providers?.length
+    ? "O'quvchilar Click/Payme orqali to'laydi — pul balansingizga tushadi, botda /pul bilan yechasiz"
+    : "O'quvchilar to'lab ishlaydi — pul to'g'ridan-to'g'ri kartangizga tushadi";
+}
+
 function renderNewTestKindChoice(draft = {}, testType = "rash") {
   showPage(`
     ${pageHeader("Yangi test")}
     <h3 style="margin:4px 0 4px">O'quvchilardan test uchun pul olasizmi?</h3>
     <p class="subtitle" style="margin:0 0 14px">Keyin ham o'zgartirish mumkin.</p>
-    ${roleCard("kind-paid", "💰", "PULLIK TEST", "O'quvchilar to'lab ishlaydi — pul to'g'ridan-to'g'ri kartangizga tushadi")}
+    ${roleCard("kind-paid", "💰", "PULLIK TEST", paidTestHint())}
     ${roleCard("kind-free", "🆓", "BEPUL TEST", "O'quvchilar bepul ishlaydi — har bir natija uchun sizdan 1 kredit")}
   `);
   wireTeacherChrome("create");
@@ -6155,7 +6162,7 @@ function renderNewTestForm(testType, draft = {}) {
         <b>${draft.paid ? "💰 Pullik test" : "🆓 Bepul test"}</b>
         <p class="subtitle" style="margin:2px 0 0">${
           draft.paid
-            ? "O'quvchilar to'lab ishlaydi — pul kartangizga tushadi"
+            ? paidTestHint()
             : "O'quvchilar bepul ishlaydi — har natija uchun 1 kredit"
         }</p>
       </div>
