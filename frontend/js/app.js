@@ -3978,6 +3978,43 @@ function applyHomeData(me) {
 
 let openedFromLink = false; // ?open=... havolasi faqat birinchi ochilishda ishlaydi
 
+/*
+  O'qituvchi bo'limi eslab qolinadi: ilova keyingi safar ochilganda o'qituvchi
+  "Test markazi → O'qituvchi" ni qayta bosmaydi — to'g'ridan-to'g'ri "Testlar"ga
+  tushadi. Faqat "Chiqish" tugmasi bilan (tasdiqlab) chiqqandagina unutiladi.
+*/
+const AREA_STORAGE_KEY = "remembered-area";
+
+function rememberTeacherArea(remember) {
+  try {
+    if (remember) localStorage.setItem(AREA_STORAGE_KEY, "teacher");
+    else localStorage.removeItem(AREA_STORAGE_KEY);
+  } catch (_) {
+    /* xotira yopiq bo'lsa — har safar tanlanadi, xolos */
+  }
+}
+
+function remembersTeacherArea() {
+  try {
+    return localStorage.getItem(AREA_STORAGE_KEY) === "teacher";
+  } catch (_) {
+    return false;
+  }
+}
+
+// Bot havolasi bilan ochilgan bo'lsa (test, taklif, cheklar) — o'sha sahifa ustun
+function openedWithLink() {
+  const params = new URLSearchParams(window.location.search);
+  return ["open", "test_code", "invite", "school_code"].some((key) => params.get(key));
+}
+
+async function exitTeacherArea() {
+  if (!(await confirmLeave())) return;
+  if (!(await askConfirm("O'qituvchi bo'limidan chiqasizmi?"))) return;
+  rememberTeacherArea(false);
+  await loadHome();
+}
+
 // O'qituvchi ilovani ochganda: o'quvchilar to'lab, ruxsat kutayotgan bo'lsa — darhol oyna
 function showPendingPaymentsPrompt(count) {
   const { sheet, close } = openSheet(`
@@ -4012,15 +4049,24 @@ async function loadHome() {
     const me = await api("/api/me");
     homeSnapshot = me;
     applyHomeData(me);
-    renderHome(me.full_name || null, true);
     // Bot eslatmasidagi "🧾 Cheklarni ko'rish" tugmasi — to'g'ridan-to'g'ri cheklar sahifasi (bir marta)
     if (new URLSearchParams(window.location.search).get("open") === "payments" && me.is_teacher && !openedFromLink) {
       openedFromLink = true;
       isTeacher = true;
+      renderHome(me.full_name || null, true);
       await renderTestPaymentsPage();
-    } else if (me.is_teacher && me.pending_payments > 0) {
-      showPendingPaymentsPrompt(me.pending_payments);
+      return;
     }
+    if (me.is_teacher && remembersTeacherArea() && !openedWithLink()) {
+      try {
+        await renderTeacherDashboard();
+      } catch (_) {
+        renderHome(me.full_name || null, true);
+      }
+    } else {
+      renderHome(me.full_name || null, true);
+    }
+    if (me.is_teacher && me.pending_payments > 0) showPendingPaymentsPrompt(me.pending_payments);
   } catch (error) {
     isAdmin = false;
     isTeacher = false;
@@ -5438,8 +5484,12 @@ function initialsOf(fullName) {
 }
 
 function drawTeacherDashboard(me, stats, tests) {
+  rememberTeacherArea(true);
   showPage(`
-    ${pageHeader("Testlar")}
+    <div class="page-header">
+      <h2 style="margin:0;flex:1">Testlar</h2>
+      <button class="btn btn-ghost" type="button" id="exit-teacher-button" style="width:auto;padding:8px 14px;margin:0">Chiqish</button>
+    </div>
     <section class="hero-card">
       <div class="hero-top">
         <div class="hero-avatar">${escapeHtml(initialsOf(me.full_name))}</div>
@@ -5498,6 +5548,7 @@ function drawTeacherDashboard(me, stats, tests) {
   `, { exitRoot: true });
 
   wireTeacherChrome("tests");
+  document.getElementById("exit-teacher-button").addEventListener("click", guarded(exitTeacherArea));
   document.getElementById("edit-name-button").addEventListener(
     "click",
     guarded(() => renderEditName(me, renderTeacherDashboard))
