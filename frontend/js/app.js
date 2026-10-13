@@ -6018,6 +6018,12 @@ const SUBJECTS = [
   "Boshqa fan",
 ];
 
+// Test turiga qarab fanlar ro'yxati
+const SUBJECTS_BY_TYPE = {
+  rash: ["Tarix", "Matematika", "Kimyo", "Biologiya", "Huquq", "Fizika"],
+  boshlangich: ["Ona tili va adabiyot", "Rus tili", "Geografiya", "Informatika", "Boshqa fan"],
+};
+
 // Milliy sertifikatda har bir fanning o'z tuzilishi bor. U BITTA joyda —
 // serverdagi backend/subjects.py — va sahifaga window.SUBJECTS_CONFIG bo'lib keladi
 // (savollar soni, A–F savollar, yozma savollar, vaqt, klaviatura, bo'limlar).
@@ -6132,12 +6138,14 @@ function renderNewTestForm(testType, draft = {}) {
   const selectOption = (value, label, selected) =>
     `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`;
 
-  const subjectOptions = SUBJECTS.map((subject) => selectOption(subject, subject, draft.subject)).join("");
+  const typeSubjects = SUBJECTS_BY_TYPE[type] || SUBJECTS;
+  const subject = typeSubjects.includes(draft.subject) ? draft.subject : typeSubjects[0];
+  const subjectOptions = typeSubjects.map((item) => selectOption(item, item, subject)).join("");
 
   // Fan bo'yicha tuzilish faqat Rash testda (Milliy sertifikat mockida) qo'llanadi
-  const structure = type === "rash" ? subjectStructure(draft.subject || SUBJECTS[0], preset) : { ...preset, options: {}, note: "" };
+  const structure = type === "rash" ? subjectStructure(subject, preset) : { ...preset, options: {}, note: "" };
   // Kalitdagi yozma javoblar ham fanga mos klaviatura bilan kiritiladi
-  answerKeyboard = SUBJECT_PRESETS[draft.subject || SUBJECTS[0]]?.keyboard || "math";
+  answerKeyboard = SUBJECT_PRESETS[subject]?.keyboard || "math";
 
   const header = `
     ${pageHeader("Yangi test")}
@@ -6279,11 +6287,7 @@ function renderNewTestForm(testType, draft = {}) {
   formPage.addEventListener("input", markUnsaved);
   formPage.addEventListener("change", markUnsaved);
 
-  // "Boshqa fan" tanlanmagan bo'lsa ham, avvalgi qiymat ro'yxatda bo'lmasligi mumkin
   const subjectSelect = document.getElementById("field-subject");
-  if (draft.subject && !SUBJECTS.includes(draft.subject)) {
-    subjectSelect.value = SUBJECTS[0];
-  }
 
   // Fan almashtirilganda, o'sha fandagi Milliy sertifikat tuzilishi qo'llanadi
   subjectSelect.addEventListener("change", () => {
