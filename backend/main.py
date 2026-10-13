@@ -6531,9 +6531,9 @@ def class_test_pdf(context: dict) -> bytes:
 
 
 def class_test_image(context: dict) -> bytes:
-    """Test natijalari — rasm (PNG), guruhga yuborish uchun."""
+    """Test natijalari — rasm (PNG), guruhga yuborish uchun: kartali reyting jadvali va foiz chiziqlari."""
 
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
     def font(name: str, size: int):
         try:
@@ -6541,45 +6541,126 @@ def class_test_image(context: dict) -> bytes:
         except OSError:
             return ImageFont.load_default()
 
-    title_font, text_font, bold_font = font("DejaVuSerif-Bold.ttf", 44), font("DejaVuSerif.ttf", 28), font("DejaVuSerif-Bold.ttf", 28)
-    width, row_height, top = 1080, 58, 300
+    def fit(text: str, typeface, max_width: float) -> str:
+        if draw.textlength(text, font=typeface) <= max_width:
+            return text
+        while text and draw.textlength(text + "…", font=typeface) > max_width:
+            text = text[:-1]
+        return text.rstrip() + "…"
+
+    def gradient(size: tuple[int, int], start: str, end: str) -> Image.Image:
+        """Chapdan o'ngga rang o'tishi."""
+        mask = Image.linear_gradient("L").rotate(90).resize(size)
+        return Image.composite(Image.new("RGBA", size, end), Image.new("RGBA", size, start), mask)
+
+    title_font = font("DejaVuSans-Bold.ttf", 64)
+    meta_font, meta_bold = font("DejaVuSans.ttf", 28), font("DejaVuSans-Bold.ttf", 28)
+    head_font, name_font = font("DejaVuSans.ttf", 30), font("DejaVuSans-Bold.ttf", 31)
+    rank_font, small_font = font("DejaVuSans-Bold.ttf", 26), font("DejaVuSans.ttf", 24)
+
     rows = context["scores"]
-    height = top + row_height * (len(rows) + 1) + 80
+    width, row_height, gap = 1600, 80, 10
+    head_top = 290
+    table_top = head_top + 100
+    height = table_top + len(rows) * (row_height + gap) + 70
+    name_x, percent_x = 250, 1085
+    panel_left, panel_right = 1215, width - 50
+    bar_left, bar_right = panel_left + 30, panel_right - 25
 
-    image = Image.new("RGB", (width, height), "#ffffff")
+    image = Image.new("RGBA", (width, height), "#f6f9fb")
     draw = ImageDraw.Draw(image)
-    draw.rectangle([0, 0, width, 12], fill="#1f4e79")
-    draw.text((50, 36), f"{context['title']}"[:40], font=title_font, fill="#1f4e79")
-    draw.text((50, 104), f"{context['school_name']}  ·  {context['class_name']}"[:60], font=text_font, fill="#374151")
-    draw.text((50, 146), f"{context['subject'] or 'Fan'}  ·  {context['date']}  ·  maks. {_fmt_number(context['max_score'])} ball",
-              font=text_font, fill="#374151")
-    draw.text((50, 188), f"O'qituvchi: {context['teacher_name']}"[:60], font=text_font, fill="#6b7280")
-    draw.text((50, 236), f"Qatnashdi: {context['participants']} / {context['total']}    O'rtacha: {_fmt_number(context['average_percent'] or 0)}%",
-              font=bold_font, fill="#111827")
 
-    columns = [(60, "№"), (130, "F.I.Sh."), (700, "Ball"), (820, "%"), (950, "Baho")]
-    y = top
-    draw.rectangle([40, y, width - 40, y + row_height], fill="#1f4e79")
-    for x, label in columns:
-        draw.text((x, y + 13), label, font=bold_font, fill="#ffffff")
-    for index, row in enumerate(rows, start=1):
-        y += row_height
-        if index % 2 == 0:
-            draw.rectangle([40, y, width - 40, y + row_height], fill="#f0f3f7")
+    # Sarlavha va test haqida ma'lumot
+    draw.text((width // 2, 92), fit(context["title"], title_font, width - 120), font=title_font, fill="#12324f", anchor="mm")
+    meta = "  ·  ".join(part for part in (context["school_name"], context["class_name"], context["subject"] or "Fan", context["date"]) if part)
+    draw.text((width // 2, 170), fit(meta, meta_font, width - 120), font=meta_font, fill="#5b6b7a", anchor="mm")
+    summary = (f"Qatnashdi: {context['participants']} / {context['total']}   ·   O'rtacha: "
+               f"{_fmt_number(context['average_percent'] or 0)}%   ·   Maks. {_fmt_number(context['max_score'])} ball")
+    draw.text((width // 2, 214), summary, font=meta_bold, fill="#1d3b53", anchor="mm")
+    draw.text((width // 2, 252), fit(f"O'qituvchi: {context['teacher_name']}", small_font, width - 120),
+              font=small_font, fill="#7b8a97", anchor="mm")
+
+    # Ustunlar sarlavhasi: chapda ingichka chiziq, o'ngda egri bo'lib ko'tariladigan to'q ko'k-yashil tasma
+    band_height, line = 84, 9
+    band_bottom = head_top + band_height
+    curve_from, curve_to = 700, 860
+    points = [(40, band_bottom - line)]
+    for step in range(41):
+        t = step / 40
+        smooth = t * t * (3 - 2 * t)
+        points.append((curve_from + (curve_to - curve_from) * t, band_bottom - line - (band_height - line) * smooth))
+    points += [(width, head_top), (width, band_bottom), (40, band_bottom)]
+    band_mask = Image.new("L", (width, height), 0)
+    ImageDraw.Draw(band_mask).polygon(points, fill=255)
+    band = Image.new("RGBA", (width, height), "#1d4e6b")
+    band.paste(gradient((width - 600, height), "#1d4e6b", "#2a8f9c"), (600, 0))
+    image.paste(band, (0, 0), band_mask)
+    draw = ImageDraw.Draw(image)
+    head_y = head_top + 38
+    draw.text((120, head_y), "No.", font=head_font, fill="#1d3b53", anchor="mm")
+    draw.text((name_x + 160, head_y), "Ism", font=head_font, fill="#1d3b53", anchor="mm")
+    draw.text((percent_x, head_y + 4), "Natija (%)", font=head_font, fill="#ffffff", anchor="mm")
+    draw.text(((panel_left + panel_right) // 2, head_y + 4), "Grafik", font=head_font, fill="#ffffff", anchor="mm")
+
+    # Qator kartalarining yumshoq soyasi
+    shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    shadow_draw = ImageDraw.Draw(shadow)
+    for index in range(len(rows)):
+        top = table_top + index * (row_height + gap)
+        shadow_draw.rounded_rectangle([44, top + 6, width - 44, top + row_height + 6], radius=16, fill=(29, 59, 83, 34))
+    image.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(9)))
+    draw = ImageDraw.Draw(image)
+
+    for index in range(len(rows)):
+        top = table_top + index * (row_height + gap)
+        draw.rounded_rectangle([40, top, width - 40, top + row_height], radius=16,
+                               fill="#ffffff" if index % 2 == 0 else "#f1f5f9")
+    # Grafik ustunining umumiy och foni
+    if rows:
+        draw.rounded_rectangle([panel_left, table_top - 6, panel_right, table_top + len(rows) * (row_height + gap) - gap + 6],
+                               radius=18, fill="#e4edf3")
+
+    # 5 va 4 — yashil, 3 — sariq, 2 — qizil
+    bar_colors = {5: ("#0e9f6e", "#34d399"), 4: ("#0e9f6e", "#34d399"), 3: ("#c48a0a", "#f2c94c"), 2: ("#d9483b", "#f59e8b")}
+    for index, row in enumerate(rows):
+        top = table_top + index * (row_height + gap)
+        middle = top + row_height // 2
         absent = row["score"] is None
-        color = "#9ca3af" if absent else "#111827"
-        draw.text((60, y + 13), str(row.get("rank", "—")), font=text_font, fill=color)
-        draw.text((130, y + 13), row["name"][:32], font=text_font, fill=color)
-        draw.text((700, y + 13), "—" if absent else _fmt_number(row["score"]), font=text_font, fill=color)
-        draw.text((820, y + 13), "—" if absent else f"{_fmt_number(row['percent'])}%", font=text_font, fill=color)
+        rank = row.get("rank")
+
+        # O'rin doirachasi: birinchi uchtasi to'q, qolganlari och
+        podium = bool(rank) and rank <= 3
+        draw.ellipse([92, middle - 28, 148, middle + 28], fill="#1d5a74" if podium else "#dde7ee")
+        draw.text((120, middle), str(rank) if rank else "—", font=rank_font,
+                  fill="#ffffff" if podium else "#1d3b53", anchor="mm")
+
+        # Avatar: oddiy odam belgisi
+        cx = 195
+        draw.ellipse([cx - 28, middle - 28, cx + 28, middle + 28], fill="#e3eaf0")
+        person = "#b4c2ce" if absent else "#7f97ac"
+        draw.ellipse([cx - 10, middle - 19, cx + 10, middle + 1], fill=person)
+        draw.chord([cx - 20, middle + 5, cx + 20, middle + 37], 180, 360, fill=person)
+
+        draw.text((name_x, middle), fit(row["name"], name_font, percent_x - 110 - name_x), font=name_font,
+                  fill="#9aa6b2" if absent else "#111c2b", anchor="lm")
+
+        draw.rounded_rectangle([bar_left, middle - 15, bar_right, middle + 15], radius=15, fill="#d3dfe8")
         if absent:
-            draw.text((950, y + 13), "kelmadi", font=text_font, fill="#9ca3af")
-        else:
-            draw.rounded_rectangle([950, y + 9, 994, y + row_height - 9], radius=8, fill=GRADE_COLORS[row["grade"]])
-            draw.text((972, y + row_height // 2), str(row["grade"]), font=bold_font, fill="#ffffff", anchor="mm")
+            draw.text((percent_x, middle), "kelmadi", font=small_font, fill="#9aa6b2", anchor="mm")
+            continue
+        percent = max(0.0, min(100.0, float(row["percent"])))
+        draw.text((percent_x, middle), f"{percent:.1f}%", font=name_font, fill="#111c2b", anchor="mm")
+
+        start, end = bar_colors.get(row["grade"], bar_colors[2])
+        length = max(30, int((bar_right - bar_left) * percent / 100))
+        bar_mask = Image.new("L", (length, 30), 0)
+        ImageDraw.Draw(bar_mask).rounded_rectangle([0, 0, length - 1, 29], radius=15, fill=255)
+        image.paste(gradient((length, 30), start, end), (bar_left, middle - 15), bar_mask)
+        dot = bar_left + length - 15
+        draw.ellipse([dot - 8, middle - 8, dot + 8, middle + 8], fill="#ffffff")
 
     buffer = io.BytesIO()
-    image.save(buffer, format="PNG", optimize=True)
+    image.convert("RGB").save(buffer, format="PNG", optimize=True)
     return buffer.getvalue()
 
 
