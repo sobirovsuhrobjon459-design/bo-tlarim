@@ -3299,10 +3299,7 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
     if required_channel:
         _ensure_bot_can_check_channel(required_channel)
 
-    while True:
-        code = "".join(secrets.choice(TEST_CODE_ALPHABET) for _ in range(TEST_CODE_LENGTH))
-        if not db.scalar(select(Test.id).where(Test.code == code)):
-            break
+    code = _new_test_code(db)
 
     test = Test(
         teacher_id=teacher.id,
@@ -3397,6 +3394,13 @@ def _as_utc_naive(moment: datetime | None) -> datetime | None:
     return moment
 
 
+def _new_test_code(db: Session) -> str:
+    while True:
+        code = "".join(secrets.choice(TEST_CODE_ALPHABET) for _ in range(TEST_CODE_LENGTH))
+        if not db.scalar(select(Test.id).where(Test.code == code)):
+            return code
+
+
 @app.patch("/api/teacher/tests/{test_id}")
 def edit_test(test_id: int, body: TestEditIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
     """
@@ -3438,6 +3442,7 @@ def edit_test(test_id: int, body: TestEditIn, teacher: Teacher = Depends(get_cur
     if "end_time" in fields and test.status == "closed" and (end_time is None or end_time > now):
         test.status = "active"
         test.results_sent_at = None
+        test.code = _new_test_code(db)  # qayta ochilgan test — yangi kod bilan
         reopened = True
 
     db.commit()
@@ -3449,6 +3454,7 @@ def edit_test(test_id: int, body: TestEditIn, teacher: Teacher = Depends(get_cur
         "end_time": test.end_time,
         "status": test.status,
         "reopened": reopened,
+        "code": test.code,
     }
 
 
@@ -3690,13 +3696,14 @@ def reopen_test(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
 
     test = _get_own_test(db, teacher, test_id)
     test.status = "active"
+    test.code = _new_test_code(db)  # qayta ochilgan test — yangi kod bilan
 
     # Hisobot "allaqachon yuborilgan" belgisi ham tozalanadi — aks holda test
     # qayta yakunlanganda, yangi o'quvchilar natijasi bilan hisobot kelmay qolardi.
     test.results_sent_at = None
 
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "code": test.code}
 
 
 @app.get("/api/teacher/tests/{test_id}/results")

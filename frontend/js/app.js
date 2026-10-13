@@ -6826,7 +6826,7 @@ function openTestEditSheet(test) {
       if (!test.has_attempts) body.start_time = localTimeToUtcIso(sheet.querySelector("#edit-test-start").value);
       const saved = await api(`/api/teacher/tests/${test.id}`, { method: "PATCH", body });
       close();
-      showToast(saved.reopened ? "✅ Saqlandi — test qayta ochildi" : "✅ Saqlandi");
+      showToast(saved.reopened ? `✅ Saqlandi — test qayta ochildi, yangi kod: ${saved.code}` : "✅ Saqlandi");
       await renderTestDetail(test.id);
     })
   );
@@ -6985,8 +6985,8 @@ async function renderTestDetail(testId) {
   document.getElementById("reopen-button")?.addEventListener(
     "click",
     guarded(async () => {
-      await api(`/api/teacher/tests/${testId}/reopen`, { method: "POST" });
-      showToast("🔓 Test qayta ochildi");
+      const reopened = await api(`/api/teacher/tests/${testId}/reopen`, { method: "POST" });
+      showToast(`🔓 Test qayta ochildi — yangi kod: ${reopened.code}`);
       await renderTestDetail(testId);
     })
   );

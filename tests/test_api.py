@@ -3126,7 +3126,11 @@ def test_testni_qayta_ochganda_hisobot_belgisi_tozalanadi():
     finally:
         session.close()
 
-    client.post(f"/api/teacher/tests/{created['id']}/reopen", headers=as_user(555))
+    reopened = client.post(f"/api/teacher/tests/{created['id']}/reopen", headers=as_user(555)).json()
+    # Qayta ochilgan test — yangi kod; eski kod endi ishlamaydi
+    assert reopened["code"] and reopened["code"] != created["code"], reopened
+    assert client.get(f"/api/tests/{created['code']}", headers=as_user(901)).status_code == 404
+    assert client.get(f"/api/tests/{reopened['code']}", headers=as_user(901)).status_code == 200
 
     session = SessionLocal()
     try:
@@ -3451,6 +3455,7 @@ def test_oqituvchi_testni_tahrirlaydi_va_vaqtini_chozadi():
     later = (utcnow() + timedelta(hours=3)).replace(microsecond=0).isoformat()
     reopened = client.patch(url, json={"end_time": later}, headers=as_user(555)).json()
     assert reopened["reopened"] is True and reopened["status"] == "active", reopened
+    assert reopened["code"] != created["code"], "qayta ochilgan test yangi kod olmadi"
 
 
 # ========== Pullik test: o'quvchi o'qituvchi kartasiga to'laydi (chek bilan) ==========
