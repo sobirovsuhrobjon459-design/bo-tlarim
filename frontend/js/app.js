@@ -6021,7 +6021,7 @@ const SUBJECTS = [
 // Test turiga qarab fanlar ro'yxati
 const SUBJECTS_BY_TYPE = {
   rash: ["Tarix", "Matematika", "Kimyo", "Biologiya", "Huquq", "Fizika"],
-  boshlangich: ["Ona tili va adabiyot", "Rus tili", "Geografiya", "Informatika", "Boshqa fan"],
+  boshlangich: SUBJECTS, // barcha fanlar
 };
 
 // Milliy sertifikatda har bir fanning o'z tuzilishi bor. U BITTA joyda —
