@@ -233,6 +233,8 @@ class Test(Base):
     # Natijalar o'qituvchiga yuborilgan vaqt (bo'sh bo'lsa — hali yuborilmagan).
     # Test vaqti tugagach, hisobot o'zi bir marta yuboriladi.
     results_sent_at: Mapped[datetime | None] = mapped_column(default=None)
+    # O'qituvchi testni bot foydalanuvchilarining barchasiga e'lon qilgan vaqt (bir marta)
+    broadcast_at: Mapped[datetime | None] = mapped_column(default=None)
 
     # Majburiy obuna: shu kanalga obuna bo'lmagan o'quvchi testni boshlay olmaydi.
     # "@kanal_nomi" ko'rinishida saqlanadi; bo'sh bo'lsa, tekshiruv yo'q.

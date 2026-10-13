@@ -6945,6 +6945,10 @@ async function renderTestDetail(testId) {
         : ""
     }
     ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
+    ${!isFinished && !isClosedTest && !test.broadcast_at
+      ? `<button class="btn" id="broadcast-button">📢 Hammaga e'lon qilish</button>`
+      : ""}
+    ${test.broadcast_at ? `<p class="subtitle" style="margin:4px 4px 10px">📢 E'lon qilingan: ${formatDateTime(test.broadcast_at)}</p>` : ""}
     <button class="btn btn-ghost" id="results-button">📊 Natijalarni ko'rish</button>
     ${isFinished
       ? `<button class="btn btn-ghost" id="reopen-button">🔓 Testni qayta ochish</button>`
@@ -6996,6 +7000,19 @@ async function renderTestDetail(testId) {
     ?.addEventListener("click", guarded(() => renderAddStudentsForm(testId, test.title)));
 
   document.getElementById("results-button").addEventListener("click", guarded(() => renderTestResults(testId)));
+
+  document.getElementById("broadcast-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const question =
+        "Test bot foydalanuvchilarining barchasiga yuboriladi: nomi, pullik yoki bepulligi, kodi va sizning profilingiz. " +
+        "Har bir test uchun faqat bir marta. Yuborilsinmi?";
+      if (!(await askConfirm(question))) return;
+      const sent = await api(`/api/teacher/tests/${testId}/broadcast`, { method: "POST", body: {} });
+      showToast(`📢 E'lon ${formatNumber(sent.recipients)} ta foydalanuvchiga yuborilmoqda`);
+      await renderTestDetail(testId);
+    })
+  );
 
   document.getElementById("reopen-button")?.addEventListener(
     "click",
@@ -7818,6 +7835,22 @@ async function deliverPdf(basePath, fileName, sentMessage) {
 */
 async function openPendingSchoolInvite() {
   const params = new URLSearchParams(window.location.search);
+
+  // E'londagi "▶️ Testni ochish" (?test_code=KOD) — test qidiruvi kod bilan ochiladi (bir marta)
+  const testCode = (params.get("test_code") || "").trim().toUpperCase();
+  if (/^[A-Z0-9]{3,20}$/.test(testCode)) {
+    params.delete("test_code");
+    const rest = params.toString();
+    history.replaceState(null, "", window.location.pathname + (rest ? `?${rest}` : "") + window.location.hash);
+    renderTestCodeSearch();
+    document.getElementById("test-code-input").value = testCode;
+    try {
+      renderTestFound(await api(`/api/tests/${encodeURIComponent(testCode)}`));
+    } catch (error) {
+      showToast(error.message || "Testni ochib bo'lmadi");
+    }
+    return;
+  }
 
   // Admin yuborgan shaxsiy havola (?invite=TOKEN) — kodsiz qo'shilish
   const inviteToken = (params.get("invite") || "").trim();

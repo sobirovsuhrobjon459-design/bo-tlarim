@@ -3978,6 +3978,42 @@ def test_sozli_javob_chiziqcha_va_rim_raqami_bilan_ham_togri():
     assert ok("2sqrt(3)", r"2\sqrt{3}") and not ok("23", "2-3")
 
 
+def test_test_hammaga_elon_qilinadi():
+    reset_database()
+    register_teacher()
+    client.put("/api/teacher/card", json={"card_number": "8600123412341234", "card_expiry": "12/30",
+                                          "card_holder": "Ali"}, headers=as_user(555))
+    for tg_id in (901, 902):
+        client.get("/api/me", headers=as_user(tg_id))  # bot foydalanuvchilari
+    created = create_test(price=15_000, title="Tarix <mock>")
+
+    started, sent = [], []
+    original_start, original_send = main._start_broadcast, main._telegram_send_message
+    main._start_broadcast = started.append
+    main._telegram_send_message = lambda chat_id, text, markup=None, parse_mode=None: sent.append((chat_id, text, markup)) or True
+    try:
+        url = f"/api/teacher/tests/{created['id']}/broadcast"
+        assert client.post(url, json={}, headers=as_user(901)).status_code in (403, 404)  # boshqa odam
+        response = client.post(url, json={}, headers=as_user(555))
+        assert response.status_code == 200 and response.json()["recipients"] == 2, response.text
+        assert started == [created["id"]]
+        assert client.post(url, json={}, headers=as_user(555)).status_code == 409  # faqat bir marta
+        assert client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()["broadcast_at"]
+
+        main._run_broadcast(created["id"])
+        students = [item for item in sent if item[0] in (901, 902)]
+        assert sorted(item[0] for item in students) == [901, 902], sent
+        text, markup = students[0][1], students[0][2]
+        assert "Tarix &lt;mock&gt;" in text and "Pullik — 15 000 so'm" in text and created["code"] in text, text
+        assert 'href="tg://user?id=555"' in text and "Ali Valiyev" in text, text
+        assert sent[-1][0] == 555 and "2 ta" in sent[-1][1], sent[-1]  # o'qituvchiga hisobot
+
+        closed = create_test(enrollment_type="closed")
+        assert client.post(f"/api/teacher/tests/{closed['id']}/broadcast", json={}, headers=as_user(555)).status_code == 409
+    finally:
+        main._start_broadcast, main._telegram_send_message = original_start, original_send
+
+
 # ========== Ishga tushirgich ==========
 
 

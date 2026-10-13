@@ -31,6 +31,7 @@ import threading
 import time
 from types import SimpleNamespace
 from contextlib import asynccontextmanager
+from html import escape as html_escape
 from xml.sax.saxutils import escape as xml_escape
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -170,6 +171,7 @@ def _add_missing_columns() -> None:
             "status": "VARCHAR(10) DEFAULT 'active'",
             "required_channel": "VARCHAR(100)",
             "results_sent_at": "TIMESTAMP",
+            "broadcast_at": "TIMESTAMP",
             "deleted_at": "TIMESTAMP",
         },
         "test_attempts": {"offline_name": "VARCHAR(200)", "saved_answers": "TEXT"},
@@ -2575,13 +2577,15 @@ _notice_worker_lock = threading.Lock()
 _notice_worker: threading.Thread | None = None
 
 
-def _telegram_send_message(chat_id: int, text: str, reply_markup: dict | None = None) -> bool:
+def _telegram_send_message(chat_id: int, text: str, reply_markup: dict | None = None, parse_mode: str | None = None) -> bool:
     """sendMessage: 429 bo'lsa — Telegram aytgan vaqtcha kutib qayta urinadi. Yetkazilsa True."""
 
     logger = logging.getLogger("backend")
     body = {"chat_id": chat_id, "text": text}
     if reply_markup:
         body["reply_markup"] = reply_markup
+    if parse_mode:
+        body["parse_mode"] = parse_mode
     for _ in range(5):
         try:
             response = httpx.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=body, timeout=15)
@@ -3369,6 +3373,88 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
     return {"id": test.id, "code": test.code}
 
 
+# E'lon: Telegram bir botdan sekundiga ~30 xabarga ruxsat beradi — 20 tasidan oshirmaymiz
+BROADCAST_INTERVAL = 0.05
+
+
+def _broadcast_text(test: Test, teacher_user: User) -> str:
+    """Bot foydalanuvchilariga boradigan e'lon: test, pullik/bepul va kim ochgani (profil havolasi)."""
+
+    name = html_escape(teacher_user.full_name or "O'qituvchi")
+    profile = f'<a href="tg://user?id={teacher_user.tg_id}">{name}</a>'
+    if teacher_user.username:
+        profile += f" (@{html_escape(teacher_user.username)})"
+    price = f"💰 Pullik — {_format_sum(test.price)} so'm" if test.price > 0 else "🆓 Bepul"
+    lines = [
+        "📢 <b>Yangi test!</b>",
+        "",
+        f"📘 <b>{html_escape(test.title)}</b>",
+        f"📚 {html_escape(test.subject)} · {_question_count(test)} ta savol · {test.duration} daqiqa",
+        price,
+    ]
+    if test.start_time:
+        lines.append(f"🕒 Boshlanishi: {_local_time(test.start_time)}")
+    if test.end_time:
+        lines.append(f"⏳ Tugashi: {_local_time(test.end_time)}")
+    lines += [f"🔑 Test kodi: <code>{test.code}</code>", "", f"👤 Testni ochgan: {profile}"]
+    return "\n".join(lines)
+
+
+def _broadcast_button(code: str) -> dict | None:
+    if not WEBAPP_URL.startswith("https://"):
+        return None
+    separator = "&" if "?" in WEBAPP_URL else "?"
+    return {"inline_keyboard": [[{"text": "▶️ Testni ochish", "web_app": {"url": f"{WEBAPP_URL}{separator}test_code={code}"}}]]}
+
+
+def _run_broadcast(test_id: int) -> None:
+    """Fonda: e'lonni botning barcha foydalanuvchilariga yuboradi, oxirida o'qituvchiga hisobot."""
+
+    logger = logging.getLogger("backend")
+    with SessionLocal() as session:
+        test = session.get(Test, test_id)
+        teacher_user = test.teacher.user
+        text, markup, code = _broadcast_text(test, teacher_user), _broadcast_button(test.code), test.code
+        teacher_tg_id = teacher_user.tg_id
+        chat_ids = session.scalars(select(User.tg_id).where(User.tg_id != teacher_tg_id).order_by(User.id)).all()
+
+    delivered = 0
+    for chat_id in chat_ids:
+        if _telegram_send_message(chat_id, text, markup, parse_mode="HTML"):
+            delivered += 1
+        time.sleep(BROADCAST_INTERVAL)
+    logger.info("E'lon yuborildi: test=%s, %s/%s", test_id, delivered, len(chat_ids))
+    _telegram_send_message(
+        teacher_tg_id, f"📢 «{code}» testi haqidagi e'lon {delivered} ta foydalanuvchiga yetkazildi."
+    )
+
+
+def _start_broadcast(test_id: int) -> None:
+    threading.Thread(target=_run_broadcast, args=(test_id,), name=f"broadcast-{test_id}", daemon=True).start()
+
+
+@app.post("/api/teacher/tests/{test_id}/broadcast")
+def broadcast_test(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """Testni bot foydalanuvchilarining barchasiga e'lon qiladi — har bir test uchun bir marta."""
+
+    test = db.scalar(select(Test).where(Test.id == test_id, Test.teacher_id == teacher.id).with_for_update())
+    if not test or test.deleted_at:
+        raise HTTPException(status_code=404, detail="Test topilmadi")
+    if test.broadcast_at:
+        raise HTTPException(status_code=409, detail="Bu test allaqachon e'lon qilingan")
+    if test.status != "active" or (test.end_time and test.end_time <= utcnow()):
+        raise HTTPException(status_code=409, detail="Test yakunlangan — e'lon qilib bo'lmaydi")
+    if test.enrollment_type == "closed":
+        raise HTTPException(status_code=409, detail="Yopiq testga o'quvchilar o'zi kira olmaydi — e'lon qilib bo'lmaydi")
+    if not BOT_TOKEN:
+        raise HTTPException(status_code=503, detail="Bot ulanmagan")
+
+    test.broadcast_at = utcnow()
+    db.commit()
+    _start_broadcast(test.id)
+    return {"ok": True, "recipients": db.scalar(select(func.count()).select_from(User)) - 1}
+
+
 @app.get("/api/teacher/tests/{test_id}")
 def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
     """
@@ -3415,6 +3501,7 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
         "start_time": test.start_time,
         "end_time": test.end_time,
         "has_attempts": _test_has_attempts(db, test),
+        "broadcast_at": test.broadcast_at,
         "students": students,
         "filled": filled,
         "missing": len(students) - filled,
