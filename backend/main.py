@@ -8053,12 +8053,12 @@ def _asset_version() -> str:
 # ========== Ommaviy oferta (Payme/Click arizasi uchun ochiq sahifa) ==========
 
 # Ijrochi (YaTT) rekvizitlari — Render → Environment'da beriladi, kodda saqlanmaydi
-LEGAL_NAME = os.getenv("LEGAL_NAME", "").strip()
-LEGAL_INN = os.getenv("LEGAL_INN", "").strip()
-LEGAL_PHONE = os.getenv("LEGAL_PHONE", "").strip()
+LEGAL_NAME = os.getenv("LEGAL_NAME", "Sobirov Suxrobjon Saidjon o'g'li").strip()
+LEGAL_INN = os.getenv("LEGAL_INN", "").strip()  # bo'sh bo'lsa sahifada ko'rsatilmaydi
+LEGAL_PHONE = os.getenv("LEGAL_PHONE", "+998 90 537 07 38").strip()
 LEGAL_EMAIL = os.getenv("LEGAL_EMAIL", "").strip()
 LEGAL_ADDRESS = os.getenv("LEGAL_ADDRESS", "").strip()
-LEGAL_BOT = os.getenv("LEGAL_BOT", "").strip()
+LEGAL_BOT = os.getenv("LEGAL_BOT", "@Sukhrobjonmath_bot").strip()
 
 
 def _oferta_html() -> str:
@@ -8084,8 +8084,8 @@ def _oferta_html() -> str:
   h2 {{ font-size: 18px; margin: 28px 0 8px }}
   p, li {{ margin: 0 0 8px }}
   .muted {{ color: var(--muted); font-size: 14px }}
-  table {{ border-collapse: collapse; width: 100%; max-width: 420px; margin: 8px 0 }}
-  td {{ border: 1px solid var(--line); padding: 7px 10px; font-variant-numeric: tabular-nums }}
+  table {{ border-collapse: collapse; width: 100%; max-width: 420px; margin: 8px 0; table-layout: fixed }}
+  td {{ border: 1px solid var(--line); padding: 7px 10px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere }}
   .req td:first-child {{ color: var(--muted); width: 40% }}
   .blank {{ color: #c0392b }}
 </style></head><body><main>
@@ -8094,7 +8094,7 @@ def _oferta_html() -> str:
 Xizmatdan foydalanish yoki to'lov qilish — oferta shartlarini to'liq qabul qilish (aksept) demakdir.</p>
 
 <h2>1. Taraflar</h2>
-<p><b>Ijrochi:</b> yakka tartibdagi tadbirkor {value(LEGAL_NAME)}, STIR {value(LEGAL_INN)}.</p>
+<p><b>Ijrochi:</b> yakka tartibdagi tadbirkor {value(LEGAL_NAME)}{f", STIR {html_escape(LEGAL_INN)}" if LEGAL_INN else ""}.</p>
 <p><b>Foydalanuvchi:</b> xizmatdan {service} orqali foydalanayotgan har qanday shaxs — o'qituvchi yoki o'quvchi.</p>
 
 <h2>2. Xizmatlar</h2>
@@ -8139,10 +8139,10 @@ to'g'ri javoblar mazmuni uchun testni yaratgan o'qituvchi javobgar.</p>
 <h2>9. Ijrochi rekvizitlari va aloqa</h2>
 <table class="req">
   <tr><td>YaTT</td><td>{value(LEGAL_NAME)}</td></tr>
-  <tr><td>STIR</td><td>{value(LEGAL_INN)}</td></tr>
-  <tr><td>Manzil</td><td>{value(LEGAL_ADDRESS)}</td></tr>
+  {f"<tr><td>STIR</td><td>{html_escape(LEGAL_INN)}</td></tr>" if LEGAL_INN else ""}
+  {f"<tr><td>Manzil</td><td>{html_escape(LEGAL_ADDRESS)}</td></tr>" if LEGAL_ADDRESS else ""}
   <tr><td>Telefon</td><td>{value(LEGAL_PHONE)}</td></tr>
-  <tr><td>E-mail</td><td>{value(LEGAL_EMAIL)}</td></tr>
+  {f"<tr><td>E-mail</td><td>{html_escape(LEGAL_EMAIL)}</td></tr>" if LEGAL_EMAIL else ""}
   <tr><td>Xizmat</td><td>{service}</td></tr>
 </table>
 </main></body></html>"""
