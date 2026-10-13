@@ -174,7 +174,7 @@ def _add_missing_columns() -> None:
         },
         "test_attempts": {"offline_name": "VARCHAR(200)", "saved_answers": "TEXT"},
         "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)"},
-        "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)"},
+        "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)"},
         "school_classes": {"curator_user_id": "INTEGER"},
         "private_schools": {"monthly_fee": "INTEGER DEFAULT 0"},
         "class_students": {"discount_percent": "INTEGER DEFAULT 0"},
@@ -4288,7 +4288,8 @@ def _pending_card_payment(db: Session, user: User, test: Test) -> Payment | None
 
 @app.get("/api/teacher/card")
 def get_teacher_card(teacher: Teacher = Depends(get_current_teacher)):
-    return {"card_number": teacher.card_number or "", "card_holder": teacher.card_holder or ""}
+    return {"card_number": teacher.card_number or "", "card_holder": teacher.card_holder or "",
+            "card_expiry": teacher.card_expiry or ""}
 
 
 @app.put("/api/teacher/card")
@@ -4296,9 +4297,10 @@ def set_teacher_card(body: TeacherCardIn, teacher: Teacher = Depends(get_current
     """O'quvchilar pullik test uchun pulni shu kartaga o'tkazadi."""
     teacher.card_number = body.card_number
     teacher.card_holder = body.card_holder
+    teacher.card_expiry = body.card_expiry
     db.commit()
     logging.getLogger("backend").info("O'qituvchi kartasi yangilandi: teacher=%s", teacher.id)
-    return {"card_number": teacher.card_number, "card_holder": teacher.card_holder}
+    return {"card_number": teacher.card_number, "card_holder": teacher.card_holder, "card_expiry": teacher.card_expiry}
 
 
 def _test_payment_caption(payment: Payment, test: Test, student: User) -> str:

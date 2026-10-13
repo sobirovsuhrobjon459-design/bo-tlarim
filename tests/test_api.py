@@ -354,7 +354,7 @@ def test_yopiq_testni_pullik_qilib_bolmaydi():
 def test_pullik_test_narxi_5000_dan_100000_gacha():
     reset_database()
     register_teacher()
-    client.put("/api/teacher/card", json={"card_number": "8600123412341234", "card_holder": "Test"},
+    client.put("/api/teacher/card", json={"card_number": "8600123412341234", "card_expiry": "12/30", "card_holder": "Test"},
                headers=as_user(555))
     for bad in (4999, 100_001):
         body = {"title": "Pullik", "subject": "Matematika", "mode": "key", "price": bad,
@@ -3503,11 +3503,11 @@ def test_pullik_test_oquvchi_oqituvchi_kartasiga_tolaydi():
             "title": "Pullik", "subject": "Matematika", "mode": "key", "price": 15000,
             "key_questions": [{"number": 1, "question_type": "single", "option_count": 4, "correct": "B"}]})
         assert no_card.status_code == 422 and "karta" in no_card.text, no_card.text
-        assert client.put("/api/teacher/card", json={"card_number": "8600 1234 5678", "card_holder": "Ali Valiyev"},
+        assert client.put("/api/teacher/card", json={"card_number": "8600 1234 5678", "card_expiry": "12/30", "card_holder": "Ali Valiyev"},
                           headers=as_user(555)).status_code == 422
-        card = client.put("/api/teacher/card", json={"card_number": "8600-1234 5678 9012", "card_holder": "  Ali   Valiyev "},
+        card = client.put("/api/teacher/card", json={"card_number": "8600-1234 5678 9012", "card_expiry": "12/30", "card_holder": "  Ali   Valiyev "},
                           headers=as_user(555))
-        assert card.status_code == 200 and card.json() == {"card_number": "8600123456789012", "card_holder": "Ali Valiyev"}
+        assert card.status_code == 200 and card.json() == {"card_number": "8600123456789012", "card_expiry": "12/30", "card_holder": "Ali Valiyev"}
 
         created = create_test(tg_id=555, price=15000)
         code = created["code"]
@@ -3776,7 +3776,7 @@ def test_chek_eslatmalari_oqituvchi_etiboridan_chetda_qolmaydi():
     reset_database()
     register_teacher(tg_id=555)
     with CardPaymentTelegramStub():
-        client.put("/api/teacher/card", json={"card_number": "8600123456789012", "card_holder": "Ali Valiyev"},
+        client.put("/api/teacher/card", json={"card_number": "8600123456789012", "card_expiry": "12/30", "card_holder": "Ali Valiyev"},
                    headers=as_user(555))
         code = create_test(tg_id=555, price=10000)["code"]
         payment_id = _pay_card(code, 901).json()["payment_id"]
@@ -3849,7 +3849,7 @@ def test_bot_xabarlari_oxirida_kutilayotgan_chek_eslatiladi():
     reset_database()
     register_teacher(tg_id=555)
     with CardPaymentTelegramStub():
-        client.put("/api/teacher/card", json={"card_number": "8600123456789012", "card_holder": "Ali Valiyev"},
+        client.put("/api/teacher/card", json={"card_number": "8600123456789012", "card_expiry": "12/30", "card_holder": "Ali Valiyev"},
                    headers=as_user(555))
         code = create_test(tg_id=555, price=10000)["code"]
         _pay_card(code, 901)
@@ -3886,7 +3886,7 @@ def test_tarix_atamasi_tutuq_belgisi_har_xil_bolsa_ham_togri():
 def test_click_payme_pul_balansga_tushadi_va_botdan_yechiladi():
     reset_database()
     register_teacher()
-    client.put("/api/teacher/card", json={"card_number": "8600123412341234", "card_holder": "Ali"}, headers=as_user(555))
+    client.put("/api/teacher/card", json={"card_number": "8600123412341234", "card_expiry": "12/30", "card_holder": "Ali"}, headers=as_user(555))
     created = create_test(price=10_000)
 
     # Click/Payme ulangan — o'quvchiga o'qituvchi kartasi ko'rsatilmaydi, chek qabul qilinmaydi
@@ -3939,6 +3939,28 @@ def test_vaqti_tugagan_test_qayta_ochilsa_ishlaydi():
     assert info["end_time"] is None, info
     started = client.post(f"/api/tests/{reopened['code']}/start", json={}, headers=as_user(901))
     assert started.status_code == 200, started.text
+
+
+def test_karta_muddati_kiritiladi_oquvchiga_korinmaydi():
+    reset_database()
+    register_teacher()
+    url, base = "/api/teacher/card", {"card_number": "8600123412341234", "card_holder": "Ali Valiyev"}
+    for bad in ("13/30", "1/3", "01/20", ""):
+        assert client.put(url, json={**base, "card_expiry": bad}, headers=as_user(555)).status_code == 422, bad
+    assert client.put(url, json=base, headers=as_user(555)).status_code == 422  # muddat majburiy
+    saved = client.put(url, json={**base, "card_expiry": "0830"}, headers=as_user(555)).json()
+    assert saved["card_expiry"] == "08/30", saved
+    assert client.get(url, headers=as_user(555)).json()["card_expiry"] == "08/30"
+
+    original = main._enabled_providers
+    main._enabled_providers = lambda: []
+    try:
+        created = create_test(price=10_000)
+        info = client.get(f"/api/tests/{created['code']}", headers=as_user(901)).json()
+    finally:
+        main._enabled_providers = original
+    assert info["teacher_card"] == {"number": "8600 1234 1234 1234", "holder": "Ali Valiyev"}, info
+    assert "08/30" not in json.dumps(info)
 
 
 # ========== Ishga tushirgich ==========

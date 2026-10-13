@@ -5474,12 +5474,21 @@ async function openCardSettingsSheet(onSaved) {
     <label class="field-label">Karta egasi (ism familiya)
       <input class="input" id="card-holder-input" maxlength="100" placeholder="Ali Valiyev"
              value="${escapeHtml(current.card_holder)}" style="margin:4px 0 0" /></label>
+    <label class="field-label">Amal qilish muddati
+      <input class="input" id="card-expiry-input" inputmode="numeric" autocomplete="cc-exp" maxlength="5"
+             placeholder="OO/YY" value="${escapeHtml(current.card_expiry || "")}" style="margin:4px 0 0;width:120px" /></label>
+    <p class="subtitle" style="margin:6px 0 0;font-size:12px">O'quvchilarga faqat karta raqami va ism-familiya ko'rinadi.</p>
     <button class="btn" id="card-save-button" style="margin-top:12px">💾 Saqlash</button>
     <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
   `);
   const numberInput = sheet.querySelector("#card-number-input");
   numberInput.addEventListener("input", () => {
     numberInput.value = formatCard(numberInput.value);
+  });
+  const expiryInput = sheet.querySelector("#card-expiry-input");
+  expiryInput.addEventListener("input", () => {
+    const digits = expiryInput.value.replace(/\D/g, "").slice(0, 4);
+    expiryInput.value = digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits;
   });
   sheet.querySelector("#card-save-button").addEventListener(
     "click",
@@ -5488,7 +5497,12 @@ async function openCardSettingsSheet(onSaved) {
       const cardHolder = sheet.querySelector("#card-holder-input").value.trim();
       if (cardNumber.length !== 16) throw new Error("Karta raqami 16 ta raqam bo'lishi kerak");
       if (cardHolder.length < 3) throw new Error("Karta egasining ism-familiyasini kiriting");
-      await api("/api/teacher/card", { method: "PUT", body: { card_number: cardNumber, card_holder: cardHolder } });
+      const cardExpiry = expiryInput.value.trim();
+      if (!/^(0[1-9]|1[0-2])\/\d{2}$/.test(cardExpiry)) throw new Error("Amal qilish muddatini OO/YY ko'rinishida kiriting (masalan 08/28)");
+      await api("/api/teacher/card", {
+        method: "PUT",
+        body: { card_number: cardNumber, card_holder: cardHolder, card_expiry: cardExpiry },
+      });
       close();
       showToast("✅ Karta saqlandi");
       await onSaved?.();

@@ -150,6 +150,8 @@ class Teacher(Base):
     # yuboradi, o'qituvchi tasdiqlaydi (platforma pulni ushlamaydi).
     card_number: Mapped[str | None] = mapped_column(String(30), default=None)
     card_holder: Mapped[str | None] = mapped_column(String(100), default=None)
+    # Amal qilish muddati "MM/YY" — faqat o'qituvchiga ko'rinadi, o'quvchiga emas
+    card_expiry: Mapped[str | None] = mapped_column(String(5), default=None)
 
     user: Mapped["User"] = relationship()
     tests: Mapped[list["Test"]] = relationship(back_populates="teacher")
@@ -818,6 +820,7 @@ class TeacherCardIn(BaseModel):
 
     card_number: str = Field(min_length=16, max_length=30)
     card_holder: str = Field(min_length=3, max_length=100)
+    card_expiry: str = Field(min_length=4, max_length=7)  # "MM/YY"
 
     @model_validator(mode="after")
     def normalize(self) -> "TeacherCardIn":
@@ -826,6 +829,15 @@ class TeacherCardIn(BaseModel):
             raise ValueError("Karta raqami 16 ta raqamdan iborat bo'lishi kerak")
         self.card_number = digits
         self.card_holder = " ".join(self.card_holder.split())
+
+        expiry = re.sub(r"\D", "", self.card_expiry)
+        if len(expiry) != 4 or not 1 <= int(expiry[:2]) <= 12:
+            raise ValueError("Amal qilish muddatini OO/YY ko'rinishida kiriting (masalan 08/28)")
+        month, year = int(expiry[:2]), 2000 + int(expiry[2:])
+        now = utcnow()
+        if (year, month) < (now.year, now.month):
+            raise ValueError("Kartaning amal qilish muddati tugagan")
+        self.card_expiry = f"{expiry[:2]}/{expiry[2:]}"
         return self
 
 
