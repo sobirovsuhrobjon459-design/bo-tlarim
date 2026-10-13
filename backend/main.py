@@ -8044,7 +8044,7 @@ def _asset_version() -> str:
     """
 
     latest = 0.0
-    for path in (FRONTEND_DIR / "js" / "app.js", FRONTEND_DIR / "css" / "style.css"):
+    for path in (FRONTEND_DIR / "js" / "app.js", FRONTEND_DIR / "css" / "style.css", FRONTEND_DIR / "css" / "theme-pastel.css"):
         if path.exists():
             latest = max(latest, path.stat().st_mtime)
     return format(int(latest), "x")
@@ -8056,7 +8056,7 @@ def serve_index():
 
     html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
     version = _asset_version()
-    for asset in ("/js/app.js", "/css/style.css"):
+    for asset in ("/js/app.js", "/css/style.css", "/css/theme-pastel.css"):
         html = html.replace(f'"{asset}"', f'"{asset}?v={version}"')
 
     # Fanlar pasporti (backend/subjects.py) — ilova test shablonini va klaviaturani shundan oladi

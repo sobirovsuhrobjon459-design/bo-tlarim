@@ -1,0 +1,570 @@
+/*
+  Dizayn qatlami — style.css dan KEYIN yuklanadi va uning ustidan yozadi.
+
+  Uslub: och lavanda fon ustida nozik katak to'r (test varaqasi kabi) va
+  yumshoq shaftoli/lavanda nurlar; oq, katta radiusli kartalar; to'q
+  siyoh-ko'k asosiy blok (hero); siyoh rangli "pill" tugmalar; pastda
+  suzuvchi menyu, o'rtada ko'tarilgan sariq tugma.
+  Telegram qorong'i rejimida — siyoh fon, xuddi shu urg'ular.
+*/
+
+:root {
+  --color-bg: #f2f2fa;
+  --color-surface: #ffffff;
+  --color-primary: #4353d8;
+  --color-primary-dark: #2f3cb5;
+  --color-accent: #ff9b73;
+  --color-text: #151b3d;
+  --color-text-muted: #6b7193;
+  --color-border: #e6e7f2;
+
+  --ink: #151b3d;
+  --ink-text: #ffffff;
+  --sun: #ffd44d;
+  --sun-deep: #f2b705;
+  --peach: #ffe0d1;
+  --peach-strong: #ffbfa3;
+  --lilac: #e4e6ff;
+  --lilac-strong: #c8ccfb;
+  --mint: #d5f4e5;
+  --sky: #d9edff;
+  --tile-text: #151b3d;
+  --grid-line: rgba(90, 98, 170, 0.075);
+  --glow-1: rgba(255, 190, 160, 0.5);
+  --glow-2: rgba(190, 196, 255, 0.5);
+
+  --btn-bg: #151b3d;
+  --btn-fg: #ffffff;
+
+  --shadow-sm: 0 6px 18px -10px rgba(30, 36, 90, 0.22);
+  --shadow-md: 0 16px 34px -16px rgba(30, 36, 90, 0.32);
+  --radius-sm: 16px;
+  --radius-md: 22px;
+  --radius-lg: 28px;
+
+  --font-main: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+[data-theme="dark"] {
+  --color-bg: #0d1024;
+  --color-surface: #171b37;
+  --color-primary: #9aa5ff;
+  --color-primary-dark: #7c88f5;
+  --color-text: #eef0ff;
+  --color-text-muted: #a2a7c7;
+  --color-border: #262b4f;
+
+  --ink: #232a5c;
+  --peach: #3a2a33;
+  --peach-strong: #5a3a3a;
+  --lilac: #262b55;
+  --lilac-strong: #343b74;
+  --mint: #1d3a35;
+  --sky: #1d3150;
+  --tile-text: #eef0ff;
+  --grid-line: rgba(160, 168, 230, 0.06);
+  --glow-1: rgba(255, 150, 120, 0.14);
+  --glow-2: rgba(130, 140, 255, 0.18);
+
+  --btn-bg: #ffd44d;
+  --btn-fg: #151b3d;
+
+  --shadow-sm: 0 6px 18px -10px rgba(0, 0, 0, 0.6);
+  --shadow-md: 0 16px 34px -16px rgba(0, 0, 0, 0.7);
+}
+
+/* ---------- Fon (katak to'r) va tipografika ---------- */
+
+body,
+[data-theme="dark"] body {
+  font-family: var(--font-main);
+  background-color: var(--color-bg);
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px),
+    radial-gradient(circle at 0% 0%, var(--glow-1), transparent 42%),
+    radial-gradient(circle at 100% 30%, var(--glow-2), transparent 45%);
+  background-size: 20px 20px, 20px 20px, 100% 100%, 100% 100%;
+  background-attachment: fixed;
+  animation: none;
+}
+
+h1, h2, h3 {
+  letter-spacing: -0.01em;
+}
+
+h1 {
+  font-size: 28px;
+  font-weight: 900;
+}
+
+h2 {
+  font-size: 23px;
+  font-weight: 900;
+}
+
+h3 {
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.subtitle {
+  font-weight: 600;
+}
+
+/* ---------- Kartalar ---------- */
+
+.card,
+.panel {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+[data-theme="dark"] .card,
+[data-theme="dark"] .panel {
+  border-color: transparent;
+}
+
+.card-icon {
+  border-radius: 18px;
+  background: var(--lilac);
+  color: var(--color-primary);
+}
+
+.role-card:nth-of-type(3n + 2) .card-icon {
+  background: var(--peach);
+  color: #e0663f;
+}
+
+.role-card:nth-of-type(3n) .card-icon {
+  background: #fff1c2;
+  color: #b88400;
+}
+
+[data-theme="dark"] .role-card:nth-of-type(3n) .card-icon {
+  background: #3b3420;
+  color: var(--sun);
+}
+
+.role-card h3 {
+  letter-spacing: 0.02em;
+}
+
+/* Rangli kartalar (pastel) */
+.tone-peach {
+  background: linear-gradient(150deg, var(--peach), var(--peach-strong));
+  border-color: transparent;
+}
+
+.tone-lilac {
+  background: linear-gradient(150deg, var(--lilac), var(--lilac-strong));
+  border-color: transparent;
+}
+
+.tone-peach,
+.tone-lilac {
+  color: var(--tile-text);
+}
+
+.tone-peach p,
+.tone-lilac p {
+  color: var(--tile-text);
+  opacity: 0.8;
+}
+
+/* ---------- Tugmalar ---------- */
+
+.btn {
+  border-radius: 999px;
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  box-shadow: 0 10px 22px -14px rgba(21, 27, 61, 0.7);
+}
+
+.btn-ghost {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1.5px solid var(--color-border);
+  box-shadow: none;
+}
+
+.btn-sun {
+  background: var(--sun);
+  color: #151b3d;
+}
+
+.btn-danger {
+  border-radius: 999px;
+}
+
+.back-button {
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  font-size: 19px;
+  font-weight: 800;
+}
+
+.page-header {
+  gap: 12px;
+}
+
+.page-header h2 {
+  font-size: 24px;
+}
+
+.share-pill,
+.icon-button {
+  border-radius: 999px;
+}
+
+/* ---------- Maydonlar ---------- */
+
+.input,
+textarea,
+select {
+  border-radius: 18px;
+  border: 1.5px solid var(--color-border);
+  font-family: var(--font-main);
+  font-weight: 600;
+}
+
+.input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 4px rgba(67, 83, 216, 0.14);
+}
+
+/* ---------- Statistik plitkalar (pastel) ---------- */
+
+.stat-tile {
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--tile-text);
+  font-weight: 700;
+  background: var(--lilac);
+}
+
+.stats-grid .stat-tile:nth-child(4n + 1) { background: #fff1c2 }
+.stats-grid .stat-tile:nth-child(4n + 2) { background: var(--mint) }
+.stats-grid .stat-tile:nth-child(4n + 3) { background: var(--peach) }
+.stats-grid .stat-tile:nth-child(4n + 4) { background: var(--sky) }
+
+[data-theme="dark"] .stats-grid .stat-tile:nth-child(4n + 1) { background: #3b3420 }
+
+.stat-tile .stat-value {
+  font-size: 26px;
+  font-weight: 900;
+  color: var(--tile-text);
+}
+
+/* ---------- Tablar — segmentli boshqaruv ---------- */
+
+.tabs {
+  gap: 4px;
+  padding: 5px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.tab {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 8px;
+  font-weight: 800;
+}
+
+.tab.active {
+  color: var(--btn-fg);
+  background: var(--btn-bg);
+  border: 0;
+}
+
+.filter-chip,
+.subject-chip,
+.badge {
+  border-radius: 999px;
+}
+
+.badge {
+  font-weight: 800;
+}
+
+/* ---------- Bildirishnoma, oyna, xabar ---------- */
+
+.notice {
+  border-radius: var(--radius-md);
+}
+
+.sheet {
+  border-radius: 30px 30px 0 0;
+  background: var(--color-surface);
+}
+
+.toast {
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--ink-text);
+  font-weight: 700;
+}
+
+/* ---------- Pastki menyu — suzuvchi, o'rtada ko'tarilgan tugma ---------- */
+
+.bottom-nav {
+  left: 12px;
+  right: 12px;
+  bottom: calc(10px + env(safe-area-inset-bottom));
+  max-width: 496px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 30px;
+  background: var(--color-surface);
+  box-shadow: 0 18px 40px -18px rgba(21, 27, 61, 0.45);
+  overflow: visible;
+}
+
+[data-theme="dark"] .bottom-nav {
+  border-color: transparent;
+}
+
+.nav-item {
+  gap: 4px;
+  font-weight: 800;
+  font-size: 12px;
+  border-radius: 20px;
+  background: none;
+}
+
+.nav-item .nav-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 18px;
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+
+.nav-item.active {
+  color: var(--color-text);
+  background: none;
+}
+
+.nav-item.active .nav-icon {
+  background: var(--peach);
+  transform: scale(1.04);
+}
+
+/* O'rtadagi "Yaratish" — ko'tarilgan sariq doira */
+.nav-item[data-nav="create"] .nav-icon {
+  width: 62px;
+  height: 62px;
+  margin-top: -32px;
+  font-size: 30px;
+  font-weight: 700;
+  color: #151b3d;
+  background: radial-gradient(circle at 35% 30%, #ffe27a, var(--sun) 55%, var(--sun-deep));
+  border: 5px solid var(--color-bg);
+  box-shadow: 0 12px 22px -10px rgba(242, 183, 5, 0.75);
+}
+
+.nav-item[data-nav="create"].active .nav-icon {
+  transform: scale(1.06);
+}
+
+#app {
+  padding-bottom: calc(118px + var(--keyboard-height, 0px));
+}
+
+/* ---------- Asosiy blok (hero) — o'qituvchi va o'quvchi bosh sahifasi ---------- */
+
+.hero-card {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 18px 16px 16px;
+  border-radius: 30px;
+  background: var(--ink);
+  color: var(--ink-text);
+  box-shadow: 0 22px 40px -22px rgba(21, 27, 61, 0.8);
+}
+
+.hero-card::before {
+  content: "";
+  position: absolute;
+  right: -60px;
+  top: -70px;
+  width: 190px;
+  height: 190px;
+  border-radius: 50%;
+  background: rgba(150, 160, 255, 0.16);
+  pointer-events: none;
+}
+
+.hero-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.hero-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.hero-avatar {
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-weight: 900;
+  font-size: 18px;
+  color: #ffffff;
+  background: linear-gradient(145deg, #6fc3ff, #3b82f6);
+  border: 3px solid rgba(255, 255, 255, 0.9);
+}
+
+.hero-who {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.hero-hello {
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.hero-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hero-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.hero-chip.is-sun {
+  background: var(--sun);
+  color: #151b3d;
+}
+
+.hero-edit {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  font-size: 16px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.hero-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.hero-stat {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 12px 4px 10px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.09);
+  text-align: center;
+}
+
+.hero-stat b {
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.hero-stat small {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.hero-stat.is-sun {
+  background: rgba(255, 212, 77, 0.2);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 212, 77, 0.55);
+}
+
+.hero-stat.is-sun b {
+  color: var(--sun);
+}
+
+.hero-card .btn-sun {
+  margin: 0;
+}
+
+/* Kartadagi sarlavha qatori: belgi + nom */
+.card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 900;
+  font-size: 16px;
+}
+
+.card-title-icon {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+  font-size: 18px;
+}
+
+[data-theme="dark"] .card-title-icon {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Karta ichidagi yonma-yon tugmalar — ixcham */
+.contact-actions .btn {
+  padding: 11px 12px;
+  font-size: 14px;
+}
+
+@media (max-width: 360px) {
+  .hero-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

@@ -4405,16 +4405,20 @@ function drawStudentHome(me, attempts) {
 
   showPage(`
     ${pageHeader("Testlar")}
-    <div class="card" style="cursor:default">
-      <div class="card-body" style="width:100%">
-        <div class="row-between">
-          <h3>${escapeHtml(me.full_name)} <span style="color:var(--color-primary);font-weight:400">o'quvchi</span></h3>
-          <button class="btn btn-ghost" id="edit-name-button" style="width:auto;padding:6px 10px">✏️</button>
+    <section class="hero-card">
+      <div class="hero-top">
+        <div class="hero-avatar">${escapeHtml(initialsOf(me.full_name))}</div>
+        <div class="hero-who">
+          <div class="hero-hello">Salom, ${escapeHtml((me.full_name || "").split(" ")[0] || "do'stim")}!</div>
+          <div class="hero-chips">
+            <span class="hero-chip is-sun">O'quvchi</span>
+            <span class="hero-chip">ID ${me.tg_id}</span>
+          </div>
         </div>
-        <p>Telegram ID: <b>${me.tg_id}</b></p>
+        <button class="hero-edit" id="edit-name-button" type="button" aria-label="Ismni o'zgartirish">✏️</button>
       </div>
-    </div>
-    <button class="btn" id="find-test-button">🔍 Yangi test qidirish</button>
+      <button class="btn btn-sun" id="find-test-button" type="button">🔍 Yangi test qidirish</button>
+    </section>
     <h3>Jarayondagi testlar</h3>
     ${inProgressRows}
     <h3>Yakunlangan testlar</h3>
@@ -5409,28 +5413,39 @@ async function renderTeacherDashboard() {
   }
 }
 
+// "Ulug'bek Sultonmurodov" -> "US" (avatar doirasi uchun)
+function initialsOf(fullName) {
+  const letters = String(fullName || "").trim().split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]);
+  return (letters.join("") || "?").toUpperCase();
+}
+
 function drawTeacherDashboard(me, stats, tests) {
   showPage(`
     ${pageHeader("Testlar")}
-    <div class="card" style="cursor:default">
-      <div class="card-body" style="width:100%">
-        <div class="row-between">
-          <h3>${escapeHtml(me.full_name)} <span style="color:var(--color-primary);font-weight:400">o'qituvchi</span></h3>
-          <button class="btn btn-ghost" id="edit-name-button" style="width:auto;padding:6px 10px">✏️</button>
+    <section class="hero-card">
+      <div class="hero-top">
+        <div class="hero-avatar">${escapeHtml(initialsOf(me.full_name))}</div>
+        <div class="hero-who">
+          <div class="hero-hello">Salom, ${escapeHtml((me.full_name || "").split(" ")[0] || "ustoz")}!</div>
+          <div class="hero-chips">
+            <span class="hero-chip is-sun">O'qituvchi</span>
+            <span class="hero-chip">ID ${me.tg_id}</span>
+          </div>
         </div>
-        <p>Telegram ID: <b>${me.tg_id}</b></p>
+        <button class="hero-edit" id="edit-name-button" type="button" aria-label="Ismni o'zgartirish">✏️</button>
       </div>
-    </div>
-    <div class="stats-grid">
-      <div class="stat-tile">📚<span class="stat-value">${stats.tests}</span>Testlar</div>
-      <div class="stat-tile">👥<span class="stat-value">${stats.students}</span>O'quvchilar</div>
-      <div class="stat-tile">📊<span class="stat-value">${stats.avg}%</span>O'rtacha natija</div>
-      <div class="stat-tile">🏆<span class="stat-value">${stats.max}%</span>Eng yuqori</div>
-    </div>
-    <div class="card" style="cursor:default">
+      <div class="hero-stats">
+        <div class="hero-stat"><b>${stats.tests}</b><small>testlar</small></div>
+        <div class="hero-stat"><b>${stats.students}</b><small>o'quvchilar</small></div>
+        <div class="hero-stat"><b>${stats.avg}%</b><small>o'rtacha</small></div>
+        <div class="hero-stat is-sun"><b>${stats.max}%</b><small>eng yuqori</small></div>
+      </div>
+      <button class="btn btn-sun" id="new-test-button" type="button">＋ Yangi test yaratish</button>
+    </section>
+    <div class="card tone-peach" style="cursor:default">
       <div class="card-body" style="width:100%">
         <div class="row-between">
-          <span>💳 Pullik test to'lovlari</span>
+          <span class="card-title-row"><span class="card-title-icon">💳</span>Pullik test to'lovlari</span>
           ${stats.pending_payments ? `<span class="badge badge-purple">${stats.pending_payments} ta ruxsat kutmoqda</span>` : ""}
         </div>
         <p>${
@@ -5450,14 +5465,13 @@ function drawTeacherDashboard(me, stats, tests) {
         }
       </div>
     </div>
-    <div class="card" style="cursor:default">
-      <div class="card-body">
-        <div class="row-between"><span>🎫 Kredit balansi</span><b>${stats.credits} ta</b></div>
+    <div class="card tone-lilac" style="cursor:default">
+      <div class="card-body" style="width:100%">
+        <div class="row-between"><span class="card-title-row"><span class="card-title-icon">🎫</span>Kredit balansi</span><b style="font-size:18px">${stats.credits} ta</b></div>
         <p>Har bir o'quvchi natijasi uchun 1 kredit sarflanadi (bepul testlarda)</p>
-        <button class="btn btn-ghost" id="buy-credit-button">🛒 Kredit sotib olish</button>
+        <button class="btn" id="buy-credit-button">🛒 Kredit sotib olish</button>
       </div>
     </div>
-    <button class="btn" id="new-test-button" style="margin-top:18px">➕ Yangi test yaratish</button>
     <div class="tabs">
       <button class="tab ${teacherTestsTab === "active" ? "active" : ""}" data-tab="active">Jarayondagi testlar</button>
       <button class="tab ${teacherTestsTab === "closed" ? "active" : ""}" data-tab="closed">Yopilgan testlar</button>
