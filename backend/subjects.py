@@ -14,7 +14,7 @@ Maydonlar:
   written   — yozma (ochiq) savollar soni, tests dan keyin raqamlanadi
   parts     — har bir yozma savol nechta bandli (2 — a va b)
   part_overrides — boshqacha bandli yozma savollar: {savol: bandlar soni}
-              (Kimyo, Biologiya 41–43 — yozma ish, 3–5 band; o'qituvchi [−]/[+] bilan o'zgartiradi)
+              (Kimyo, Biologiya 41–43 — yozma ish, 3–7 band; o'qituvchi [−]/[+] bilan o'zgartiradi)
   duration  — daqiqa
   keyboard  — yozma javob klaviaturasi: "math" (√, kasr, π) yoki "text" (oddiy harflar)
   sections  — bo'limlar: (nomi, "savollar") — None bo'lsa "qolgan barcha savollar"
@@ -47,6 +47,7 @@ SUBJECTS: dict[str, dict] = {
     },
     "Kimyo": {
         "tests": 35, "options": MATCHING, "written": 8, "parts": 1, "duration": 180, "keyboard": "math",
+        # Spetsifikatsiya (2025): 41 — 3–5 band, 42 — 3, 4 yoki 7 band, 43 — 3–5 band
         "part_overrides": {41: 3, 42: 3, 43: 3},
         "sections": [
             ("Umumiy kimyo", "1-13, 36-37, 41"),
@@ -60,7 +61,8 @@ SUBJECTS: dict[str, dict] = {
     },
     "Biologiya": {
         "tests": 35, "options": MATCHING, "written": 8, "parts": 1, "duration": 180, "keyboard": "text",
-        "part_overrides": {41: 3, 42: 3, 43: 3},
+        # Spetsifikatsiya (2025): 41 — 4–6 band, 42 — 5–7 band, 43 — 3–5 band
+        "part_overrides": {41: 4, 42: 5, 43: 3},
         "sections": [
             ("Hujayra va genetika", "1-11"),
             ("O'simlik va hayvonlar", "12-19"),

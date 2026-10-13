@@ -6660,7 +6660,7 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
 }
 
 function handleAnswerCellTap(event) {
-  // Yozma ish bandlari: [−] / [+] — 1 dan 6 gacha; yozilgan javoblar saqlanib qoladi
+  // Yozma ish bandlari: [−] / [+] — 1 dan 7 gacha (Milliy sertifikatda 7 tagacha); yozilgan javoblar saqlanib qoladi
   const step = event.target.closest("[data-band-step]");
   if (step) {
     const container = document.getElementById("key-questions-container");
@@ -6672,7 +6672,7 @@ function handleAnswerCellTap(event) {
     }
     const question = step.dataset.bandQuestion;
     const current = Number(overrides[question]) || 1;
-    overrides[question] = Math.min(6, Math.max(1, current + Number(step.dataset.bandStep)));
+    overrides[question] = Math.min(7, Math.max(1, current + Number(step.dataset.bandStep)));
     container.dataset.partOverrides = JSON.stringify(overrides);
     telegram?.HapticFeedback?.selectionChanged?.();
     buildKeyQuestionRows();
