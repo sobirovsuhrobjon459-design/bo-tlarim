@@ -263,7 +263,38 @@ new MutationObserver(() => {
   }
 }).observe(appElement, { childList: true, subtree: true });
 
-function showPage(html) {
+/*
+  Telegram'ning tepadagi "‹ Back" tugmasi (va Android'ning orqaga tugmasi):
+  ichki sahifalarda — ilovadagi "←" bilan bir xil, bir qadam orqaga qaytaradi.
+  Faqat bosh sahifalarda (o'qituvchining "Testlar" sahifasi, "←" bo'lmagan sahifalar)
+  yashiriladi — shunda Telegram o'zining "Yopish" tugmasini ko'rsatadi va ilovadan chiqiladi.
+*/
+let exitRootPage = false;
+
+function syncTelegramBackButton() {
+  const button = telegram?.BackButton;
+  if (!button || !telegram.isVersionAtLeast?.("6.1")) return;
+  if (!exitRootPage && appElement.querySelector(".back-button")) button.show();
+  else button.hide();
+}
+
+function handleTelegramBack() {
+  // Ochiq oyna (sheet) bo'lsa — avval o'shani yopadi
+  const sheet = document.querySelector(".sheet-backdrop");
+  if (sheet) {
+    (sheet.querySelector("[data-sheet-close]") || sheet).click();
+    return;
+  }
+  appElement.querySelector(".back-button")?.click();
+}
+
+try {
+  if (telegram?.isVersionAtLeast?.("6.1")) telegram.BackButton.onClick(handleTelegramBack);
+} catch (_) {
+  /* eski Telegram versiyasi */
+}
+
+function showPage(html, { exitRoot = false } = {}) {
   // Menyu avval yashiriladi — kerak bo'lsa, sahifa o'zi qaytadan ko'rsatadi.
   // Ikkalasi bitta qadamda bo'lgani uchun ekranda miltillash sezilmaydi.
   hideBottomNav();
@@ -274,6 +305,8 @@ function showPage(html) {
   if (activeMathField || window.mathVirtualKeyboard?.visible) closeMathKeyboard();
   appElement.innerHTML = `<div class="page">${html}</div>`;
   window.scrollTo(0, 0);
+  exitRootPage = exitRoot;
+  syncTelegramBackButton();
 }
 
 const TOAST_VISIBLE_MS = 2400;
@@ -5430,7 +5463,7 @@ function drawTeacherDashboard(me, stats, tests) {
       <button class="tab ${teacherTestsTab === "closed" ? "active" : ""}" data-tab="closed">Yopilgan testlar</button>
     </div>
     <div id="teacher-test-list"></div>
-  `);
+  `, { exitRoot: true });
 
   wireTeacherChrome("tests");
   document.getElementById("edit-name-button").addEventListener(
