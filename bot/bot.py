@@ -246,25 +246,17 @@ async def _open_bot(message: Message, payload: str) -> None:
     await message.answer(welcome_text, parse_mode="HTML", reply_markup=MAIN_KEYBOARD)
 
 
-def _remember_user(tg_id: int, full_name: str, username: str | None) -> None:
+def _remember_user(tg_id: int, full_name: str, username: str | None, payload: str = "") -> None:
     """
     /start bosgan odamni bazaga yozadi — test e'lonlari unga ham yetib borsin.
-    Ilgari foydalanuvchi faqat Mini App'ni ochganda saqlanardi.
+    Referal havolasi (start=ref_ID) bilan kelgan yangi odam o'sha o'qituvchiga bog'lanadi.
     """
 
-    from sqlalchemy import select
-    from sqlalchemy.exc import IntegrityError
-
-    from backend.database import SessionLocal, User
+    from backend.database import SessionLocal
+    from backend.main import remember_bot_user
 
     with SessionLocal() as session:
-        if session.scalar(select(User.id).where(User.tg_id == tg_id)):
-            return
-        session.add(User(tg_id=tg_id, full_name=full_name, username=username))
-        try:
-            session.commit()
-        except IntegrityError:
-            session.rollback()  # shu payt Mini App ham yaratib qo'ygan
+        remember_bot_user(session, tg_id, full_name, username, payload)
 
 
 @dispatcher.message(CommandStart())
@@ -275,7 +267,7 @@ async def handle_start(message: Message, command: CommandObject) -> None:
     logger.info("Yangi /start: %s (tg_id=%s)", message.from_user.full_name, message.from_user.id)
     try:
         await asyncio.to_thread(_remember_user, message.from_user.id, message.from_user.full_name,
-                                message.from_user.username)
+                                message.from_user.username, payload)
     except Exception:
         logger.warning("Foydalanuvchini saqlab bo'lmadi", exc_info=True)  # /start baribir ishlasin
 

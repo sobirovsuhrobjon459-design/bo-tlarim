@@ -52,7 +52,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import CondPageBreak, HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import String, case, cast, delete, distinct, func, inspect, or_, select, text
+from sqlalchemy import String, case, cast, delete, distinct, func, inspect, or_, select, text, update
 from sqlalchemy.orm import Session, selectinload
 
 from .rasch import grade_for, rasch_scores
@@ -76,7 +76,9 @@ from .database import (
     CLICK_SECRET_KEY,
     CLICK_SERVICE_ID,
     PLATFORM_COMMISSION_PERCENT,
+    REFERRAL_CREDITS,
     WELCOME_CREDITS,
+    Referral,
     Attempt,
     Attendance,
     AttendanceIn,
@@ -2811,6 +2813,8 @@ def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)
     """Mini App ochilganda chaqiriladi — Telegram orqali aniqlangan foydalanuvchini qaytaradi."""
 
     is_teacher = db.scalar(select(Teacher.id).where(Teacher.user_id == user.id)) is not None
+    if is_teacher:
+        reward_referral(db, user)  # ro'yxatdan o'tganda obuna bo'lmagan bo'lsa — keyinroq beriladi
 
     return {
         # O'qituvchiga ilova ochilishi bilan "N ta o'quvchi ruxsat kutmoqda" oynasi
@@ -2961,8 +2965,101 @@ def register_teacher(
     # Yangi o'qituvchi darhol ishlay boshlashi uchun sovg'a kreditlar beriladi
     db.add(Teacher(user_id=user.id, credits=WELCOME_CREDITS))
     db.commit()
+    reward_referral(db, user)
 
     return {"ok": True, "full_name": user.full_name, "credits": WELCOME_CREDITS}
+
+
+# ---------- Referal ----------
+# O'qituvchi o'z havolasini tarqatadi. Havola orqali botga BIRINCHI marta kirgan
+# odam shu o'qituvchiga bog'lanadi. U @sukhrobmath kanaliga obuna bo'lib,
+# o'qituvchi sifatida ro'yxatdan o'tsa — havola egasiga REFERRAL_CREDITS kredit.
+
+
+def referral_link(teacher: Teacher) -> str | None:
+    username = _bot_username()
+    return f"https://t.me/{username}?start=ref_{teacher.id}" if username else None
+
+
+def remember_bot_user(db: Session, tg_id: int, full_name: str, username: str | None, payload: str = "") -> None:
+    """
+    /start bosgan odamni bazaga yozadi (test e'lonlari unga ham yetsin). Yangi odam
+    referal havolasi bilan kelgan bo'lsa — havola egasiga bog'lanadi. Avval botga
+    yoki ilovaga kirgan odam referal hisoblanmaydi.
+    """
+
+    if db.scalar(select(User.id).where(User.tg_id == tg_id)):
+        return
+    user = User(tg_id=tg_id, full_name=full_name, username=username)
+    db.add(user)
+    try:
+        db.flush()
+        code = payload[len("ref_"):] if payload.startswith("ref_") else ""
+        referrer = db.get(Teacher, int(code)) if code.isdigit() and len(code) <= 9 else None
+        if referrer and referrer.user_id != user.id:
+            db.add(Referral(referrer_teacher_id=referrer.id, referred_user_id=user.id))
+        db.commit()
+    except IntegrityError:
+        db.rollback()  # shu payt Mini App ham yaratib qo'ygan — u holda yangi odam emas
+
+
+def _subscribed_to_default_channels(tg_id: int) -> bool:
+    """Adminlar kanaliga obunami — QAT'IY: tekshirib bo'lmasa ham "yo'q" (kredit keyinroq beriladi)."""
+
+    if not DEFAULT_REQUIRED_CHANNELS or not BOT_TOKEN or BOT_TOKEN == "your_bot_token_here":
+        return True
+    probe = SimpleNamespace(tg_id=tg_id)
+    try:
+        return all(_is_subscribed(channel, probe) for channel in DEFAULT_REQUIRED_CHANNELS)
+    except HTTPException:
+        logging.getLogger("backend").warning("Referal: %s obunasini tekshirib bo'lmadi", tg_id)
+        return False
+
+
+def reward_referral(db: Session, user: User) -> None:
+    """
+    Taklif qilingan odam o'qituvchi bo'lgan va kanalga obuna bo'lsa — havola egasiga
+    kredit (bir marta). Shartlar hali bajarilmagan bo'lsa, keyingi kirishda yana tekshiriladi.
+    """
+
+    try:
+        referral = db.scalar(select(Referral).where(Referral.referred_user_id == user.id, Referral.rewarded_at.is_(None)))
+        if not referral or not db.scalar(select(Teacher.id).where(Teacher.user_id == user.id)):
+            return
+        if not _subscribed_to_default_channels(user.tg_id):
+            return
+        # Ikki so'rov bir vaqtda kelsa ham kredit faqat bir marta beriladi
+        claimed = db.execute(
+            update(Referral)
+            .where(Referral.id == referral.id, Referral.rewarded_at.is_(None))
+            .values(rewarded_at=utcnow(), credits=REFERRAL_CREDITS),
+            execution_options={"synchronize_session": False},
+        ).rowcount
+        if claimed != 1:
+            db.rollback()
+            return
+        referrer = db.get(Teacher, referral.referrer_teacher_id)
+        add_credits(referrer, REFERRAL_CREDITS)
+        db.commit()
+        referrer_chat, name = referrer.user.tg_id, user.full_name or "Yangi o'qituvchi"
+    except Exception:
+        db.rollback()
+        logging.getLogger("backend").warning("Referal krediti berilmadi", exc_info=True)
+        return
+    threading.Thread(
+        target=_send_bot_text,
+        args=(referrer_chat, f"🎉 Siz taklif qilgan {name} o'qituvchi sifatida qo'shildi — sizga +{REFERRAL_CREDITS} kredit!"),
+        daemon=True,
+    ).start()
+
+
+def _referral_view(db: Session, teacher: Teacher) -> dict:
+    invited, joined, earned = db.execute(
+        select(func.count(Referral.id), func.count(Referral.rewarded_at), func.coalesce(func.sum(Referral.credits), 0))
+        .where(Referral.referrer_teacher_id == teacher.id)
+    ).one()
+    return {"link": referral_link(teacher), "invited": invited, "joined": joined, "earned": earned,
+            "reward": REFERRAL_CREDITS}
 
 
 # ========== 5) O'qituvchi endpointlari ==========
@@ -2986,6 +3083,7 @@ def teacher_overview(teacher: Teacher = Depends(get_current_teacher), db: Sessio
         "max": max((a.percent for a in attempts), default=0),
         "balance": teacher.balance,
         "credits": teacher.credits,
+        "referral": _referral_view(db, teacher),
         # Pullik test: karta kiritilganmi va nechta chek tasdiq kutyapti
         "card": _teacher_card_view(teacher),
         "pending_payments": db.scalar(

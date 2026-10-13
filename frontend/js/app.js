@@ -5497,6 +5497,35 @@ async function submitTeacherRegister() {
   await renderTeacherDashboard();
 }
 
+/*
+  Referal: o'qituvchi havolasini tarqatadi. Havola orqali kelgan yangi odam
+  @sukhrobmath kanaliga obuna bo'lib, o'qituvchi bo'lib ro'yxatdan o'tsa —
+  havola egasiga kredit (server beradi, bot xabar qiladi).
+*/
+function referralCardHtml(referral) {
+  return `
+    <div class="card tone-peach" style="cursor:default">
+      <div class="card-body" style="width:100%">
+        <div class="row-between"><span class="card-title-row"><span class="card-title-icon">🤝</span>Do'stlarni taklif qiling</span><b style="font-size:18px">+${referral.reward} kredit</b></div>
+        <p>Havolangiz orqali kelgan har bir yangi odam kanalga obuna bo'lib, o'qituvchi sifatida ro'yxatdan o'tsa — sizga ${referral.reward} kredit.</p>
+        <p class="subtitle" style="margin:6px 0 0">👥 Taklif qilinganlar: <b>${referral.invited}</b> · ✅ O'qituvchi bo'ldi: <b>${referral.joined}</b> · 🎫 Olingan: <b>${referral.earned}</b> kredit</p>
+        ${
+          referral.link
+            ? `<div class="contact-actions" style="margin-top:10px">
+                 <button class="btn" id="referral-share-button">📤 Ulashish</button>
+                 <button class="btn btn-ghost" id="referral-copy-button">📋 Nusxalash</button>
+               </div>`
+            : `<p class="subtitle" style="margin:8px 0 0">Havola hozir tayyor emas — birozdan keyin qayta oching.</p>`
+        }
+      </div>
+    </div>`;
+}
+
+function shareReferral(referral) {
+  const text = "📚 Test platformasi: test yarating, natijalarni avtomatik oling. Havola orqali kiring 👇";
+  openExternalLink(`https://t.me/share/url?url=${encodeURIComponent(referral.link)}&text=${encodeURIComponent(text)}`);
+}
+
 function fetchTeacherDashboardData() {
   return Promise.all([api("/api/me"), api("/api/teacher/stats"), api("/api/teacher/tests")]);
 }
@@ -5578,6 +5607,7 @@ function drawTeacherDashboard(me, stats, tests) {
         <button class="btn" id="buy-credit-button">🛒 Kredit sotib olish</button>
       </div>
     </div>
+    ${stats.referral ? referralCardHtml(stats.referral) : ""}
     <div class="tabs">
       <button class="tab ${teacherTestsTab === "active" ? "active" : ""}" data-tab="active">Jarayondagi testlar</button>
       <button class="tab ${teacherTestsTab === "closed" ? "active" : ""}" data-tab="closed">Yopilgan testlar</button>
@@ -5595,6 +5625,11 @@ function drawTeacherDashboard(me, stats, tests) {
   document.getElementById("test-payments-button").addEventListener("click", guarded(renderTestPaymentsPage));
   document.getElementById("card-settings-button").addEventListener("click", () => openCardSettingsSheet(renderTeacherDashboard));
   document.getElementById("buy-credit-button").addEventListener("click", guarded(renderCreditPurchaseForm));
+  document.getElementById("referral-share-button")?.addEventListener("click", () => shareReferral(stats.referral));
+  document.getElementById("referral-copy-button")?.addEventListener(
+    "click",
+    () => copyToClipboard(stats.referral.link, "📋 Havola nusxalandi")
+  );
   document.getElementById("new-test-button").addEventListener("click", () => renderNewTestKindChoice());
 
   // Tab almashganda faqat ro'yxat qayta chiziladi — testlar allaqachon

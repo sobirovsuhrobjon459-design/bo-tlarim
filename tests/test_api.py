@@ -4141,3 +4141,57 @@ def test_start_bosgan_foydalanuvchi_saqlanadi():
 
     with SessionLocal() as session:
         assert session.query(User).filter(User.tg_id == 777).count() == 1
+
+
+def test_referal_yangi_oqituvchi_uchun_kredit():
+    from backend.database import Referral, User
+    from bot.bot import _remember_user
+
+    reset_database()
+    register_teacher()  # 555 — havola egasi
+    with SessionLocal() as session:
+        referrer = session.query(Teacher).join(User, User.id == Teacher.user_id).filter(User.tg_id == 555).one()
+        referrer_id, start_credits = referrer.id, referrer.credits
+
+    def credits() -> int:
+        with SessionLocal() as session:
+            return session.get(Teacher, referrer_id).credits
+
+    stats = client.get("/api/teacher/stats", headers=as_user(555)).json()["referral"]
+    assert stats["link"] == f"https://t.me/test_platform_bot?start=ref_{referrer_id}", stats
+    assert (stats["invited"], stats["joined"], stats["earned"], stats["reward"]) == (0, 0, 0, 10), stats
+
+    client.get("/api/me", headers=as_user(700))  # avval ilovaga kirgan — referal emas
+    _remember_user(700, "Eski Odam", None, f"ref_{referrer_id}")
+    _remember_user(701, "Noto'g'ri", None, "ref_abc")
+    _remember_user(702, "Yo'q o'qituvchi", None, "ref_99999")
+    _remember_user(800, "Yangi Odam", None, f"ref_{referrer_id}")
+    _remember_user(801, "Obunasiz", None, f"ref_{referrer_id}")
+    _remember_user(800, "Yangi Odam", None, "ref_1")  # qayta /start — o'zgarmaydi
+    with SessionLocal() as session:
+        assert sorted(r.referred_user_id for r in session.query(Referral)) == sorted(
+            u.id for u in session.query(User).filter(User.tg_id.in_([800, 801]))
+        )
+
+    # O'quvchi bo'lib qolsa — kredit yo'q
+    client.get("/api/me", headers=as_user(800))
+    assert credits() == start_credits
+
+    original = main._subscribed_to_default_channels
+    main._subscribed_to_default_channels = lambda tg_id: tg_id != 801
+    try:
+        register_teacher(800, "Yangi", "Odam")
+        assert credits() == start_credits + 10
+        client.get("/api/me", headers=as_user(800))  # takror — ikkinchi marta berilmaydi
+        assert credits() == start_credits + 10
+
+        register_teacher(801, "Obunasiz", "Odam")  # kanalga obuna emas — hali berilmaydi
+        assert credits() == start_credits + 10
+        main._subscribed_to_default_channels = lambda tg_id: True
+        client.get("/api/me", headers=as_user(801))  # obuna bo'lgach, keyingi kirishda
+        assert credits() == start_credits + 20
+    finally:
+        main._subscribed_to_default_channels = original
+
+    stats = client.get("/api/teacher/stats", headers=as_user(555)).json()["referral"]
+    assert (stats["invited"], stats["joined"], stats["earned"]) == (2, 2, 20), stats

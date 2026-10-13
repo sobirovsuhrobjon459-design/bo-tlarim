@@ -65,6 +65,8 @@ PLATFORM_COMMISSION_PERCENT = int(os.getenv("PLATFORM_COMMISSION_PERCENT") or 20
 # Yangi o'qituvchi ro'yxatdan o'tganda beriladigan sovg'a kreditlar.
 # Har bir bepul test natijasi uchun 1 kredit sarflanadi.
 WELCOME_CREDITS = int(os.getenv("WELCOME_CREDITS") or 8000)
+# Referal: taklif qilingan odam o'qituvchi bo'lsa, havola egasiga beriladigan kredit
+REFERRAL_CREDITS = int(os.getenv("REFERRAL_CREDITS") or 10)
 
 # O'qituvchilarga pul balansini to'ldirish uchun ko'rsatiladigan karta raqami.
 ADMIN_CARD_NUMBER = os.getenv("ADMIN_CARD_NUMBER", "")
@@ -660,6 +662,25 @@ class PromoCode(Base):
     active: Mapped[bool] = mapped_column(default=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class Referral(Base):
+    """
+    Referal: o'qituvchi o'z havolasi (t.me/bot?start=ref_ID) bilan yangi odam olib keldi.
+    Taklif qilingan odam @sukhrobmath kanaliga obuna bo'lib, o'qituvchi sifatida
+    ro'yxatdan o'tganda havola egasiga REFERRAL_CREDITS kredit beriladi (bir marta).
+    HECH QACHON o'chirilmaydi — kim kimni olib kelgani va berilgan kredit tarixi.
+    """
+
+    __tablename__ = "referrals"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    referrer_teacher_id: Mapped[int] = mapped_column(ForeignKey("teachers.id"), index=True)
+    # Bitta odamni faqat bitta o'qituvchi "olib kelgan" bo'ladi
+    referred_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    rewarded_at: Mapped[datetime | None] = mapped_column(default=None)
+    credits: Mapped[int] = mapped_column(default=0)
 
 
 class PromoRedemption(Base):
