@@ -4308,5 +4308,12 @@ def test_javoblar_varaqasi_skanerlanadi():
     detail = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
     assert detail["filled"] == 2 and detail["missing"] == 0, detail
 
+    # Ochiq test ham skanerlanadi
     opened = create_test(enrollment_type="open")
-    assert client.post(f"/api/teacher/tests/{opened['id']}/scan", json={"image_base64": "x"}, headers=as_user(555)).status_code == 400
+    open_url = f"/api/teacher/tests/{opened['id']}/scan"
+    open_scan = client.post(open_url, json={"image_base64": _sheet_photo(opened["id"], {1: "B"})}, headers=as_user(555))
+    assert open_scan.status_code == 200 and open_scan.json()["answers"] == {"1": "B"}, open_scan.text
+    saved = client.post(f"{open_url}/save", json={"name": "Qog'ozda Ishlagan", "answers": {"1": "B"}}, headers=as_user(555))
+    assert saved.status_code == 200, saved.text
+    results = client.get(f"/api/teacher/tests/{opened['id']}/results", headers=as_user(555)).json()
+    assert "Qog'ozda Ishlagan" in [row["name"] for row in results["rows"]], results

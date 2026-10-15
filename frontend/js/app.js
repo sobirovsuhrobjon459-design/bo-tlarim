@@ -7405,13 +7405,9 @@ async function renderTestDetail(testId) {
     </section>
     <button class="btn btn-ghost" id="edit-test-button">✏️ Tahrirlash (nomi, vaqti)</button>
 
-    ${
-      isClosedTest
-        ? `<button class="btn btn-ghost" id="answer-sheet-button">📄 Javoblar varaqasini olish</button>
-           <button class="btn btn-ghost" id="answer-key-button">🔑 To'g'ri javoblar (kalit)</button>`
-        : ""
-    }
-    ${isClosedTest && !isFinished ? `<button class="btn" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""}
+    <button class="btn btn-ghost" id="answer-sheet-button">📄 Javoblar varaqasini olish</button>
+    <button class="btn btn-ghost" id="answer-key-button">🔑 To'g'ri javoblar (kalit)</button>
+    ${!isFinished ? `<button class="btn" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""}
     ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
     ${!isFinished && !isClosedTest && !test.broadcast_at
       ? `<button class="btn" id="broadcast-button">📢 Hammaga e'lon qilish</button>`

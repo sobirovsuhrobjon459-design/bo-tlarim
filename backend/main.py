@@ -4111,9 +4111,8 @@ def _store_offline_answers(db: Session, test: Test, teacher: Teacher, attempt: A
 
 
 def _paper_test(db: Session, teacher: Teacher, test_id: int) -> Test:
+    # Ochiq testni ham qog'ozda o'tkazish mumkin — skanerlangan natija onlayn ishlaganlar bilan bir ro'yxatda
     test = _get_own_test(db, teacher, test_id)
-    if test.enrollment_type != "closed":
-        raise HTTPException(status_code=400, detail="Varaq skanerlash faqat yopiq (qog'ozda o'tkaziladigan) testlarda")
     if test.status == "closed":
         raise HTTPException(status_code=400, detail="Test yakunlangan — avval qayta oching")
     return test
