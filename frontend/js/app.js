@@ -4765,7 +4765,7 @@ function renderTestFound(test) {
   let blockedMessage = "";
 
   if (test.enrollment_type === "closed") {
-    blockedMessage = "🔒 Bu offline test — javoblarni o'qituvchining o'zi kiritadi.";
+    blockedMessage = "🔒 Bu offline test — ichki imtihon, javoblar titulda belgilanadi.";
   } else if (test.start_time && now < parseUtc(test.start_time)) {
     blockedMessage = `⏳ Test hali boshlanmagan. Boshlanish vaqti: ${formatDateTime(test.start_time)}`;
   } else if (test.end_time && now > parseUtc(test.end_time)) {
@@ -6475,8 +6475,8 @@ function renderNewTestForm(testType, draft = {}) {
     <p class="subtitle" id="enrollment-hint" style="margin-bottom:16px">
       ${
         draft.enrollment === "closed"
-          ? "O'qituvchi o'quvchilarni o'zi qo'shib, javoblarini kiritadi"
-          : "O'quvchilar test kodini kiritib o'zlari qo'shiladi"
+          ? "Ichki imtihon uchun: o'quvchilar titulga (javoblar varaqasiga) belgilaydi, natija skaner orqali tekshiriladi"
+          : "O'quvchilar test kodini kiritib, testni ilovada ishlaydi"
       }
     </p>
 
@@ -6631,7 +6631,7 @@ function renderNewTestForm(testType, draft = {}) {
     enrollmentToggle.dataset.value = "open";
     enrollmentOpenButton.classList.remove("btn-ghost");
     enrollmentClosedButton.classList.add("btn-ghost");
-    enrollmentHint.textContent = "O'quvchilar test kodini kiritib o'zlari qo'shiladi";
+    enrollmentHint.textContent = "O'quvchilar test kodini kiritib, testni ilovada ishlaydi";
   }
 
   enrollmentOpenButton.addEventListener("click", selectOpenEnrollment);
@@ -6645,7 +6645,7 @@ function renderNewTestForm(testType, draft = {}) {
     enrollmentToggle.dataset.value = "closed";
     enrollmentClosedButton.classList.remove("btn-ghost");
     enrollmentOpenButton.classList.add("btn-ghost");
-    enrollmentHint.textContent = "O'qituvchi o'quvchilarni o'zi qo'shib, javoblarini kiritadi";
+    enrollmentHint.textContent = "Ichki imtihon uchun: o'quvchilar titulga (javoblar varaqasiga) belgilaydi, natija skaner orqali tekshiriladi";
   });
 
   const channelCheckbox = document.getElementById("field-require-channel");

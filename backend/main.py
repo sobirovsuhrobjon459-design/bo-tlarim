@@ -2361,7 +2361,7 @@ def _check_enrollment(test: Test) -> None:
 
     if test.enrollment_type == "closed":
         raise HTTPException(
-            status_code=403, detail="Bu offline test — javoblarni o'qituvchining o'zi kiritadi"
+            status_code=403, detail="Bu offline test — ichki imtihon, javoblar titulda belgilanadi"
         )
     if test.status == "closed":
         raise HTTPException(status_code=403, detail="Test yakunlangan")
