@@ -192,7 +192,7 @@ def _add_missing_columns() -> None:
         "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)"},
         "school_classes": {"curator_user_id": "INTEGER"},
         "private_schools": {"monthly_fee": "INTEGER DEFAULT 0"},
-        "class_students": {"discount_percent": "INTEGER DEFAULT 0"},
+        "class_students": {"discount_percent": "INTEGER DEFAULT 0", "student_code": "INTEGER"},
         "promo_codes": {"per_teacher_limit": "INTEGER DEFAULT 3"},
         "school_members": {"position": "VARCHAR(20)", "phone": "VARCHAR(20)", "birth_date": "DATE", "passport": "VARCHAR(20)"},
         "attendances": {
@@ -6782,6 +6782,39 @@ def _school_attendance(db: Session, user: User, attendance_id: int) -> tuple[Att
     return attendance, member
 
 
+STUDENT_CODE_FIRST, STUDENT_CODE_LAST = 1001, 9999
+
+
+def _assign_student_codes(db: Session, school_id: int) -> None:
+    """
+    Maktabning ID'siz o'quvchilariga 4 xonali ID beradi (qo'shilish tartibida, 1001 dan).
+    Chiqarilgan o'quvchilarning ID'si ham band hisoblanadi — boshqaga berilmaydi.
+    """
+
+    # Bir vaqtda ikki o'qituvchi o'quvchi qo'shsa ham ID takrorlanmasin
+    db.execute(select(PrivateSchool.id).where(PrivateSchool.id == school_id).with_for_update())
+    students = db.scalars(
+        select(ClassStudent)
+        .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
+        .where(SchoolClass.school_id == school_id)
+        .order_by(ClassStudent.id)
+    ).all()
+    taken = {student.student_code for student in students if student.student_code}
+    missing = [student for student in students if not student.student_code]
+    if not missing:
+        return
+    next_code = max(taken, default=STUDENT_CODE_FIRST - 1) + 1
+    for student in missing:
+        if next_code > STUDENT_CODE_LAST:  # 9999 dan oshsa — bo'sh qolgan raqamlardan
+            next_code = next((code for code in range(STUDENT_CODE_FIRST, STUDENT_CODE_LAST + 1) if code not in taken), None)
+            if next_code is None:
+                break
+        student.student_code = next_code
+        taken.add(next_code)
+        next_code += 1
+    db.commit()
+
+
 def _active_students(school_class: SchoolClass) -> list[ClassStudent]:
     return [student for student in school_class.students if student.removed_at is None]
 
@@ -6852,10 +6885,13 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
         "can_delete": bool(member and _can_delete_classes(member)),
     }
     if with_details:
+        if any(not student.student_code for student in students):
+            _assign_student_codes(db, school_class.school_id)  # avval qo'shilganlarga ham ID
         stats = _student_attendance_stats(db, [student.id for student in students], _attendance_filter(school_class, member))
         view["students"] = [
             {
                 "id": student.id,
+                "code": student.student_code,
                 "full_name": student.full_name,
                 "birth_date": student.birth_date,
                 "stats": stats[student.id],
@@ -6990,6 +7026,7 @@ def add_student(class_id: int, body: StudentIn, user: User = Depends(get_current
     school_class = _managed_class(db, user, class_id)
     db.add(ClassStudent(class_id=school_class.id, full_name=body.full_name, birth_date=body.birth_date))
     db.commit()
+    _assign_student_codes(db, school_class.school_id)
     db.refresh(school_class)
     return _class_view(db, school_class, with_details=True, member=_active_membership(db, user))
 
@@ -7047,6 +7084,7 @@ def add_students_bulk(
         added += 1
 
     db.commit()
+    _assign_student_codes(db, school_class.school_id)
     db.refresh(school_class)
     return {"added": added, "class": _class_view(db, school_class, with_details=True, member=_active_membership(db, user))}
 
@@ -7087,8 +7125,11 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
         history_query = history_query.where(scope)
     history = db.execute(history_query).all()
 
+    if not student.student_code:
+        _assign_student_codes(db, school_class.school_id)
     return {
         "id": student.id,
+        "code": student.student_code,
         "class_id": school_class.id,
         "class_name": school_class.name,
         "full_name": student.full_name,

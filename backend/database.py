@@ -582,6 +582,9 @@ class ClassStudent(Base):
     class_id: Mapped[int] = mapped_column(ForeignKey("school_classes.id"), index=True)
     full_name: Mapped[str] = mapped_column(String(200))
     birth_date: Mapped[date | None] = mapped_column(default=None)
+    # O'quvchi ID — 4 xonali (1001, 1002 ...), maktab ichida takrorlanmaydi va
+    # o'quvchi chiqarilsa ham boshqaga berilmaydi. Titulga shu raqam bo'yaladi.
+    student_code: Mapped[int | None] = mapped_column(default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     removed_at: Mapped[datetime | None] = mapped_column(default=None)
     # O'qish to'lovidan chegirma (foiz): 30 — oylik summaning 70% i to'lanadi

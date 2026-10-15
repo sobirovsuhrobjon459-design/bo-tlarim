@@ -1786,7 +1786,7 @@ function renderClassStudentsTab(schoolClass) {
             <div class="student-card" data-student-id="${student.id}" role="button" tabindex="0">
               <span class="student-avatar">${initials(student.full_name)}</span>
               <span class="student-info">
-                <b>${escapeHtml(student.full_name)}</b>
+                <b>${student.code ? `<span class="student-number">${student.code}</span> ` : ""}${escapeHtml(student.full_name)}</b>
                 <small>${studentStatsLine(student.stats)}</small>
               </span>
               ${rateBadge(student.stats)}
@@ -2003,7 +2003,7 @@ async function renderStudentProfile(schoolClass, studentId) {
       <span class="student-avatar" style="width:56px;height:56px;font-size:20px">${initials(student.full_name)}</span>
       <div class="card-body" style="width:100%">
         <h3 style="margin:0">${escapeHtml(student.full_name)}</h3>
-        <p style="margin:4px 0 0">📚 ${escapeHtml(student.class_name)}</p>
+        <p style="margin:4px 0 0">📚 ${escapeHtml(student.class_name)}${student.code ? ` · 🆔 ID: <b>${student.code}</b>` : ""}</p>
         <p class="subtitle" style="margin:2px 0 0">${stats.total ? `${stats.total} ta darsda davomat olingan` : "Hali davomat olinmagan"}</p>
       </div>
       ${rateBadge(stats)}

@@ -4486,3 +4486,44 @@ def test_offline_testga_excel_dan_oquvchilar():
     assert bad.status_code == 422, bad.text
     opened = create_test(enrollment_type="open")
     assert client.post(f"/api/teacher/tests/{opened['id']}/students/import", json=payload, headers=as_user(555)).status_code == 400
+
+
+def test_maktab_oquvchilariga_4_xonali_id():
+    from backend.database import ClassStudent
+
+    reset_database()
+    school_class = _school_with_class()
+    cid = school_class["id"]
+    client.post(f"/api/classes/{cid}/students", json={"full_name": "Islom Karimov"}, headers=as_user(701))
+    added = client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Ali Valiyev", "Zuhra Karimova"]},
+                        headers=as_user(701)).json()["class"]
+    assert [(s["code"], s["full_name"]) for s in added["students"]] == [
+        (1001, "Islom Karimov"), (1002, "Ali Valiyev"), (1003, "Zuhra Karimova")], added["students"]
+
+    # Boshqa sinf — shu maktabda raqamlash davom etadi (takrorlanmaydi)
+    other = client.post("/api/classes", json={"name": "11-A"}, headers=as_user(701)).json()
+    other_view = client.post(f"/api/classes/{other['id']}/students", json={"full_name": "Jasur Umarov"},
+                             headers=as_user(701)).json()
+    assert other_view["students"][0]["code"] == 1004
+
+    # Chiqarilgan o'quvchining ID'si boshqaga berilmaydi
+    zuhra = added["students"][2]["id"]
+    assert client.delete(f"/api/classes/{cid}/students/{zuhra}", headers=as_user(701)).status_code == 200
+    after = client.post(f"/api/classes/{cid}/students", json={"full_name": "Yangi Bola"}, headers=as_user(701)).json()
+    assert [s["code"] for s in after["students"]] == [1001, 1002, 1005], after["students"]
+
+    profile = client.get(f"/api/classes/{cid}/students/{after['students'][0]['id']}", headers=as_user(701)).json()
+    assert profile["code"] == 1001
+
+    # Avval (ID'siz) qo'shilgan o'quvchilar ochilganda ID oladi
+    with SessionLocal() as session:
+        session.add(ClassStudent(class_id=cid, full_name="Eski Oquvchi"))
+        session.commit()
+    view = client.get(f"/api/classes/{cid}", headers=as_user(701)).json()
+    assert {s["full_name"]: s["code"] for s in view["students"]}["Eski Oquvchi"] == 1006
+
+    # Boshqa maktab — o'z raqamlashi 1001 dan
+    other_school = _school_with_class(801)
+    first = client.post(f"/api/classes/{other_school['id']}/students", json={"full_name": "Birinchi"},
+                        headers=as_user(801)).json()
+    assert first["students"][0]["code"] == 1001
