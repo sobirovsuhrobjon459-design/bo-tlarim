@@ -4513,6 +4513,26 @@ def test_offline_testga_excel_dan_oquvchilar():
     assert client.post(f"/api/teacher/tests/{opened['id']}/students/import", json=payload, headers=as_user(555)).status_code == 400
 
 
+def test_chiqarilgan_oquvchi_idsi_yangisiga_beriladi():
+    reset_database()
+    cid = _school_with_class()["id"]  # 701 — maktab admini
+    client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Ali Valiyev", "Zuhra Karimova", "Islom Karimov"]},
+                headers=as_user(701))
+    students = client.put(f"/api/classes/{cid}/student-codes", json={"start": 1030, "end": 1040},
+                          headers=as_user(701)).json()["students"]
+    assert [s["code"] for s in students] == [1030, 1031, 1032]
+
+    # Oxirgi (1032) chiqarildi — yangi o'quvchi 1033 emas, 1032 oladi
+    client.delete(f"/api/classes/{cid}/students/{students[2]['id']}", headers=as_user(701))
+    view = client.post(f"/api/classes/{cid}/students", json={"full_name": "Yangi Bola"}, headers=as_user(701)).json()
+    assert [(s["full_name"], s["code"]) for s in view["students"]][-1] == ("Yangi Bola", 1032), view["students"]
+
+    # O'rtadagi (1030) chiqarilsa ham — bo'sh joy keyingi yangisiga
+    client.delete(f"/api/classes/{cid}/students/{students[0]['id']}", headers=as_user(701))
+    view = client.post(f"/api/classes/{cid}/students", json={"full_name": "Yana Bola"}, headers=as_user(701)).json()
+    assert sorted(s["code"] for s in view["students"]) == [1030, 1031, 1032], view["students"]
+
+
 def test_sinf_id_oraligini_admin_belgilaydi():
     from backend.database import ClassStudent
 

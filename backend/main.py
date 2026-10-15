@@ -6973,8 +6973,21 @@ def _assign_student_codes(db: Session, school_id: int) -> None:
         .where(SchoolClass.school_id == school_id)
         .order_by(ClassStudent.id)
     ).all()
-    taken = {student.student_code for student, _ in rows if student.student_code}
     changed = False
+    # Sinfdan chiqarilgan (yoki sinfi o'chirilgan) o'quvchining ID'si bo'shaydi — keyingi yangi
+    # o'quvchiga beriladi (1031, 1032 o'chdi → yangisi 1032). Natija va davomatlari o'quvchiga
+    # bog'langan, ID'ga emas — yo'qolmaydi. Hali skanerlanmagan imtihon varag'idagi raqam ham
+    # olinadi: shu ID'li yangi o'quvchining varag'i unga tushib qolmasin.
+    for student, school_class in rows:
+        if student.student_code and (student.removed_at or school_class.deleted_at):
+            for attempt in db.scalars(
+                select(Attempt).where(Attempt.class_student_id == student.id, Attempt.status == "pending",
+                                      Attempt.sheet_number == student.student_code)
+            ).all():
+                attempt.sheet_number = None
+            student.student_code = None
+            changed = True
+    taken = {student.student_code for student, _ in rows if student.student_code}
     for student, school_class in rows:
         if student.student_code or student.removed_at or school_class.code_start is None:
             continue
@@ -7383,6 +7396,7 @@ def remove_student(class_id: int, student_id: int, user: User = Depends(get_curr
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
     student.removed_at = utcnow()
     db.commit()
+    _assign_student_codes(db, school_class.school_id)  # ID'si bo'shaydi
     db.refresh(school_class)
     return _class_view(db, school_class, with_details=True, member=_active_membership(db, user))
 
