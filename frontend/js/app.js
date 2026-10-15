@@ -7212,7 +7212,12 @@ async function scanSheetFromPhoto(testId, test, page = 1, collected = null) {
   if (!file) return;
   showToast("⏳ Varaq o'qilmoqda…");
   const image = await shrinkPhoto(file);
-  renderScanReview(testId, test, await readSheetImage(testId, image, page, collected));
+  try {
+    renderScanReview(testId, test, await readSheetImage(testId, image, page, collected));
+  } catch (error) {
+    if (!isOfflineError(error) || page !== 1) throw error;
+    await queueSheet(testId, image);
+  }
 }
 
 // Rasm serverda o'qiladi; ko'p sahifali varaqda sahifalar javoblari bitta o'quvchiga yig'iladi
@@ -7428,8 +7433,9 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     full.width = Math.round(video.videoWidth * factor);
     full.height = Math.round(video.videoHeight * factor);
     full.getContext("2d").drawImage(video, 0, 0, full.width, full.height);
+    const image = full.toDataURL("image/jpeg", 0.9);
     try {
-      const scan = await readSheetImage(testId, full.toDataURL("image/jpeg", 0.9), page, collected);
+      const scan = await readSheetImage(testId, image, page, collected);
       if (page === 1 && liveSession?.lastSignature && sheetSignature(scan) === liveSession.lastSignature) {
         // Hozirgina saqlangan varaq — qayta o'qilmaydi
         status.textContent = "✅ Bu varaq saqlangan — keyingisini qo'ying";
@@ -7446,6 +7452,18 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
       renderScanReview(testId, test, scan);
     } catch (error) {
       if (!video.isConnected) return;
+      if (isOfflineError(error) && page === 1) {
+        await queueSheet(testId, image);
+        liveSession = liveSession || { count: 0 };
+        liveSession.count += 1;
+        status.textContent = "📥 Navbatga qo'shildi (internet yo'q) — keyingisini qo'ying";
+        waitForNewSheet = true;
+        busy = false;
+        previous = null;
+        steady = 0;
+        liveTimer = setInterval(tick, 250);
+        return;
+      }
       status.textContent = `⚠️ ${error.message}`;
       busy = false;
       previous = null;
@@ -7652,6 +7670,7 @@ function renderScanReview(testId, test, scan) {
       },
     });
     unsavedChanges = false;
+    if (scan.queueId) await queueDelete(scan.queueId);
     if (scan.live && liveSession) {
       liveSession.count += 1;
       liveSession.lastSignature = sheetSignature(scan);
@@ -7882,6 +7901,149 @@ function wireVariantChips(onChange) {
   });
 }
 
+/* ---------- Internetsiz skanerlash: varaqlar navbati ---------- */
+
+/*
+  Internet yo'q paytda olingan varaq surati telefonda (IndexedDB) saqlanadi va
+  internet kelganda o'zi yuboriladi. O'quvchi raqamdan tanilib, shubhali savol
+  bo'lmasa — natija o'zi saqlanadi; qolganlari "tekshirish kerak" bo'lib qoladi.
+  Surat navbatdan faqat natija saqlangandan keyin o'chadi — hech narsa yo'qolmaydi.
+*/
+const SCAN_QUEUE_DB = "testway";
+const SCAN_QUEUE_STORE = "scan-queue";
+
+function openScanQueue() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(SCAN_QUEUE_DB, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore(SCAN_QUEUE_STORE, { keyPath: "id", autoIncrement: true });
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function scanQueue(mode, action) {
+  const db = await openScanQueue();
+  return new Promise((resolve, reject) => {
+    const store = db.transaction(SCAN_QUEUE_STORE, mode).objectStore(SCAN_QUEUE_STORE);
+    const request = action(store);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+const queueAll = () => scanQueue("readonly", (store) => store.getAll()).catch(() => []);
+const queuePut = (item) => scanQueue("readwrite", (store) => store.put(item));
+const queueDelete = (id) => scanQueue("readwrite", (store) => store.delete(id));
+
+// Internet yo'qligi tufayli so'rov umuman ketmadi (server javob bergan xato emas)
+function isOfflineError(error) {
+  return !error?.status && (error instanceof TypeError || !navigator.onLine);
+}
+
+async function queueSheet(testId, image) {
+  await queuePut({ testId, image, status: "new", createdAt: Date.now() });
+  showToast("📥 Internet yo'q — varaq navbatga qo'shildi, internet kelganda yuboriladi");
+}
+
+let queueRunning = false;
+
+async function processScanQueue() {
+  if (queueRunning || !navigator.onLine) return;
+  queueRunning = true;
+  let saved = 0;
+  try {
+    for (const item of await queueAll()) {
+      if (item.status !== "new") continue;
+      try {
+        const scan = await readSheetImage(item.testId, item.image, 1, null);
+        const flagged = scan.questions.some((question) => question.status === "multiple" || question.status === "unsure");
+        const variantKnown = !scan.variants?.length || Boolean(scan.variant);
+        if (scan.match?.status === "pending" && !flagged && variantKnown && scan.pageCount === 1) {
+          const answers = Object.fromEntries(
+            scan.questions.filter((question) => question.chosen).map((question) => [String(question.ref), question.chosen])
+          );
+          await api(`/api/teacher/tests/${item.testId}/scan/save`, {
+            method: "POST",
+            body: { attempt_id: scan.match.id, answers, variant: scan.variants?.length ? scan.variant : null },
+          });
+          await queueDelete(item.id);
+          saved += 1;
+        } else {
+          await queuePut({ ...item, status: "review", scan });
+        }
+      } catch (error) {
+        if (isOfflineError(error)) break;
+        await queuePut({ ...item, status: "error", error: error.message });
+      }
+    }
+  } finally {
+    queueRunning = false;
+  }
+  if (saved) showToast(`📤 Navbatdagi ${saved} ta varaq tekshirildi va saqlandi`);
+}
+
+window.addEventListener("online", () => processScanQueue());
+
+async function renderScanQueue(testId, test) {
+  const items = (await queueAll()).filter((item) => item.testId === testId);
+  const statusText = {
+    new: "⏳ Yuborilishini kutmoqda",
+    review: "⚠️ Tekshirish kerak",
+    error: "❌ O'qib bo'lmadi",
+  };
+
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-queue" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">Navbatdagi varaqlar</h2>
+    </div>
+    <p class="subtitle">Internet yo'q paytda skanerlangan varaqlar. Internet kelganda o'zi yuboriladi;
+      o'quvchi tanilmagan yoki shubhali savoli borlarni bu yerda tekshirasiz.</p>
+    ${
+      items.length
+        ? items
+            .map(
+              (item) => `
+                <div class="card" ${item.status === "review" ? `data-queue-review="${item.id}"` : 'style="cursor:default"'}>
+                  <div class="card-body" style="flex:1">
+                    <b>${item.scan?.match ? escapeHtml(item.scan.match.name) : `Varaq #${item.id}`}</b>
+                    <p>${statusText[item.status]}${item.error ? ` — ${escapeHtml(item.error)}` : ""} · ${formatDateTime(new Date(item.createdAt).toISOString())}</p>
+                  </div>
+                  ${item.status === "review" ? "<span>›</span>" : deleteButton("data-queue-delete", item.id)}
+                </div>`
+            )
+            .join("")
+        : `<p class="subtitle">Navbat bo'sh ✅</p>`
+    }
+    ${items.some((item) => item.status === "new") ? `<button class="btn" id="queue-send">📤 Hozir yuborish</button>` : ""}
+  `);
+
+  document.querySelector('[data-action="back-queue"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
+  document.getElementById("queue-send")?.addEventListener(
+    "click",
+    guarded(async () => {
+      if (!navigator.onLine) throw new Error("Internet hali yo'q");
+      await processScanQueue();
+      await renderScanQueue(testId, test);
+    })
+  );
+  document.querySelectorAll("[data-queue-review]").forEach((card) => {
+    const item = items.find((entry) => entry.id === Number(card.dataset.queueReview));
+    card.addEventListener("click", () => renderScanReview(testId, test, { ...item.scan, queueId: item.id }));
+  });
+  document.querySelectorAll("[data-queue-delete]").forEach((button) => {
+    button.addEventListener(
+      "click",
+      guarded(async (event) => {
+        event.stopPropagation();
+        if (!(await askConfirm("Bu varaq navbatdan o'chirilsinmi? Surati ham o'chadi."))) return;
+        await queueDelete(Number(button.dataset.queueDelete));
+        await renderScanQueue(testId, test);
+      })
+    );
+  });
+}
+
 async function renderTestDetail(testId) {
   const test = await api(`/api/teacher/tests/${testId}`);
   const isClosedTest = test.enrollment_type === "closed";
@@ -7944,6 +8106,7 @@ async function renderTestDetail(testId) {
     }
     ${test.mode === "key" ? `<button class="btn btn-ghost" id="variants-button">🔀 Variantlar${test.variants.length ? ` (${test.variants.join(", ")})` : " (A/B/C/D)"}</button>` : ""}
     ${!isFinished ? `<button class="btn" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""}
+    <div id="scan-queue-slot"></div>
     ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
     ${!isFinished && !isClosedTest && !test.broadcast_at
       ? `<button class="btn" id="broadcast-button">📢 Hammaga e'lon qilish</button>`
@@ -7997,6 +8160,14 @@ async function renderTestDetail(testId) {
 
   document.getElementById("scan-sheet-button")?.addEventListener("click", guarded(() => scanSheetPage(testId, test)));
   document.getElementById("variants-button")?.addEventListener("click", guarded(() => renderVariantsPage(testId, test)));
+  queueAll().then((items) => {
+    const mine = items.filter((item) => item.testId === testId);
+    const slot = document.getElementById("scan-queue-slot");
+    if (!mine.length || !slot) return;
+    const review = mine.filter((item) => item.status !== "new").length;
+    slot.innerHTML = `<button class="btn btn-ghost" id="scan-queue-button">📥 Navbatdagi varaqlar: ${mine.length}${review ? ` (${review} tasi tekshirish kerak)` : ""}</button>`;
+    document.getElementById("scan-queue-button").addEventListener("click", guarded(() => renderScanQueue(testId, test)));
+  });
   document.getElementById("named-sheets-button")?.addEventListener(
     "click",
     guarded(() =>
@@ -9051,6 +9222,9 @@ window.appBack = () => {
 };
 
 function startApp() {
+  // Internetsiz ham ochilishi uchun (qarang: /sw.js); ishlamasa — oddiy rejim
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+  setTimeout(() => processScanQueue(), 3000);
   if (IN_APP && !telegram?.initData && !appSession) {
     renderAppLogin();
     return;
