@@ -8418,7 +8418,14 @@ async function renderTestDetail(testId) {
                : ""
            }
            ${test.mode === "key" ? `<button class="btn btn-ghost" id="variants-button">🔀 Variantlar${test.variants.length ? ` (${test.variants.join(", ")})` : " (A/B/C/D)"}</button>` : ""}
-           ${!isFinished ? `<button class="btn" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""}`
+           ${
+             // Skaner faqat Android ilovada (APK) — Telegram botida yo'q
+             isFinished
+               ? ""
+               : IN_APP
+                 ? `<button class="btn" id="scan-sheet-button">📷 Varaqni skanerlash</button>`
+                 : `<p class="subtitle" style="margin:4px 4px 10px">📷 Varaqni skanerlash — TestWay ilovasida (Android).</p>`
+           }`
         : ""
     }
     ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
