@@ -945,3 +945,9 @@ select:focus {
   text-align: center;
   font-weight: 700;
 }
+
+/* Skanerlash tugmasidan keyingi navbat joyi bo'sh bo'lsa ham tugmalar yopishmasin */
+#scan-queue-slot + .btn,
+#scan-queue-slot .btn {
+  margin-top: 10px;
+}
