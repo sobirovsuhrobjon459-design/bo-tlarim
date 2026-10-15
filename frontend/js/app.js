@@ -7261,12 +7261,8 @@ async function shrinkPhoto(file, maxSide = 1600) {
 }
 
 async function scanSheetPage(testId, test, page = 1, collected = null) {
-  // Kamera bo'lsa — jonli skaner (o'zi suratga oladi), bo'lmasa — oddiy surat
-  if (navigator.mediaDevices?.getUserMedia && !liveScanUnavailable) {
-    await startLiveScan(testId, test, page, collected);
-    return;
-  }
-  await scanSheetFromPhoto(testId, test, page, collected);
+  // Har safar jonli skaner (ilova ichidagi kamera) ochiladi; ochilmasa — sababi va oddiy surat tugmasi ko'rsatiladi
+  await startLiveScan(testId, test, page, collected);
 }
 
 async function scanSheetFromPhoto(testId, test, page = 1, collected = null) {
@@ -7311,7 +7307,6 @@ async function readSheetImage(testId, image, page, collected) {
 */
 let liveStream = null;
 let liveTimer = null;
-let liveScanUnavailable = false;
 let liveSession = null; // { count, lastSignature } — ketma-ket skanerlanganlar soni va oxirgi varaq
 
 // Varaqni tanish uchun "iz": raqami bo'lsa — raqam, bo'lmasa — o'qilgan javoblar
@@ -7648,13 +7643,23 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
   );
 
   try {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("unsupported");
     liveStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1440 } },
       audio: false,
     });
-  } catch (_) {
-    liveScanUnavailable = true; // shu sessiyada qayta so'ralmaydi — oddiy suratga o'tiladi
-    status.textContent = "Kameraga ruxsat berilmadi. «Galereyadan / oddiy surat» tugmasi bilan davom eting.";
+  } catch (error) {
+    // Nega ochilmadi — o'qituvchi nima qilishini bilsin (keyingi safar yana urinib ko'riladi)
+    const reason =
+      error?.name === "NotAllowedError" || error?.name === "SecurityError"
+        ? "Kameraga ruxsat yo'q. Telefon sozlamalari → Ilovalar → TestWay → Ruxsatlar → Kamera → «Ruxsat berish». " +
+          "Ilova eski bo'lsa (1.0), yangi versiyasini o'rnating."
+        : error?.name === "NotReadableError" || error?.name === "AbortError"
+          ? "Kamera boshqa ilovada band. Uni yopib, qayta urinib ko'ring."
+          : error?.name === "NotFoundError" || error?.name === "OverconstrainedError"
+            ? "Orqa kamera topilmadi."
+            : "Bu yerda jonli skaner ishlamaydi.";
+    status.textContent = `⚠️ ${reason} Hozircha «Galereyadan / oddiy surat» bilan davom etishingiz mumkin.`;
     document.getElementById("live-capture").remove();
     return;
   }
