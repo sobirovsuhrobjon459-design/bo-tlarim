@@ -8108,7 +8108,8 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
 // (source — video yoki ImageBitmap)
 function analyzeFrame(source, sourceWidth, sourceHeight, options) {
   const pool = analyzeFrame.pool || (analyzeFrame.pool = {});
-  const context = (name, width, height) => {
+  // crop — kadrning faqat shu qismi (manba pikselida): [x, y, eni, bo'yi]
+  const context = (name, width, height, crop = [0, 0, sourceWidth, sourceHeight]) => {
     if (!pool[name]) {
       const canvas = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
       pool[name] = canvas.getContext("2d", { willReadFrequently: true });
@@ -8116,7 +8117,7 @@ function analyzeFrame(source, sourceWidth, sourceHeight, options) {
     const draw = pool[name];
     if (draw.canvas.width !== width) draw.canvas.width = width;
     if (draw.canvas.height !== height) draw.canvas.height = height;
-    draw.drawImage(source, 0, 0, width, height);
+    draw.drawImage(source, ...crop, 0, 0, width, height);
     return draw.getImageData(0, 0, width, height).data;
   };
 
@@ -8128,16 +8129,25 @@ function analyzeFrame(source, sourceWidth, sourceHeight, options) {
   const answer = { width, height, corners, read: null };
   if (!corners || !options.layout || options.skipRead) return answer;
 
+  // To'liq o'lchamda faqat titul turgan qism olinadi (burchaklar atrofi) — kadrning qolgani
+  // (stol, boshqa titullar) o'qilmaydi; ixcham titulda bu kadrning uchdan biri
   const scale = Math.min(1, 1600 / Math.max(sourceWidth, sourceHeight));
-  const fullWidth = Math.round(sourceWidth * scale);
-  const fullHeight = Math.round(sourceHeight * scale);
-  const pixels = context("full", fullWidth, fullHeight);
+  const k = (sourceWidth * scale) / width; // kichik kadr pikseli → to'liq o'lcham pikseli
+  const margin = Math.max(...corners.map((corner) => corner.size)) * k * 1.5 + 4;
+  const xs = corners.map((corner) => corner.x * k);
+  const ys = corners.map((corner) => corner.y * k);
+  const left = Math.max(0, Math.floor(Math.min(...xs) - margin));
+  const top = Math.max(0, Math.floor(Math.min(...ys) - margin));
+  const fullWidth = Math.min(Math.round(sourceWidth * scale), Math.ceil(Math.max(...xs) + margin)) - left;
+  const fullHeight = Math.min(Math.round(sourceHeight * scale), Math.ceil(Math.max(...ys) + margin)) - top;
+  const pixels = context("full", fullWidth, fullHeight, [left / scale, top / scale, fullWidth / scale, fullHeight / scale]);
   const gray = new Float32Array(fullWidth * fullHeight);
   for (let i = 0, p = 0; i < gray.length; i += 1, p += 4) {
     gray[i] = pixels[p] * 0.299 + pixels[p + 1] * 0.587 + pixels[p + 2] * 0.114;
   }
-  const k = fullWidth / width;
-  const full = corners.map((corner) => refineCorner(gray, fullWidth, fullHeight, corner.x * k, corner.y * k, corner.size * k));
+  const full = corners.map((corner) =>
+    refineCorner(gray, fullWidth, fullHeight, corner.x * k - left, corner.y * k - top, corner.size * k)
+  );
   const sheet = prepareSheetFrame(gray, fullWidth, fullHeight, full);
   if (!sheet) return answer;
   let result = readSheetAnswers(sheet, options.layout.bubbles, options.page);
@@ -8647,7 +8657,15 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
         return;
       }
       const signature = JSON.stringify([result.answers, result.sheet_number, result.variant, result.sheet_code]);
-      if (signature !== lastRead) {
+      // Ishonchli o'qilgan bo'lsa (imtihon kodi mos, shubhali doiracha yo'q, ID aniq) — birinchi kadrning
+      // o'zi qabul qilinadi; aks holda ikkinchi kadr ham xuddi shuni berishi kutiladi. Natija baribir
+      // tekshiruv ekranida ko'rsatiladi — o'qituvchi tasdiqlamaguncha saqlanmaydi
+      const confident =
+        result.sheet_code !== null &&
+        result.sheet_code === layout.sheet_code &&
+        ["ok", "none"].includes(result.sheet_number_status) &&
+        result.questions.every((question) => question.status === "ok" || question.status === "empty");
+      if (signature !== lastRead && !confident) {
         lastRead = signature;
         status.textContent = "🔎 O'qilmoqda…";
         return;
