@@ -18,6 +18,8 @@ const telegram = window.Telegram?.WebApp;
   shu telefonda saqlanadi (X-App-Session header'i bilan yuboriladi).
 */
 const IN_APP = /TestWayApp/i.test(navigator.userAgent);
+// TestWay ilovasining Play Market havolasi — ilova chiqqach shu yerga yoziladi (bo'sh bo'lsa — "tez orada")
+const APP_DOWNLOAD_URL = "";
 const APP_SESSION_KEY = "app-session";
 let appSession = "";
 try {
@@ -1457,6 +1459,25 @@ function wireClassTab(schoolClass, tab) {
 }
 
 /* --- Pastdan ochiladigan oyna (bottom sheet) --- */
+
+// Botda "Varaqni skanerlash" bosilganda: skaner faqat ilovada — yuklab olish taklifi
+function showScannerAppOffer() {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 10px">📷 Skaner — TestWay ilovasida</h3>
+    <p class="subtitle" style="margin:0 0 12px">Varaqlarni skanerlash uchun TestWay ilovasini (Android) yuklab oling.
+      Ilova orqali skaner qila olasiz — testlar, o'quvchilar va natijalar bot bilan bir xil.</p>
+    ${
+      APP_DOWNLOAD_URL
+        ? `<button class="btn" id="app-download-button">⬇️ Ilovani yuklab olish</button>`
+        : `<div class="notice" style="margin:0 0 10px">Ilova tez orada Play Market'da chiqadi.</div>`
+    }
+    <button class="btn btn-ghost" data-sheet-close>Yopish</button>
+  `);
+  sheet.querySelector("#app-download-button")?.addEventListener("click", () => {
+    openExternalLink(APP_DOWNLOAD_URL);
+    close();
+  });
+}
 
 function openSheet(innerHtml, { onClose = null } = {}) {
   document.querySelector(".sheet-backdrop")?.remove();
@@ -8969,14 +8990,7 @@ async function renderTestDetail(testId) {
                : ""
            }
            ${test.mode === "key" ? `<button class="btn btn-ghost" id="variants-button">🔀 Variantlar${test.variants.length ? ` (${test.variants.join(", ")})` : " (A/B/C/D)"}</button>` : ""}
-           ${
-             // Skaner faqat Android ilovada (APK) — Telegram botida yo'q
-             isFinished
-               ? ""
-               : IN_APP
-                 ? `<button class="btn" id="scan-sheet-button">📷 Varaqni skanerlash</button>`
-                 : `<p class="subtitle" style="margin:4px 4px 10px">📷 Varaqni skanerlash — TestWay ilovasida (Android).</p>`
-           }`
+           ${!isFinished ? `<button class="btn" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""}`
         : ""
     }
     ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
@@ -9032,7 +9046,10 @@ async function renderTestDetail(testId) {
     )
   );
 
-  document.getElementById("scan-sheet-button")?.addEventListener("click", guarded(() => scanSheetPage(testId, test)));
+  // Skaner faqat Android ilovada (APK); Telegram botida — ilovani yuklab olish taklifi
+  document
+    .getElementById("scan-sheet-button")
+    ?.addEventListener("click", guarded(() => (IN_APP ? scanSheetPage(testId, test) : showScannerAppOffer())));
   document.getElementById("attach-classes-button-open")?.addEventListener("click", guarded(() => renderAttachClasses(testId)));
   document.getElementById("variants-button")?.addEventListener("click", guarded(() => renderVariantsPage(testId, test)));
   queueAll().then((items) => {
