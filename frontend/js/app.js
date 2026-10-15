@@ -8097,16 +8097,21 @@ async function renderTestDetail(testId) {
     </section>
     <button class="btn btn-ghost" id="edit-test-button">✏️ Tahrirlash (nomi, vaqti)</button>
 
-    <button class="btn btn-ghost" id="answer-sheet-button">📄 Javoblar varaqasini olish</button>
-    <button class="btn btn-ghost" id="answer-key-button">🔑 To'g'ri javoblar (kalit)</button>
     ${
-      test.sheet_version >= 2 && test.students.some((student) => student.editable)
-        ? `<button class="btn btn-ghost" id="named-sheets-button">👥 Ismli varaqlar (har o'quvchiga)</button>`
+      // Titul (javoblar varaqasi) faqat oflayn (yopiq) testda — onlayn testda o'quvchi ilovada belgilaydi
+      isClosedTest
+        ? `<button class="btn btn-ghost" id="answer-sheet-button">📄 Javoblar varaqasini olish</button>
+           <button class="btn btn-ghost" id="answer-key-button">🔑 To'g'ri javoblar (kalit)</button>
+           ${
+             test.sheet_version >= 2 && test.students.some((student) => student.editable)
+               ? `<button class="btn btn-ghost" id="named-sheets-button">👥 Ismli varaqlar (har o'quvchiga)</button>`
+               : ""
+           }
+           ${test.mode === "key" ? `<button class="btn btn-ghost" id="variants-button">🔀 Variantlar${test.variants.length ? ` (${test.variants.join(", ")})` : " (A/B/C/D)"}</button>` : ""}
+           ${!isFinished ? `<button class="btn" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""}
+           <div id="scan-queue-slot"></div>`
         : ""
     }
-    ${test.mode === "key" ? `<button class="btn btn-ghost" id="variants-button">🔀 Variantlar${test.variants.length ? ` (${test.variants.join(", ")})` : " (A/B/C/D)"}</button>` : ""}
-    ${!isFinished ? `<button class="btn" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""}
-    <div id="scan-queue-slot"></div>
     ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
     ${!isFinished && !isClosedTest && !test.broadcast_at
       ? `<button class="btn" id="broadcast-button">📢 Hammaga e'lon qilish</button>`

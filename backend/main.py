@@ -4365,8 +4365,10 @@ def delete_variant(test_id: int, name: str, teacher: Teacher = Depends(get_curre
 
 
 def _paper_test(db: Session, teacher: Teacher, test_id: int) -> Test:
-    # Ochiq testni ham qog'ozda o'tkazish mumkin — skanerlangan natija onlayn ishlaganlar bilan bir ro'yxatda
+    # Titul faqat oflayn (yopiq) testda — onlayn testda o'quvchi javobini ilovada belgilaydi
     test = _get_own_test(db, teacher, test_id)
+    if test.enrollment_type != "closed":
+        raise HTTPException(status_code=400, detail="Varaq skanerlash faqat oflayn (yopiq) testlarda")
     if test.status == "closed":
         raise HTTPException(status_code=400, detail="Test yakunlangan — avval qayta oching")
     return test
