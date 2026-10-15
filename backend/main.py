@@ -1753,8 +1753,77 @@ def _draw_sheet_header(sheet, test: Test, width: float, height: float, with_answ
     if (test.sheet_version or 1) < 2:
         return name_y - 16
 
-    # O'quvchi raqami: 3 qator (yuzlik, o'nlik, birlik), har qatorda 0–9
     number_digits = f"{student[0]:03d}" if student else None
+    if test.sheet_version >= 4:
+        id_bottom, hint_x, hint_top = _draw_vertical_id(sheet, name_y, number_digits, bubbles)
+    else:
+        id_bottom, hint_x, hint_top = _draw_horizontal_id(sheet, name_y, number_digits, bubbles)
+
+    # Variant (A/B/C/D) — o'ng chetda; ismli varaqda bo'yab qo'yiladi
+    if variants:
+        student_variant = student[2] if student and len(student) > 2 else None
+        variant_x = width - SHEET_MARGIN - (len(variants) - 1) * SHEET_ID_GAP - SHEET_ID_RADIUS
+        sheet.setFont("Helvetica-Bold", 8)
+        sheet.drawString(variant_x - SHEET_ID_RADIUS, name_y - 13, "Variant:")
+        for index, name in enumerate(variants):
+            x = variant_x + index * SHEET_ID_GAP
+            sheet.setFont("Helvetica-Bold", 7)
+            sheet.drawCentredString(x, name_y - 50, name)
+            sheet.circle(x, name_y - 37, SHEET_ID_RADIUS + 1, stroke=1, fill=1 if student_variant == name else 0)
+            if bubbles is not None:
+                bubbles.append({"page": 1, "ref": "variant", "label": "Variant", "kind": "variant", "letter": name,
+                                "x": x, "y": name_y - 37, "r": SHEET_ID_RADIUS + 1})
+
+    if student:
+        sheet.setFont("Helvetica-Bold", 12)
+        sheet.drawString(hint_x, hint_top - 14, f"No {student[0]:03d}")
+    else:
+        sheet.setFont("Helvetica", 7)
+        along = "har ustunda" if test.sheet_version >= 4 else "har qatorda"
+        sheet.drawString(hint_x, hint_top, "ID raqamingizni o'qituvchidan oling,")
+        sheet.drawString(hint_x, hint_top - 9, f"katakchalarga yozing va {along} bittadan bo'yang.")
+        sheet.drawString(hint_x, hint_top - 18, "Masalan 7 -> 0, 0, 7;  23 -> 0, 2, 3")
+    return id_bottom
+
+
+SHEET_ID_COLUMN_GAP = 18
+SHEET_ID_DIGIT_STEP = 12.5
+
+
+def _draw_vertical_id(sheet, name_y: float, digits: str | None, bubbles: list | None) -> tuple[float, float, float]:
+    """
+    O'quvchi ID (4-versiya): 3 ustun (yuzlik, o'nlik, birlik), har ustunda yuqoridan
+    pastga 0–9. Tepada raqam yoziladigan katakchalar. (pastki chegara, izoh x, izoh y)
+    """
+
+    radius = SHEET_ID_RADIUS
+    first_x = SHEET_MARGIN + 30
+    sheet.setFont("Helvetica-Bold", 8)
+    sheet.drawString(SHEET_MARGIN, name_y - 14, "O'quvchi ID:")
+    for column in range(3):
+        x = first_x + column * SHEET_ID_COLUMN_GAP
+        sheet.rect(x - 7, name_y - 36, 14, 14, stroke=1, fill=0)
+        if digits:
+            sheet.setFont("Helvetica-Bold", 10)
+            sheet.drawCentredString(x, name_y - 32.5, digits[column])
+    for digit in range(10):
+        center_y = name_y - 48 - digit * SHEET_ID_DIGIT_STEP
+        sheet.setFont("Helvetica-Bold", 7)
+        sheet.drawCentredString(first_x - 16, center_y - 2.5, str(digit))
+        for column in range(3):
+            x = first_x + column * SHEET_ID_COLUMN_GAP
+            filled = digits is not None and int(digits[column]) == digit
+            sheet.circle(x, center_y, radius, stroke=1, fill=1 if filled else 0)
+            if bubbles is not None:
+                bubbles.append({"page": 1, "ref": f"id{column}", "label": "ID", "kind": "id", "letter": str(digit),
+                                "x": x, "y": center_y, "r": radius})
+    bottom = name_y - 48 - 9 * SHEET_ID_DIGIT_STEP - radius - 12
+    return bottom, first_x + 2 * SHEET_ID_COLUMN_GAP + 24, name_y - 50
+
+
+def _draw_horizontal_id(sheet, name_y: float, number_digits: str | None, bubbles: list | None) -> tuple[float, float, float]:
+    """O'quvchi raqami (2–3-versiya): 3 qator (yuzlik, o'nlik, birlik), har qatorda 0–9."""
+
     first_x = SHEET_MARGIN + 80 + SHEET_ID_RADIUS
     sheet.setFont("Helvetica-Bold", 7)
     for digit in range(10):
@@ -1772,32 +1841,7 @@ def _draw_sheet_header(sheet, test: Test, width: float, height: float, with_answ
             if bubbles is not None:
                 bubbles.append({"page": 1, "ref": f"id{row}", "label": place, "kind": "id", "letter": str(digit),
                                 "x": x, "y": center_y, "r": SHEET_ID_RADIUS})
-    hint_x = first_x + 10 * SHEET_ID_GAP + 6
-
-    # Variant (A/B/C/D) — o'ng chetda; ismli varaqda bo'yab qo'yiladi
-    if variants:
-        student_variant = student[2] if student and len(student) > 2 else None
-        variant_x = width - SHEET_MARGIN - (len(variants) - 1) * SHEET_ID_GAP - SHEET_ID_RADIUS
-        sheet.setFont("Helvetica-Bold", 8)
-        sheet.drawString(variant_x - SHEET_ID_RADIUS, name_y - 13, "Variant:")
-        for index, name in enumerate(variants):
-            x = variant_x + index * SHEET_ID_GAP
-            sheet.setFont("Helvetica-Bold", 7)
-            sheet.drawCentredString(x, name_y - 50, name)
-            sheet.circle(x, name_y - 37, SHEET_ID_RADIUS + 1, stroke=1, fill=1 if student_variant == name else 0)
-            if bubbles is not None:
-                bubbles.append({"page": 1, "ref": "variant", "label": "Variant", "kind": "variant", "letter": name,
-                                "x": x, "y": name_y - 37, "r": SHEET_ID_RADIUS + 1})
-
-    sheet.setFont("Helvetica", 7)
-    if student:
-        sheet.setFont("Helvetica-Bold", 12)
-        sheet.drawString(hint_x, name_y - 40, f"No {student[0]:03d}")
-    else:
-        sheet.drawString(hint_x, name_y - 26, "Raqamingizni o'qituvchidan oling va")
-        sheet.drawString(hint_x, name_y - 35, "har qatorda bittadan bo'yang.")
-        sheet.drawString(hint_x, name_y - 44, "Masalan 7 -> 0, 0, 7;  23 -> 0, 2, 3")
-    return name_y - 24 - 2 * SHEET_ID_ROW - 16
+    return name_y - 24 - 2 * SHEET_ID_ROW - 16, first_x + 10 * SHEET_ID_GAP + 6, name_y - 26
 
 
 def _pack_sheet_cells(cells: list[dict], row_height: float, available_height: float) -> list[list[dict]]:

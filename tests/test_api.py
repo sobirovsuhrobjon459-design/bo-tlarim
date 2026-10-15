@@ -4342,7 +4342,7 @@ def test_varaqdagi_oquvchi_raqami_boyicha_taniladi():
                 headers=as_user(555))
     detail = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1, "Birinchi Bola"), (2, "Ikkinchi Bola")]
-    assert detail["sheet_version"] == 3
+    assert detail["sheet_version"] == 4
 
     url = f"/api/teacher/tests/{test_id}/scan"
     photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "2", 1: "B", 2: "C"})

@@ -219,7 +219,7 @@ def _sample(image: np.ndarray, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
 
 
 def _align_row(maps: "_ResponseMaps", centers: list[tuple[float, float]], radius: float,
-               start: tuple[float, float] = (0.0, 0.0)) -> tuple[float, float]:
+               start: tuple[float, float] = (0.0, 0.0), reach: int = 5) -> tuple[float, float]:
     """
     Bitta savol qatori doirachalarini chop etilgan halqalari ustiga aniq joylashtiradi:
     qator butunligicha ±0,8 radius oralig'ida siljitib, halqalar eng qora bo'lgan joy olinadi.
@@ -227,7 +227,7 @@ def _align_row(maps: "_ResponseMaps", centers: list[tuple[float, float]], radius
     """
 
     ring_map, _ = maps.get(radius)
-    grid = np.arange(-5, 6) * radius * 0.16
+    grid = np.arange(-reach, reach + 1) * radius * 0.16
     dx, dy = np.meshgrid(start[0] + grid, start[1] + grid)
     dx, dy = dx.ravel(), dy.ravel()
     points = np.array(centers, np.float32)
@@ -341,9 +341,11 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1) -> dict:
     for ref, row in sorted(rows.items(), key=lambda item: (round(item[1][0]["x"] / 40), -item[1][0]["y"])):
         centers = [corrected(bubble["x"], PAGE_HEIGHT - bubble["y"]) for bubble in row]
         x0, y0 = centers[0]
-        near = [item for item in aligned if abs(item[0] - x0) < 40 and abs(item[1] - y0) < 60]
-        start = min(near, key=lambda item: abs(item[1] - y0))[2] if near else (0.0, 0.0)
-        row_shift[ref] = _align_row(maps, centers, row[0]["r"], start)
+        # Eng yaqin tekislangan qatordan boshlanadi; u uzoq bo'lsa — kengroq qidiriladi
+        nearest = min(aligned, key=lambda item: (item[0] - x0) ** 2 + (item[1] - y0) ** 2, default=None)
+        start = nearest[2] if nearest else (0.0, 0.0)
+        far = nearest is None or abs(nearest[0] - x0) >= 40 or abs(nearest[1] - y0) >= 60
+        row_shift[ref] = _align_row(maps, centers, row[0]["r"], start, reach=8 if far else 5)
         aligned.append((x0, y0, row_shift[ref]))
 
     for bubble in page_bubbles:

@@ -244,9 +244,10 @@ class Test(Base):
 
     # Javoblar varaqasi ko'rinishi: 2 — "O'quvchi raqami" doirachalari bilan (skaner
     # o'quvchini o'zi taniydi); 3 — kvadrat burchaklar, chetlarda tekislash belgilari
-    # va pastda imtihon kodi (boshqa imtihon tituli bilan adashmaydi). Eski testlar
-    # o'z versiyasida qoladi — oldin chop etilgan varaqlar ham to'g'ri skanerlanishi uchun.
-    sheet_version: Mapped[int] = mapped_column(default=3)
+    # va pastda imtihon kodi (boshqa imtihon tituli bilan adashmaydi); 4 — o'quvchi ID
+    # vertikal 3 ustunda (0–9). Eski testlar o'z versiyasida qoladi — oldin chop
+    # etilgan varaqlar ham to'g'ri skanerlanishi uchun.
+    sheet_version: Mapped[int] = mapped_column(default=4)
 
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     # O'qituvchi "o'chirgan" test. Bazadan butunlay o'chirilmaydi: unga bog'liq
