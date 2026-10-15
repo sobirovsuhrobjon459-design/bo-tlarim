@@ -27,6 +27,10 @@ PAGE_WIDTH, PAGE_HEIGHT = A4
 SCALE = 3.0  # tekislangan rasmda 1 punkt = 3 piksel
 CORNER_OFFSET = 32  # burchak nuqtalari markazi chetdan 32 punktda (qarang: _draw_corner_marks)
 CORNER_RADIUS = 7
+EDGE_MARKS = 10  # chap/o'ng chetdagi tekislash belgilari (qarang: SHEET_EDGE_MARKS)
+EDGE_MARK_SIZE = 8
+EDGE_SCORE = 0.8  # chet bo'lishi mumkin bo'lgan chiziq: belgilari va oralig'ining shuncha qismi joyida
+MARKS_SCORE = 0.9  # to'rtburchak haqiqiy varaq: aniq joylari bo'yicha shuncha qismi mos
 
 # Doiracha ichining qancha qismi qoraygan bo'lsa "bo'yalgan" hisoblanadi
 FILLED_RATIO = 0.5
@@ -86,18 +90,186 @@ def _corner_candidates(gray: np.ndarray) -> list[tuple[float, float, float]]:
     return candidates
 
 
-def _find_corners(gray: np.ndarray) -> np.ndarray:
+def _edge_marks_score(gray: np.ndarray, points: np.ndarray) -> float:
+    """
+    3-versiya titulda burchaklar orasida chap va o'ng chetda 10 tadan kvadrat bor.
+    To'rtta nuqta haqiqatan varaq burchaklari bo'lsa, shu kvadratlar aynan kutilgan
+    joyda qora, ularning orasi esa oq qog'oz bo'ladi. Natija: mos kelgan nuqtalar ulushi (0..1).
+    """
+
+    page_corners = np.array([
+        (CORNER_OFFSET, CORNER_OFFSET), (PAGE_WIDTH - CORNER_OFFSET, CORNER_OFFSET),
+        (PAGE_WIDTH - CORNER_OFFSET, PAGE_HEIGHT - CORNER_OFFSET), (CORNER_OFFSET, PAGE_HEIGHT - CORNER_OFFSET),
+    ], np.float32)
+    matrix = cv2.getPerspectiveTransform(page_corners, points)
+    step = (PAGE_HEIGHT - 2 * CORNER_OFFSET) / (EDGE_MARKS + 1)
+    sides = (CORNER_OFFSET, PAGE_WIDTH - CORNER_OFFSET)
+    marks = [(x, CORNER_OFFSET + index * step) for index in range(1, EDGE_MARKS + 1) for x in sides]
+    # Belgilar orasi butunlay oq bo'lishi kerak (doirachalar ustuni bunday emas — u yerda qatorlar zich)
+    gaps = [(x, CORNER_OFFSET + (index + part) * step)
+            for index in range(EDGE_MARKS + 1) for part in (0.3, 0.5, 0.7) for x in sides]
+    # Tepadagi ikki burchak orasi ham bo'sh (sarlavha pastroqda)
+    gaps += [(CORNER_OFFSET + 30 + index * (PAGE_WIDTH - 2 * CORNER_OFFSET - 60) / 11, CORNER_OFFSET)
+             for index in range(12)]
+    projected = cv2.perspectiveTransform(np.array([marks + gaps + page_corners.tolist()], np.float32), matrix)[0]
+
+    side_px = (np.linalg.norm(points[3] - points[0]) + np.linalg.norm(points[2] - points[1])) / 2
+    radius = max(1, round(EDGE_MARK_SIZE / 2 * 0.6 * side_px / (PAGE_HEIGHT - 2 * CORNER_OFFSET)))
+    height, width = gray.shape
+
+    def window(x: float, y: float) -> np.ndarray:
+        cx, cy = round(x), round(y)
+        return gray[max(0, cy - radius): min(height, cy + radius + 1), max(0, cx - radius): min(width, cx + radius + 1)]
+
+    # O'rtacha yorqinlik: belgi ichi to'liq qora (bo'sh doirachaning esa faqat chegarasi qora, o'rtasi oq)
+    values = [float(patch.mean()) if (patch := window(x, y)).size else 255.0 for x, y in projected]
+    mark_values = values[: len(marks)]
+    gap_values = values[len(marks): len(marks) + len(gaps)]
+    corner_values = values[len(marks) + len(gaps):]
+    paper, dark = float(np.median(gap_values)), float(np.median(corner_values))
+    if paper - dark < 30:
+        return 0.0
+    threshold = (paper + dark) / 2
+    hits = sum(value < threshold for value in mark_values) + sum(value > threshold for value in gap_values)
+    return hits / (len(mark_values) + len(gap_values))
+
+
+def _marked_edges(gray: np.ndarray, candidates: list[tuple[float, float, float]]) -> list[tuple]:
+    """
+    Varaqning chap/o'ng cheti bo'lishi mumkin bo'lgan dog'lar juftlari: orasida 10 ta
+    chet belgisi teng oraliqda qatorlashib turadi. Kadrda qayerda bo'lishidan qat'i nazar
+    topiladi — kadr burchagiga yaqinroq begona narsalar xalaqit bermaydi.
+    Natija: [(ball, tepadagi_dog', pastdagi_dog'), ...].
+    """
+
+    if len(candidates) < 2 or len(candidates) > 400:
+        return []
+    points = np.array(candidates, np.float64)
+    first, second = np.triu_indices(len(points), 1)
+    swap = points[first, 1] > points[second, 1]
+    top = np.where(swap, second, first)
+    bottom = np.where(swap, first, second)
+    length = np.hypot(*(points[bottom, :2] - points[top, :2]).T)
+    radius = (points[top, 2] + points[bottom, 2]) / 2
+    expected = radius * (PAGE_HEIGHT - 2 * CORNER_OFFSET) / CORNER_RADIUS / 1.2  # radius ~ 1,2 x yarim tomon
+    spread = np.abs(points[top, 2] - points[bottom, 2]) / np.maximum(points[top, 2], points[bottom, 2])
+    keep = (spread <= 0.45) & (length >= expected * 0.45) & (length <= expected * 2.2)
+    top, bottom, radius = top[keep], bottom[keep], radius[keep]
+    if not len(top):
+        return []
+
+    height, width = gray.shape
+    edges = []
+    # Belgi kichik: atrofidagi eng qora nuqta olinadi (ozgina siljigan bo'lsa ham topilsin)
+    for kernel in sorted({max(3, 2 * round(r * 0.4) + 1) for r in radius}):
+        darkest = cv2.erode(gray, np.ones((kernel, kernel), np.uint8))
+        average = cv2.blur(gray, (kernel, kernel))
+        group = np.array([max(3, 2 * round(r * 0.4) + 1) == kernel for r in radius])
+        start, end = points[top[group], :2], points[bottom[group], :2]
+        # Perspektiva: varaqning yaqinroq uchi kattaroq ko'rinadi — belgilar orasi ham shunga qarab
+        # o'zgaradi. Uchlaridagi dog'lar o'lchamidan taxmin qilinadi (u -> t proyektiv moslik).
+        near = np.sqrt(points[top[group], 2] / points[bottom[group], 2])[:, None]
+        steps = EDGE_MARKS + 1
+
+        def sample(image: np.ndarray, u: np.ndarray) -> np.ndarray:
+            t = u[None, :] * near / ((1 - u[None, :]) + u[None, :] * near)
+            xy = start[:, None, :] + (end - start)[:, None, :] * t[..., None]
+            columns = np.clip(np.rint(xy[..., 0]).astype(int), 0, width - 1)
+            rows = np.clip(np.rint(xy[..., 1]).astype(int), 0, height - 1)
+            return image[rows, columns].astype(np.float32)
+
+        # Belgi joyi atrofida bir necha nuqta (taxmin aniq emas); belgilar orasi — uch joyda oq bo'lishi shart
+        jitter = np.linspace(-0.15, 0.15, 5)
+        mark_u = (np.arange(1, steps)[:, None] + jitter[None, :]).ravel() / steps
+        gap_u = (np.arange(steps)[:, None] + np.array([0.35, 0.5, 0.65])[None, :]).ravel() / steps
+        marks = sample(darkest, mark_u).reshape(len(start), EDGE_MARKS, len(jitter)).min(axis=2)
+        gaps = sample(average, gap_u)
+        ends = np.minimum(sample(average, np.array([0.0])), sample(average, np.array([1.0])))[:, 0]
+        paper = np.median(gaps, axis=1)
+        threshold = (paper + ends) / 2
+        score = ((marks < threshold[:, None]).sum(axis=1) + (gaps > threshold[:, None]).sum(axis=1)) / (
+            EDGE_MARKS + gaps.shape[1]
+        )
+        score[paper - ends < 30] = 0
+        for index in np.nonzero(score >= EDGE_SCORE)[0]:
+            edges.append((float(score[index]), candidates[top[group][index]], candidates[bottom[group][index]]))
+    # Haqiqiy chet — eng uzunlaridan (burchaklar varaqdagi hamma narsani o'rab turadi)
+    edges.sort(key=lambda edge: (-round(edge[0], 1), -np.hypot(edge[2][0] - edge[1][0], edge[2][1] - edge[1][1])))
+    return edges[:60]
+
+
+def _nearly_rectangular(points: np.ndarray) -> bool:
+    """Har burchagi 90° ga yaqin (±35°) — suratga qiya olinganda ham varaq shunday ko'rinadi."""
+
+    for index in range(4):
+        before, here, after = points[index - 1], points[index], points[(index + 1) % 4]
+        a, b = before - here, after - here
+        cosine = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
+        if abs(cosine) > np.cos(np.radians(55)):
+            return False
+    return True
+
+
+def _corners_from_edges(gray: np.ndarray, candidates: list[tuple[float, float, float]]) -> np.ndarray | None:
+    """Ikkita belgili chetdan (chap va o'ng) varaq; chet belgilari hammasi joyida bo'lgani olinadi."""
+
+    expected_ratio = (PAGE_WIDTH - 2 * CORNER_OFFSET) / (PAGE_HEIGHT - 2 * CORNER_OFFSET)
+    edges = _marked_edges(gray, candidates)
+    shapes = []
+    for (_, top_a, bottom_a), (_, top_b, bottom_b) in itertools.combinations(edges, 2):
+        if {top_a, bottom_a} & {top_b, bottom_b}:
+            continue
+        if top_a[0] + bottom_a[0] > top_b[0] + bottom_b[0]:
+            top_a, bottom_a, top_b, bottom_b = top_b, bottom_b, top_a, bottom_a
+        combo = (top_a, top_b, bottom_b, bottom_a)
+        points = np.array([(c[0], c[1]) for c in combo], dtype=np.float32)
+        top = np.linalg.norm(points[1] - points[0])
+        bottom = np.linalg.norm(points[2] - points[3])
+        left = np.linalg.norm(points[3] - points[0])
+        right = np.linalg.norm(points[2] - points[1])
+        ratio = ((top + bottom) / 2) / ((left + right) / 2)
+        radii = [c[2] for c in combo]
+        if abs(ratio - expected_ratio) / expected_ratio > 0.3 or (max(radii) - min(radii)) / max(radii) > 0.45:
+            continue
+        # Haqiqiy to'rtburchak: bir chiziqda yotgan nuqtalar emas, qarama-qarshi tomonlari deyarli teng
+        if cv2.contourArea(points) < 0.6 * (top + bottom) / 2 * (left + right) / 2:
+            continue
+        if max(top, bottom) > 1.5 * min(top, bottom) or max(left, right) > 1.5 * min(left, right):
+            continue
+        if not _nearly_rectangular(points):
+            continue
+        if not cv2.isContourConvex(points.reshape(-1, 1, 2)):
+            continue
+        shapes.append((cv2.contourArea(points), points))
+    # Kattasidan boshlab: haqiqiy burchaklar varaqdagi hamma narsani o'rab turadi
+    best_score, best = 0.0, None
+    for _, points in sorted(shapes, key=lambda shape: -shape[0]):
+        score = _edge_marks_score(gray, points)
+        if score > best_score:
+            best_score, best = score, points
+        if score >= 0.95:
+            break
+    return best if best_score >= MARKS_SCORE else None
+
+
+def _find_corners(gray: np.ndarray, edge_marks: bool = False) -> np.ndarray:
     """
     Varaqning 4 ta burchak nuqtasi (chap-tepa, o'ng-tepa, o'ng-past, chap-past).
 
     Har bir burchakka eng yaqin bir nechta dog' olinadi va ulardan to'g'ri
     to'rtburchak (A4 nisbatida, o'lchami o'xshash dog'lar) hosil qiladigani tanlanadi —
     o'quvchi bo'yagan doirachalar yoki stol ustidagi dog'lar adashtirmasin.
+    Titulda chet belgilari bo'lsa (edge_marks), ular joyida turgan to'rtlik olinadi:
+    varaq atrofidagi qora narsalar (stol, qo'l, boshqa qog'oz) burchak bo'lib qolmaydi.
     """
 
     candidates = _corner_candidates(gray)
     if len(candidates) < 4:
         raise ScanError(_CORNERS_HINT)
+    if edge_marks:
+        found = _corners_from_edges(gray, candidates)
+        if found is not None:
+            return found
     height, width = gray.shape
     image_corners = [(0, 0), (width, 0), (width, height), (0, height)]
     nearest = [
@@ -105,34 +277,45 @@ def _find_corners(gray: np.ndarray) -> np.ndarray:
         for corner in image_corners
     ]
     expected_ratio = (PAGE_WIDTH - 2 * CORNER_OFFSET) / (PAGE_HEIGHT - 2 * CORNER_OFFSET)
+    min_side = min(width, height) * 0.25
 
     # Shakli A4'ga yetarlicha mos kombinatsiyalar orasidan ENG KATTA maydonlisi olinadi:
     # haqiqiy burchak nuqtalari varaqdagi hamma narsani (bo'yalgan doirachalarni ham) o'rab turadi.
-    best, best_area = None, 0.0
+    shapes = []
     for combo in itertools.product(*nearest):
         if len({(round(c[0]), round(c[1])) for c in combo}) < 4:
             continue
-        points = np.array([(c[0], c[1]) for c in combo], dtype=np.float32)
-        top = np.linalg.norm(points[1] - points[0])
-        bottom = np.linalg.norm(points[2] - points[3])
-        left = np.linalg.norm(points[3] - points[0])
-        right = np.linalg.norm(points[2] - points[1])
-        if min(top, bottom, left, right) < min(width, height) * 0.25:
+        (x0, y0, _), (x1, y1, _), (x2, y2, _), (x3, y3, _) = combo
+        top = np.hypot(x1 - x0, y1 - y0)
+        bottom = np.hypot(x2 - x3, y2 - y3)
+        left = np.hypot(x3 - x0, y3 - y0)
+        right = np.hypot(x2 - x1, y2 - y1)
+        if min(top, bottom, left, right) < min_side:
             continue
         ratio = ((top + bottom) / 2) / ((left + right) / 2)
         radii = [c[2] for c in combo]
         size_spread = (max(radii) - min(radii)) / max(radii)
+        if abs(ratio - expected_ratio) / expected_ratio > 0.3 or size_spread > 0.45:
+            continue
+        points = np.array([(c[0], c[1]) for c in combo], dtype=np.float32)
         # Qavariq to'rtburchak bo'lishi shart (nuqtalar tartibi to'g'ri)
         if not cv2.isContourConvex(points.reshape(-1, 1, 2)):
             continue
-        if abs(ratio - expected_ratio) / expected_ratio > 0.3 or size_spread > 0.45:
-            continue
-        area = cv2.contourArea(points)
-        if area > best_area:
-            best, best_area = points, area
-    if best is None:
+        shapes.append((cv2.contourArea(points), points))
+    if not shapes:
         raise ScanError(_CORNERS_HINT)
-    return best
+    shapes.sort(key=lambda shape: -shape[0])
+    if edge_marks:
+        best_score, best = 0.0, None
+        for _, points in shapes[:300]:
+            score = _edge_marks_score(gray, points)
+            if score > best_score:
+                best_score, best = score, points
+        if best_score >= MARKS_SCORE:
+            return best
+        # Chet belgilari joyida emas — bu varaq burchaklari emas (noto'g'ri javob o'qigandan ko'ra xato yaxshi)
+        raise ScanError(_CORNERS_HINT)
+    return shapes[0][1]
 
 
 _CORNERS_HINT = (
@@ -305,7 +488,8 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1) -> dict:
 
     image = _load_image(data)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    corners = _find_corners(gray)
+    page_bubbles = [bubble for bubble in bubbles if bubble["page"] == page]
+    corners = _find_corners(gray, edge_marks=any(bubble["kind"] == "mark" for bubble in page_bubbles))
     warped = _warp(image, corners)
     warped_gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
     warped_gray = cv2.GaussianBlur(warped_gray, (3, 3), 0)
@@ -314,7 +498,6 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1) -> dict:
     )
 
     # 3-versiya titul: chet belgilari bo'yicha mahalliy tuzatish (egilgan qog'oz)
-    page_bubbles = [bubble for bubble in bubbles if bubble["page"] == page]
     offsets = _mark_offsets(binary, [bubble for bubble in page_bubbles if bubble["kind"] == "mark"])
     left_x, right_x = CORNER_OFFSET, PAGE_WIDTH - CORNER_OFFSET
 

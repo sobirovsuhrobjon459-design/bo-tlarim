@@ -4276,6 +4276,31 @@ def _sheet_photo(test_id: int, marks: dict[int, str], skew: bool = True, code_of
     return base64.b64encode(buffer.getvalue()).decode()
 
 
+def test_varaq_atrofidagi_qora_narsalar_skanerni_adashtirmaydi():
+    """Stol ustida varaqdan tashqarida qora dog'lar bor — burchak deb olinmaydi (chet belgilari tekshiriladi)."""
+
+    from PIL import Image, ImageDraw
+
+    reset_database()
+    register_teacher()
+    test_id = create_test(enrollment_type="closed")["id"]
+    sheet = Image.open(io.BytesIO(base64.b64decode(_sheet_photo(test_id, {1: "C", 2: "B"}, skew=False))))
+    photo = Image.new("RGB", (sheet.width + 500, sheet.height + 500), (120, 120, 120))
+    photo.paste(sheet, (250, 250))
+    draw = ImageDraw.Draw(photo)
+    # Kadr burchaklariga yaqin, burchak kvadratiga o'xshash dog'lar — varaq burchaklaridan ham chetroqda
+    for x in (40, 110, photo.width - 140, photo.width - 70):
+        for y in (40, 120, photo.height - 150, photo.height - 70):
+            draw.rectangle([x, y, x + 28, y + 28], fill="black")
+    buffer = io.BytesIO()
+    photo.save(buffer, "JPEG", quality=85)
+
+    scanned = client.post(f"/api/teacher/tests/{test_id}/scan",
+                          json={"image_base64": base64.b64encode(buffer.getvalue()).decode()}, headers=as_user(555))
+    assert scanned.status_code == 200, scanned.text
+    assert scanned.json()["answers"] == {"1": "C", "2": "B"}, scanned.json()["questions"]
+
+
 def test_javoblar_varaqasi_skanerlanadi():
     reset_database()
     register_teacher()

@@ -7326,8 +7326,38 @@ function stopLiveScan() {
   liveStream = null;
 }
 
-// Kichraytirilgan kadrda burchak nuqtalarini topish: to'liq bo'yalgan, dumaloq qora dog'lar
-function findSheetCorners(pixels, width, height) {
+// Varaq o'lchamlari (punktlarda) — backend/omr.py va titul chizilishi bilan bir xil
+const SHEET_PAGE = { width: 595.28, height: 841.89, corner: 32, cornerSize: 14, edgeMarks: 10, edgeMarkSize: 8 };
+
+// 4 nuqtadan 4 nuqtaga perspektiv moslik (varaqdagi punkt → kadr pikseli)
+function perspectiveMap(from, to) {
+  const rows = [];
+  from.forEach(([x, y], index) => {
+    const [u, v] = to[index];
+    rows.push([x, y, 1, 0, 0, 0, -u * x, -u * y, u]);
+    rows.push([0, 0, 0, x, y, 1, -v * x, -v * y, v]);
+  });
+  for (let column = 0; column < 8; column += 1) {
+    let pivot = column;
+    for (let row = column + 1; row < 8; row += 1) if (Math.abs(rows[row][column]) > Math.abs(rows[pivot][column])) pivot = row;
+    [rows[column], rows[pivot]] = [rows[pivot], rows[column]];
+    if (Math.abs(rows[column][column]) < 1e-9) return null;
+    for (let row = 0; row < 8; row += 1) {
+      if (row === column) continue;
+      const factor = rows[row][column] / rows[column][column];
+      for (let k = column; k < 9; k += 1) rows[row][k] -= factor * rows[column][k];
+    }
+  }
+  const h = rows.map((row, index) => row[8] / row[index]);
+  return (x, y) => {
+    const w = h[6] * x + h[7] * y + 1;
+    return [(h[0] * x + h[1] * y + h[2]) / w, (h[3] * x + h[4] * y + h[5]) / w];
+  };
+}
+
+// Kichraytirilgan kadrda burchak kvadratlarini topish. Titulda chet belgilari bo'lsa (3-versiyadan),
+// ular joyida turgan to'rtlik olinadi — varaq atrofidagi qora narsalar (stol, qo'l) adashtirmaydi.
+function findSheetCorners(pixels, width, height, edgeMarks = false) {
   const gray = new Float32Array(width * height);
   for (let i = 0, p = 0; i < gray.length; i += 1, p += 4) {
     gray[i] = pixels[p] * 0.299 + pixels[p + 1] * 0.587 + pixels[p + 2] * 0.114;
@@ -7359,7 +7389,7 @@ function findSheetCorners(pixels, width, height) {
 
   const blobs = [];
   const stack = [];
-  const minArea = Math.max(6, (width / 320) ** 2 * 6);
+  const minArea = Math.max(6, (width / 640) ** 2 * 12);
   const maxArea = (width * 0.045) ** 2;
   for (let start = 0; start < dark.length; start += 1) {
     if (!dark[start]) continue;
@@ -7397,8 +7427,9 @@ function findSheetCorners(pixels, width, height) {
     }
   }
   if (blobs.length < 4) return null;
+  if (edgeMarks) return cornersFromEdgeMarks(gray, integral, width, height, blobs);
 
-  // Har burchakka eng chekkadagi dog' (varaqdagi boshqa hamma narsani o'rab turadi)
+  // Eski titul (chet belgilarisiz): har burchakka eng chekkadagi dog'
   const pick = (score) => blobs.reduce((best, blob) => (score(blob) > score(best) ? blob : best));
   const corners = [
     pick((b) => -(b.x + b.y)),
@@ -7418,6 +7449,163 @@ function findSheetCorners(pixels, width, height) {
   const sizes = corners.map((corner) => corner.size);
   if (Math.max(...sizes) > Math.min(...sizes) * 2.2) return null;
   return corners;
+}
+
+// Serverdagi usul bilan bir xil (backend/omr.py: _marked_edges, _corners_from_edges, _edge_marks_score)
+function cornersFromEdgeMarks(gray, integral, width, height, blobs) {
+  const page = SHEET_PAGE;
+  const span = page.height - 2 * page.corner;
+  const steps = page.edgeMarks + 1;
+  if (blobs.length > 300) return null;
+  const at = (x, y) =>
+    gray[Math.min(height - 1, Math.max(0, Math.round(y))) * width + Math.min(width - 1, Math.max(0, Math.round(x)))];
+  // Kvadrat oyna ichidagi o'rtacha yorqinlik — integral rasmdan bir zumda
+  const mean = (x, y, r) => {
+    const x0 = Math.min(width, Math.max(0, Math.round(x) - r));
+    const x1 = Math.min(width, Math.max(0, Math.round(x) + r + 1));
+    const y0 = Math.min(height, Math.max(0, Math.round(y) - r));
+    const y1 = Math.min(height, Math.max(0, Math.round(y) + r + 1));
+    const count = (x1 - x0) * (y1 - y0);
+    if (!count) return 255;
+    const row = width + 1;
+    return (integral[y1 * row + x1] - integral[y0 * row + x1] - integral[y1 * row + x0] + integral[y0 * row + x0]) / count;
+  };
+  // Oyna ichidagi eng qora nuqta — kichik belgi biroz siljigan bo'lsa ham topilsin
+  const darkest = (x, y, r) => {
+    const cx = Math.round(x);
+    const cy = Math.round(y);
+    let low = 255;
+    for (let dy = -r; dy <= r; dy += 1) for (let dx = -r; dx <= r; dx += 1) low = Math.min(low, at(cx + dx, cy + dy));
+    return low;
+  };
+  const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+  const distance = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);
+
+  // 1) Chet bo'lishi mumkin bo'lgan juftlar: orasida 10 ta belgi teng oraliqda qatorlashgan
+  let edges = [];
+  for (let i = 0; i < blobs.length; i += 1) {
+    for (let j = i + 1; j < blobs.length; j += 1) {
+      const [a, b] = blobs[i].y <= blobs[j].y ? [blobs[i], blobs[j]] : [blobs[j], blobs[i]];
+      if (Math.abs(a.size - b.size) / Math.max(a.size, b.size) > 0.45) continue;
+      const length = distance(a, b);
+      const expected = (((a.size + b.size) / 2) * span) / page.cornerSize;
+      if (length < expected * 0.45 || length > expected * 2.2) continue;
+      const near = Math.sqrt(a.size / b.size); // perspektiva: yaqinroq uchi kattaroq ko'rinadi
+      const point = (u) => {
+        const t = (u * near) / (1 - u + u * near);
+        return [a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t];
+      };
+      const r = Math.max(1, Math.round((a.size + b.size) * 0.14));
+      const ends = Math.min(mean(a.x, a.y, r), mean(b.x, b.y, r));
+      // Qog'oz yorqinligi — belgilar orasining o'rtalaridan
+      const middles = [];
+      for (let k = 0; k < steps; k += 1) middles.push(mean(...point((k + 0.5) / steps), r));
+      const paper = median(middles);
+      if (paper - ends < 30) continue;
+      const threshold = (paper + ends) / 2;
+      const total = page.edgeMarks + steps * 3;
+      const allowed = total * 0.2;
+      let misses = middles.filter((value) => value <= threshold).length;
+      // Juft yaroqsizligi aniq bo'lishi bilan to'xtatiladi (kadr tez tekshirilsin)
+      for (let k = 0; k < steps && misses <= allowed; k += 1) {
+        for (const part of [0.35, 0.65]) if (mean(...point((k + part) / steps), r) <= threshold) misses += 1;
+        if (k === 0) continue;
+        let found = false;
+        for (const shift of [0, -0.075, 0.075, -0.15, 0.15]) {
+          if (darkest(...point((k + shift) / steps), r) < threshold) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) misses += 1;
+      }
+      const score = 1 - misses / total;
+      if (score >= 0.8) edges.push({ score, a, b, length });
+    }
+  }
+  // Haqiqiy chet — eng uzunlaridan (burchaklar varaqdagi hamma narsani o'rab turadi)
+  edges.sort((p, q) => Math.round(q.score * 10) - Math.round(p.score * 10) || q.length - p.length);
+  edges = edges.slice(0, 60);
+
+  // 2) Ikki chetdan to'rtburchak: A4 shakli, qarama-qarshi tomonlari deyarli teng, burchaklari 90° ga yaqin
+  const shapes = [];
+  for (let i = 0; i < edges.length; i += 1) {
+    for (let j = i + 1; j < edges.length; j += 1) {
+      let [left, right] = [edges[i], edges[j]];
+      if (new Set([left.a, left.b, right.a, right.b]).size < 4) continue;
+      if (left.a.x + left.b.x > right.a.x + right.b.x) [left, right] = [right, left];
+      const corners = [left.a, right.a, right.b, left.b];
+      const top = distance(corners[0], corners[1]);
+      const bottom = distance(corners[3], corners[2]);
+      const leftSide = distance(corners[0], corners[3]);
+      const rightSide = distance(corners[1], corners[2]);
+      if (Math.abs((top + bottom) / (leftSide + rightSide) - 0.684) / 0.684 > 0.3) continue;
+      const sizes = corners.map((corner) => corner.size);
+      if ((Math.max(...sizes) - Math.min(...sizes)) / Math.max(...sizes) > 0.45) continue;
+      if (Math.max(top, bottom) > 1.5 * Math.min(top, bottom)) continue;
+      if (Math.max(leftSide, rightSide) > 1.5 * Math.min(leftSide, rightSide)) continue;
+      let area = 0;
+      let turns = 0;
+      let rectangular = true;
+      for (let k = 0; k < 4; k += 1) {
+        const p = corners[(k + 3) % 4];
+        const q = corners[k];
+        const s = corners[(k + 1) % 4];
+        const ax = p.x - q.x;
+        const ay = p.y - q.y;
+        const bx = s.x - q.x;
+        const by = s.y - q.y;
+        if (Math.abs(ax * bx + ay * by) / (Math.hypot(ax, ay) * Math.hypot(bx, by)) > Math.cos((55 * Math.PI) / 180)) {
+          rectangular = false;
+        }
+        turns += Math.sign(ax * by - ay * bx);
+        area += q.x * s.y - s.x * q.y;
+      }
+      area = Math.abs(area) / 2;
+      if (!rectangular || Math.abs(turns) !== 4) continue;
+      if (area < 0.6 * ((top + bottom) / 2) * ((leftSide + rightSide) / 2)) continue;
+      shapes.push({ area, corners });
+    }
+  }
+  shapes.sort((p, q) => q.area - p.area);
+
+  // 3) Aniq tekshiruv: har bir chet belgisi o'z joyida qora, oralari va tepa cheti oq qog'oz
+  const sides = [page.corner, page.width - page.corner];
+  const marks = [];
+  const blanks = [];
+  for (let k = 1; k <= page.edgeMarks; k += 1) for (const x of sides) marks.push([x, page.corner + (k * span) / steps]);
+  for (let k = 0; k < steps; k += 1) {
+    for (const part of [0.3, 0.5, 0.7]) for (const x of sides) blanks.push([x, page.corner + ((k + part) * span) / steps]);
+  }
+  for (let k = 0; k < 12; k += 1) blanks.push([page.corner + 30 + (k * (page.width - 2 * page.corner - 60)) / 11, page.corner]);
+  const pageCorners = [
+    [page.corner, page.corner],
+    [page.width - page.corner, page.corner],
+    [page.width - page.corner, page.height - page.corner],
+    [page.corner, page.height - page.corner],
+  ];
+  let best = null;
+  let bestScore = 0;
+  for (const { corners } of shapes) {
+    const map = perspectiveMap(pageCorners, corners.map((corner) => [corner.x, corner.y]));
+    if (!map) continue;
+    const sidePx = (distance(corners[0], corners[3]) + distance(corners[1], corners[2])) / 2;
+    const r = Math.max(1, Math.round(((page.edgeMarkSize / 2) * 0.6 * sidePx) / span));
+    const sample = ([x, y]) => mean(...map(x, y), r);
+    const blankValues = blanks.map(sample);
+    const paper = median(blankValues);
+    const darkness = median(pageCorners.map(sample));
+    if (paper - darkness < 30) continue;
+    const threshold = (paper + darkness) / 2;
+    const hits = marks.filter((mark) => sample(mark) < threshold).length + blankValues.filter((value) => value > threshold).length;
+    const score = hits / (marks.length + blanks.length);
+    if (score > bestScore) {
+      bestScore = score;
+      best = corners;
+    }
+    if (score >= 0.95) break;
+  }
+  return bestScore >= 0.9 ? best : null;
 }
 
 async function startLiveScan(testId, test, page = 1, collected = null) {
@@ -7484,6 +7672,7 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
   let steady = 0;
   let busy = false;
   let waitForNewSheet = false; // saqlangan varaq hali kamera oldida — almashtirilishini kutamiz
+  let restUntil = 0;
 
   const capture = async () => {
     if (busy || !video.videoWidth) return;
@@ -7539,13 +7728,23 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
       stopLiveScan();
       return;
     }
-    if (busy || !video.videoWidth) return;
-    const width = 400;
-    const height = Math.round((width * video.videoHeight) / video.videoWidth);
+    if (busy || !video.videoWidth || performance.now() < restUntil) return;
+    const started = performance.now();
+    // Kadr kichraytiriladi (uzun tomoni 720 px) — chet belgilari ko'rinadigan darajada
+    const factor = 720 / Math.max(video.videoWidth, video.videoHeight);
+    const width = Math.round(video.videoWidth * factor);
+    const height = Math.round(video.videoHeight * factor);
     probe.width = width;
     probe.height = height;
     probeContext.drawImage(video, 0, 0, width, height);
-    const corners = findSheetCorners(probeContext.getImageData(0, 0, width, height).data, width, height);
+    const corners = findSheetCorners(
+      probeContext.getImageData(0, 0, width, height).data,
+      width,
+      height,
+      (test.sheet_version || 1) >= 3
+    );
+    // Sekin telefonda qizib ketmasin: tekshiruv qancha vaqt olgan bo'lsa, shuncha dam olinadi
+    restUntil = performance.now() + (performance.now() - started) * 1.5;
 
     // Topilgan burchaklar videoning ustida ko'rsatiladi
     overlay.width = video.clientWidth;
