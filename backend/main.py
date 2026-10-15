@@ -244,6 +244,20 @@ def _add_missing_columns() -> None:
 _add_missing_columns()
 
 
+def _upgrade_sheet_versions() -> None:
+    """
+    4-versiya (3 xonali ID) testlar 5-versiyaga (4 xonali ID) o'tkaziladi: savollar joyi
+    bir xil, faqat ID blokiga 4-ustun qo'shiladi. Oldin chop etilgan 3 xonali varaqlar
+    ham o'qiladi (skaner ularni qayta urinib taniydi — qarang: scan_sheet).
+    """
+    with engine.begin() as connection:
+        if "tests" in inspect(engine).get_table_names():
+            connection.execute(text("UPDATE tests SET sheet_version = 5 WHERE sheet_version = 4"))
+
+
+_upgrade_sheet_versions()
+
+
 # ---------- Promo kodlar ----------
 
 def _drop_promo_unique_constraint() -> None:
@@ -4653,6 +4667,16 @@ def scan_sheet(
         raise HTTPException(status_code=422, detail="Rasm buzilgan — qaytadan suratga oling")
     try:
         result = scan_answer_sheet(image, bubbles, page=body.page)
+        if test.sheet_version == 5 and body.page == 1 and result["sheet_number_status"] != "ok":
+            # Oldin chop etilgan 3 xonali ID'li titul bo'lishi mumkin — shu ko'rinishda qayta o'qiladi
+            old_bubbles: list[dict] = []
+            generate_answer_sheet_pdf(SimpleNamespace(
+                mode=test.mode, key_questions=test.key_questions, questions=test.questions, title=test.title,
+                code=test.code, subject=test.subject, id=test.id, sheet_version=4,
+            ), bubbles=old_bubbles, variants=variants or None)
+            old_result = scan_answer_sheet(image, old_bubbles, page=1)
+            if old_result["sheet_number_status"] == "ok":
+                result = old_result
     except ScanError as error:
         raise HTTPException(status_code=422, detail=str(error))
     if result.get("sheet_code") is not None and result["sheet_code"] != sheet_code(test):

@@ -4583,3 +4583,25 @@ def test_skaner_natijasi_sinf_natijalariga_yoziladi():
 
     named = client.get(f"{base}/answer-sheet", params={"named": "true"}, headers=as_user(701))
     assert named.status_code == 200 and named.content.startswith(b"%PDF")
+
+
+def test_3_xonali_eski_titul_yangi_testda_ham_oqiladi():
+    from backend.database import Test
+
+    reset_database()
+    register_teacher()
+    created = create_test(enrollment_type="closed")
+    test_id = created["id"]
+    client.post(f"/api/teacher/tests/{test_id}/students", json={"names": ["Birinchi", "Ikkinchi"]}, headers=as_user(555))
+    with SessionLocal() as session:
+        session.get(Test, test_id).sheet_version = 4
+        session.commit()
+    old_photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "2", 1: "B"})  # 3 xonali titul chop etilgan
+
+    main._upgrade_sheet_versions()
+    with SessionLocal() as session:
+        assert session.get(Test, test_id).sheet_version == 5
+
+    scanned = client.post(f"/api/teacher/tests/{test_id}/scan", json={"image_base64": old_photo}, headers=as_user(555)).json()
+    assert scanned["sheet_number"] == 2 and scanned["match"]["name"] == "Ikkinchi", scanned
+    assert scanned["answers"] == {"1": "B"}
