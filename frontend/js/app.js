@@ -7869,6 +7869,7 @@ async function renderResultsTab(selectedId) {
     </div>
 
     <button class="btn" id="results-pdf-button" style="margin-top:14px">📄 PDF HISOBOT</button>
+    <button class="btn btn-ghost" id="results-excel-button">📊 EXCEL (javoblar va tahlil)</button>
     <div class="contact-actions" style="margin-top:10px">
       <button class="btn btn-ghost" id="results-sections-button">🧩 Bo'limlar${results.section_names?.length ? ` (${results.section_names.length})` : ""}</button>
       <button class="btn btn-ghost" id="results-certificates-button">🎓 Sertifikatlar</button>
@@ -7899,6 +7900,7 @@ async function renderResultsTab(selectedId) {
 
   document.getElementById("all-results-button").addEventListener("click", () => renderResultsTestList(tests));
   document.getElementById("results-pdf-button").addEventListener("click", guarded(() => downloadOrSendPdf(testId)));
+  document.getElementById("results-excel-button").addEventListener("click", guarded(() => downloadOrSendExcel(testId)));
   document.getElementById("results-certificates-button").addEventListener(
     "click",
     guarded(async () => {
@@ -8262,6 +8264,7 @@ async function renderTestResults(testId) {
       }
     </div>
     <button class="btn" id="pdf-button">📄 PDF HISOBOT</button>
+    <button class="btn btn-ghost" id="excel-button">📊 EXCEL (javoblar va tahlil)</button>
     <h3>Natijalar</h3>
     <input class="input" id="filter-input" placeholder="🔍 O'quvchini qidirish..." />
     <div style="overflow-x:auto">
@@ -8275,6 +8278,7 @@ async function renderTestResults(testId) {
 
   document.querySelector('[data-action="test"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
   document.getElementById("pdf-button").addEventListener("click", guarded(() => downloadOrSendPdf(testId)));
+  document.getElementById("excel-button").addEventListener("click", guarded(() => downloadOrSendExcel(testId)));
 
   document.getElementById("edit-price-button").addEventListener("click", () => showPriceEditor(testId, results.price));
   document.getElementById("question-stats-button").addEventListener(
@@ -8318,6 +8322,11 @@ async function saveNewPrice(testId) {
 
 async function downloadOrSendPdf(testId) {
   await deliverPdf(`/api/teacher/tests/${testId}/pdf`, "hisobot.pdf", "📄 PDF Telegram chatga yuborildi");
+}
+
+// Excel: natijalar, har o'quvchining javoblari va savollar tahlili
+async function downloadOrSendExcel(testId) {
+  await deliverPdf(`/api/teacher/tests/${testId}/excel`, "natijalar.xlsx", "📊 Excel Telegram chatga yuborildi");
 }
 
 async function deliverPdf(basePath, fileName, sentMessage) {

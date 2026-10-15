@@ -2037,14 +2037,15 @@ def _notify_admin_about_withdrawal(request: WithdrawalRequest, teacher: Teacher)
         logging.getLogger("backend").warning("Admin'ga pul yechish bildirishnomasi yuborilmadi", exc_info=True)
 
 
-def _send_pdf_to_telegram(chat_id: int, file_name: str, pdf_bytes: bytes, caption: str = "") -> None:
-    """Tayyor PDF'ni bot orqali foydalanuvchining shaxsiy chatiga yuboradi."""
+def _send_pdf_to_telegram(chat_id: int, file_name: str, pdf_bytes: bytes, caption: str = "",
+                          mime: str = "application/pdf") -> None:
+    """Tayyor faylni (PDF yoki Excel) bot orqali foydalanuvchining shaxsiy chatiga yuboradi."""
 
     for _ in range(3):
         response = httpx.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
             data={"chat_id": chat_id, "caption": caption} if caption else {"chat_id": chat_id},
-            files={"document": (file_name, pdf_bytes, "application/pdf")},
+            files={"document": (file_name, pdf_bytes, mime)},
             timeout=30,
         )
         if response.status_code != 429:  # 429 — juda tez: Telegram aytgancha kutib qayta urinamiz
@@ -2055,7 +2056,7 @@ def _send_pdf_to_telegram(chat_id: int, file_name: str, pdf_bytes: bytes, captio
             retry_after = 3
         time.sleep(min(retry_after, 30) + 0.5)
     if response.status_code != 200:
-        raise HTTPException(status_code=502, detail="PDF yuborilmadi (botga /start bosganmisiz?)")
+        raise HTTPException(status_code=502, detail="Fayl yuborilmadi (botga /start bosganmisiz?)")
 
 
 def _answer_sheet_caption(test: Test) -> str:
@@ -4722,6 +4723,121 @@ def send_pdf_to_telegram(
 
     test = _get_own_test(db, teacher, test_id)
     _send_pdf_to_telegram(user.tg_id, f"{test.code}.pdf", generate_test_report_pdf(db, test, teacher))
+    return {"ok": True}
+
+
+# ---------- Excel hisobot ----------
+# Uch varaq: natijalar (reyting), har o'quvchining javoblari (yashil — to'g'ri,
+# qizil — xato) va savollar tahlili (har variantni nechta o'quvchi tanlagan).
+
+
+def generate_test_report_xlsx(db: Session, test: Test) -> bytes:
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    report = build_rasch_report(db, test)
+    rows = report["rows"]
+    sections = report["section_names"]
+    numbers = {
+        attempt_id: number
+        for attempt_id, number in db.execute(
+            select(Attempt.id, Attempt.sheet_number).where(Attempt.test_id == test.id, Attempt.sheet_number.is_not(None))
+        ).all()
+    }
+    reviews = {row["attempt_id"]: _attempt_review(db, test, db.get(Attempt, row["attempt_id"])) for row in rows}
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="1F4E79")
+    green = PatternFill("solid", fgColor="C6EFCE")
+    red = PatternFill("solid", fgColor="FFC7CE")
+    grey = PatternFill("solid", fgColor="EDEDED")
+    center = Alignment(horizontal="center", vertical="center")
+
+    def header(sheet, titles: list[str], widths: list[int]) -> None:
+        sheet.append(titles)
+        for column, width in enumerate(widths, start=1):
+            cell = sheet.cell(row=1, column=column)
+            cell.font, cell.fill, cell.alignment = header_font, header_fill, center
+            sheet.column_dimensions[get_column_letter(column)].width = width
+        sheet.freeze_panes = "C2"
+
+    workbook = Workbook()
+
+    # 1) Natijalar
+    results = workbook.active
+    results.title = "Natijalar"
+    header(results, ["O'rin", "Raqam", "Ism-familiya", "To'g'ri", "Xato", "Jami", "Foiz %", "Ball", "Daraja", *sections],
+           [7, 8, 32, 9, 8, 7, 9, 9, 9, *[14] * len(sections)])
+    for row in rows:
+        results.append([
+            row["rank"], numbers.get(row["attempt_id"]), row["name"], row["correct"], row["wrong"], row["total"],
+            row["percent"], row["ball"], row["grade"], *[row["sections"].get(name) for name in sections],
+        ])
+
+    # 2) Javoblar: birinchi qator — to'g'ri javoblar kaliti
+    first_review = next(iter(reviews.values()), None)
+    labels = [question["label"] for question in first_review["questions"]] if first_review else []
+    answers = workbook.create_sheet("Javoblar")
+    header(answers, ["O'rin", "Ism-familiya", *labels], [7, 32, *[9] * len(labels)])
+    if first_review:
+        answers.append(["", "To'g'ri javob", *[question["correct"] for question in first_review["questions"]]])
+        for cell in answers[2]:
+            cell.font = Font(bold=True)
+    for row in rows:
+        questions = reviews[row["attempt_id"]]["questions"]
+        answers.append([row["rank"], row["name"], *[question["chosen"] for question in questions]])
+        for column, question in enumerate(questions, start=3):
+            cell = answers.cell(row=answers.max_row, column=column)
+            cell.alignment = center
+            cell.fill = grey if question["chosen"] == "—" else green if question["is_correct"] else red
+
+    # 3) Savollar tahlili: qaysi savolni ko'pchilik xato qildi, qaysi variant "tuzoq" bo'ldi
+    letters = "ABCDEF"
+    analysis = workbook.create_sheet("Savollar tahlili")
+    header(analysis, ["Savol", "To'g'ri javob", "To'g'ri yechdi", "Ulush %", *letters, "Bo'sh"],
+           [9, 14, 14, 9, *[7] * len(letters), 8])
+    total = len(rows)
+    for index, label in enumerate(labels):
+        picked = [reviews[row["attempt_id"]]["questions"][index] for row in rows]
+        solved = sum(1 for question in picked if question["is_correct"])
+        counts = {letter: sum(1 for question in picked if letter in question["chosen"].split(",")) for letter in letters}
+        empty = sum(1 for question in picked if question["chosen"] == "—")
+        analysis.append([label, first_review["questions"][index]["correct"], solved,
+                         round(solved / total * 100, 1) if total else 0, *[counts[letter] or "" for letter in letters], empty])
+        share_cell = analysis.cell(row=analysis.max_row, column=4)
+        share_cell.fill = green if share_cell.value >= 70 else red if share_cell.value < 40 else PatternFill()
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@app.get("/api/teacher/tests/{test_id}/excel")
+def download_excel(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    test = _get_own_test(db, teacher, test_id)
+    return StreamingResponse(
+        io.BytesIO(generate_test_report_xlsx(db, test)),
+        media_type=XLSX_MIME,
+        headers={"Content-Disposition": f'attachment; filename="{test.code}_natijalar.xlsx"'},
+    )
+
+
+@app.post("/api/teacher/tests/{test_id}/excel/send")
+def send_excel_to_telegram(
+    test_id: int,
+    teacher: Teacher = Depends(get_current_teacher),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    test = _get_own_test(db, teacher, test_id)
+    _send_pdf_to_telegram(
+        user.tg_id, f"{test.code}_natijalar.xlsx", generate_test_report_xlsx(db, test),
+        caption=f"📊 {test.title} ({test.code}) — natijalar, javoblar va savollar tahlili", mime=XLSX_MIME,
+    )
     return {"ok": True}
 
 

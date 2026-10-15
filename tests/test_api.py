@@ -4364,3 +4364,38 @@ def test_varaqdagi_oquvchi_raqami_boyicha_taniladi():
     assert old_scan["answers"] == {"1": "B"} and old_scan["sheet_number"] is None, old_scan
     empty_named = client.get(f"/api/teacher/tests/{old['id']}/answer-sheet", params={"named": "true"}, headers=as_user(555))
     assert empty_named.status_code == 400
+
+
+def test_excel_hisobot():
+    from openpyxl import load_workbook
+
+    reset_database()
+    register_teacher()
+    created = create_test(enrollment_type="closed")
+    test_id = created["id"]
+    client.post(f"/api/teacher/tests/{test_id}/students", json={"names": ["Ali", "Vali"]}, headers=as_user(555))
+    students = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()["students"]
+    answers = {"Ali": {"1": "B", "2": "C", "3": "A,C", "4": r"2\sqrt{3}"}, "Vali": {"1": "A", "3": "A"}}
+    for student in students:
+        client.post(f"/api/teacher/tests/{test_id}/students/{student['id']}/answers",
+                    json={"answers": answers[student["name"]]}, headers=as_user(555))
+
+    response = client.get(f"/api/teacher/tests/{test_id}/excel", headers=as_user(555))
+    assert response.status_code == 200, response.text
+    book = load_workbook(io.BytesIO(response.content))
+    assert book.sheetnames == ["Natijalar", "Javoblar", "Savollar tahlili"]
+
+    results = list(book["Natijalar"].iter_rows(min_row=2, values_only=True))
+    assert [(row[0], row[1], row[2], row[3]) for row in results] == [(1, 1, "Ali", 4), (2, 2, "Vali", 0)], results
+
+    answer_rows = list(book["Javoblar"].iter_rows(min_row=2, values_only=True))
+    assert answer_rows[0][1] == "To'g'ri javob" and answer_rows[0][2:5] == ("B", "C", "A,C"), answer_rows[0]
+    vali = next(row for row in answer_rows if row[1] == "Vali")
+    assert vali[2:5] == ("A", "—", "A"), vali
+    vali_row = next(row for row in book["Javoblar"].iter_rows(min_row=3) if row[1].value == "Vali")
+    assert vali_row[2].fill.fgColor.rgb.endswith("FFC7CE")  # xato — qizil
+
+    analysis = list(book["Savollar tahlili"].iter_rows(min_row=2, values_only=True))
+    first = analysis[0]
+    assert first[0] == "1-savol" and first[1] == "B" and first[2] == 1 and first[3] == 50.0, first
+    assert first[4] == 1 and first[5] == 1, first  # A ni 1 kishi, B ni 1 kishi tanlagan
