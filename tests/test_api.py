@@ -4317,3 +4317,50 @@ def test_javoblar_varaqasi_skanerlanadi():
     assert saved.status_code == 200, saved.text
     results = client.get(f"/api/teacher/tests/{opened['id']}/results", headers=as_user(555)).json()
     assert "Qog'ozda Ishlagan" in [row["name"] for row in results["rows"]], results
+
+
+def test_varaqdagi_oquvchi_raqami_boyicha_taniladi():
+    from backend.database import Test
+
+    reset_database()
+    register_teacher()
+    created = create_test(enrollment_type="closed")
+    test_id = created["id"]
+    client.post(f"/api/teacher/tests/{test_id}/students", json={"names": ["Birinchi Bola", "Ikkinchi Bola"]},
+                headers=as_user(555))
+    detail = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
+    assert [(s["number"], s["name"]) for s in detail["students"]] == [(1, "Birinchi Bola"), (2, "Ikkinchi Bola")]
+    assert detail["sheet_version"] == 2
+
+    url = f"/api/teacher/tests/{test_id}/scan"
+    photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "2", 1: "B", 2: "C"})
+    scanned = client.post(url, json={"image_base64": photo}, headers=as_user(555)).json()
+    assert scanned["sheet_number"] == 2 and scanned["sheet_number_status"] == "ok", scanned
+    assert scanned["match"]["name"] == "Ikkinchi Bola" and scanned["match"]["status"] == "pending", scanned["match"]
+    saved = client.post(f"{url}/save", json={"attempt_id": scanned["match"]["id"], "answers": scanned["answers"]},
+                        headers=as_user(555))
+    assert saved.json()["correct"] == 2, saved.text
+    again = client.post(url, json={"image_base64": photo}, headers=as_user(555)).json()
+    assert again["match"]["status"] == "done"  # qayta skanerlansa — "natijasi bor" deb ogohlantiriladi
+
+    # Ro'yxatda yo'q raqam — yangi o'quvchi shu raqam bilan saqlanadi
+    unknown = client.post(url, json={"image_base64": _sheet_photo(test_id, {"id0": "0", "id1": "1", "id2": "7"})},
+                          headers=as_user(555)).json()
+    assert unknown["sheet_number"] == 17 and unknown["match"] is None, unknown
+    client.post(f"{url}/save", json={"name": "Yangi Bola", "sheet_number": 17, "answers": {}}, headers=as_user(555))
+    detail = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
+    assert (17, "Yangi Bola") in [(s["number"], s["name"]) for s in detail["students"]], detail["students"]
+
+    named = client.get(f"/api/teacher/tests/{test_id}/answer-sheet", params={"named": "true"}, headers=as_user(555))
+    assert named.status_code == 200 and named.content.startswith(b"%PDF") and named.content.count(b"/Type /Page") >= 3
+
+    # Eski test (raqamsiz varaq) ham skanerlanadi, ismli varaq esa yo'q
+    old = create_test(enrollment_type="closed")
+    with SessionLocal() as session:
+        session.get(Test, old["id"]).sheet_version = 1
+        session.commit()
+    old_scan = client.post(f"/api/teacher/tests/{old['id']}/scan", json={"image_base64": _sheet_photo(old["id"], {1: "B"})},
+                           headers=as_user(555)).json()
+    assert old_scan["answers"] == {"1": "B"} and old_scan["sheet_number"] is None, old_scan
+    empty_named = client.get(f"/api/teacher/tests/{old['id']}/answer-sheet", params={"named": "true"}, headers=as_user(555))
+    assert empty_named.status_code == 400

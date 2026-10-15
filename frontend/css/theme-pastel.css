@@ -883,3 +883,16 @@ select:focus {
   color: #a16207;
   font-weight: 700;
 }
+
+/* O'quvchining varaqdagi raqami (#7) */
+.student-number {
+  display: inline-block;
+  min-width: 28px;
+  padding: 1px 6px;
+  margin-right: 2px;
+  border-radius: 8px;
+  background: var(--sun);
+  color: var(--ink-text, #1b2452);
+  font-size: 12px;
+  text-align: center;
+}

@@ -180,8 +180,10 @@ def _add_missing_columns() -> None:
             "results_sent_at": "TIMESTAMP",
             "broadcast_at": "TIMESTAMP",
             "deleted_at": "TIMESTAMP",
+            # Eski testlar — eski varaq ko'rinishi (raqamsiz), chop etilganlari to'g'ri skanerlansin
+            "sheet_version": "INTEGER DEFAULT 1",
         },
-        "test_attempts": {"offline_name": "VARCHAR(200)", "saved_answers": "TEXT"},
+        "test_attempts": {"offline_name": "VARCHAR(200)", "saved_answers": "TEXT", "sheet_number": "INTEGER"},
         "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)"},
         "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)"},
         "school_classes": {"curator_user_id": "INTEGER"},
@@ -691,6 +693,31 @@ def _all_participants(db: Session, test: Test) -> list[tuple[Attempt, str]]:
     for attempt, user in db.execute(query).all():
         participants.append((attempt, user.full_name if user else (attempt.offline_name or "Noma'lum")))
     return participants
+
+
+def _ensure_sheet_numbers(db: Session, test: Test) -> None:
+    """O'qituvchi qo'shgan o'quvchilarga varaq raqami (1, 2, 3 ...) — hali yo'q bo'lsa, qo'shilish tartibida."""
+
+    offline = db.scalars(
+        select(Attempt)
+        .where(Attempt.test_id == test.id, Attempt.user_id.is_(None), Attempt.status.in_(("pending", "done")))
+        .order_by(Attempt.id)
+    ).all()
+    taken = {attempt.sheet_number for attempt in offline if attempt.sheet_number}
+    next_number = 1
+    changed = False
+    for attempt in offline:
+        if attempt.sheet_number:
+            continue
+        while next_number in taken:
+            next_number += 1
+        if next_number > 999:
+            break
+        attempt.sheet_number = next_number
+        taken.add(next_number)
+        changed = True
+    if changed:
+        db.commit()
 
 
 def _get_offline_attempt(db: Session, test: Test, attempt_id: int) -> Attempt:
@@ -1503,6 +1530,10 @@ TEST_CODE_LENGTH = 4
 # Javoblar varaqasining o'lchamlari (punktlarda)
 SHEET_MARGIN = 40
 SHEET_BOTTOM_LIMIT = 56
+# "O'quvchi raqami" doirachalari: radius, orasi, qatorlar orasi
+SHEET_ID_RADIUS = 5.0
+SHEET_ID_GAP = 16
+SHEET_ID_ROW = 13
 
 # Hamma savol iloji boricha BITTA varaqqa sig'ishi kerak. Shuning uchun bir
 # nechta joylashuv tayyor turadi: savollar ko'paygan sari ustunlar ko'payadi va
@@ -1621,12 +1652,17 @@ def _draw_corner_marks(sheet, width: float, height: float) -> None:
         sheet.circle(x, y, 7, stroke=0, fill=1)
 
 
-def _draw_sheet_header(sheet, test: Test, width: float, height: float, with_answers: bool) -> float:
+def _draw_sheet_header(sheet, test: Test, width: float, height: float, with_answers: bool,
+                       student: tuple[int, str] | None = None, bubbles: list | None = None) -> float:
     """
     Varaq sarlavhasini chizadi va savollar boshlanadigan y koordinatasini qaytaradi.
 
     Sarlavha ixcham: savollarga ko'proq joy qolishi uchun (hammasi bitta
     varaqqa sig'ishi kerak) test ma'lumotlari bitta qatorga joylashtiriladi.
+
+    Yangi varaqlarda (sheet_version 2) ism ostida "O'quvchi raqami" doirachalari bor:
+    skaner o'quvchini shu raqam bo'yicha o'zi taniydi. student = (raqam, ism) berilsa —
+    ism yozib, raqam bo'yab qo'yilgan shaxsiy varaq chiqadi.
     """
 
     _draw_corner_marks(sheet, width, height)
@@ -1652,8 +1688,42 @@ def _draw_sheet_header(sheet, test: Test, width: float, height: float, with_answ
     sheet.setFont("Helvetica", 9)
     sheet.drawString(SHEET_MARGIN, name_y + 6, "Ism va familiya:")
     sheet.rect(SHEET_MARGIN + 80, name_y, width - SHEET_MARGIN * 2 - 80, 20)
+    if student:
+        sheet.setFont(REPORT_FONT_BOLD, 11)
+        sheet.drawString(SHEET_MARGIN + 86, name_y + 6, student[1][:60])
 
-    return name_y - 16
+    if (test.sheet_version or 1) < 2:
+        return name_y - 16
+
+    # O'quvchi raqami: 3 qator (yuzlik, o'nlik, birlik), har qatorda 0–9
+    number_digits = f"{student[0]:03d}" if student else None
+    first_x = SHEET_MARGIN + 80 + SHEET_ID_RADIUS
+    sheet.setFont("Helvetica-Bold", 7)
+    for digit in range(10):
+        sheet.drawCentredString(first_x + digit * SHEET_ID_GAP, name_y - 13, str(digit))
+    sheet.setFont("Helvetica", 8)
+    sheet.drawString(SHEET_MARGIN, name_y - 13, "O'quvchi raqami:")
+    for row, place in enumerate(("yuzlik", "o'nlik", "birlik")):
+        center_y = name_y - 24 - row * SHEET_ID_ROW
+        sheet.setFont("Helvetica", 7)
+        sheet.drawRightString(SHEET_MARGIN + 72, center_y - 2.5, place)
+        for digit in range(10):
+            filled = number_digits is not None and int(number_digits[row]) == digit
+            x = first_x + digit * SHEET_ID_GAP
+            sheet.circle(x, center_y, SHEET_ID_RADIUS, stroke=1, fill=1 if filled else 0)
+            if bubbles is not None:
+                bubbles.append({"page": 1, "ref": f"id{row}", "label": place, "kind": "id", "letter": str(digit),
+                                "x": x, "y": center_y, "r": SHEET_ID_RADIUS})
+    hint_x = first_x + 10 * SHEET_ID_GAP + 6
+    sheet.setFont("Helvetica", 7)
+    if student:
+        sheet.setFont("Helvetica-Bold", 12)
+        sheet.drawString(hint_x, name_y - 40, f"No {student[0]:03d}")
+    else:
+        sheet.drawString(hint_x, name_y - 26, "Raqamingizni o'qituvchidan oling va")
+        sheet.drawString(hint_x, name_y - 35, "har qatorda bittadan bo'yang.")
+        sheet.drawString(hint_x, name_y - 44, "Masalan 7 -> 0, 0, 7;  23 -> 0, 2, 3")
+    return name_y - 24 - 2 * SHEET_ID_ROW - 16
 
 
 def _pack_sheet_cells(cells: list[dict], row_height: float, available_height: float) -> list[list[dict]]:
@@ -1761,21 +1831,10 @@ def _draw_sheet_column(sheet, column_cells, column_x, column_width, top_y, layou
         y -= row_height
 
 
-def generate_answer_sheet_pdf(test: Test, with_answers: bool = False, bubbles: list | None = None) -> bytes:
-    """
-    "Javoblar varaqasi" — o'quvchilarga tarqatiladigan bo'sh blank.
+def _draw_answer_sheet(sheet, test: Test, with_answers: bool, bubbles: list | None,
+                       student: tuple[int, str] | None) -> None:
+    """Bitta to'liq varaq (bir yoki bir necha sahifa) — hamma savollar bilan."""
 
-    O'quvchi javoblarini shu varaqada belgilaydi, o'qituvchi esa ularni
-    Mini App'dagi "O'quvchilar" bo'limiga kiritadi va bot avtomatik tekshiradi.
-
-    Hamma savol iloji boricha bitta varaqqa joylashtiriladi (qarang: SHEET_LAYOUTS).
-
-    with_answers=True bo'lsa, to'g'ri javoblar bo'yalgan "kalit" varaqasi
-    chiqadi — o'qituvchi qo'lda tekshirishi uchun.
-    """
-
-    buffer = io.BytesIO()
-    sheet = pdf_canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
 
     # Har bir guruh: sarlavha katagi + savol kataklari
@@ -1784,7 +1843,7 @@ def generate_answer_sheet_pdf(test: Test, with_answers: bool = False, bubbles: l
         cells.append({"kind": "header", "group": group})
         cells.extend({"kind": "row", "item": item} for item in group)
 
-    top_y = _draw_sheet_header(sheet, test, width, height, with_answers)
+    top_y = _draw_sheet_header(sheet, test, width, height, with_answers, student, bubbles)
     available_height = top_y - SHEET_BOTTOM_LIMIT
 
     layout, columns = _choose_sheet_layout(cells, available_height)
@@ -1818,6 +1877,30 @@ def generate_answer_sheet_pdf(test: Test, with_answers: bool = False, bubbles: l
         sheet.setFont("Helvetica", 8)
         sheet.drawCentredString(width / 2, 40, "To'g'ri javob doirachasini to'liq bo'yang.")
 
+
+def generate_answer_sheet_pdf(test: Test, with_answers: bool = False, bubbles: list | None = None,
+                              students: list[tuple[int, str]] | None = None) -> bytes:
+    """
+    "Javoblar varaqasi" — o'quvchilarga tarqatiladigan bo'sh blank.
+
+    O'quvchi javoblarini shu varaqada belgilaydi, o'qituvchi esa ularni
+    skanerlaydi yoki Mini App'dagi "O'quvchilar" bo'limiga kiritadi va bot avtomatik tekshiradi.
+
+    Hamma savol iloji boricha bitta varaqqa joylashtiriladi (qarang: SHEET_LAYOUTS).
+
+    with_answers=True bo'lsa, to'g'ri javoblar bo'yalgan "kalit" varaqasi
+    chiqadi — o'qituvchi qo'lda tekshirishi uchun.
+
+    students = [(raqam, ism), ...] berilsa — har o'quvchiga ismi yozilgan va raqami
+    bo'yalgan alohida varaq (skaner ularni o'zi taniydi).
+    """
+
+    buffer = io.BytesIO()
+    sheet = pdf_canvas.Canvas(buffer, pagesize=A4)
+    for index, student in enumerate(students or [None]):
+        if index:
+            sheet.showPage()
+        _draw_answer_sheet(sheet, test, with_answers, bubbles if index == 0 else None, student)
     sheet.save()
     return buffer.getvalue()
 
@@ -3770,6 +3853,7 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
     """
 
     test = _get_own_test(db, teacher, test_id)
+    _ensure_sheet_numbers(db, test)
 
     students = []
     for attempt, name in _all_participants(db, test):
@@ -3782,6 +3866,7 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
                 "wrong": attempt.wrong,
                 "percent": attempt.percent,
                 "editable": attempt.user_id is None,  # faqat o'qituvchi qo'shgan o'quvchi tahrirlanadi
+                "number": attempt.sheet_number,
             }
         )
 
@@ -3806,6 +3891,7 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
         "end_time": test.end_time,
         "has_attempts": _test_has_attempts(db, test),
         "broadcast_at": test.broadcast_at,
+        "sheet_version": test.sheet_version or 1,
         "students": students,
         "filled": filled,
         "missing": len(students) - filled,
@@ -3936,6 +4022,7 @@ def add_students(
         raise HTTPException(status_code=422, detail="Hech bo'lmaganda bitta ism kiriting")
 
     db.commit()
+    _ensure_sheet_numbers(db, test)
     return {"added": added}
 
 
@@ -4142,6 +4229,21 @@ def scan_sheet(
     except ScanError as error:
         raise HTTPException(status_code=422, detail=str(error))
 
+    # Varaqdagi raqam bo'yicha o'quvchi topiladi (ro'yxatda bo'lsa)
+    _ensure_sheet_numbers(db, test)
+    match = None
+    if result.get("sheet_number"):
+        found = db.scalar(
+            select(Attempt).where(
+                Attempt.test_id == test.id,
+                Attempt.user_id.is_(None),
+                Attempt.status.in_(("pending", "done")),
+                Attempt.sheet_number == result["sheet_number"],
+            )
+        )
+        if found:
+            match = {"id": found.id, "name": found.offline_name, "status": found.status}
+
     pending = [
         {"id": attempt.id, "name": attempt.offline_name}
         for attempt in db.scalars(
@@ -4150,7 +4252,7 @@ def scan_sheet(
             .order_by(Attempt.offline_name)
         ).all()
     ]
-    return {**result, "page": body.page, "page_count": page_count, "pending_students": pending}
+    return {**result, "match": match, "page": body.page, "page_count": page_count, "pending_students": pending}
 
 
 @app.post("/api/teacher/tests/{test_id}/scan/save")
@@ -4180,6 +4282,13 @@ def save_scanned_sheet(
         attempt = same_name or Attempt(test_id=test.id, offline_name=name[:200], status="pending")
         db.add(attempt)
         db.flush()
+        if not attempt.sheet_number:
+            number_taken = body.sheet_number and db.scalar(
+                select(Attempt.id).where(Attempt.test_id == test.id, Attempt.sheet_number == body.sheet_number)
+            )
+            if body.sheet_number and not number_taken:
+                attempt.sheet_number = body.sheet_number
+                db.flush()  # saqlashda yozuv bazadan qayta o'qiladi — raqam yo'qolmasin
     return _store_offline_answers(db, test, teacher, attempt, body.answers)
 
 
@@ -4616,18 +4725,43 @@ def send_pdf_to_telegram(
     return {"ok": True}
 
 
+def _named_sheet_students(db: Session, test: Test, named: bool) -> list[tuple[int, str]] | None:
+    """Ismli varaqlar uchun: o'qituvchi qo'shgan o'quvchilar (raqam, ism) — raqam tartibida."""
+
+    if not named:
+        return None
+    if (test.sheet_version or 1) < 2:
+        raise HTTPException(status_code=400, detail="Bu eski test — ismli varaqlar yangi testlarda bor")
+    _ensure_sheet_numbers(db, test)
+    students = [
+        (attempt.sheet_number, attempt.offline_name or "")
+        for attempt in db.scalars(
+            select(Attempt)
+            .where(Attempt.test_id == test.id, Attempt.user_id.is_(None), Attempt.status.in_(("pending", "done")),
+                   Attempt.sheet_number.is_not(None))
+            .order_by(Attempt.sheet_number)
+        ).all()
+    ]
+    if not students:
+        raise HTTPException(status_code=400, detail="Avval o'quvchilarni qo'shing — har biriga ismli varaq chiqadi")
+    return students
+
+
 @app.get("/api/teacher/tests/{test_id}/answer-sheet")
 def download_answer_sheet(
     test_id: int,
     answers: bool = False,
+    named: bool = False,
     teacher: Teacher = Depends(get_current_teacher),
     db: Session = Depends(get_db),
 ):
     """Javoblar varaqasini brauzerga yuklab beradi (answers=true bo'lsa — to'g'ri javobli kalit)."""
 
     test = _get_own_test(db, teacher, test_id)
-    pdf_bytes = generate_answer_sheet_pdf(test, with_answers=answers)
-    file_name = f"{test.code}_{'kalit' if answers else 'javoblar_varaqasi'}.pdf"
+    pdf_bytes = generate_answer_sheet_pdf(
+        test, with_answers=answers, students=_named_sheet_students(db, test, named and not answers)
+    )
+    file_name = f"{test.code}_{'kalit' if answers else 'ismli_varaqlar' if named else 'javoblar_varaqasi'}.pdf"
 
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
@@ -4640,6 +4774,7 @@ def download_answer_sheet(
 def send_answer_sheet_to_telegram(
     test_id: int,
     answers: bool = False,
+    named: bool = False,
     teacher: Teacher = Depends(get_current_teacher),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -4658,11 +4793,14 @@ def send_answer_sheet_to_telegram(
         )
     else:
         caption = _answer_sheet_caption(test)
+    students = _named_sheet_students(db, test, named and not answers)
+    if students:
+        caption = f"👥 Ismli varaqlar — {len(students)} ta o'quvchi\n📝 {test.title} ({test.code})\n\nChop etib, har o'quvchiga o'z varag'ini bering."
 
     _send_pdf_to_telegram(
         user.tg_id,
-        f"{test.code}_{'kalit' if answers else 'javoblar_varaqasi'}.pdf",
-        generate_answer_sheet_pdf(test, with_answers=answers),
+        f"{test.code}_{'kalit' if answers else 'ismli_varaqlar' if students else 'javoblar_varaqasi'}.pdf",
+        generate_answer_sheet_pdf(test, with_answers=answers, students=students),
         caption=caption,
     )
     return {"ok": True}

@@ -7209,6 +7209,11 @@ async function scanSheetPage(testId, test, page = 1, collected = null) {
   merged.questions = merged.questions.filter((question) => !scan.questions.some((item) => item.ref === question.ref));
   merged.questions.push(...scan.questions);
   if (scan.name_image) merged.nameImage = scan.name_image;
+  if (scan.page === 1) {
+    merged.match = scan.match;
+    merged.sheetNumber = scan.sheet_number;
+    merged.numberStatus = scan.sheet_number_status;
+  }
   merged.page = scan.page;
   merged.pageCount = scan.page_count;
   renderScanReview(testId, test, merged);
@@ -7249,18 +7254,22 @@ function renderScanReview(testId, test, scan) {
       <h2 style="margin:0;flex:1">Varaq tekshiruvi</h2>
     </div>
     <div class="card" style="cursor:default;display:block">
+      ${scanNumberHtml(scan)}
       <p class="subtitle" style="margin:0 0 8px">Varaqdagi ism:</p>
       ${scan.nameImage ? `<img class="scan-name-image" src="${scan.nameImage}" alt="Ism yozilgan katak" />` : ""}
-      ${
-        scan.pending.length
-          ? `<label class="field-label" for="scan-student-select" style="margin-top:10px">Ro'yxatdagi o'quvchi</label>
-             <select class="input" id="scan-student-select">
-               <option value="">— Yangi o'quvchi (ismini yozing) —</option>
-               ${scan.pending.map((student) => `<option value="${student.id}">${escapeHtml(student.name)}</option>`).join("")}
-             </select>`
-          : ""
-      }
-      <input class="input" id="scan-student-name" maxlength="200" placeholder="Ism-familiya" style="margin-top:8px" />
+      ${scan.match ? `<button type="button" class="btn btn-ghost" id="scan-other-student" style="margin-top:10px">✏️ Boshqa o'quvchi</button>` : ""}
+      <div id="scan-student-pick" ${scan.match ? "hidden" : ""}>
+        ${
+          scan.pending.length
+            ? `<label class="field-label" for="scan-student-select" style="margin-top:10px">Ro'yxatdagi o'quvchi</label>
+               <select class="input" id="scan-student-select">
+                 <option value="">— Yangi o'quvchi (ismini yozing) —</option>
+                 ${scan.pending.map((student) => `<option value="${student.id}">${escapeHtml(student.name)}</option>`).join("")}
+               </select>`
+            : ""
+        }
+        <input class="input" id="scan-student-name" maxlength="200" placeholder="Ism-familiya" style="margin-top:8px" />
+      </div>
     </div>
     <p class="subtitle" style="margin:4px 4px 10px">
       ✅ O'qildi: <b>${scan.questions.length - needsCheck.length - empty}</b> ·
@@ -7283,6 +7292,12 @@ function renderScanReview(testId, test, scan) {
   const nameInput = document.getElementById("scan-student-name");
   select?.addEventListener("change", () => {
     nameInput.hidden = Boolean(select.value);
+  });
+  // Raqam bo'yicha topilgan o'quvchi emas — boshqasini tanlash
+  document.getElementById("scan-other-student")?.addEventListener("click", (event) => {
+    scan.match = null;
+    event.currentTarget.remove();
+    document.getElementById("scan-student-pick").hidden = false;
   });
 
   document.querySelectorAll(".scan-row").forEach((row) => {
@@ -7318,26 +7333,48 @@ function renderScanReview(testId, test, scan) {
     .getElementById("scan-retake")
     .addEventListener("click", guarded(() => scanSheetPage(testId, test, scan.page, scan.page > 1 ? scan : null)));
   document.getElementById("scan-next-page")?.addEventListener("click", guarded(() => scanSheetPage(testId, test, scan.page + 1, scan)));
-  document.getElementById("scan-save")?.addEventListener(
-    "click",
-    guarded(async () => {
-      const attemptId = Number(select?.value) || null;
-      const name = nameInput.value.trim();
-      if (!attemptId && name.length < 2) {
-        nameInput.focus();
-        throw new Error("O'quvchining ism-familiyasini yozing yoki ro'yxatdan tanlang");
-      }
-      const answers = Object.fromEntries(
-        scan.questions.filter((question) => question.chosen).map((question) => [String(question.ref), question.chosen])
-      );
-      const result = await api(`/api/teacher/tests/${testId}/scan/save`, {
-        method: "POST",
-        body: { attempt_id: attemptId, name, answers },
-      });
-      unsavedChanges = false;
-      renderScanSaved(testId, test, result);
-    })
-  );
+  const save = async () => {
+    // Ro'yxatdan tanlangan yoki raqam bo'yicha topilgan (natijasi bor bo'lsa ham) o'quvchi
+    const attemptId = scan.match?.id || Number(select?.value) || null;
+    const name = nameInput.value.trim();
+    if (!attemptId && name.length < 2) {
+      document.getElementById("scan-student-pick").hidden = false;
+      nameInput.hidden = false;
+      nameInput.focus();
+      throw new Error("O'quvchining ism-familiyasini yozing yoki ro'yxatdan tanlang");
+    }
+    const answers = Object.fromEntries(
+      scan.questions.filter((question) => question.chosen).map((question) => [String(question.ref), question.chosen])
+    );
+    const result = await api(`/api/teacher/tests/${testId}/scan/save`, {
+      method: "POST",
+      body: { attempt_id: attemptId, name, answers, sheet_number: scan.sheetNumber || null },
+    });
+    unsavedChanges = false;
+    renderScanSaved(testId, test, result);
+  };
+  document.getElementById("scan-save")?.addEventListener("click", guarded(save));
+
+  // Ketma-ket skanerlash: o'quvchi raqamidan tanildi, shubhali savol yo'q — o'zi saqlanadi
+  if (scan.match?.status === "pending" && !needsCheck.length && !morePages) {
+    guarded(save)();
+  }
+}
+
+// Varaqdagi o'quvchi raqami: kim ekani tanildimi
+function scanNumberHtml(scan) {
+  if (scan.match) {
+    const already = scan.match.status === "done";
+    return `<p style="margin:0 0 10px">🔢 Raqam <b>${String(scan.sheetNumber).padStart(3, "0")}</b> → <b>${escapeHtml(scan.match.name)}</b></p>
+      ${already ? `<div class="notice" style="margin:0 0 10px">Bu o'quvchining natijasi allaqachon bor — saqlansangiz yangisi bilan almashadi.</div>` : ""}`;
+  }
+  if (scan.sheetNumber) {
+    return `<p class="subtitle" style="margin:0 0 10px">🔢 Raqam <b>${String(scan.sheetNumber).padStart(3, "0")}</b> — ro'yxatda yo'q. Ismini yozing, raqami shu bo'lib saqlanadi.</p>`;
+  }
+  if (scan.numberStatus === "unclear") {
+    return `<div class="notice" style="margin:0 0 10px">🔢 O'quvchi raqami aniq o'qilmadi — ro'yxatdan tanlang yoki ismini yozing.</div>`;
+  }
+  return "";
 }
 
 function renderScanSaved(testId, test, result) {
@@ -7362,7 +7399,7 @@ async function renderTestDetail(testId) {
   const studentRow = (student) => `
           <div class="list-row" data-student-id="${student.id}">
             <div ${student.has_answers ? `class="student-summary" data-detail="${student.id}"` : ""}>
-              <b>${escapeHtml(student.name)}</b>
+              <b>${student.number ? `<span class="student-number">#${student.number}</span> ` : ""}${escapeHtml(student.name)}</b>
               <p class="subtitle" style="margin:2px 0 0">
                 ${student.has_answers
             ? `✅ ${student.correct}/${test.count} • ${student.percent}% — batafsil ›`
@@ -7407,6 +7444,11 @@ async function renderTestDetail(testId) {
 
     <button class="btn btn-ghost" id="answer-sheet-button">📄 Javoblar varaqasini olish</button>
     <button class="btn btn-ghost" id="answer-key-button">🔑 To'g'ri javoblar (kalit)</button>
+    ${
+      test.sheet_version >= 2 && test.students.some((student) => student.editable)
+        ? `<button class="btn btn-ghost" id="named-sheets-button">👥 Ismli varaqlar (har o'quvchiga)</button>`
+        : ""
+    }
     ${!isFinished ? `<button class="btn" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""}
     ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
     ${!isFinished && !isClosedTest && !test.broadcast_at
@@ -7460,6 +7502,16 @@ async function renderTestDetail(testId) {
   );
 
   document.getElementById("scan-sheet-button")?.addEventListener("click", guarded(() => scanSheetPage(testId, test)));
+  document.getElementById("named-sheets-button")?.addEventListener(
+    "click",
+    guarded(() =>
+      deliverPdf(
+        `/api/teacher/tests/${testId}/answer-sheet?named=true`,
+        `${test.code}_ismli_varaqlar.pdf`,
+        "👥 Ismli varaqlar Telegramga yuborildi"
+      )
+    )
+  );
 
   document
     .getElementById("add-students-button")

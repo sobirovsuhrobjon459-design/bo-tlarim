@@ -195,11 +195,15 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1) -> dict:
     )
 
     questions: dict = {}
+    id_rows: dict[str, dict[str, float]] = {}
     for bubble in bubbles:
         if bubble["page"] != page:
             continue
         # PDF koordinatasi pastdan, rasm esa tepadan sanaladi
         ratio = _fill_ratio(binary, bubble["x"], PAGE_HEIGHT - bubble["y"], bubble["r"])
+        if bubble["kind"] == "id":
+            id_rows.setdefault(bubble["ref"], {})[bubble["letter"]] = ratio
+            continue
         entry = questions.setdefault(bubble["ref"], {
             "ref": bubble["ref"], "label": bubble["label"], "kind": bubble["kind"], "options": [], "ratios": {},
         })
@@ -233,4 +237,19 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1) -> dict:
         if ok:
             name_image = "data:image/png;base64," + base64.b64encode(png.tobytes()).decode()
 
-    return {"answers": answers, "questions": result, "name_image": name_image}
+    # O'quvchi raqami: har qatorda (yuzlik, o'nlik, birlik) aniq bitta doiracha bo'lishi kerak
+    sheet_number, number_status = None, "none"
+    if id_rows:
+        digits = []
+        for ref in sorted(id_rows):
+            filled = [digit for digit, ratio in id_rows[ref].items() if ratio >= FILLED_RATIO]
+            digits.append(filled[0] if len(filled) == 1 else None)
+        if all(digit is None for digit in digits):
+            number_status = "empty"
+        elif any(digit is None for digit in digits) or int("".join(digits)) == 0:
+            number_status = "unclear"
+        else:
+            sheet_number, number_status = int("".join(digits)), "ok"
+
+    return {"answers": answers, "questions": result, "name_image": name_image,
+            "sheet_number": sheet_number, "sheet_number_status": number_status}

@@ -242,6 +242,11 @@ class Test(Base):
     # "@kanal_nomi" ko'rinishida saqlanadi; bo'sh bo'lsa, tekshiruv yo'q.
     required_channel: Mapped[str | None] = mapped_column(String(100), default=None)
 
+    # Javoblar varaqasi ko'rinishi: 2 — "O'quvchi raqami" doirachalari bilan (skaner
+    # o'quvchini o'zi taniydi). Eski testlar 1 da qoladi — oldin chop etilgan
+    # varaqlar ham to'g'ri skanerlanishi uchun.
+    sheet_version: Mapped[int] = mapped_column(default=2)
+
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     # O'qituvchi "o'chirgan" test. Bazadan butunlay o'chirilmaydi: unga bog'liq
     # to'lovlar (pul hisobi) va o'quvchilar natijalari saqlanib qoladi, test esa
@@ -324,6 +329,8 @@ class Attempt(Base):
     test_id: Mapped[int] = mapped_column(ForeignKey("tests.id"), index=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
     offline_name: Mapped[str | None] = mapped_column(String(200), default=None)
+    # Javoblar varaqasidagi o'quvchi raqami (1–999) — o'qituvchi qo'shgan o'quvchilarga beriladi
+    sheet_number: Mapped[int | None] = mapped_column(default=None)
     started_at: Mapped[datetime] = mapped_column(default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(default=None)
     # pending  — o'qituvchi yopiq testga qo'shgan, javoblari hali kiritilmagan
@@ -971,6 +978,7 @@ class SheetScanSaveIn(BaseModel):
 
     name: str = Field(default="", max_length=200)
     attempt_id: int | None = None
+    sheet_number: int | None = Field(default=None, ge=1, le=999)
     answers: dict[str, str] = {}
 
 
