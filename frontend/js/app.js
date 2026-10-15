@@ -8108,11 +8108,11 @@ async function renderTestDetail(testId) {
                : ""
            }
            ${test.mode === "key" ? `<button class="btn btn-ghost" id="variants-button">🔀 Variantlar${test.variants.length ? ` (${test.variants.join(", ")})` : " (A/B/C/D)"}</button>` : ""}
-           ${!isFinished ? `<button class="btn" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""}
-           <div id="scan-queue-slot"></div>`
+           ${!isFinished ? `<button class="btn" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""}`
         : ""
     }
     ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
+    ${isClosedTest ? `<div id="scan-queue-slot"></div>` : ""}
     ${!isFinished && !isClosedTest && !test.broadcast_at
       ? `<button class="btn" id="broadcast-button">📢 Hammaga e'lon qilish</button>`
       : ""}
