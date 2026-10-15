@@ -127,6 +127,8 @@ from .database import (
     StudentsBulkIn,
     SessionLocal,
     StudentAnswer,
+    SheetScanIn,
+    SheetScanSaveIn,
     StudentAnswersIn,
     StudentNamesIn,
     Teacher,
@@ -1516,14 +1518,20 @@ SHEET_LAYOUTS = [
 ]
 
 
-def _answer_sheet_items(test: Test) -> list[tuple[str, str, int, str]]:
-    """Javoblar varaqasi uchun: har bir savolning (nomi, turi, variantlar soni, to'g'ri javobi)."""
+def _answer_sheet_items(test: Test) -> list[tuple[str, str, int, str, int]]:
+    """
+    Javoblar varaqasi uchun: har bir savolning (nomi, turi, variantlar soni, to'g'ri javobi,
+    javob kaliti — skanerlangan javob qaysi savolga yozilishi uchun).
+    """
 
     if test.mode == "key":
         return [
-            (kq.label or str(kq.number), kq.question_type, kq.option_count, kq.correct) for kq in test.key_questions
+            (kq.label or str(kq.number), kq.question_type, kq.option_count, kq.correct, kq.number)
+            for kq in test.key_questions
         ]
-    return [(str(index), "single", 4, question.correct) for index, question in enumerate(test.questions, start=1)]
+    return [
+        (str(index), "single", 4, question.correct, question.id) for index, question in enumerate(test.questions, start=1)
+    ]
 
 
 def _group_similar_questions(items) -> list[list]:
@@ -1689,8 +1697,14 @@ def _choose_sheet_layout(cells: list[dict], available_height: float):
     return densest, _pack_sheet_cells(cells, densest[1], available_height)
 
 
-def _draw_sheet_column(sheet, column_cells, column_x, column_width, top_y, layout, with_answers) -> None:
-    """Bitta ustundagi sarlavha va savol qatorlarini chizadi."""
+def _draw_sheet_column(sheet, column_cells, column_x, column_width, top_y, layout, with_answers,
+                       bubbles: list | None = None, page: int = 1) -> None:
+    """
+    Bitta ustundagi sarlavha va savol qatorlarini chizadi.
+
+    bubbles berilsa — har bir doirachaning joyi (sahifa, punktlarda) shu ro'yxatga
+    yoziladi: skaner varaq rasmidan aynan shu nuqtalarni tekshiradi.
+    """
 
     _, row_height, bubble_radius, bubble_gap, font_size = layout
     label_width = max(24.0, font_size * 3)
@@ -1711,7 +1725,7 @@ def _draw_sheet_column(sheet, column_cells, column_x, column_width, top_y, layou
             y -= row_height + 16
             continue
 
-        label, question_type, options, correct = cell["item"]
+        label, question_type, options, correct, ref = cell["item"]
         center_y = y - row_height / 2
 
         sheet.setFont("Helvetica", font_size)
@@ -1738,11 +1752,16 @@ def _draw_sheet_column(sheet, column_cells, column_x, column_width, top_y, layou
                     stroke=1,
                     fill=1 if filled else 0,
                 )
+                if bubbles is not None:
+                    bubbles.append({
+                        "page": page, "ref": ref, "label": label, "kind": question_type, "letter": letter,
+                        "x": bubble_x + option_index * bubble_gap, "y": center_y, "r": bubble_radius,
+                    })
 
         y -= row_height
 
 
-def generate_answer_sheet_pdf(test: Test, with_answers: bool = False) -> bytes:
+def generate_answer_sheet_pdf(test: Test, with_answers: bool = False, bubbles: list | None = None) -> bytes:
     """
     "Javoblar varaqasi" — o'quvchilarga tarqatiladigan bo'sh blank.
 
@@ -1772,6 +1791,7 @@ def generate_answer_sheet_pdf(test: Test, with_answers: bool = False) -> bytes:
     columns_per_page = layout[0]
     column_width = (width - SHEET_MARGIN * 2) / columns_per_page
 
+    page = 1
     for index, column_cells in enumerate(columns):
         position = index % columns_per_page
 
@@ -1780,6 +1800,7 @@ def generate_answer_sheet_pdf(test: Test, with_answers: bool = False) -> bytes:
             sheet.showPage()
             _draw_corner_marks(sheet, width, height)
             top_y = height - 70
+            page += 1
 
         _draw_sheet_column(
             sheet,
@@ -1789,6 +1810,8 @@ def generate_answer_sheet_pdf(test: Test, with_answers: bool = False) -> bytes:
             top_y,
             layout,
             with_answers,
+            bubbles,
+            page,
         )
 
     if not with_answers:
@@ -4045,6 +4068,12 @@ def save_student_answers(
 
     test = _get_own_test(db, teacher, test_id)
     attempt = _get_offline_attempt(db, test, attempt_id)
+    return _store_offline_answers(db, test, teacher, attempt, body.answers)
+
+
+def _store_offline_answers(db: Session, test: Test, teacher: Teacher, attempt: Attempt, answers: dict[str, str]) -> dict:
+    """O'qituvchi kiritgan (yoki skanerlangan) javoblarni tekshirib saqlaydi."""
+
     db.refresh(attempt, with_for_update=True)  # ikki marta yuborilsa ham kredit bir marta yechilsin
 
     # Har bir YANGI o'quvchi natijasi o'qituvchidan 1 kredit oladi (bepul testlarda).
@@ -4056,7 +4085,7 @@ def save_student_answers(
     # Qayta kiritilsa, eski javoblar o'rniga yangilari yoziladi.
     db.execute(delete(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id))
 
-    total_questions = _grade_answers(db, attempt, test, body.answers)
+    total_questions = _grade_answers(db, attempt, test, answers)
     _calculate_attempt_score(db, attempt, test)
     attempt.status = "done"
     attempt.finished_at = utcnow()
@@ -4073,6 +4102,86 @@ def save_student_answers(
         "total": total_questions,
         "percent": attempt.percent,
     }
+
+
+# ---------- Javoblar varaqasini skanerlash ----------
+# O'qituvchi o'quvchi bo'yagan varaqni suratga oladi → skaner javoblarni o'qiydi
+# (backend/omr.py) → o'qituvchi ekranda tekshirib, ismni yozib saqlaydi.
+# Saqlash oddiy "javoblarni kiritish" bilan bir xil: kredit, baholash, natijalar.
+
+
+def _paper_test(db: Session, teacher: Teacher, test_id: int) -> Test:
+    test = _get_own_test(db, teacher, test_id)
+    if test.enrollment_type != "closed":
+        raise HTTPException(status_code=400, detail="Varaq skanerlash faqat yopiq (qog'ozda o'tkaziladigan) testlarda")
+    if test.status == "closed":
+        raise HTTPException(status_code=400, detail="Test yakunlangan — avval qayta oching")
+    return test
+
+
+@app.post("/api/teacher/tests/{test_id}/scan")
+def scan_sheet(
+    test_id: int, body: SheetScanIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
+):
+    from .omr import ScanError, scan_answer_sheet  # og'ir kutubxona (OpenCV) — faqat kerak bo'lganda
+
+    test = _paper_test(db, teacher, test_id)
+    bubbles: list[dict] = []
+    generate_answer_sheet_pdf(test, bubbles=bubbles)
+    if not bubbles:
+        raise HTTPException(status_code=400, detail="Bu testda belgilanadigan (variantli) savol yo'q")
+    page_count = max(bubble["page"] for bubble in bubbles)
+    if body.page > page_count:
+        raise HTTPException(status_code=422, detail=f"Varaq {page_count} sahifali")
+
+    try:
+        image = base64.b64decode(body.image_base64.split(",")[-1], validate=True)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Rasm buzilgan — qaytadan suratga oling")
+    try:
+        result = scan_answer_sheet(image, bubbles, page=body.page)
+    except ScanError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+
+    pending = [
+        {"id": attempt.id, "name": attempt.offline_name}
+        for attempt in db.scalars(
+            select(Attempt)
+            .where(Attempt.test_id == test.id, Attempt.user_id.is_(None), Attempt.status == "pending")
+            .order_by(Attempt.offline_name)
+        ).all()
+    ]
+    return {**result, "page": body.page, "page_count": page_count, "pending_students": pending}
+
+
+@app.post("/api/teacher/tests/{test_id}/scan/save")
+def save_scanned_sheet(
+    test_id: int, body: SheetScanSaveIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
+):
+    test = _paper_test(db, teacher, test_id)
+    if body.attempt_id:
+        attempt = _get_offline_attempt(db, test, body.attempt_id)
+    else:
+        name = " ".join(body.name.split())
+        if len(name) < 2:
+            raise HTTPException(status_code=422, detail="O'quvchining ism-familiyasini yozing")
+        same_name = db.scalars(
+            select(Attempt).where(
+                Attempt.test_id == test.id,
+                Attempt.user_id.is_(None),
+                Attempt.status.in_(("pending", "done")),
+                func.lower(Attempt.offline_name) == name.lower(),
+            )
+        ).first()
+        if same_name and same_name.status == "done":
+            raise HTTPException(
+                status_code=409,
+                detail=f"«{name}» natijasi allaqachon kiritilgan — boshqa ism yozing yoki ro'yxatdan tahrirlang",
+            )
+        attempt = same_name or Attempt(test_id=test.id, offline_name=name[:200], status="pending")
+        db.add(attempt)
+        db.flush()
+    return _store_offline_answers(db, test, teacher, attempt, body.answers)
 
 
 @app.post("/api/teacher/tests/{test_id}/close")

@@ -956,6 +956,24 @@ class StudentAnswersIn(BaseModel):
     answers: dict[str, str] = {}
 
 
+class SheetScanIn(BaseModel):
+    """Javoblar varaqasining surati (base64) — skaner javoblarni o'qib beradi."""
+
+    image_base64: str = Field(max_length=12_000_000)
+    page: int = Field(default=1, ge=1, le=10)
+
+
+class SheetScanSaveIn(BaseModel):
+    """
+    Skanerlangan (o'qituvchi tekshirib tuzatgan) javoblarni saqlash: ro'yxatdagi
+    o'quvchi (attempt_id) yoki yangi ism.
+    """
+
+    name: str = Field(default="", max_length=200)
+    attempt_id: int | None = None
+    answers: dict[str, str] = {}
+
+
 def _clean_phone(value: str | None) -> str | None:
     """Telefon raqamni +998XXXXXXXXX ko'rinishiga keltiradi (bo'sh bo'lsa — None)."""
 

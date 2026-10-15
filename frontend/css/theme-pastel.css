@@ -809,3 +809,67 @@ select:focus {
   object-fit: cover;
   display: block;
 }
+
+/* Javoblar varaqasini skanerlash: o'qilgan javoblar va tuzatish */
+.scan-name-image {
+  display: block;
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: #ffffff;
+}
+
+.scan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+  gap: 6px 8px;
+}
+
+.scan-row {
+  display: grid;
+  grid-template-columns: 26px auto;
+  align-items: center;
+  gap: 2px 4px;
+  padding: 4px 6px;
+  border-radius: 10px;
+}
+
+.scan-row.is-flagged {
+  background: #fff4cc;
+  box-shadow: inset 0 0 0 2px #f2c94c;
+}
+
+.scan-label {
+  font-weight: 800;
+  font-size: 13px;
+  text-align: right;
+}
+
+.scan-options {
+  display: flex;
+  gap: 4px;
+}
+
+.scan-option {
+  width: 25px;
+  height: 25px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  background: var(--color-surface);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  padding: 0;
+}
+
+.scan-option.selected {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #ffffff;
+}
+
+.scan-note {
+  grid-column: 1 / -1;
+  color: #a16207;
+  font-weight: 700;
+}

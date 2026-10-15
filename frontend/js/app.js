@@ -7149,6 +7149,210 @@ function findWithin(elements, selector) {
   return elements.flatMap((element) => [element, ...element.querySelectorAll(selector)].filter((node) => node.matches(selector)));
 }
 
+/* ---------- Javoblar varaqasini skanerlash ---------- */
+
+/*
+  O'qituvchi o'quvchi bo'yagan varaqni suratga oladi → server doirachalarni
+  o'qiydi → bu yerda ism va javoblar tekshiriladi (kerak bo'lsa tuzatiladi) →
+  saqlanadi va keyingi varaqqa o'tiladi. Natijalar (mandat) — "Natijalarni
+  ko'rish" va "Yakunlash" orqali, odatdagidek.
+*/
+
+// Kamera yoki galereyadan surat tanlash (bosish paytida chaqirilishi shart)
+function pickSheetPhoto() {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.setAttribute("capture", "environment");
+    input.style.display = "none";
+    input.addEventListener("change", () => {
+      resolve(input.files?.[0] || null);
+      input.remove();
+    });
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+// Telefon surati 5–10 MB bo'ladi — yuborishdan oldin kichraytiriladi (skanerga 2000 px yetadi)
+async function shrinkPhoto(file, maxSide = 2000) {
+  const url = URL.createObjectURL(file);
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("Suratni ochib bo'lmadi"));
+      element.src = url;
+    });
+    const factor = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(image.naturalWidth * factor);
+    canvas.height = Math.round(image.naturalHeight * factor);
+    canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.88);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function scanSheetPage(testId, test, page = 1, collected = null) {
+  const file = await pickSheetPhoto();
+  if (!file) return;
+  showToast("⏳ Varaq o'qilmoqda…");
+  const image = await shrinkPhoto(file);
+  const scan = await api(`/api/teacher/tests/${testId}/scan`, { method: "POST", body: { image_base64: image, page } });
+
+  // Ko'p sahifali varaq: sahifalar javoblari bitta o'quvchiga yig'iladi
+  const merged = collected || { questions: [], nameImage: null, pending: scan.pending_students };
+  merged.questions = merged.questions.filter((question) => !scan.questions.some((item) => item.ref === question.ref));
+  merged.questions.push(...scan.questions);
+  if (scan.name_image) merged.nameImage = scan.name_image;
+  merged.page = scan.page;
+  merged.pageCount = scan.page_count;
+  renderScanReview(testId, test, merged);
+}
+
+const SCAN_STATUS_NOTE = {
+  multiple: "bir nechta bo'yalgan",
+  unsure: "aniq emas",
+  empty: "bo'sh",
+};
+
+function renderScanReview(testId, test, scan) {
+  const needsCheck = scan.questions.filter((question) => question.status === "multiple" || question.status === "unsure");
+  const empty = scan.questions.filter((question) => question.status === "empty").length;
+  const morePages = scan.page < scan.pageCount;
+
+  const questionRow = (question) => {
+    const chosen = new Set((question.chosen || "").split(",").filter(Boolean));
+    const flagged = question.status === "multiple" || question.status === "unsure";
+    return `
+      <div class="scan-row${flagged ? " is-flagged" : ""}" data-scan-ref="${question.ref}">
+        <span class="scan-label">${escapeHtml(question.label)}.</span>
+        <div class="scan-options">
+          ${question.options
+            .map(
+              (letter) =>
+                `<button type="button" class="scan-option${chosen.has(letter) ? " selected" : ""}" data-letter="${letter}">${letter}</button>`
+            )
+            .join("")}
+        </div>
+        ${flagged ? `<small class="scan-note">⚠️ ${SCAN_STATUS_NOTE[question.status]}</small>` : ""}
+      </div>`;
+  };
+
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-scan" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">Varaq tekshiruvi</h2>
+    </div>
+    <div class="card" style="cursor:default;display:block">
+      <p class="subtitle" style="margin:0 0 8px">Varaqdagi ism:</p>
+      ${scan.nameImage ? `<img class="scan-name-image" src="${scan.nameImage}" alt="Ism yozilgan katak" />` : ""}
+      ${
+        scan.pending.length
+          ? `<label class="field-label" for="scan-student-select" style="margin-top:10px">Ro'yxatdagi o'quvchi</label>
+             <select class="input" id="scan-student-select">
+               <option value="">— Yangi o'quvchi (ismini yozing) —</option>
+               ${scan.pending.map((student) => `<option value="${student.id}">${escapeHtml(student.name)}</option>`).join("")}
+             </select>`
+          : ""
+      }
+      <input class="input" id="scan-student-name" maxlength="200" placeholder="Ism-familiya" style="margin-top:8px" />
+    </div>
+    <p class="subtitle" style="margin:4px 4px 10px">
+      ✅ O'qildi: <b>${scan.questions.length - needsCheck.length - empty}</b> ·
+      ⚠️ Tekshiring: <b>${needsCheck.length}</b> · ⬜ Bo'sh: <b>${empty}</b>
+      ${scan.pageCount > 1 ? ` · 📄 ${scan.page}/${scan.pageCount}-sahifa` : ""}
+    </p>
+    ${needsCheck.length ? `<div class="notice">Sariq qatorlarni varaqqa qarab tuzating: harfni bosing (qayta bosilsa — bekor).</div>` : ""}
+    <div class="panel scan-grid">${scan.questions.map(questionRow).join("")}</div>
+    <p class="subtitle" style="margin:8px 4px 0">Yozma savollar javobini saqlagandan keyin o'quvchilar ro'yxatidan (✏️) kiriting.</p>
+    ${
+      morePages
+        ? `<button class="btn" id="scan-next-page" style="margin-top:14px">📷 ${scan.page + 1}-sahifani skanerlash</button>`
+        : `<button class="btn" id="scan-save" style="margin-top:14px">💾 Saqlash va tekshirish</button>`
+    }
+    <button class="btn btn-ghost" id="scan-retake">📷 Qayta suratga olish</button>
+  `);
+  markUnsaved();
+
+  const select = document.getElementById("scan-student-select");
+  const nameInput = document.getElementById("scan-student-name");
+  select?.addEventListener("change", () => {
+    nameInput.hidden = Boolean(select.value);
+  });
+
+  document.querySelectorAll(".scan-row").forEach((row) => {
+    const question = scan.questions.find((item) => String(item.ref) === row.dataset.scanRef);
+    row.addEventListener("click", (event) => {
+      const button = event.target.closest(".scan-option");
+      if (!button) return;
+      const letter = button.dataset.letter;
+      const chosen = new Set((question.chosen || "").split(",").filter(Boolean));
+      if (question.kind === "multi") {
+        if (chosen.has(letter)) chosen.delete(letter);
+        else chosen.add(letter);
+      } else {
+        const wasChosen = chosen.has(letter);
+        chosen.clear();
+        if (!wasChosen) chosen.add(letter);
+      }
+      question.chosen = question.options.filter((item) => chosen.has(item)).join(",");
+      question.status = question.chosen ? "ok" : "empty";
+      row.classList.remove("is-flagged");
+      row.querySelector(".scan-note")?.remove();
+      row.querySelectorAll(".scan-option").forEach((item) => item.classList.toggle("selected", chosen.has(item.dataset.letter)));
+    });
+  });
+
+  document.querySelector('[data-action="back-scan"]').addEventListener(
+    "click",
+    guarded(async () => {
+      if (await confirmLeave()) await renderTestDetail(testId);
+    })
+  );
+  document
+    .getElementById("scan-retake")
+    .addEventListener("click", guarded(() => scanSheetPage(testId, test, scan.page, scan.page > 1 ? scan : null)));
+  document.getElementById("scan-next-page")?.addEventListener("click", guarded(() => scanSheetPage(testId, test, scan.page + 1, scan)));
+  document.getElementById("scan-save")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const attemptId = Number(select?.value) || null;
+      const name = nameInput.value.trim();
+      if (!attemptId && name.length < 2) {
+        nameInput.focus();
+        throw new Error("O'quvchining ism-familiyasini yozing yoki ro'yxatdan tanlang");
+      }
+      const answers = Object.fromEntries(
+        scan.questions.filter((question) => question.chosen).map((question) => [String(question.ref), question.chosen])
+      );
+      const result = await api(`/api/teacher/tests/${testId}/scan/save`, {
+        method: "POST",
+        body: { attempt_id: attemptId, name, answers },
+      });
+      unsavedChanges = false;
+      renderScanSaved(testId, test, result);
+    })
+  );
+}
+
+function renderScanSaved(testId, test, result) {
+  showPage(`
+    <div style="text-align:center;padding-top:30px">
+      <div class="result-number">✅</div>
+      <h2 style="margin:6px 0">${escapeHtml(result.name)}</h2>
+      <p class="subtitle">${result.correct} / ${result.total} to'g'ri · <b>${result.percent}%</b></p>
+    </div>
+    <button class="btn" id="scan-next-sheet" style="margin-top:20px">📷 Keyingi varaqni skanerlash</button>
+    <button class="btn btn-ghost" id="scan-done">⬅️ Testga qaytish</button>
+  `);
+  document.getElementById("scan-next-sheet").addEventListener("click", guarded(() => scanSheetPage(testId, test)));
+  document.getElementById("scan-done").addEventListener("click", guarded(() => renderTestDetail(testId)));
+}
+
 async function renderTestDetail(testId) {
   const test = await api(`/api/teacher/tests/${testId}`);
   const isClosedTest = test.enrollment_type === "closed";
@@ -7206,6 +7410,7 @@ async function renderTestDetail(testId) {
            <button class="btn btn-ghost" id="answer-key-button">🔑 To'g'ri javoblar (kalit)</button>`
         : ""
     }
+    ${isClosedTest && !isFinished ? `<button class="btn" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""}
     ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
     ${!isFinished && !isClosedTest && !test.broadcast_at
       ? `<button class="btn" id="broadcast-button">📢 Hammaga e'lon qilish</button>`
@@ -7256,6 +7461,8 @@ async function renderTestDetail(testId) {
       )
     )
   );
+
+  document.getElementById("scan-sheet-button")?.addEventListener("click", guarded(() => scanSheetPage(testId, test)));
 
   document
     .getElementById("add-students-button")

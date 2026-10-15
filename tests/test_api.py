@@ -4234,3 +4234,79 @@ def test_android_ilovaga_bot_orqali_kirish():
         session.commit()
         assert main.confirm_app_login(session, old, 4242, "Ilova Odam", None)[0] is False
     assert client.get(f"/api/app-login/{old}").status_code == 410
+
+
+def _sheet_photo(test_id: int, marks: dict[int, str], skew: bool = True) -> str:
+    """Varaq "surati": doirachalar joyi PDF'dan olinadi, belgilanganlari bo'yaladi, so'ng qiyshaytiriladi."""
+
+    from PIL import Image, ImageDraw
+
+    from backend.database import Test
+    from backend.omr import PAGE_HEIGHT, PAGE_WIDTH
+
+    with SessionLocal() as session:
+        bubbles: list[dict] = []
+        main.generate_answer_sheet_pdf(session.get(Test, test_id), bubbles=bubbles)
+    zoom = 2.0
+    page = Image.new("RGB", (round(PAGE_WIDTH * zoom), round(PAGE_HEIGHT * zoom)), "white")
+    draw = ImageDraw.Draw(page)
+    for x, y in [(32, 32), (PAGE_WIDTH - 32, 32), (32, PAGE_HEIGHT - 32), (PAGE_WIDTH - 32, PAGE_HEIGHT - 32)]:
+        draw.ellipse([(x - 7) * zoom, (y - 7) * zoom, (x + 7) * zoom, (y + 7) * zoom], fill="black")
+    for bubble in bubbles:
+        cx, cy, r = bubble["x"] * zoom, (PAGE_HEIGHT - bubble["y"]) * zoom, bubble["r"] * zoom
+        filled = bubble["letter"] in marks.get(bubble["ref"], "").split(",")
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline="black", width=2, fill=(40, 40, 40) if filled else None)
+    if skew:
+        background = Image.new("RGB", (page.width + 300, page.height + 300), (90, 70, 60))
+        background.paste(page.rotate(4, expand=True, fillcolor=(90, 70, 60)), (120, 110))
+        page = background
+    buffer = io.BytesIO()
+    page.save(buffer, "JPEG", quality=85)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+def test_javoblar_varaqasi_skanerlanadi():
+    reset_database()
+    register_teacher()
+    created = create_test(enrollment_type="closed")
+    test_id = created["id"]
+    url = f"/api/teacher/tests/{test_id}/scan"
+    client.post(f"/api/teacher/tests/{test_id}/students", json={"names": ["Ro'yxatdagi Bola"]}, headers=as_user(555))
+
+    # 1-savol B (to'g'ri), 2-savol A (xato), 3-savol A,C (to'g'ri, ko'p javobli)
+    scanned = client.post(url, json={"image_base64": _sheet_photo(test_id, {1: "B", 2: "A", 3: "A,C"})}, headers=as_user(555))
+    assert scanned.status_code == 200, scanned.text
+    body = scanned.json()
+    assert body["answers"] == {"1": "B", "2": "A", "3": "A,C"}, body["questions"]
+    assert all(q["status"] == "ok" for q in body["questions"]), body["questions"]
+    assert body["page_count"] == 1 and body["name_image"].startswith("data:image/png;base64,")
+    assert [s["name"] for s in body["pending_students"]] == ["Ro'yxatdagi Bola"]
+
+    # Ikki doiracha bo'yalgan oddiy savol — tanlanmaydi, o'qituvchiga belgilanadi
+    double = client.post(url, json={"image_base64": _sheet_photo(test_id, {1: "A,B"})}, headers=as_user(555)).json()
+    first = next(q for q in double["questions"] if q["ref"] == 1)
+    assert first["status"] == "multiple" and first["chosen"] == "" and "1" not in double["answers"], first
+
+    blank = io.BytesIO()
+    from PIL import Image
+    Image.new("RGB", (900, 1200), "white").save(blank, "PNG")
+    bad = client.post(url, json={"image_base64": base64.b64encode(blank.getvalue()).decode()}, headers=as_user(555))
+    assert bad.status_code == 422 and "qora nuqta" in bad.json()["detail"], bad.text
+
+    credits_before = credits_of()
+    saved = client.post(f"{url}/save", json={"name": "Skaner  Bola", "answers": body["answers"]}, headers=as_user(555))
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["correct"] == 2 and saved.json()["name"] == "Skaner Bola", saved.json()
+    assert credits_of() == credits_before - 1
+    again = client.post(f"{url}/save", json={"name": "skaner bola", "answers": {}}, headers=as_user(555))
+    assert again.status_code == 409, again.text  # bir xil ism ikki marta kiritilmaydi
+
+    pending_id = body["pending_students"][0]["id"]
+    saved = client.post(f"{url}/save", json={"attempt_id": pending_id, "answers": {"1": "B"}}, headers=as_user(555))
+    assert saved.status_code == 200 and saved.json()["name"] == "Ro'yxatdagi Bola", saved.text
+
+    detail = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
+    assert detail["filled"] == 2 and detail["missing"] == 0, detail
+
+    opened = create_test(enrollment_type="open")
+    assert client.post(f"/api/teacher/tests/{opened['id']}/scan", json={"image_base64": "x"}, headers=as_user(555)).status_code == 400
