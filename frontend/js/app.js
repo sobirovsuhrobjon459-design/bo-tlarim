@@ -7944,6 +7944,7 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
   const codeBits = new Map();
   const questions = new Map();
   const positions = {}; // {savol: {harf: [x, y, r]}} — qatorga moslangan joyi (punktlarda)
+  const highlights = []; // bo'yalgan ID va variant doirachalari — natija rasmida sariq halqa
   const idRows = new Map();
   const variantRatios = new Map();
   for (const bubble of pageBubbles) {
@@ -7966,13 +7967,14 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
     for (const ox of [-0.1, 0, 0.1]) {
       for (const oy of [-0.1, 0, 0.1]) ratio = Math.max(ratio, maskFill(sheet, inner, x + dx + ox * bubble.r, y + dy + oy * bubble.r));
     }
-    if (bubble.kind === "id") {
+    if (bubble.kind === "id" || bubble.kind === "variant") {
+      if (ratio >= FILLED_RATIO) highlights.push([x + dx, y + dy, bubble.r]);
+      if (bubble.kind === "variant") {
+        variantRatios.set(bubble.letter, ratio);
+        continue;
+      }
       if (!idRows.has(bubble.ref)) idRows.set(bubble.ref, new Map());
       idRows.get(bubble.ref).set(bubble.letter, ratio);
-      continue;
-    }
-    if (bubble.kind === "variant") {
-      variantRatios.set(bubble.letter, ratio);
       continue;
     }
     if (!questions.has(bubble.ref)) {
@@ -8032,6 +8034,7 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
     variant,
     sheet_code: sheetCode,
     positions,
+    highlights,
   };
 }
 
@@ -8066,6 +8069,14 @@ function paintSheetView(canvas, view, questions, key) {
   const draw = canvas.getContext("2d");
   draw.drawImage(view.base, 0, 0);
   const colors = { right: "#16a34a", wrong: "#dc2626", missed: "#eab308" };
+  // O'qilgan ID va variant doirachalari — sariq halqa
+  for (const [x, y, r] of view.highlights || []) {
+    draw.beginPath();
+    draw.arc(x * READ_SCALE, y * READ_SCALE, r * READ_SCALE * 1.15, 0, Math.PI * 2);
+    draw.lineWidth = 4;
+    draw.strokeStyle = colors.missed;
+    draw.stroke();
+  }
   for (const question of questions) {
     const spots = positions[question.ref];
     if (!spots) continue;
@@ -8081,6 +8092,13 @@ function paintSheetView(canvas, view, questions, key) {
           : null;
       if (!color) continue;
       draw.beginPath();
+      if (color === colors.missed) {
+        // To'g'ri javob, o'quvchi belgilamagan — doiracha o'rtasida kichik nuqta
+        draw.arc(x * READ_SCALE, y * READ_SCALE, r * READ_SCALE * 0.38, 0, Math.PI * 2);
+        draw.fillStyle = color;
+        draw.fill();
+        continue;
+      }
       draw.arc(x * READ_SCALE, y * READ_SCALE, r * READ_SCALE * 1.1, 0, Math.PI * 2);
       draw.globalAlpha = 0.45;
       draw.fillStyle = color;
@@ -8138,6 +8156,36 @@ function sheetNameImage(sheet) {
   }
   context.putImageData(image, 0, 0);
   return canvas.toDataURL("image/png");
+}
+
+// Kamera oynasidagi yo'naltiruvchi ramka: varaqning 4 ta qora burchagi tushishi kerak bo'lgan
+// kvadratlar. Topilgan burchak o'z kvadratida bo'lsa — kvadrat yashil bo'lib to'ladi.
+function drawScanGuide(draw, width, height, corners) {
+  const ratio = (SHEET_PAGE.width - 2 * SHEET_PAGE.corner) / (SHEET_PAGE.height - 2 * SHEET_PAGE.corner);
+  let guideWidth = width * 0.84;
+  let guideHeight = guideWidth / ratio;
+  if (guideHeight > height * 0.86) {
+    guideHeight = height * 0.86;
+    guideWidth = guideHeight * ratio;
+  }
+  const left = (width - guideWidth) / 2;
+  const top = (height - guideHeight) / 2;
+  const box = Math.max(30, guideWidth * 0.15);
+  const targets = [
+    [left, top],
+    [left + guideWidth, top],
+    [left + guideWidth, top + guideHeight],
+    [left, top + guideHeight],
+  ];
+  targets.forEach(([x, y], index) => {
+    const corner = corners?.[index];
+    const inside = corner && Math.abs(corner.x - x) < box / 2 && Math.abs(corner.y - y) < box / 2;
+    draw.fillStyle = inside ? "rgba(34, 197, 94, 0.45)" : "rgba(255, 255, 255, 0.15)";
+    draw.fillRect(x - box / 2, y - box / 2, box, box);
+    draw.lineWidth = 2;
+    draw.strokeStyle = inside ? "#22c55e" : "rgba(255, 255, 255, 0.95)";
+    draw.strokeRect(x - box / 2, y - box / 2, box, box);
+  });
 }
 
 async function startLiveScan(testId, test, page = 1, collected = null) {
@@ -8215,7 +8263,7 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
   }
   video.srcObject = liveStream;
   await video.play().catch(() => {});
-  status.textContent = "Varaqni ramkaga to'liq sig'diring — 4 burchakdagi qora nuqta ko'rinsin";
+  status.textContent = "Varaqning 4 ta qora burchagini ekrandagi kvadratlarga tushiring";
 
   const probe = document.createElement("canvas");
   const probeContext = probe.getContext("2d", { willReadFrequently: true });
@@ -8277,13 +8325,16 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     try {
       const scan = await api(`/api/teacher/tests/${testId}/scan/result`, {
         method: "POST",
-        body: { ...result, positions: undefined, page, name_image: page === 1 ? sheetNameImage(sheet) : null },
+        body: { ...result, positions: undefined, highlights: undefined, page, name_image: page === 1 ? sheetNameImage(sheet) : null },
       });
       stopLiveScan();
       liveSession = liveSession || { count: 0 };
       const merged = mergeScan(scan, collected);
       merged.live = true;
-      merged.sheetViews = { ...(merged.sheetViews || {}), [page]: { sheet, positions: result.positions } };
+      merged.sheetViews = {
+        ...(merged.sheetViews || {}),
+        [page]: { sheet, positions: result.positions, highlights: result.highlights },
+      };
       renderScanReview(testId, test, merged);
     } catch (error) {
       if (!video.isConnected) return;
@@ -8377,6 +8428,12 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     overlay.height = video.clientHeight;
     const draw = overlay.getContext("2d");
     draw.clearRect(0, 0, overlay.width, overlay.height);
+    // Video "cover" bilan qirqib ko'rsatiladi — belgilar ham xuddi shunday joylashtiriladi
+    const scale = Math.max(overlay.width / width, overlay.height / height);
+    const offsetX = (overlay.width - width * scale) / 2;
+    const offsetY = (overlay.height - height * scale) / 2;
+    const shown = corners && corners.map((corner) => ({ x: corner.x * scale + offsetX, y: corner.y * scale + offsetY }));
+    drawScanGuide(draw, overlay.width, overlay.height, waitForNewSheet ? null : shown);
     if (!corners) {
       previous = null;
       steady = 0;
@@ -8385,16 +8442,10 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
       return;
     }
     if (waitForNewSheet) return;
-    // Video "cover" bilan qirqib ko'rsatiladi — belgilar ham xuddi shunday joylashtiriladi
-    const scale = Math.max(overlay.width / width, overlay.height / height);
-    const offsetX = (overlay.width - width * scale) / 2;
-    const offsetY = (overlay.height - height * scale) / 2;
-    draw.strokeStyle = steady >= 2 ? "#22c55e" : "#facc15";
-    draw.lineWidth = 4;
+    draw.strokeStyle = steady >= 2 || layout ? "#22c55e" : "#facc15";
+    draw.lineWidth = 3;
     draw.beginPath();
-    corners.forEach((corner, index) => {
-      const x = corner.x * scale + offsetX;
-      const y = corner.y * scale + offsetY;
+    shown.forEach(({ x, y }, index) => {
       if (index) draw.lineTo(x, y);
       else draw.moveTo(x, y);
     });
@@ -8477,7 +8528,7 @@ function renderScanReview(testId, test, scan) {
       views.length
         ? `<p class="subtitle" id="scan-score" style="margin:0 4px 8px;font-size:15px"></p>
            ${views.map(([page]) => `<canvas class="scan-sheet-canvas" data-page="${page}" style="width:100%;display:block;border-radius:12px;margin:0 0 10px;background:#fff"></canvas>`).join("")}
-           <p class="subtitle" style="margin:0 4px 12px;font-size:12px">🟢 to'g'ri · 🔴 xato · 🟡 to'g'ri javob (belgilanmagan) · 🟧 tekshiring</p>`
+           <p class="subtitle" style="margin:0 4px 12px;font-size:12px">🟢 to'g'ri · 🔴 xato · 🟡 nuqta — to'g'ri javob · 🟡 halqa — o'qilgan ID · 🟧 tekshiring</p>`
         : ""
     }
     <div class="card" style="cursor:default;display:block">
