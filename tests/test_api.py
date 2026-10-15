@@ -4455,3 +4455,34 @@ def test_variantlar_alohida_kalit_bilan_tekshiriladi():
     assert client.delete(f"{base}/variants/B", headers=headers).status_code == 409  # o'quvchilar bor
     assert client.post(f"{base}/scan/save", json={"name": "Boshqa", "variant": "C", "answers": {}},
                        headers=headers).status_code == 422
+
+
+def test_offline_testga_excel_dan_oquvchilar():
+    from openpyxl import Workbook
+
+    reset_database()
+    register_teacher()
+    created = create_test(enrollment_type="closed")
+    base = f"/api/teacher/tests/{created['id']}"
+    client.post(f"{base}/students", json={"names": ["Karimova Laylo"]}, headers=as_user(555))
+
+    book = Workbook()
+    sheet = book.active
+    sheet.append(["№", "F.I.Sh.", "Sinf"])
+    sheet.append([1, "Aliyev Vali", "9-A"])
+    sheet.append([2, "karimova laylo", "9-A"])
+    sheet.append([3, "Oʻrinboyeva Gʻulnora", "9-A"])
+    buffer = io.BytesIO()
+    book.save(buffer)
+    payload = {"file_base64": base64.b64encode(buffer.getvalue()).decode(), "file_name": "royxat.xlsx"}
+
+    read = client.post(f"{base}/students/import", json=payload, headers=as_user(555))
+    assert read.status_code == 200, read.text
+    assert read.json() == {"names": ["Aliyev Vali", "Oʻrinboyeva Gʻulnora"], "already_in_test": ["karimova laylo"]}, read.json()
+    # Faqat o'qiydi — hali qo'shmaydi
+    assert len(client.get(base, headers=as_user(555)).json()["students"]) == 1
+
+    bad = client.post(f"{base}/students/import", json={"file_base64": "eA==", "file_name": "eski.xls"}, headers=as_user(555))
+    assert bad.status_code == 422, bad.text
+    opened = create_test(enrollment_type="open")
+    assert client.post(f"/api/teacher/tests/{opened['id']}/students/import", json=payload, headers=as_user(555)).status_code == 400

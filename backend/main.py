@@ -4152,6 +4152,45 @@ def add_students(
     return {"added": added}
 
 
+@app.post("/api/teacher/tests/{test_id}/students/import")
+def read_test_students_file(
+    test_id: int, body: StudentImportIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
+):
+    """
+    Offline testga o'quvchilar ro'yxatini Excel (.xlsx) yoki CSV fayldan o'qiydi — hali SAQLAMAYDI:
+    ismlar formaga tushadi, o'qituvchi ko'rib-tuzatib, keyin qo'shadi.
+    """
+
+    test = _get_own_test(db, teacher, test_id)
+    if test.enrollment_type != "closed":
+        raise HTTPException(status_code=400, detail="O'quvchi qo'shish faqat offline testlarda")
+    try:
+        if not body.file_base64:
+            raise ValueError("Fayl yuborilmadi")
+        try:
+            data = base64.b64decode(body.file_base64.split(",")[-1], validate=True)
+        except (binascii.Error, ValueError):
+            raise ValueError("Fayl buzilgan — qayta tanlab ko'ring")
+        names = parse_student_file(body.file_name or "", data)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    if not names:
+        raise HTTPException(status_code=422, detail="Fayldan birorta ham ism topilmadi")
+
+    existing = {
+        (name or "").lower()
+        for name in db.scalars(
+            select(Attempt.offline_name).where(
+                Attempt.test_id == test.id, Attempt.user_id.is_(None), Attempt.status.in_(("pending", "done"))
+            )
+        ).all()
+    }
+    return {
+        "names": [name for name in names if name.lower() not in existing],
+        "already_in_test": [name for name in names if name.lower() in existing],
+    }
+
+
 @app.delete("/api/teacher/tests/{test_id}/students/{attempt_id}")
 def delete_student(
     test_id: int, attempt_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)

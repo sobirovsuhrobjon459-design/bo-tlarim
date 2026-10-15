@@ -8315,12 +8315,45 @@ async function renderAddStudentsForm(testId, testTitle) {
       ${escapeHtml(testTitle)} — har bir o'quvchining ism-familiyasini alohida qatorga yozing.
       Javoblarini keyin, ro'yxatdagi ✏️ tugmasi orqali kiritasiz.
     </p>
+    <label class="btn btn-ghost import-file-label" style="margin-bottom:10px">
+      📊 Excel / CSV fayldan yuklash
+      <input type="file" id="test-students-file" accept=".xlsx,.csv,.txt" hidden />
+    </label>
+    <p class="subtitle" style="margin:0 4px 8px">Fayldagi ismlar quyida chiqadi — tekshirib, keyin qo'shasiz.
+      Birinchi ustunda (yoki «F.I.Sh.» ustunida) ism-familiya bo'lsa yetarli.</p>
+    <p class="subtitle" id="students-file-note" style="margin:0 4px 8px" hidden></p>
     <textarea class="input" id="student-names-input" rows="8"
       placeholder="Ali Valiyev&#10;Zuhra Karimova&#10;Jasur Umarov"></textarea>
     <button class="btn" id="save-students-button">✅ Ro'yxatga qo'shish</button>
   `);
 
   document.querySelector('[data-action="test"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
+
+  // Excel/CSV: ismlar formaga tushadi (hali saqlanmaydi)
+  document.getElementById("test-students-file").addEventListener(
+    "change",
+    guarded(async (event) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (!file) return;
+      if (file.size > IMPORT_MAX_FILE_BYTES) throw new Error("Fayl juda katta (3 MB dan oshmasin)");
+      const result = await api(`/api/teacher/tests/${testId}/students/import`, {
+        method: "POST",
+        body: { file_base64: await readFileAsBase64(file), file_name: file.name },
+      });
+      const input = document.getElementById("student-names-input");
+      const current = input.value.split("\n").map((name) => name.trim()).filter(Boolean);
+      const merged = [...current, ...result.names.filter((name) => !current.some((item) => item.toLowerCase() === name.toLowerCase()))];
+      input.value = merged.join("\n");
+      const note = document.getElementById("students-file-note");
+      note.hidden = false;
+      note.textContent =
+        `📊 Fayldan ${result.names.length} ta ism olindi` +
+        (result.already_in_test.length ? `, ${result.already_in_test.length} tasi testda allaqachon bor (qo'shilmadi)` : "") +
+        ". Tekshirib, «Ro'yxatga qo'shish»ni bosing.";
+      markUnsaved();
+    })
+  );
 
   document.getElementById("save-students-button").addEventListener(
     "click",
@@ -8337,6 +8370,7 @@ async function renderAddStudentsForm(testId, testTitle) {
       }
 
       const result = await api(`/api/teacher/tests/${testId}/students`, { method: "POST", body: { names } });
+      unsavedChanges = false;
       showToast(`✅ ${result.added} ta o'quvchi qo'shildi`);
       await renderTestDetail(testId);
     })

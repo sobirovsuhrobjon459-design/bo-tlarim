@@ -8,6 +8,8 @@ qanday tuzilganidan qat'i nazar ismlar ajratib olinadi:
   • raqamlar (tartib raqami), sanalar va telefon raqamlari e'tiborsiz;
   • "Familiya | Ism | Otasining ismi" kabi alohida ustunlar bitta ismga
     birlashtiriladi;
+  • sarlavhada ism ustunlari ko'rsatilgan bo'lsa ("F.I.Sh", "Ism", "Familiya"),
+    faqat o'shalar olinadi — "Sinf", "Manzil" kabi boshqa ustunlar ismga qo'shilmaydi;
   • takrorlar olib tashlanadi.
 """
 
@@ -43,17 +45,41 @@ def _is_header(row: list) -> bool:
     return any(word in cell for cell in cells for word in HEADER_WORDS) and len(cells) <= 8
 
 
+# Sarlavhadagi ism ustunlari (F.I.Sh., Ism, Familiya, Otasining ismi ...)
+NAME_COLUMN_WORDS = (
+    "f.i.sh", "fish", "f.i.o", "fio", "ism", "familiya", "sharif", "o'quvchi", "oquvchi", "o‘quvchi",
+    "name", "student", "ф.и.о", "фио", "имя", "фамилия", "отчество", "ученик",
+)
+
+
+def _skipped_columns(header: list) -> set[int] | None:
+    """
+    Sarlavhada nomi bor, lekin ismga aloqasi yo'q ustunlar ("Sinf", "Manzil", "Telefon") —
+    ular ismga qo'shilmaydi. Sarlavhasiz ustunlar (masalan "F.I.Sh" ostida familiya va ism
+    alohida katakda) olinaveradi. Sarlavhada ism ustuni bo'lmasa — hech narsa tashlanmaydi.
+    """
+
+    labelled = {index: str(cell).strip().lower() for index, cell in enumerate(header) if cell not in (None, "")}
+    is_name = {index: any(word in text for word in NAME_COLUMN_WORDS) for index, text in labelled.items()}
+    if not any(is_name.values()):
+        return None
+    return {index for index, name_column in is_name.items() if not name_column and labelled[index] not in ("№", "#")}
+
+
 def names_from_rows(rows: list[list]) -> list[str]:
     names: list[str] = []
     seen: set[str] = set()
+    skipped: set[int] = set()
 
     for index, row in enumerate(rows):
         if not row:
             continue
         # Sarlavha odatda birinchi qatorlarda bo'ladi
         if index < 3 and _is_header(row):
+            skipped = _skipped_columns(row) or set()
             continue
-        parts = [" ".join(str(cell).split()) for cell in row if _is_name_cell(cell)][:MAX_NAME_PARTS]
+        cells = [cell for column, cell in enumerate(row) if column not in skipped]
+        parts = [" ".join(str(cell).split()) for cell in cells if _is_name_cell(cell)][:MAX_NAME_PARTS]
         if not parts:
             continue
         name = " ".join(parts)[:200]
