@@ -8103,7 +8103,7 @@ async function renderTestDetail(testId) {
         ? `<button class="btn btn-ghost" id="answer-sheet-button">📄 Javoblar varaqasini olish</button>
            <button class="btn btn-ghost" id="answer-key-button">🔑 To'g'ri javoblar (kalit)</button>
            ${
-             test.sheet_version >= 2 && test.students.some((student) => student.editable)
+             test.sheet_version >= 2
                ? `<button class="btn btn-ghost" id="named-sheets-button">👥 Ismli varaqlar (har o'quvchiga)</button>`
                : ""
            }
@@ -8175,13 +8175,17 @@ async function renderTestDetail(testId) {
   });
   document.getElementById("named-sheets-button")?.addEventListener(
     "click",
-    guarded(() =>
-      deliverPdf(
+    guarded(() => {
+      // Ismli varaq har o'quvchiga alohida chiqadi — avval ro'yxat kerak
+      if (!test.students.some((student) => student.editable)) {
+        throw new Error("O'quvchi qo'shilmagan — avval «O'quvchilarni qo'shish» orqali o'quvchilarni qo'shing");
+      }
+      return deliverPdf(
         `/api/teacher/tests/${testId}/answer-sheet?named=true`,
         `${test.code}_ismli_varaqlar.pdf`,
         "👥 Ismli varaqlar Telegramga yuborildi"
-      )
-    )
+      );
+    })
   );
 
   document
