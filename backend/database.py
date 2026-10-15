@@ -313,6 +313,22 @@ class KeyQuestion(Base):
     test: Mapped["Test"] = relationship(back_populates="key_questions")
 
 
+class TestVariant(Base):
+    """
+    Testning qo'shimcha varianti (B, C, D): savollar tuzilishi asosiy kalit bilan bir xil,
+    faqat to'g'ri javoblar boshqacha. answers — JSON: {"1": "C", "2": "A,D", "36": "15"}.
+    """
+
+    __tablename__ = "test_variants"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    test_id: Mapped[int] = mapped_column(ForeignKey("tests.id"), index=True)
+    name: Mapped[str] = mapped_column(String(2))
+    answers: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
 class Attempt(Base):
     """
     O'quvchining bitta testni ishlash urinishi (va natijasi).
@@ -331,6 +347,8 @@ class Attempt(Base):
     offline_name: Mapped[str | None] = mapped_column(String(200), default=None)
     # Javoblar varaqasidagi o'quvchi raqami (1–999) — o'qituvchi qo'shgan o'quvchilarga beriladi
     sheet_number: Mapped[int | None] = mapped_column(default=None)
+    # Qaysi variant kaliti bilan tekshiriladi (B, C, D); bo'sh — asosiy (A)
+    variant: Mapped[str | None] = mapped_column(String(2), default=None)
     started_at: Mapped[datetime] = mapped_column(default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(default=None)
     # pending  — o'qituvchi yopiq testga qo'shgan, javoblari hali kiritilmagan
@@ -961,6 +979,13 @@ class StudentAnswersIn(BaseModel):
     """O'qituvchi ro'yxatdagi o'quvchining javoblarini kiritganda yuboriladi: {savol_ref: "A"}."""
 
     answers: dict[str, str] = {}
+    variant: str | None = Field(default=None, pattern="^[A-D]$")
+
+
+class VariantKeyIn(BaseModel):
+    """Variant kaliti: {savol_raqami: to'g'ri javob}."""
+
+    answers: dict[str, str] = {}
 
 
 class SheetScanIn(BaseModel):
@@ -979,6 +1004,7 @@ class SheetScanSaveIn(BaseModel):
     name: str = Field(default="", max_length=200)
     attempt_id: int | None = None
     sheet_number: int | None = Field(default=None, ge=1, le=999)
+    variant: str | None = Field(default=None, pattern="^[A-D]$")
     answers: dict[str, str] = {}
 
 

@@ -131,6 +131,8 @@ from .database import (
     SheetScanSaveIn,
     StudentAnswersIn,
     StudentNamesIn,
+    TestVariant,
+    VariantKeyIn,
     Teacher,
     TeacherRegisterIn,
     Test,
@@ -183,7 +185,9 @@ def _add_missing_columns() -> None:
             # Eski testlar — eski varaq ko'rinishi (raqamsiz), chop etilganlari to'g'ri skanerlansin
             "sheet_version": "INTEGER DEFAULT 1",
         },
-        "test_attempts": {"offline_name": "VARCHAR(200)", "saved_answers": "TEXT", "sheet_number": "INTEGER"},
+        "test_attempts": {
+            "offline_name": "VARCHAR(200)", "saved_answers": "TEXT", "sheet_number": "INTEGER", "variant": "VARCHAR(2)",
+        },
         "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)"},
         "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)"},
         "school_classes": {"curator_user_id": "INTEGER"},
@@ -1549,7 +1553,7 @@ SHEET_LAYOUTS = [
 ]
 
 
-def _answer_sheet_items(test: Test) -> list[tuple[str, str, int, str, int]]:
+def _answer_sheet_items(test: Test, key_override: dict | None = None) -> list[tuple[str, str, int, str, int]]:
     """
     Javoblar varaqasi uchun: har bir savolning (nomi, turi, variantlar soni, to'g'ri javobi,
     javob kaliti — skanerlangan javob qaysi savolga yozilishi uchun).
@@ -1557,7 +1561,8 @@ def _answer_sheet_items(test: Test) -> list[tuple[str, str, int, str, int]]:
 
     if test.mode == "key":
         return [
-            (kq.label or str(kq.number), kq.question_type, kq.option_count, kq.correct, kq.number)
+            (kq.label or str(kq.number), kq.question_type, kq.option_count,
+             (key_override or {}).get(kq.number, kq.correct), kq.number)
             for kq in test.key_questions
         ]
     return [
@@ -1653,7 +1658,8 @@ def _draw_corner_marks(sheet, width: float, height: float) -> None:
 
 
 def _draw_sheet_header(sheet, test: Test, width: float, height: float, with_answers: bool,
-                       student: tuple[int, str] | None = None, bubbles: list | None = None) -> float:
+                       student: tuple | None = None, bubbles: list | None = None,
+                       variants: list[str] | None = None, key_variant: str | None = None) -> float:
     """
     Varaq sarlavhasini chizadi va savollar boshlanadigan y koordinatasini qaytaradi.
 
@@ -1680,7 +1686,7 @@ def _draw_sheet_header(sheet, test: Test, width: float, height: float, with_answ
     if with_answers:
         # Kalit varaqasi faqat o'qituvchi uchun — ism yozadigan katak kerak emas.
         sheet.setFont("Helvetica-Bold", 11)
-        sheet.drawCentredString(width / 2, height - 88, "JAVOBLAR KALITI")
+        sheet.drawCentredString(width / 2, height - 88, f"JAVOBLAR KALITI — {key_variant} VARIANT" if key_variant else "JAVOBLAR KALITI")
         return height - 104
 
     # O'quvchi o'z ismini yozadigan maydon
@@ -1715,6 +1721,22 @@ def _draw_sheet_header(sheet, test: Test, width: float, height: float, with_answ
                 bubbles.append({"page": 1, "ref": f"id{row}", "label": place, "kind": "id", "letter": str(digit),
                                 "x": x, "y": center_y, "r": SHEET_ID_RADIUS})
     hint_x = first_x + 10 * SHEET_ID_GAP + 6
+
+    # Variant (A/B/C/D) — o'ng chetda; ismli varaqda bo'yab qo'yiladi
+    if variants:
+        student_variant = student[2] if student and len(student) > 2 else None
+        variant_x = width - SHEET_MARGIN - (len(variants) - 1) * SHEET_ID_GAP - SHEET_ID_RADIUS
+        sheet.setFont("Helvetica-Bold", 8)
+        sheet.drawString(variant_x - SHEET_ID_RADIUS, name_y - 13, "Variant:")
+        for index, name in enumerate(variants):
+            x = variant_x + index * SHEET_ID_GAP
+            sheet.setFont("Helvetica-Bold", 7)
+            sheet.drawCentredString(x, name_y - 50, name)
+            sheet.circle(x, name_y - 37, SHEET_ID_RADIUS + 1, stroke=1, fill=1 if student_variant == name else 0)
+            if bubbles is not None:
+                bubbles.append({"page": 1, "ref": "variant", "label": "Variant", "kind": "variant", "letter": name,
+                                "x": x, "y": name_y - 37, "r": SHEET_ID_RADIUS + 1})
+
     sheet.setFont("Helvetica", 7)
     if student:
         sheet.setFont("Helvetica-Bold", 12)
@@ -1831,19 +1853,20 @@ def _draw_sheet_column(sheet, column_cells, column_x, column_width, top_y, layou
         y -= row_height
 
 
-def _draw_answer_sheet(sheet, test: Test, with_answers: bool, bubbles: list | None,
-                       student: tuple[int, str] | None) -> None:
+def _draw_answer_sheet(sheet, test: Test, with_answers: bool, bubbles: list | None, student: tuple | None,
+                       variants: list[str] | None = None, key_override: dict | None = None,
+                       key_variant: str | None = None) -> None:
     """Bitta to'liq varaq (bir yoki bir necha sahifa) — hamma savollar bilan."""
 
     width, height = A4
 
     # Har bir guruh: sarlavha katagi + savol kataklari
     cells: list[dict] = []
-    for group in _group_similar_questions(_answer_sheet_items(test)):
+    for group in _group_similar_questions(_answer_sheet_items(test, key_override)):
         cells.append({"kind": "header", "group": group})
         cells.extend({"kind": "row", "item": item} for item in group)
 
-    top_y = _draw_sheet_header(sheet, test, width, height, with_answers, student, bubbles)
+    top_y = _draw_sheet_header(sheet, test, width, height, with_answers, student, bubbles, variants, key_variant)
     available_height = top_y - SHEET_BOTTOM_LIMIT
 
     layout, columns = _choose_sheet_layout(cells, available_height)
@@ -1879,7 +1902,8 @@ def _draw_answer_sheet(sheet, test: Test, with_answers: bool, bubbles: list | No
 
 
 def generate_answer_sheet_pdf(test: Test, with_answers: bool = False, bubbles: list | None = None,
-                              students: list[tuple[int, str]] | None = None) -> bytes:
+                              students: list[tuple] | None = None, variants: list[str] | None = None,
+                              key_override: dict | None = None, key_variant: str | None = None) -> bytes:
     """
     "Javoblar varaqasi" — o'quvchilarga tarqatiladigan bo'sh blank.
 
@@ -1900,7 +1924,8 @@ def generate_answer_sheet_pdf(test: Test, with_answers: bool = False, bubbles: l
     for index, student in enumerate(students or [None]):
         if index:
             sheet.showPage()
-        _draw_answer_sheet(sheet, test, with_answers, bubbles if index == 0 else None, student)
+        _draw_answer_sheet(sheet, test, with_answers, bubbles if index == 0 else None, student,
+                           variants, key_override, key_variant)
     sheet.save()
     return buffer.getvalue()
 
@@ -2616,8 +2641,10 @@ def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str,
     """
 
     if test.mode == "key":
+        overrides = _key_override(db, test, attempt.variant)
         for key_question in test.key_questions:
             student_answer = answers.get(str(key_question.number)) or ""
+            key_correct = overrides.get(key_question.number, key_question.correct)
 
             if key_question.question_type == "multi":
                 raw_answer = student_answer.upper().replace(" ", "")
@@ -2625,18 +2652,18 @@ def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str,
                 # Kalit ham xuddi shunday tozalanadi — bazada eski, normallashtirilmagan
                 # yozuv ("a, c") qolgan bo'lsa ham to'g'ri solishtiriladi.
                 correct_letters = {
-                    part.strip().upper() for part in key_question.correct.split(",") if part.strip()
+                    part.strip().upper() for part in key_correct.split(",") if part.strip()
                 }
                 is_correct = bool(chosen_letters) and chosen_letters == correct_letters
                 chosen_value = ",".join(sorted(chosen_letters)) if chosen_letters else None
             elif key_question.question_type == "text":
                 # Yozma javob: yozilish farqlari hisobga olinmaydi (qarang: _normalize_text_answer),
                 # o'qituvchi kiritgan variantlardan biriga mos kelsa yetarli.
-                is_correct = _text_answer_is_correct(student_answer, key_question.correct)
+                is_correct = _text_answer_is_correct(student_answer, key_correct)
                 chosen_value = student_answer.strip()[:300] or None
             else:
                 raw_answer = student_answer.upper().replace(" ", "")
-                is_correct = raw_answer == key_question.correct
+                is_correct = raw_answer == key_correct
                 chosen_value = raw_answer or None
 
             db.add(
@@ -3868,6 +3895,7 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
                 "percent": attempt.percent,
                 "editable": attempt.user_id is None,  # faqat o'qituvchi qo'shgan o'quvchi tahrirlanadi
                 "number": attempt.sheet_number,
+                "variant": attempt.variant,
             }
         )
 
@@ -3893,6 +3921,7 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
         "has_attempts": _test_has_attempts(db, test),
         "broadcast_at": test.broadcast_at,
         "sheet_version": test.sheet_version or 1,
+        "variants": _variant_names(db, test),
         "students": students,
         "filled": filled,
         "missing": len(students) - filled,
@@ -4076,15 +4105,17 @@ def _attempt_review(db: Session, test: Test, attempt: Attempt) -> dict:
 
     questions = []
     if test.mode == "key":
+        overrides = _key_override(db, test, attempt.variant)
         for group in _group_key_questions(test):
             for key_question in group:
                 answer = answers.get(key_question.number)
+                key_correct = overrides.get(key_question.number, key_question.correct)
                 questions.append(
                     {
                         "label": _key_question_label(key_question),
                         "kind": key_question.question_type,
                         "chosen": (answer.chosen if answer else None) or "—",
-                        "correct": " / ".join(_split_accepted_variants(key_question.correct)),
+                        "correct": " / ".join(_split_accepted_variants(key_correct)),
                         "is_correct": bool(answer and answer.is_correct),
                     }
                 )
@@ -4134,6 +4165,7 @@ def get_student_answers(
 
     return {
         "name": attempt.offline_name,
+        "variant": attempt.variant,
         "has_answers": attempt.status == "done",
         "answers": {str(answer.question_ref): answer.chosen or "" for answer in answers},
     }
@@ -4156,6 +4188,10 @@ def save_student_answers(
 
     test = _get_own_test(db, teacher, test_id)
     attempt = _get_offline_attempt(db, test, attempt_id)
+    _check_variant(db, test, body.variant)
+    if body.variant:
+        attempt.variant = body.variant
+        db.flush()
     return _store_offline_answers(db, test, teacher, attempt, body.answers)
 
 
@@ -4192,6 +4228,136 @@ def _store_offline_answers(db: Session, test: Test, teacher: Teacher, attempt: A
     }
 
 
+# ---------- Variantlar (A/B/C/D) ----------
+# Ko'chirishga qarshi: bitta testning bir nechta varianti — savollar soni va turi
+# bir xil, faqat to'g'ri javoblar boshqacha (savollar aralashtirilgan). A — asosiy
+# kalit (KeyQuestion), B/C/D — TestVariant'da. Har o'quvchi o'z varianti kaliti
+# bilan tekshiriladi (Attempt.variant; bo'sh — A).
+
+VARIANT_LETTERS = ("A", "B", "C", "D")
+
+
+def _test_variants(db: Session, test: Test) -> dict[str, dict[int, str]]:
+    """Qo'shimcha variantlar kalitlari: {"B": {savol_raqami: to'g'ri_javob}}."""
+
+    result = {}
+    for variant in db.scalars(select(TestVariant).where(TestVariant.test_id == test.id).order_by(TestVariant.name)).all():
+        result[variant.name] = {int(number): correct for number, correct in json.loads(variant.answers or "{}").items()}
+    return result
+
+
+def _variant_names(db: Session, test: Test) -> list[str]:
+    """Variantlar ro'yxati (["A", "B", ...]); qo'shimcha variant bo'lmasa — bo'sh."""
+
+    extra = sorted(_test_variants(db, test))
+    return ["A", *extra] if extra else []
+
+
+def _key_override(db: Session, test: Test, variant: str | None) -> dict[int, str]:
+    if not variant or variant == "A" or test.mode != "key":
+        return {}
+    return _test_variants(db, test).get(variant, {})
+
+
+def _check_variant(db: Session, test: Test, variant: str | None) -> None:
+    if variant and variant != "A" and variant not in _test_variants(db, test):
+        raise HTTPException(status_code=422, detail=f"Bu testda {variant} variant yo'q")
+
+
+def _regrade_variant(db: Session, test: Test, variant: str) -> int:
+    """Variant kaliti o'zgardi — shu variantdagi natijalar saqlangan javoblardan qayta tekshiriladi."""
+
+    attempts = db.scalars(
+        select(Attempt).where(Attempt.test_id == test.id, Attempt.status == "done", Attempt.variant == variant)
+    ).all()
+    for attempt in attempts:
+        answers = {
+            str(answer.question_ref): answer.chosen or ""
+            for answer in db.scalars(select(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id)).all()
+        }
+        db.execute(delete(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id))
+        _grade_answers(db, attempt, test, answers)
+        _calculate_attempt_score(db, attempt, test)
+    return len(attempts)
+
+
+@app.get("/api/teacher/tests/{test_id}/variants")
+def list_variants(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    test = _get_own_test(db, teacher, test_id)
+    if test.mode != "key":
+        return {"available": False, "variants": []}
+    used = dict(
+        db.execute(
+            select(Attempt.variant, func.count())
+            .where(Attempt.test_id == test.id, Attempt.status.in_(("pending", "done")), Attempt.variant.is_not(None))
+            .group_by(Attempt.variant)
+        ).all()
+    )
+    variants = [{"name": "A", "main": True, "students": used.get("A", 0)}]
+    variants += [
+        {"name": name, "main": False, "answers": {str(number): correct for number, correct in key.items()},
+         "students": used.get(name, 0)}
+        for name, key in _test_variants(db, test).items()
+    ]
+    return {"available": True, "variants": variants}
+
+
+@app.put("/api/teacher/tests/{test_id}/variants/{name}")
+def save_variant(
+    test_id: int, name: str, body: VariantKeyIn,
+    teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db),
+):
+    test = _get_own_test(db, teacher, test_id)
+    if test.mode != "key":
+        raise HTTPException(status_code=400, detail="Variantlar faqat javoblar kaliti bilan yaratilgan testlarda")
+    if name not in VARIANT_LETTERS[1:]:
+        raise HTTPException(status_code=422, detail="Variant nomi B, C yoki D bo'ladi")
+
+    key: dict[str, str] = {}
+    for kq in test.key_questions:
+        value = (body.answers.get(str(kq.number)) or "").strip()
+        label = _key_question_label(kq)
+        if not value:
+            raise HTTPException(status_code=422, detail=f"{label}: to'g'ri javobni belgilang")
+        if kq.question_type == "text":
+            key[str(kq.number)] = value[:300]
+            continue
+        letters = sorted({part.strip().upper() for part in value.split(",") if part.strip()})
+        allowed = {chr(65 + index) for index in range(kq.option_count)}
+        if not letters or not set(letters) <= allowed or (kq.question_type == "single" and len(letters) != 1):
+            raise HTTPException(status_code=422, detail=f"{label}: javob noto'g'ri")
+        key[str(kq.number)] = ",".join(letters)
+
+    variant = db.scalar(select(TestVariant).where(TestVariant.test_id == test.id, TestVariant.name == name))
+    if not variant:
+        variant = TestVariant(test_id=test.id, name=name)
+        db.add(variant)
+    variant.answers = json.dumps(key, ensure_ascii=False)
+    variant.updated_at = utcnow()
+    db.flush()
+    regraded = _regrade_variant(db, test, name)
+    db.commit()
+    return {"ok": True, "regraded": regraded}
+
+
+@app.delete("/api/teacher/tests/{test_id}/variants/{name}")
+def delete_variant(test_id: int, name: str, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    test = _get_own_test(db, teacher, test_id)
+    variant = db.scalar(select(TestVariant).where(TestVariant.test_id == test.id, TestVariant.name == name))
+    if not variant:
+        raise HTTPException(status_code=404, detail="Variant topilmadi")
+    in_use = db.scalar(
+        select(func.count()).select_from(Attempt).where(
+            Attempt.test_id == test.id, Attempt.variant == name, Attempt.status.in_(("pending", "done"))
+        )
+    )
+    if in_use:
+        raise HTTPException(status_code=409, detail=f"{name} variantda {in_use} ta o'quvchi bor — o'chirib bo'lmaydi")
+    db.delete(variant)
+    db.commit()
+    return {"ok": True}
+
+
 # ---------- Javoblar varaqasini skanerlash ----------
 # O'qituvchi o'quvchi bo'yagan varaqni suratga oladi → skaner javoblarni o'qiydi
 # (backend/omr.py) → o'qituvchi ekranda tekshirib, ismni yozib saqlaydi.
@@ -4214,7 +4380,8 @@ def scan_sheet(
 
     test = _paper_test(db, teacher, test_id)
     bubbles: list[dict] = []
-    generate_answer_sheet_pdf(test, bubbles=bubbles)
+    variants = _variant_names(db, test)
+    generate_answer_sheet_pdf(test, bubbles=bubbles, variants=variants or None)
     if not bubbles:
         raise HTTPException(status_code=400, detail="Bu testda belgilanadigan (variantli) savol yo'q")
     page_count = max(bubble["page"] for bubble in bubbles)
@@ -4243,7 +4410,7 @@ def scan_sheet(
             )
         )
         if found:
-            match = {"id": found.id, "name": found.offline_name, "status": found.status}
+            match = {"id": found.id, "name": found.offline_name, "status": found.status, "variant": found.variant}
 
     pending = [
         {"id": attempt.id, "name": attempt.offline_name}
@@ -4253,7 +4420,8 @@ def scan_sheet(
             .order_by(Attempt.offline_name)
         ).all()
     ]
-    return {**result, "match": match, "page": body.page, "page_count": page_count, "pending_students": pending}
+    return {**result, "match": match, "variants": variants, "page": body.page, "page_count": page_count,
+            "pending_students": pending}
 
 
 @app.post("/api/teacher/tests/{test_id}/scan/save")
@@ -4261,6 +4429,7 @@ def save_scanned_sheet(
     test_id: int, body: SheetScanSaveIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
 ):
     test = _paper_test(db, teacher, test_id)
+    _check_variant(db, test, body.variant)
     if body.attempt_id:
         attempt = _get_offline_attempt(db, test, body.attempt_id)
     else:
@@ -4290,6 +4459,9 @@ def save_scanned_sheet(
             if body.sheet_number and not number_taken:
                 attempt.sheet_number = body.sheet_number
                 db.flush()  # saqlashda yozuv bazadan qayta o'qiladi — raqam yo'qolmasin
+    if body.variant:
+        attempt.variant = body.variant
+        db.flush()
     return _store_offline_answers(db, test, teacher, attempt, body.answers)
 
 
@@ -4392,7 +4564,8 @@ def teacher_test_questions(test_id: int, teacher: Teacher = Depends(get_current_
             for q in test.questions
         ]
 
-    return {"mode": test.mode, "keyboard": subject_keyboard(test.subject), "questions": questions}
+    return {"mode": test.mode, "keyboard": subject_keyboard(test.subject), "questions": questions,
+            "variants": _variant_names(db, test)}
 
 
 @app.patch("/api/teacher/tests/{test_id}/price")
@@ -4841,7 +5014,19 @@ def send_excel_to_telegram(
     return {"ok": True}
 
 
-def _named_sheet_students(db: Session, test: Test, named: bool) -> list[tuple[int, str]] | None:
+def _sheet_variant_options(db: Session, test: Test, answers: bool, variant: str | None) -> dict:
+    """Varaq uchun variant sozlamalari: blankda — variant doirachalari, kalitda — tanlangan variant javoblari."""
+
+    variants = _variant_names(db, test)
+    if answers:
+        if variant and variant != "A":
+            _check_variant(db, test, variant)
+            return {"key_override": _key_override(db, test, variant), "key_variant": variant}
+        return {"key_variant": "A"} if variants else {}
+    return {"variants": variants or None}
+
+
+def _named_sheet_students(db: Session, test: Test, named: bool) -> list[tuple] | None:
     """Ismli varaqlar uchun: o'qituvchi qo'shgan o'quvchilar (raqam, ism) — raqam tartibida."""
 
     if not named:
@@ -4849,15 +5034,20 @@ def _named_sheet_students(db: Session, test: Test, named: bool) -> list[tuple[in
     if (test.sheet_version or 1) < 2:
         raise HTTPException(status_code=400, detail="Bu eski test — ismli varaqlar yangi testlarda bor")
     _ensure_sheet_numbers(db, test)
-    students = [
-        (attempt.sheet_number, attempt.offline_name or "")
-        for attempt in db.scalars(
-            select(Attempt)
-            .where(Attempt.test_id == test.id, Attempt.user_id.is_(None), Attempt.status.in_(("pending", "done")),
-                   Attempt.sheet_number.is_not(None))
-            .order_by(Attempt.sheet_number)
-        ).all()
-    ]
+    attempts = db.scalars(
+        select(Attempt)
+        .where(Attempt.test_id == test.id, Attempt.user_id.is_(None), Attempt.status.in_(("pending", "done")),
+               Attempt.sheet_number.is_not(None))
+        .order_by(Attempt.sheet_number)
+    ).all()
+    # Variantlar bo'lsa — yonma-yon o'tirganlar har xil variant oladi (raqam bo'yicha navbatma-navbat)
+    variants = _variant_names(db, test)
+    if variants:
+        for attempt in attempts:
+            if not attempt.variant and attempt.status == "pending":
+                attempt.variant = variants[(attempt.sheet_number - 1) % len(variants)]
+        db.commit()
+    students = [(attempt.sheet_number, attempt.offline_name or "", attempt.variant or "A") for attempt in attempts]
     if not students:
         raise HTTPException(status_code=400, detail="Avval o'quvchilarni qo'shing — har biriga ismli varaq chiqadi")
     return students
@@ -4868,6 +5058,7 @@ def download_answer_sheet(
     test_id: int,
     answers: bool = False,
     named: bool = False,
+    variant: str | None = None,
     teacher: Teacher = Depends(get_current_teacher),
     db: Session = Depends(get_db),
 ):
@@ -4875,7 +5066,8 @@ def download_answer_sheet(
 
     test = _get_own_test(db, teacher, test_id)
     pdf_bytes = generate_answer_sheet_pdf(
-        test, with_answers=answers, students=_named_sheet_students(db, test, named and not answers)
+        test, with_answers=answers, students=_named_sheet_students(db, test, named and not answers),
+        **_sheet_variant_options(db, test, answers, variant),
     )
     file_name = f"{test.code}_{'kalit' if answers else 'ismli_varaqlar' if named else 'javoblar_varaqasi'}.pdf"
 
@@ -4891,6 +5083,7 @@ def send_answer_sheet_to_telegram(
     test_id: int,
     answers: bool = False,
     named: bool = False,
+    variant: str | None = None,
     teacher: Teacher = Depends(get_current_teacher),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -4901,7 +5094,7 @@ def send_answer_sheet_to_telegram(
 
     if answers:
         caption = (
-            "🔑 Javoblar Kaliti\n\n"
+            f"🔑 Javoblar Kaliti{f' — {variant} variant' if variant else ''}\n\n"
             f"📝 Test: {test.title}\n"
             f"🔑 Kod: {test.code}\n"
             f"📚 Fan: {test.subject}\n\n"
@@ -4916,7 +5109,8 @@ def send_answer_sheet_to_telegram(
     _send_pdf_to_telegram(
         user.tg_id,
         f"{test.code}_{'kalit' if answers else 'ismli_varaqlar' if students else 'javoblar_varaqasi'}.pdf",
-        generate_answer_sheet_pdf(test, with_answers=answers, students=students),
+        generate_answer_sheet_pdf(test, with_answers=answers, students=students,
+                                  **_sheet_variant_options(db, test, answers, variant)),
         caption=caption,
     )
     return {"ok": True}

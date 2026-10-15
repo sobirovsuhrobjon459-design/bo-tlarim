@@ -4246,7 +4246,8 @@ def _sheet_photo(test_id: int, marks: dict[int, str], skew: bool = True) -> str:
 
     with SessionLocal() as session:
         bubbles: list[dict] = []
-        main.generate_answer_sheet_pdf(session.get(Test, test_id), bubbles=bubbles)
+        sheet_test = session.get(Test, test_id)
+        main.generate_answer_sheet_pdf(sheet_test, bubbles=bubbles, variants=main._variant_names(session, sheet_test) or None)
     zoom = 2.0
     page = Image.new("RGB", (round(PAGE_WIDTH * zoom), round(PAGE_HEIGHT * zoom)), "white")
     draw = ImageDraw.Draw(page)
@@ -4399,3 +4400,47 @@ def test_excel_hisobot():
     first = analysis[0]
     assert first[0] == "1-savol" and first[1] == "B" and first[2] == 1 and first[3] == 50.0, first
     assert first[4] == 1 and first[5] == 1, first  # A ni 1 kishi, B ni 1 kishi tanlagan
+
+
+def test_variantlar_alohida_kalit_bilan_tekshiriladi():
+    reset_database()
+    register_teacher()
+    created = create_test(enrollment_type="closed")
+    test_id = created["id"]
+    base = f"/api/teacher/tests/{test_id}"
+    headers = as_user(555)
+
+    bad = client.put(f"{base}/variants/B", json={"answers": {"1": "C"}}, headers=headers)
+    assert bad.status_code == 422, bad.text  # hamma savol uchun javob kerak
+    assert client.put(f"{base}/variants/E", json={"answers": {}}, headers=headers).status_code == 422
+    key_b = {"1": "C", "2": "A", "3": "b, d", "4": "5"}
+    assert client.put(f"{base}/variants/B", json={"answers": key_b}, headers=headers).status_code == 200
+    listed = client.get(f"{base}/variants", headers=headers).json()
+    assert [v["name"] for v in listed["variants"]] == ["A", "B"] and listed["variants"][1]["answers"]["3"] == "B,D"
+
+    client.post(f"{base}/students", json={"names": ["Birinchi", "Ikkinchi"]}, headers=headers)
+    named = client.get(f"{base}/answer-sheet", params={"named": "true"}, headers=headers)
+    assert named.status_code == 200
+    detail = client.get(base, headers=headers).json()
+    assert detail["variants"] == ["A", "B"]
+    assert [(s["number"], s["variant"]) for s in detail["students"]] == [(1, "A"), (2, "B")], detail["students"]
+
+    # 2-o'quvchi (B variant) varaqi: B kaliti bo'yicha hammasi to'g'ri
+    photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "2", "variant": "B", 1: "C", 2: "A", 3: "B,D"})
+    scanned = client.post(f"{base}/scan", json={"image_base64": photo}, headers=headers).json()
+    assert scanned["variant"] == "B" and scanned["match"]["variant"] == "B", scanned
+    saved = client.post(f"{base}/scan/save", json={"attempt_id": scanned["match"]["id"], "variant": "B",
+                                                  "answers": scanned["answers"]}, headers=headers).json()
+    assert saved["correct"] == 3, saved  # A kaliti bilan 0 bo'lardi
+
+    # B kaliti o'zgardi — natija qayta hisoblanadi
+    key_b["1"] = "D"
+    assert client.put(f"{base}/variants/B", json={"answers": key_b}, headers=headers).json()["regraded"] == 1
+    review = client.get(f"{base}/students/{scanned['match']['id']}/detail", headers=headers).json()
+    assert review["correct"] == 2 and review["questions"][0]["correct"] == "D", review
+
+    sheet_key = client.get(f"{base}/answer-sheet", params={"answers": "true", "variant": "B"}, headers=headers)
+    assert sheet_key.status_code == 200 and sheet_key.content.startswith(b"%PDF")
+    assert client.delete(f"{base}/variants/B", headers=headers).status_code == 409  # o'quvchilar bor
+    assert client.post(f"{base}/scan/save", json={"name": "Boshqa", "variant": "C", "answers": {}},
+                       headers=headers).status_code == 422

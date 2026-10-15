@@ -7210,6 +7210,8 @@ async function scanSheetPage(testId, test, page = 1, collected = null) {
   merged.questions.push(...scan.questions);
   if (scan.name_image) merged.nameImage = scan.name_image;
   if (scan.page === 1) {
+    merged.variants = scan.variants || [];
+    merged.variant = scan.variant || scan.match?.variant || null;
     merged.match = scan.match;
     merged.sheetNumber = scan.sheet_number;
     merged.numberStatus = scan.sheet_number_status;
@@ -7271,6 +7273,8 @@ function renderScanReview(testId, test, scan) {
         <input class="input" id="scan-student-name" maxlength="200" placeholder="Ism-familiya" style="margin-top:8px" />
       </div>
     </div>
+    ${variantChipsHtml(scan.variants, scan.variant || "A")}
+    ${scan.variants?.length && !scan.variant ? `<div class="notice">🔀 Varaqdagi variant aniq o'qilmadi — to'g'risini tanlang.</div>` : ""}
     <p class="subtitle" style="margin:4px 4px 10px">
       ✅ O'qildi: <b>${scan.questions.length - needsCheck.length - empty}</b> ·
       ⚠️ Tekshiring: <b>${needsCheck.length}</b> · ⬜ Bo'sh: <b>${empty}</b>
@@ -7292,6 +7296,9 @@ function renderScanReview(testId, test, scan) {
   const nameInput = document.getElementById("scan-student-name");
   select?.addEventListener("change", () => {
     nameInput.hidden = Boolean(select.value);
+  });
+  wireVariantChips((name) => {
+    scan.variant = name;
   });
   // Raqam bo'yicha topilgan o'quvchi emas — boshqasini tanlash
   document.getElementById("scan-other-student")?.addEventListener("click", (event) => {
@@ -7348,7 +7355,13 @@ function renderScanReview(testId, test, scan) {
     );
     const result = await api(`/api/teacher/tests/${testId}/scan/save`, {
       method: "POST",
-      body: { attempt_id: attemptId, name, answers, sheet_number: scan.sheetNumber || null },
+      body: {
+        attempt_id: attemptId,
+        name,
+        answers,
+        sheet_number: scan.sheetNumber || null,
+        variant: scan.variants?.length ? scan.variant || "A" : null,
+      },
     });
     unsavedChanges = false;
     renderScanSaved(testId, test, result);
@@ -7356,7 +7369,8 @@ function renderScanReview(testId, test, scan) {
   document.getElementById("scan-save")?.addEventListener("click", guarded(save));
 
   // Ketma-ket skanerlash: o'quvchi raqamidan tanildi, shubhali savol yo'q — o'zi saqlanadi
-  if (scan.match?.status === "pending" && !needsCheck.length && !morePages) {
+  const variantKnown = !scan.variants?.length || Boolean(scan.variant);
+  if (scan.match?.status === "pending" && !needsCheck.length && !morePages && variantKnown) {
     guarded(save)();
   }
 }
@@ -7391,6 +7405,177 @@ function renderScanSaved(testId, test, result) {
   document.getElementById("scan-done").addEventListener("click", guarded(() => renderTestDetail(testId)));
 }
 
+/* ---------- Variantlar (A/B/C/D) ---------- */
+
+/*
+  Ko'chirishga qarshi: savollar aralashtirilgan bir nechta variant. A — asosiy
+  kalit, B/C/D uchun o'qituvchi to'g'ri javoblarni shu yerda kiritadi. Har o'quvchi
+  o'z varianti kaliti bilan tekshiriladi; ismli varaqlarda variant navbatma-navbat beriladi.
+*/
+async function renderVariantsPage(testId, test) {
+  const { variants } = await api(`/api/teacher/tests/${testId}/variants`);
+  const nextName = ["B", "C", "D"].find((name) => !variants.some((variant) => variant.name === name));
+
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-variants" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">Variantlar</h2>
+    </div>
+    <p class="subtitle">Savollari aralashtirilgan variantlar — yonma-yon o'tirganlar bir-biridan ko'chira olmaydi.
+      Har variantning to'g'ri javoblarini kiriting; varaqda o'quvchi o'z variantini belgilaydi.</p>
+    ${variants
+      .map(
+        (variant) => `
+          <div class="card" style="cursor:default">
+            <div class="variant-letter">${variant.name}</div>
+            <div class="card-body" style="flex:1">
+              <b>${variant.main ? "Asosiy kalit" : `${variant.name} variant`}</b>
+              <p>${variant.students ? `👥 ${variant.students} ta o'quvchi` : "Hali o'quvchi yo'q"}</p>
+            </div>
+            <div style="display:flex;gap:8px;flex-shrink:0">
+              <button class="icon-button" data-variant-key="${variant.name}" title="Kalit PDF">🔑</button>
+              ${variant.main ? "" : `<button class="icon-button" data-variant-edit="${variant.name}" title="Tahrirlash">✏️</button>`}
+              ${variant.main || variant.students ? "" : deleteButton("data-variant-delete", variant.name)}
+            </div>
+          </div>`
+      )
+      .join("")}
+    ${nextName ? `<button class="btn" id="add-variant-button">➕ ${nextName} variant qo'shish</button>` : ""}
+  `);
+
+  document.querySelector('[data-action="back-variants"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
+  document.getElementById("add-variant-button")?.addEventListener("click", guarded(() => renderVariantEditor(testId, test, nextName, {})));
+  document.querySelectorAll("[data-variant-edit]").forEach((button) => {
+    const variant = variants.find((item) => item.name === button.dataset.variantEdit);
+    button.addEventListener("click", guarded(() => renderVariantEditor(testId, test, variant.name, variant.answers)));
+  });
+  document.querySelectorAll("[data-variant-key]").forEach((button) => {
+    const name = button.dataset.variantKey;
+    button.addEventListener(
+      "click",
+      guarded(() =>
+        deliverPdf(
+          `/api/teacher/tests/${testId}/answer-sheet?answers=true&variant=${name}`,
+          `${test.code}_kalit_${name}.pdf`,
+          `🔑 ${name} variant kaliti Telegramga yuborildi`
+        )
+      )
+    );
+  });
+  document.querySelectorAll("[data-variant-delete]").forEach((button) => {
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        const name = button.dataset.variantDelete;
+        if (!(await askConfirm(`${name} variant o'chirilsinmi?`))) return;
+        await api(`/api/teacher/tests/${testId}/variants/${name}`, { method: "DELETE" });
+        showToast(`🗑 ${name} variant o'chirildi`);
+        await renderVariantsPage(testId, test);
+      })
+    );
+  });
+}
+
+async function renderVariantEditor(testId, test, name, saved) {
+  const structure = await api(`/api/teacher/tests/${testId}/questions`);
+  const answers = { ...saved };
+
+  const row = (question) => {
+    if (question.question_type === "text") {
+      return `
+        <div class="scan-row variant-text-row">
+          <span class="scan-label">${escapeHtml(question.label)}</span>
+          <input class="input" data-variant-text="${question.ref}" value="${escapeHtml(answers[question.ref] || "")}"
+            placeholder="To'g'ri javob" style="margin:0" />
+        </div>`;
+    }
+    const chosen = new Set((answers[question.ref] || "").split(",").filter(Boolean));
+    return `
+      <div class="scan-row" data-variant-ref="${question.ref}">
+        <span class="scan-label">${escapeHtml(question.label.replace(/-savol$/, ""))}.</span>
+        <div class="scan-options">
+          ${Array.from({ length: question.option_count }, (_, index) => String.fromCharCode(65 + index))
+            .map((letter) => `<button type="button" class="scan-option${chosen.has(letter) ? " selected" : ""}" data-letter="${letter}">${letter}</button>`)
+            .join("")}
+        </div>
+      </div>`;
+  };
+
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-variant-editor" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">${name} variant kaliti</h2>
+    </div>
+    <p class="subtitle">Har savolning to'g'ri javobini belgilang (savollar tartibi ${name} variantdagi kabi).</p>
+    <div class="panel scan-grid">${structure.questions.map(row).join("")}</div>
+    <button class="btn" id="save-variant-button" style="margin-top:14px">💾 Saqlash</button>
+  `);
+  markUnsaved();
+
+  document.querySelectorAll("[data-variant-ref]").forEach((rowElement) => {
+    const question = structure.questions.find((item) => item.ref === rowElement.dataset.variantRef);
+    rowElement.addEventListener("click", (event) => {
+      const button = event.target.closest(".scan-option");
+      if (!button) return;
+      const chosen = new Set((answers[question.ref] || "").split(",").filter(Boolean));
+      const letter = button.dataset.letter;
+      if (question.question_type === "multi") {
+        if (chosen.has(letter)) chosen.delete(letter);
+        else chosen.add(letter);
+      } else {
+        chosen.clear();
+        chosen.add(letter);
+      }
+      answers[question.ref] = [...chosen].sort().join(",");
+      rowElement.querySelectorAll(".scan-option").forEach((item) => item.classList.toggle("selected", chosen.has(item.dataset.letter)));
+    });
+  });
+  document.querySelectorAll("[data-variant-text]").forEach((input) => {
+    input.addEventListener("input", () => {
+      answers[input.dataset.variantText] = input.value;
+    });
+  });
+
+  document.querySelector('[data-action="back-variant-editor"]').addEventListener(
+    "click",
+    guarded(async () => {
+      if (await confirmLeave()) await renderVariantsPage(testId, test);
+    })
+  );
+  document.getElementById("save-variant-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const missing = structure.questions.find((question) => !(answers[question.ref] || "").trim());
+      if (missing) throw new Error(`${missing.label}: to'g'ri javobni belgilang`);
+      const result = await api(`/api/teacher/tests/${testId}/variants/${name}`, { method: "PUT", body: { answers } });
+      unsavedChanges = false;
+      showToast(result.regraded ? `✅ Saqlandi, ${result.regraded} ta natija qayta hisoblandi` : `✅ ${name} variant saqlandi`);
+      await renderVariantsPage(testId, test);
+    })
+  );
+}
+
+// Variant tanlash tugmalari (skaner va qo'lda kiritishda)
+function variantChipsHtml(variants, selected) {
+  if (!variants?.length) return "";
+  return `
+    <div class="variant-chips" role="group" aria-label="Variant">
+      <span class="subtitle" style="margin:0">🔀 Variant:</span>
+      ${variants
+        .map((name) => `<button type="button" class="scan-option${name === selected ? " selected" : ""}" data-variant-chip="${name}">${name}</button>`)
+        .join("")}
+    </div>`;
+}
+
+function wireVariantChips(onChange) {
+  document.querySelectorAll("[data-variant-chip]").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      document.querySelectorAll("[data-variant-chip]").forEach((item) => item.classList.toggle("selected", item === chip));
+      onChange(chip.dataset.variantChip);
+    });
+  });
+}
+
 async function renderTestDetail(testId) {
   const test = await api(`/api/teacher/tests/${testId}`);
   const isClosedTest = test.enrollment_type === "closed";
@@ -7399,7 +7584,9 @@ async function renderTestDetail(testId) {
   const studentRow = (student) => `
           <div class="list-row" data-student-id="${student.id}">
             <div ${student.has_answers ? `class="student-summary" data-detail="${student.id}"` : ""}>
-              <b>${student.number ? `<span class="student-number">#${student.number}</span> ` : ""}${escapeHtml(student.name)}</b>
+              <b>${student.number ? `<span class="student-number">#${student.number}</span> ` : ""}${escapeHtml(student.name)}${
+                test.variants.length && student.editable ? ` <span class="badge badge-purple">${student.variant || "A"}</span>` : ""
+              }</b>
               <p class="subtitle" style="margin:2px 0 0">
                 ${student.has_answers
             ? `✅ ${student.correct}/${test.count} • ${student.percent}% — batafsil ›`
@@ -7449,6 +7636,7 @@ async function renderTestDetail(testId) {
         ? `<button class="btn btn-ghost" id="named-sheets-button">👥 Ismli varaqlar (har o'quvchiga)</button>`
         : ""
     }
+    ${test.mode === "key" ? `<button class="btn btn-ghost" id="variants-button">🔀 Variantlar${test.variants.length ? ` (${test.variants.join(", ")})` : " (A/B/C/D)"}</button>` : ""}
     ${!isFinished ? `<button class="btn" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""}
     ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
     ${!isFinished && !isClosedTest && !test.broadcast_at
@@ -7502,6 +7690,7 @@ async function renderTestDetail(testId) {
   );
 
   document.getElementById("scan-sheet-button")?.addEventListener("click", guarded(() => scanSheetPage(testId, test)));
+  document.getElementById("variants-button")?.addEventListener("click", guarded(() => renderVariantsPage(testId, test)));
   document.getElementById("named-sheets-button")?.addEventListener(
     "click",
     guarded(() =>
@@ -7677,6 +7866,7 @@ async function renderStudentAnswersForm(testId, attemptId) {
   answerKeyboard = structure.keyboard || "math";
   // Tanlangan javoblar shu yerda yig'iladi: {savol_ref: "B"} yoki {savol_ref: "A,C"}
   const answers = { ...saved.answers };
+  let selectedVariant = saved.variant || "A";
 
   const questionBlocks = structure.questions
     .map((question) => {
@@ -7707,6 +7897,7 @@ async function renderStudentAnswersForm(testId, attemptId) {
     <button class="back-button" data-action="test">←</button>
     <h2>${escapeHtml(saved.name)}</h2>
     <p class="subtitle">O'quvchi varaqasida belgilangan javoblarni kiriting — bot avtomatik tekshiradi.</p>
+    ${variantChipsHtml(structure.variants, selectedVariant)}
     ${structure.questions.some((question) => question.question_type === "text")
       ? `<p class="subtitle answer-hint">${answerInputHint()}</p>`
       : ""}
@@ -7715,6 +7906,9 @@ async function renderStudentAnswersForm(testId, attemptId) {
   `);
 
   document.querySelector('[data-action="test"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
+  wireVariantChips((name) => {
+    selectedVariant = name;
+  });
 
   document.querySelectorAll(".answer-options").forEach((container) => {
     const ref = container.dataset.ref;
@@ -7751,7 +7945,7 @@ async function renderStudentAnswersForm(testId, attemptId) {
     guarded(async () => {
       const result = await api(`/api/teacher/tests/${testId}/students/${attemptId}/answers`, {
         method: "POST",
-        body: { answers },
+        body: { answers, variant: structure.variants?.length ? selectedVariant : null },
       });
 
       showToast(`✅ ${result.name}: ${result.correct}/${result.total} = ${result.percent}%`);
