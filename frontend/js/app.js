@@ -4989,8 +4989,9 @@ async function checkChannel(test, channel) {
   if (status === "yes") {
     action.innerHTML = `<span class="channel-ok">Obuna ✓</span>`;
   } else {
+    // Obuna tasdiqlanmagan har qanday holatda (yo'q yoki tekshirib bo'lmadi) — tugma chiqadi
     action.innerHTML = `
-      ${status === "no" && channelLink(channel) ? `<button type="button" class="share-pill" data-join>Obuna bo'lish</button>` : ""}
+      ${channelLink(channel) ? `<button type="button" class="share-pill" data-join>Obuna bo'lish</button>` : ""}
       <button type="button" class="share-pill" data-recheck aria-label="Qayta tekshirish">↻</button>`;
     action.querySelector("[data-join]")?.addEventListener("click", () => {
       openExternalLink(channelLink(channel));

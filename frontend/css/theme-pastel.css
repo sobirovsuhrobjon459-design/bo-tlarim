@@ -636,6 +636,16 @@ select:focus {
   color: var(--color-text);
 }
 
+/* To'q kartada kanal qatorlari oq fonda — kanal nomi ko'rinsin */
+.hero-light .channel-rows {
+  margin: 0;
+  background: var(--color-surface);
+}
+
+.hero-light .channel-rows .subtitle {
+  color: var(--color-text-muted);
+}
+
 .hero-light .subtitle {
   color: rgba(255, 255, 255, 0.72);
 }
