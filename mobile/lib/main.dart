@@ -5,11 +5,13 @@
 //  - user-agent'ga "TestWayApp" qo'shadi (sayt shu bo'yicha ilova ekanini biladi);
 //  - t.me va boshqa tashqi havolalarni Telegram/brauzerda ochadi;
 //  - Android "orqaga" tugmasini saytdagi "←" ga ulaydi;
-//  - internet yo'q bo'lsa, qayta urinish oynasini ko'rsatadi.
+//  - internet yo'q bo'lsa, qayta urinish oynasini ko'rsatadi;
+//  - jonli skaner uchun kameraga ruxsat beradi (sayt so'raganda).
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 const appUrl = 'https://bo-tlarim.onrender.com/';
@@ -93,6 +95,8 @@ class _WebShellState extends State<WebShell> {
                   supportMultipleWindows: true,
                   javaScriptCanOpenWindowsAutomatically: true,
                   transparentBackground: true,
+                  mediaPlaybackRequiresUserGesture: false,
+                  allowsInlineMediaPlayback: true,
                   supportZoom: false,
                 ),
                 onWebViewCreated: (controller) => _controller = controller,
@@ -111,6 +115,16 @@ class _WebShellState extends State<WebShell> {
                   final uri = action.request.url;
                   if (uri != null) await _openExternal(uri);
                   return false;
+                },
+                // Jonli skaner kamerani so'raydi — Android ruxsati olinib, faqat o'z saytimizga beriladi
+                onPermissionRequest: (controller, request) async {
+                  final wantsCamera = request.resources.contains(PermissionResourceType.CAMERA);
+                  final ownSite = request.origin.host == appHost;
+                  final granted = wantsCamera && ownSite && (await Permission.camera.request()).isGranted;
+                  return PermissionResponse(
+                    resources: request.resources,
+                    action: granted ? PermissionResponseAction.GRANT : PermissionResponseAction.DENY,
+                  );
                 },
                 onProgressChanged: (controller, progress) => setState(() => _progress = progress / 100),
                 onReceivedError: (controller, request, error) {
