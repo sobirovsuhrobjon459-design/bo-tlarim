@@ -476,9 +476,35 @@ def _interpolate(points: list[tuple[float, float, float]], y: float) -> tuple[fl
     return 0.0, 0.0
 
 
-def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1) -> dict:
+class PreparedSheet:
+    """
+    Tekislangan varaq (burchaklar topilgan, perspektiva to'g'rilangan). Bir suratni boshqa
+    doirachalar joylashuvi bilan qayta o'qishda (masalan, eski 3 xonali ID) shu qism
+    qaytadan hisoblanmaydi — eng og'ir ish shu yerda.
+    """
+
+    def __init__(self, data: bytes, bubbles: list[dict], page: int = 1) -> None:
+        image = _load_image(data)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        page_bubbles = [bubble for bubble in bubbles if bubble["page"] == page]
+        self.edge_marks = any(bubble["kind"] == "mark" for bubble in page_bubbles)
+        corners = _find_corners(gray, edge_marks=self.edge_marks)
+        self.warped = _warp(image, corners)
+        warped_gray = cv2.cvtColor(self.warped, cv2.COLOR_BGR2GRAY)
+        warped_gray = cv2.GaussianBlur(warped_gray, (3, 3), 0)
+        self.binary = cv2.adaptiveThreshold(
+            warped_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, round(40 * SCALE) | 1, 18
+        )
+        self.maps = _ResponseMaps(self.binary)
+
+
+def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
+                      prepared: PreparedSheet | None = None) -> dict:
     """
     Surat + varaqdagi doirachalar ro'yxati (generate_answer_sheet_pdf'dan) → o'qilgan javoblar.
+
+    prepared — shu surat uchun avval tayyorlangan PreparedSheet (qayta o'qishda tezroq).
+    Faqat burchak/chet belgilari bir xil joylashgan varaq uchun beriladi.
 
     Qaytaradi:
       answers  — {savol_kaliti: "A"} (ko'p javobli savolda "A,C"), faqat aniq o'qilganlari;
@@ -486,16 +512,10 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1) -> dict:
       name_image — ism yozilgan katak (PNG, data URL) — o'qituvchi ismni ko'rib yozishi uchun.
     """
 
-    image = _load_image(data)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     page_bubbles = [bubble for bubble in bubbles if bubble["page"] == page]
-    corners = _find_corners(gray, edge_marks=any(bubble["kind"] == "mark" for bubble in page_bubbles))
-    warped = _warp(image, corners)
-    warped_gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
-    warped_gray = cv2.GaussianBlur(warped_gray, (3, 3), 0)
-    binary = cv2.adaptiveThreshold(
-        warped_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, round(40 * SCALE) | 1, 18
-    )
+    if prepared is None or prepared.edge_marks != any(bubble["kind"] == "mark" for bubble in page_bubbles):
+        prepared = PreparedSheet(data, bubbles, page)
+    warped, binary = prepared.warped, prepared.binary
 
     # 3-versiya titul: chet belgilari bo'yicha mahalliy tuzatish (egilgan qog'oz)
     offsets = _mark_offsets(binary, [bubble for bubble in page_bubbles if bubble["kind"] == "mark"])
@@ -518,7 +538,7 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1) -> dict:
             rows.setdefault(bubble["ref"], []).append(bubble)
     # Qatorlar ustun bo'yicha tepadan pastga: har biri eng yaqin tekislangan qatorning
     # siljishidan boshlab qidiriladi — qog'oz silliq egiladi, kuchli bo'rtish ham "kuzatiladi"
-    maps = _ResponseMaps(binary)
+    maps = prepared.maps
     row_shift: dict = {}
     aligned: list[tuple[float, float, tuple[float, float]]] = []
     for ref, row in sorted(rows.items(), key=lambda item: (round(item[1][0]["x"] / 40), -item[1][0]["y"])):

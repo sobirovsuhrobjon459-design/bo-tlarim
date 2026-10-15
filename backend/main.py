@@ -4664,7 +4664,7 @@ def _paper_test(db: Session, teacher: Teacher, test_id: int) -> Test:
 def scan_sheet(
     test_id: int, body: SheetScanIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
 ):
-    from .omr import ScanError, scan_answer_sheet  # og'ir kutubxona (OpenCV) — faqat kerak bo'lganda
+    from .omr import PreparedSheet, ScanError, scan_answer_sheet  # og'ir kutubxona (OpenCV) — faqat kerak bo'lganda
 
     test = _paper_test(db, teacher, test_id)
     bubbles: list[dict] = []
@@ -4681,7 +4681,8 @@ def scan_sheet(
     except ValueError:
         raise HTTPException(status_code=422, detail="Rasm buzilgan — qaytadan suratga oling")
     try:
-        result = scan_answer_sheet(image, bubbles, page=body.page)
+        prepared = PreparedSheet(image, bubbles, page=body.page)
+        result = scan_answer_sheet(image, bubbles, page=body.page, prepared=prepared)
         if test.sheet_version == 5 and body.page == 1 and result["sheet_number_status"] != "ok":
             # Oldin chop etilgan 3 xonali ID'li titul bo'lishi mumkin — shu ko'rinishda qayta o'qiladi
             old_bubbles: list[dict] = []
@@ -4689,7 +4690,8 @@ def scan_sheet(
                 mode=test.mode, key_questions=test.key_questions, questions=test.questions, title=test.title,
                 code=test.code, subject=test.subject, id=test.id, sheet_version=4,
             ), bubbles=old_bubbles, variants=variants or None)
-            old_result = scan_answer_sheet(image, old_bubbles, page=1)
+            # Burchak va chet belgilari ikkala titulda bir xil — tekislangan varaq qayta ishlatiladi
+            old_result = scan_answer_sheet(image, old_bubbles, page=1, prepared=prepared)
             if old_result["sheet_number_status"] == "ok":
                 result = old_result
     except ScanError as error:
