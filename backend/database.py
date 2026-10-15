@@ -566,6 +566,10 @@ class SchoolClass(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    # O'quvchi ID oralig'i — maktab admini belgilaydi (masalan 1001–1038). O'quvchilar shu
+    # oraliqdan ID oladi; oraliq belgilanmagan sinf o'quvchilarida ID bo'lmaydi.
+    code_start: Mapped[int | None] = mapped_column(default=None)
+    code_end: Mapped[int | None] = mapped_column(default=None)
     teacher_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)  # kim yaratgan
     curator_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
     name: Mapped[str] = mapped_column(String(100))
@@ -584,8 +588,8 @@ class ClassStudent(Base):
     class_id: Mapped[int] = mapped_column(ForeignKey("school_classes.id"), index=True)
     full_name: Mapped[str] = mapped_column(String(200))
     birth_date: Mapped[date | None] = mapped_column(default=None)
-    # O'quvchi ID — 4 xonali (1001, 1002 ...), maktab ichida takrorlanmaydi va
-    # o'quvchi chiqarilsa ham boshqaga berilmaydi. Titulga shu raqam bo'yaladi.
+    # O'quvchi ID — 4 xonali, sinfning ID oralig'idan (admin belgilaydi), maktab ichida
+    # takrorlanmaydi. Titulga shu raqam bo'yaladi.
     student_code: Mapped[int | None] = mapped_column(default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     removed_at: Mapped[datetime | None] = mapped_column(default=None)
@@ -989,6 +993,13 @@ class StudentAnswersIn(BaseModel):
 
     answers: dict[str, str] = {}
     variant: str | None = Field(default=None, pattern="^[A-D]$")
+
+
+class ClassCodeRangeIn(BaseModel):
+    """Sinf o'quvchilari ID oralig'i: 1001 dan 1038 gacha."""
+
+    start: int = Field(ge=1000, le=9999)
+    end: int = Field(ge=1000, le=9999)
 
 
 class TestClassesIn(BaseModel):

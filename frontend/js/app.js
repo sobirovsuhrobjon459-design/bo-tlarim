@@ -1777,6 +1777,58 @@ function initials(name) {
   return escapeHtml(((parts[0] || "?").charAt(0) + (parts[1] || "").charAt(0)).toUpperCase());
 }
 
+// Admin: sinf o'quvchilari uchun ID oralig'ini belgilash (masalan 1001–1038)
+function openCodeRangeSheet(schoolClass) {
+  const count = schoolClass.students.length;
+  const start = schoolClass.code_start || "";
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 6px">🆔 O'quvchilar ID oralig'i</h3>
+    <p class="subtitle" style="margin:0 0 10px">${escapeHtml(schoolClass.name)} — ${count} ta o'quvchi. O'quvchilar ro'yxatdagi
+      tartibda shu oraliqdan ID oladi; keyin qo'shilganlar keyingi bo'sh raqamni oladi.</p>
+    <div class="row-between" style="gap:10px">
+      <div style="flex:1">
+        <label class="field-label" for="code-start">Boshlanishi</label>
+        <input class="input" id="code-start" type="number" inputmode="numeric" min="1000" max="9999" placeholder="1001" value="${start}" />
+      </div>
+      <div style="flex:1">
+        <label class="field-label" for="code-end">Oxiri</label>
+        <input class="input" id="code-end" type="number" inputmode="numeric" min="1000" max="9999"
+          placeholder="${count ? 1000 + count : 1038}" value="${schoolClass.code_end || ""}" />
+      </div>
+    </div>
+    <p class="subtitle" id="code-hint" style="margin:6px 0 0"></p>
+    <button class="btn" id="code-save" style="margin-top:12px">💾 Saqlash</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+  const startInput = sheet.querySelector("#code-start");
+  const endInput = sheet.querySelector("#code-end");
+  const hint = sheet.querySelector("#code-hint");
+  const update = () => {
+    const from = Number(startInput.value);
+    if (from >= 1000 && !endInput.dataset.touched) endInput.value = Math.min(9999, from + Math.max(count, 1) - 1);
+    const to = Number(endInput.value);
+    hint.textContent = from && to >= from ? `${to - from + 1} ta raqam · ${count} ta o'quvchi` : "";
+  };
+  startInput.addEventListener("input", update);
+  endInput.addEventListener("input", () => {
+    endInput.dataset.touched = "1";
+    update();
+  });
+  update();
+  sheet.querySelector("#code-save").addEventListener(
+    "click",
+    guarded(async () => {
+      const updated = await api(`/api/classes/${schoolClass.id}/student-codes`, {
+        method: "PUT",
+        body: { start: Number(startInput.value), end: Number(endInput.value) },
+      });
+      showToast(`✅ ID'lar berildi: ${updated.code_start}–${updated.code_end}`);
+      close();
+      openClassTab(updated, "students");
+    })
+  );
+}
+
 function renderClassStudentsTab(schoolClass) {
   currentClass = schoolClass;
   const rows = schoolClass.students.length
@@ -1807,12 +1859,22 @@ function renderClassStudentsTab(schoolClass) {
     <div data-class-tab="students">
       ${classHeader(schoolClass, schoolClass.can_manage ? `<button type="button" class="share-pill" id="add-student-pill">➕ Qo'shish</button>` : "")}
       <p class="subtitle" style="margin:0 0 10px">${schoolClass.students.length} ta o'quvchi · % — barcha darslar bo'yicha qatnashish (bugungi emas)</p>
+      ${
+        schoolClass.is_director
+          ? `<button type="button" class="btn btn-ghost" id="code-range-button" style="margin:0 0 12px">🆔 ${
+              schoolClass.code_start ? `ID oralig'i: ${schoolClass.code_start}–${schoolClass.code_end} (o'zgartirish)` : "ID kiritish (oraliq belgilash)"
+            }</button>`
+          : schoolClass.code_start
+            ? `<p class="subtitle" style="margin:0 0 10px">🆔 ID oralig'i: ${schoolClass.code_start}–${schoolClass.code_end}</p>`
+            : ""
+      }
       <div class="student-list">${rows}</div>
     </div>
   `);
 
   wireClassTab(schoolClass, "students");
   document.getElementById("add-student-pill")?.addEventListener("click", () => openAddStudentSheet(schoolClass));
+  document.getElementById("code-range-button")?.addEventListener("click", () => openCodeRangeSheet(schoolClass));
   document.querySelectorAll("[data-student-id]").forEach((card) => {
     card.addEventListener(
       "click",

@@ -4488,45 +4488,53 @@ def test_offline_testga_excel_dan_oquvchilar():
     assert client.post(f"/api/teacher/tests/{opened['id']}/students/import", json=payload, headers=as_user(555)).status_code == 400
 
 
-def test_maktab_oquvchilariga_4_xonali_id():
+def test_sinf_id_oraligini_admin_belgilaydi():
     from backend.database import ClassStudent
 
     reset_database()
-    school_class = _school_with_class()
+    school_class = _school_with_class()  # 10/2, 701 — maktab admini
     cid = school_class["id"]
-    client.post(f"/api/classes/{cid}/students", json={"full_name": "Islom Karimov"}, headers=as_user(701))
-    added = client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Ali Valiyev", "Zuhra Karimova"]},
-                        headers=as_user(701)).json()["class"]
-    assert [(s["code"], s["full_name"]) for s in added["students"]] == [
-        (1001, "Islom Karimov"), (1002, "Ali Valiyev"), (1003, "Zuhra Karimova")], added["students"]
-
-    # Boshqa sinf — shu maktabda raqamlash davom etadi (takrorlanmaydi)
-    other = client.post("/api/classes", json={"name": "11-A"}, headers=as_user(701)).json()
-    other_view = client.post(f"/api/classes/{other['id']}/students", json={"full_name": "Jasur Umarov"},
-                             headers=as_user(701)).json()
-    assert other_view["students"][0]["code"] == 1004
-
-    # Chiqarilgan o'quvchining ID'si boshqaga berilmaydi
-    zuhra = added["students"][2]["id"]
-    assert client.delete(f"/api/classes/{cid}/students/{zuhra}", headers=as_user(701)).status_code == 200
-    after = client.post(f"/api/classes/{cid}/students", json={"full_name": "Yangi Bola"}, headers=as_user(701)).json()
-    assert [s["code"] for s in after["students"]] == [1001, 1002, 1005], after["students"]
-
-    profile = client.get(f"/api/classes/{cid}/students/{after['students'][0]['id']}", headers=as_user(701)).json()
-    assert profile["code"] == 1001
-
-    # Avval (ID'siz) qo'shilgan o'quvchilar ochilganda ID oladi
-    with SessionLocal() as session:
-        session.add(ClassStudent(class_id=cid, full_name="Eski Oquvchi"))
-        session.commit()
+    client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Ali Valiyev", "Zuhra Karimova", "Islom Karimov"]},
+                headers=as_user(701))
     view = client.get(f"/api/classes/{cid}", headers=as_user(701)).json()
-    assert {s["full_name"]: s["code"] for s in view["students"]}["Eski Oquvchi"] == 1006
+    assert [s["code"] for s in view["students"]] == [None, None, None]  # oraliq yo'q — ID yo'q
+    assert view["code_start"] is None
 
-    # Boshqa maktab — o'z raqamlashi 1001 dan
-    other_school = _school_with_class(801)
-    first = client.post(f"/api/classes/{other_school['id']}/students", json={"full_name": "Birinchi"},
-                        headers=as_user(801)).json()
-    assert first["students"][0]["code"] == 1001
+    url = f"/api/classes/{cid}/student-codes"
+    assert client.put(url, json={"start": 1001, "end": 1002}, headers=as_user(701)).status_code == 422  # 3 ta o'quvchi
+    assert client.put(url, json={"start": 1005, "end": 1001}, headers=as_user(701)).status_code == 422
+    ranged = client.put(url, json={"start": 1001, "end": 1038}, headers=as_user(701))
+    assert ranged.status_code == 200, ranged.text
+    assert [s["code"] for s in ranged.json()["students"]] == [1001, 1002, 1003], ranged.json()["students"]
+    assert (ranged.json()["code_start"], ranged.json()["code_end"]) == (1001, 1038)
+
+    # Yangi o'quvchi — oraliqdagi keyingi bo'sh raqam
+    after = client.post(f"/api/classes/{cid}/students", json={"full_name": "Yangi Bola"}, headers=as_user(701)).json()
+    assert after["students"][-1]["code"] == 1004
+
+    # Boshqa sinf: kesishgan oraliq rad etiladi
+    other = client.post("/api/classes", json={"name": "Iqtisod-1"}, headers=as_user(701)).json()
+    client.post(f"/api/classes/{other['id']}/students", json={"full_name": "Jasur Umarov"}, headers=as_user(701))
+    clash = client.put(f"/api/classes/{other['id']}/student-codes", json={"start": 1030, "end": 1060}, headers=as_user(701))
+    assert clash.status_code == 409 and "10/2" in clash.json()["detail"], clash.text
+    ok = client.put(f"/api/classes/{other['id']}/student-codes", json={"start": 1101, "end": 1142}, headers=as_user(701))
+    assert ok.json()["students"][0]["code"] == 1101
+
+    # Oraliqni o'zgartirish — o'quvchilar yangi oraliqdan qayta raqamlanadi
+    moved = client.put(url, json={"start": 2001, "end": 2050}, headers=as_user(701)).json()
+    assert [s["code"] for s in moved["students"]] == [2001, 2002, 2003, 2004]
+
+    # Faqat admin/direktor belgilaydi
+    _set_name(709, "Oddiy", "Oqituvchi")
+    assert client.put(url, json={"start": 3001, "end": 3010}, headers=as_user(709)).status_code in (403, 404)
+
+    # Oraliq belgilanmagan sinfdagi eski avtomatik ID'lar tozalanadi
+    third = client.post("/api/classes", json={"name": "Huquq"}, headers=as_user(701)).json()
+    with SessionLocal() as session:
+        session.add(ClassStudent(class_id=third["id"], full_name="Eski", student_code=1001))
+        session.commit()
+    main._clear_unassigned_student_codes()
+    assert client.get(f"/api/classes/{third['id']}", headers=as_user(701)).json()["students"][0]["code"] is None
 
 
 def test_skaner_natijasi_sinf_natijalariga_yoziladi():
@@ -4536,7 +4544,9 @@ def test_skaner_natijasi_sinf_natijalariga_yoziladi():
     cid = school_class["id"]
     client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Ali Valiyev", "Zuhra Karimova"]}, headers=as_user(701))
     other = client.post("/api/classes", json={"name": "11-A"}, headers=as_user(701)).json()
-    client.post(f"/api/classes/{other['id']}/students", json={"full_name": "Jasur Umarov"}, headers=as_user(701))  # ID 1003
+    client.post(f"/api/classes/{other['id']}/students", json={"full_name": "Jasur Umarov"}, headers=as_user(701))
+    client.put(f"/api/classes/{cid}/student-codes", json={"start": 1001, "end": 1038}, headers=as_user(701))
+    client.put(f"/api/classes/{other['id']}/student-codes", json={"start": 1101, "end": 1110}, headers=as_user(701))  # Jasur 1101
 
     test = create_test(701, enrollment_type="closed")
     base = f"/api/teacher/tests/{test['id']}"
@@ -4563,9 +4573,9 @@ def test_skaner_natijasi_sinf_natijalariga_yoziladi():
                                                                headers=as_user(701)).json()["scores"]}
     assert scores == {"Zuhra Karimova": 2, "Ali Valiyev": None}, scores
 
-    # Biriktirilmagan sinf o'quvchisi (Jasur, 1003) ham ID bo'yicha topiladi va o'z sinfiga yoziladi
+    # Biriktirilmagan sinf o'quvchisi (Jasur, 1101) ham ID bo'yicha topiladi va o'z sinfiga yoziladi
     jasur = client.post(f"{base}/scan", json={"image_base64": _sheet_photo(test["id"], {
-        "id0": "1", "id1": "0", "id2": "0", "id3": "3", 1: "B"})}, headers=as_user(701)).json()
+        "id0": "1", "id1": "1", "id2": "0", "id3": "1", 1: "B"})}, headers=as_user(701)).json()
     assert jasur["match"]["name"] == "Jasur Umarov", jasur
     client.post(f"{base}/scan/save", json={"attempt_id": jasur["match"]["id"], "answers": jasur["answers"]},
                 headers=as_user(701))

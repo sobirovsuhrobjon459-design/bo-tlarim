@@ -132,6 +132,7 @@ from .database import (
     StudentAnswersIn,
     StudentNamesIn,
     TestClassesIn,
+    ClassCodeRangeIn,
     TestVariant,
     VariantKeyIn,
     Teacher,
@@ -192,7 +193,7 @@ def _add_missing_columns() -> None:
         },
         "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)"},
         "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)"},
-        "school_classes": {"curator_user_id": "INTEGER"},
+        "school_classes": {"curator_user_id": "INTEGER", "code_start": "INTEGER", "code_end": "INTEGER"},
         "private_schools": {"monthly_fee": "INTEGER DEFAULT 0"},
         "class_students": {"discount_percent": "INTEGER DEFAULT 0", "student_code": "INTEGER"},
         "class_tests": {"source_test_id": "INTEGER"},
@@ -256,6 +257,20 @@ def _upgrade_sheet_versions() -> None:
 
 
 _upgrade_sheet_versions()
+
+
+def _clear_unassigned_student_codes() -> None:
+    """ID oralig'i belgilanmagan sinflarda ID bo'lmaydi (ilgari avtomatik berilganlari olinadi)."""
+    with engine.begin() as connection:
+        tables = inspect(engine).get_table_names()
+        if "class_students" in tables and "school_classes" in tables:
+            connection.execute(text(
+                "UPDATE class_students SET student_code = NULL WHERE student_code IS NOT NULL AND class_id IN "
+                "(SELECT id FROM school_classes WHERE code_start IS NULL)"
+            ))
+
+
+_clear_unassigned_student_codes()
 
 
 # ---------- Promo kodlar ----------
@@ -6944,32 +6959,31 @@ STUDENT_CODE_FIRST, STUDENT_CODE_LAST = 1001, 9999
 
 def _assign_student_codes(db: Session, school_id: int) -> None:
     """
-    Maktabning ID'siz o'quvchilariga 4 xonali ID beradi (qo'shilish tartibida, 1001 dan).
-    Chiqarilgan o'quvchilarning ID'si ham band hisoblanadi — boshqaga berilmaydi.
+    ID oralig'i belgilangan sinflarda ID'siz (yangi qo'shilgan) o'quvchilarga oraliqdagi
+    keyingi bo'sh raqamni beradi. Oraliq tugagan bo'lsa — ID'siz qoladi (admin oraliqni kengaytiradi).
     """
 
     # Bir vaqtda ikki o'qituvchi o'quvchi qo'shsa ham ID takrorlanmasin
     db.execute(select(PrivateSchool.id).where(PrivateSchool.id == school_id).with_for_update())
-    students = db.scalars(
-        select(ClassStudent)
+    rows = db.execute(
+        select(ClassStudent, SchoolClass)
         .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
         .where(SchoolClass.school_id == school_id)
         .order_by(ClassStudent.id)
     ).all()
-    taken = {student.student_code for student in students if student.student_code}
-    missing = [student for student in students if not student.student_code]
-    if not missing:
-        return
-    next_code = max(taken, default=STUDENT_CODE_FIRST - 1) + 1
-    for student in missing:
-        if next_code > STUDENT_CODE_LAST:  # 9999 dan oshsa — bo'sh qolgan raqamlardan
-            next_code = next((code for code in range(STUDENT_CODE_FIRST, STUDENT_CODE_LAST + 1) if code not in taken), None)
-            if next_code is None:
-                break
-        student.student_code = next_code
-        taken.add(next_code)
-        next_code += 1
-    db.commit()
+    taken = {student.student_code for student, _ in rows if student.student_code}
+    changed = False
+    for student, school_class in rows:
+        if student.student_code or student.removed_at or school_class.code_start is None:
+            continue
+        code = next((value for value in range(school_class.code_start, school_class.code_end + 1) if value not in taken), None)
+        if code is None:
+            continue
+        student.student_code = code
+        taken.add(code)
+        changed = True
+    if changed:
+        db.commit()
 
 
 def _active_students(school_class: SchoolClass) -> list[ClassStudent]:
@@ -7039,6 +7053,8 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
         "can_manage": bool(member and _can_manage_class(school_class, member)),
         # ⚙️ sozlamalar (nom, kurator, o'chirish) — admin va direktor
         "is_director": bool(member and _can_delete_classes(member)),
+        "code_start": school_class.code_start,
+        "code_end": school_class.code_end,
         "can_delete": bool(member and _can_delete_classes(member)),
     }
     if with_details:
@@ -7176,6 +7192,61 @@ def delete_class(class_id: int, user: User = Depends(get_current_user), db: Sess
     school_class.deleted_at = utcnow()
     db.commit()
     return {"ok": True}
+
+
+@app.put("/api/classes/{class_id}/student-codes")
+def set_class_code_range(
+    class_id: int, body: ClassCodeRangeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """
+    Maktab admini (direktor) sinf o'quvchilari uchun ID oralig'ini belgilaydi, masalan 1001–1038.
+    O'quvchilar ro'yxatdagi tartibda shu oraliqdan ID oladi; boshqa sinf oralig'i bilan kesishmaydi.
+    """
+
+    school_class = _director_class(db, user, class_id)
+    if body.end < body.start:
+        raise HTTPException(status_code=422, detail="Oraliq oxiri boshidan kichik bo'lmasin")
+    students = _active_students(school_class)
+    size = body.end - body.start + 1
+    if size < len(students):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Sinfda {len(students)} ta o'quvchi bor — oraliqda kamida {len(students)} ta raqam bo'lsin "
+                   f"({body.start}–{body.start + len(students) - 1})",
+        )
+    others = db.scalars(
+        select(SchoolClass).where(
+            SchoolClass.school_id == school_class.school_id, SchoolClass.id != school_class.id,
+            SchoolClass.deleted_at.is_(None), SchoolClass.code_start.is_not(None),
+        )
+    ).all()
+    for other in others:
+        if body.start <= other.code_end and other.code_start <= body.end:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Bu oraliq «{other.name}» sinfi oralig'i ({other.code_start}–{other.code_end}) bilan kesishadi",
+            )
+
+    school_class.code_start, school_class.code_end = body.start, body.end
+    for student in school_class.students:  # chiqarilganlar ham oraliqdan tashqarida qolmasin
+        student.student_code = None
+    db.flush()
+    for offset, student in enumerate(students):
+        student.student_code = body.start + offset
+        # Offline imtihon ro'yxatlaridagi (hali skanerlanmagan) raqam ham yangilanadi
+        for attempt in db.scalars(
+            select(Attempt).where(Attempt.class_student_id == student.id, Attempt.status == "pending")
+        ).all():
+            clash = db.scalar(
+                select(Attempt.id).where(
+                    Attempt.test_id == attempt.test_id, Attempt.id != attempt.id, Attempt.sheet_number == student.student_code
+                )
+            )
+            if not clash:
+                attempt.sheet_number = student.student_code
+    db.commit()
+    db.refresh(school_class)
+    return _class_view(db, school_class, with_details=True, member=_active_membership(db, user))
 
 
 @app.post("/api/classes/{class_id}/students")
