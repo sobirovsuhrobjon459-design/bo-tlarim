@@ -4316,6 +4316,8 @@ def test_ilovada_oqilgan_varaq_natijasi_qabul_qilinadi():
     assert {"mark", "code", "id", "single"} <= kinds, kinds
     assert layout["page_count"] == 1 and isinstance(layout["sheet_code"], int)
     assert layout["old_bubbles"], "5-versiya testda eski 3 xonali ID'li titul tuzilishi ham beriladi"
+    # Natija ekranida ranglash uchun kalit (yozma savol yo'q — u titulda bo'yalmaydi)
+    assert layout["keys"] == {"A": {"1": "B", "2": "C", "3": "A,C"}}, layout["keys"]
 
     result = {"answers": {"1": "B"}, "questions": [{"ref": 1, "label": "1", "kind": "single", "options": ["A", "B"],
                                                     "chosen": "B", "status": "ok"}],

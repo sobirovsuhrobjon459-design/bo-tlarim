@@ -7943,6 +7943,7 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
 
   const codeBits = new Map();
   const questions = new Map();
+  const positions = {}; // {savol: {harf: [x, y, r]}} — qatorga moslangan joyi (punktlarda)
   const idRows = new Map();
   const variantRatios = new Map();
   for (const bubble of pageBubbles) {
@@ -7977,6 +7978,8 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
     if (!questions.has(bubble.ref)) {
       questions.set(bubble.ref, { ref: bubble.ref, label: bubble.label, kind: bubble.kind, options: [], ratios: {} });
     }
+    if (!positions[bubble.ref]) positions[bubble.ref] = {};
+    positions[bubble.ref][bubble.letter] = [x + dx, y + dy, bubble.r];
     const entry = questions.get(bubble.ref);
     entry.options.push(bubble.letter);
     entry.ratios[bubble.letter] = ratio;
@@ -8028,6 +8031,7 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
     sheet_number_status: numberStatus,
     variant,
     sheet_code: sheetCode,
+    positions,
   };
 }
 
@@ -8039,6 +8043,77 @@ async function loadScanLayout(testId) {
     scanLayouts.set(testId, layout);
   }
   return scanLayouts.get(testId);
+}
+
+// Natija ekrani: tekislangan varaq, doirachalar ustida rang — yashil (to'g'ri), qizil (xato),
+// sariq (to'g'ri javob, o'quvchi belgilamagan); shubhali qator — to'q sariq ramka
+function paintSheetView(canvas, view, questions, key) {
+  const { sheet, positions } = view;
+  if (!view.base) {
+    view.base = document.createElement("canvas");
+    view.base.width = sheet.W;
+    view.base.height = sheet.H;
+    const context = view.base.getContext("2d");
+    const image = context.createImageData(sheet.W, sheet.H);
+    for (let i = 0; i < sheet.warped.length; i += 1) {
+      image.data[i * 4] = image.data[i * 4 + 1] = image.data[i * 4 + 2] = sheet.warped[i];
+      image.data[i * 4 + 3] = 255;
+    }
+    context.putImageData(image, 0, 0);
+  }
+  canvas.width = sheet.W;
+  canvas.height = sheet.H;
+  const draw = canvas.getContext("2d");
+  draw.drawImage(view.base, 0, 0);
+  const colors = { right: "#16a34a", wrong: "#dc2626", missed: "#eab308" };
+  for (const question of questions) {
+    const spots = positions[question.ref];
+    if (!spots) continue;
+    const right = new Set((key[String(question.ref)] || "").split(",").filter(Boolean));
+    const chosen = new Set((question.chosen || "").split(",").filter(Boolean));
+    for (const [letter, [x, y, r]] of Object.entries(spots)) {
+      const color = chosen.has(letter)
+        ? right.size && !right.has(letter)
+          ? colors.wrong
+          : colors.right
+        : right.has(letter)
+          ? colors.missed
+          : null;
+      if (!color) continue;
+      draw.beginPath();
+      draw.arc(x * READ_SCALE, y * READ_SCALE, r * READ_SCALE * 1.1, 0, Math.PI * 2);
+      draw.globalAlpha = 0.45;
+      draw.fillStyle = color;
+      draw.fill();
+      draw.globalAlpha = 1;
+      draw.lineWidth = 3;
+      draw.strokeStyle = color;
+      draw.stroke();
+    }
+    if (question.status === "multiple" || question.status === "unsure") {
+      const points = Object.values(spots);
+      const r = points[0][2] * READ_SCALE * 1.6;
+      const xs = points.map(([x]) => x * READ_SCALE);
+      const ys = points.map(([, y]) => y * READ_SCALE);
+      draw.lineWidth = 3;
+      draw.strokeStyle = "#f97316";
+      draw.strokeRect(Math.min(...xs) - r, Math.min(...ys) - r, Math.max(...xs) - Math.min(...xs) + 2 * r, Math.max(...ys) - Math.min(...ys) + 2 * r);
+    }
+  }
+}
+
+// Varaqdagi belgilanadigan savollar bo'yicha: to'g'ri / xato / bo'sh (kalit bo'yicha)
+function sheetScore(questions, key) {
+  const score = { right: 0, wrong: 0, empty: 0 };
+  for (const question of questions) {
+    const right = key[String(question.ref)];
+    if (!right) continue;
+    const chosen = (question.chosen || "").split(",").filter(Boolean).sort().join(",");
+    if (!chosen) score.empty += 1;
+    else if (chosen === right) score.right += 1;
+    else score.wrong += 1;
+  }
+  return score;
 }
 
 // Ism yozilgan katak (tekislangan varaqdan) — o'qituvchi ismni ko'rib yozishi uchun
@@ -8202,12 +8277,13 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     try {
       const scan = await api(`/api/teacher/tests/${testId}/scan/result`, {
         method: "POST",
-        body: { ...result, page, name_image: page === 1 ? sheetNameImage(sheet) : null },
+        body: { ...result, positions: undefined, page, name_image: page === 1 ? sheetNameImage(sheet) : null },
       });
       stopLiveScan();
       liveSession = liveSession || { count: 0 };
       const merged = mergeScan(scan, collected);
       merged.live = true;
+      merged.sheetViews = { ...(merged.sheetViews || {}), [page]: { sheet, positions: result.positions } };
       renderScanReview(testId, test, merged);
     } catch (error) {
       if (!video.isConnected) return;
@@ -8388,11 +8464,22 @@ function renderScanReview(testId, test, scan) {
       </div>`;
   };
 
+  const layout = scanLayouts.get(testId);
+  const views = layout?.keys && scan.sheetViews ? Object.entries(scan.sheetViews) : [];
+  const currentKey = () => layout.keys[scan.variant || "A"] || layout.keys.A || {};
+
   showPage(`
     <div class="page-header">
       <button class="back-button" type="button" data-action="back-scan" style="margin:0">←</button>
       <h2 style="margin:0;flex:1">Varaq tekshiruvi</h2>
     </div>
+    ${
+      views.length
+        ? `<p class="subtitle" id="scan-score" style="margin:0 4px 8px;font-size:15px"></p>
+           ${views.map(([page]) => `<canvas class="scan-sheet-canvas" data-page="${page}" style="width:100%;display:block;border-radius:12px;margin:0 0 10px;background:#fff"></canvas>`).join("")}
+           <p class="subtitle" style="margin:0 4px 12px;font-size:12px">🟢 to'g'ri · 🔴 xato · 🟡 to'g'ri javob (belgilanmagan) · 🟧 tekshiring</p>`
+        : ""
+    }
     <div class="card" style="cursor:default;display:block">
       ${scanNumberHtml(scan)}
       <p class="subtitle" style="margin:0 0 8px">Varaqdagi ism:</p>
@@ -8430,6 +8517,20 @@ function renderScanReview(testId, test, scan) {
   `);
   markUnsaved();
 
+  // Rangli varaq va hisob — javob yoki variant tuzatilganda qayta chiziladi
+  const paintViews = () => {
+    if (!views.length) return;
+    const key = currentKey();
+    document.querySelectorAll(".scan-sheet-canvas").forEach((canvas) => {
+      paintSheetView(canvas, scan.sheetViews[canvas.dataset.page], scan.questions, key);
+    });
+    const score = sheetScore(scan.questions, key);
+    const total = score.right + score.wrong + score.empty;
+    document.getElementById("scan-score").innerHTML =
+      `🎯 <b>${score.right} / ${total}</b> to'g'ri · ❌ ${score.wrong} xato · ⬜ ${score.empty} bo'sh`;
+  };
+  paintViews();
+
   const select = document.getElementById("scan-student-select");
   const nameInput = document.getElementById("scan-student-name");
   select?.addEventListener("change", () => {
@@ -8437,6 +8538,7 @@ function renderScanReview(testId, test, scan) {
   });
   wireVariantChips((name) => {
     scan.variant = name;
+    paintViews();
   });
   // Raqam bo'yicha topilgan o'quvchi emas — boshqasini tanlash
   document.getElementById("scan-other-student")?.addEventListener("click", (event) => {
@@ -8465,6 +8567,7 @@ function renderScanReview(testId, test, scan) {
       row.classList.remove("is-flagged");
       row.querySelector(".scan-note")?.remove();
       row.querySelectorAll(".scan-option").forEach((item) => item.classList.toggle("selected", chosen.has(item.dataset.letter)));
+      paintViews();
     });
   });
 
@@ -8508,7 +8611,7 @@ function renderScanReview(testId, test, scan) {
       liveSession.count += 1;
       liveSession.lastSignature = sheetSignature(scan);
     }
-    renderScanSaved(testId, test, result, scan.live);
+    renderScanSaved(testId, test, result, scan.live, scan);
   };
   document.getElementById("scan-save")?.addEventListener("click", guarded(save));
 
@@ -8535,13 +8638,17 @@ function scanNumberHtml(scan) {
   return "";
 }
 
-function renderScanSaved(testId, test, result, live = false) {
+function renderScanSaved(testId, test, result, live = false, scan = null) {
+  // Ilovada o'qilgan varaq — rangli ko'rinishi ham (qaysi javob to'g'ri/xato)
+  const layout = scanLayouts.get(testId);
+  const views = layout?.keys && scan?.sheetViews ? Object.entries(scan.sheetViews) : [];
   showPage(`
-    <div style="text-align:center;padding-top:30px">
+    <div style="text-align:center;padding-top:${views.length ? 8 : 30}px">
       <div class="result-number">✅</div>
       <h2 style="margin:6px 0">${escapeHtml(result.name)}</h2>
       <p class="subtitle">${result.correct} / ${result.total} to'g'ri · <b>${result.percent}%</b></p>
     </div>
+    ${views.map(([page]) => `<canvas class="scan-sheet-canvas" data-page="${page}" style="width:100%;display:block;border-radius:12px;margin:0 0 10px;background:#fff"></canvas>`).join("")}
     <button class="btn" id="scan-next-sheet" style="margin-top:20px">📷 Keyingi varaqni skanerlash</button>
     <button class="btn btn-ghost" id="scan-done">⬅️ Testga qaytish</button>
   `);
@@ -8553,13 +8660,19 @@ function renderScanSaved(testId, test, result, live = false) {
       return renderTestDetail(testId);
     })
   );
-  // Jonli skanerda — 1,5 soniyadan keyin kamera o'zi keyingi varaqqa ochiladi
+  if (views.length) {
+    const key = layout.keys[scan.variant || "A"] || layout.keys.A || {};
+    document.querySelectorAll(".scan-sheet-canvas").forEach((canvas) => {
+      paintSheetView(canvas, scan.sheetViews[canvas.dataset.page], scan.questions, key);
+    });
+  }
+  // Jonli skanerda kamera o'zi keyingi varaqqa ochiladi (rangli varaq bo'lsa — ko'rib olishga vaqt)
   if (live) {
     const next = document.getElementById("scan-next-sheet");
     next.textContent = "📷 Keyingi varaq (kamera ochilmoqda…)";
     setTimeout(() => {
       if (next.isConnected) next.click();
-    }, 1500);
+    }, views.length ? 2500 : 1500);
   }
 }
 

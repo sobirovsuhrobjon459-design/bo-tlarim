@@ -4845,7 +4845,21 @@ def scan_layout(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
         "old_bubbles": _old_id_bubbles(test, variants) if test.sheet_version == 5 else None,
         "page_count": page_count,
         "sheet_code": sheet_code(test),
+        # Natija ekranida doirachalarni ranglash uchun (yashil — to'g'ri, qizil — xato, sariq — to'g'ri javob)
+        "keys": {name: _sheet_key(db, test, name) for name in (variants or ["A"])},
     }
+
+
+def _sheet_key(db: Session, test: Test, variant: str) -> dict[str, str]:
+    """Varaqdagi belgilanadigan savollarning to'g'ri javobi: {savol_kaliti: "B"} (ko'p javobli — "A,C")."""
+
+    key = {}
+    for _, kind, _, correct, ref in _answer_sheet_items(test, _key_override(db, test, variant)):
+        if kind == "text" or not correct:
+            continue
+        letters = sorted({part.strip().upper() for part in correct.split(",") if part.strip()})
+        key[str(ref)] = ",".join(letters) if kind == "multi" else correct.strip().upper()
+    return key
 
 
 @app.post("/api/teacher/tests/{test_id}/scan/result")
