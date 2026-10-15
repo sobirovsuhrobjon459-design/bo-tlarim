@@ -932,8 +932,8 @@ function wireTeacherChrome(activeTab) {
 function testBadges(test) {
   const enrollment =
     test.enrollment_type === "closed"
-      ? `<span class="badge badge-purple">Yopiq test</span>`
-      : `<span class="badge badge-blue">Ochiq test</span>`;
+      ? `<span class="badge badge-purple">Offline test</span>`
+      : `<span class="badge badge-blue">Online test</span>`;
 
   const status =
     test.status === "closed"
@@ -4765,7 +4765,7 @@ function renderTestFound(test) {
   let blockedMessage = "";
 
   if (test.enrollment_type === "closed") {
-    blockedMessage = "🔒 Bu yopiq test — javoblarni o'qituvchining o'zi kiritadi.";
+    blockedMessage = "🔒 Bu offline test — javoblarni o'qituvchining o'zi kiritadi.";
   } else if (test.start_time && now < parseUtc(test.start_time)) {
     blockedMessage = `⏳ Test hali boshlanmagan. Boshlanish vaqti: ${formatDateTime(test.start_time)}`;
   } else if (test.end_time && now > parseUtc(test.end_time)) {
@@ -6469,8 +6469,8 @@ function renderNewTestForm(testType, draft = {}) {
 
     <p class="field-label" style="margin-top:14px">Testga qo'shilish turi</p>
     <div class="row-between" id="enrollment-toggle" data-value="${draft.enrollment || "open"}" style="gap:8px;margin-bottom:6px">
-      <button type="button" class="btn ${draft.enrollment === "closed" ? "btn-ghost" : ""}" id="enrollment-open-button" style="flex:1">Ochiq test</button>
-      <button type="button" class="btn ${draft.enrollment === "closed" ? "" : "btn-ghost"}" id="enrollment-closed-button" style="flex:1">Yopiq test</button>
+      <button type="button" class="btn ${draft.enrollment === "closed" ? "btn-ghost" : ""}" id="enrollment-open-button" style="flex:1">Online test</button>
+      <button type="button" class="btn ${draft.enrollment === "closed" ? "" : "btn-ghost"}" id="enrollment-closed-button" style="flex:1">Offline test</button>
     </div>
     <p class="subtitle" id="enrollment-hint" style="margin-bottom:16px">
       ${
@@ -6639,7 +6639,7 @@ function renderNewTestForm(testType, draft = {}) {
   enrollmentClosedButton.addEventListener("click", () => {
     // Pullik test faqat ochiq bo'ladi — o'quvchi o'zi to'lab, o'zi ishlaydi.
     if (document.getElementById("price-toggle").dataset.value === "paid") {
-      showToast("Pullik test faqat ochiq bo'ladi");
+      showToast("Pullik test faqat online bo'ladi");
       return;
     }
     enrollmentToggle.dataset.value = "closed";

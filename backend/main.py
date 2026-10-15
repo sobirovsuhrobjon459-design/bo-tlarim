@@ -2361,7 +2361,7 @@ def _check_enrollment(test: Test) -> None:
 
     if test.enrollment_type == "closed":
         raise HTTPException(
-            status_code=403, detail="Bu yopiq test — javoblarni o'qituvchining o'zi kiritadi"
+            status_code=403, detail="Bu offline test — javoblarni o'qituvchining o'zi kiritadi"
         )
     if test.status == "closed":
         raise HTTPException(status_code=403, detail="Test yakunlangan")
@@ -3786,7 +3786,7 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
     if body.mode == "full" and not body.questions:
         raise HTTPException(status_code=422, detail="Kamida bitta savol kiriting")
     if body.price > 0 and body.enrollment_type == "closed":
-        raise HTTPException(status_code=422, detail="Pullik testlar faqat ochiq test sifatida yaratiladi")
+        raise HTTPException(status_code=422, detail="Pullik testlar faqat online test sifatida yaratiladi")
     if body.price > 0 and not _can_sell_tests(teacher):
         raise HTTPException(status_code=422, detail="Pullik test uchun avval karta raqamingizni kiriting")
 
@@ -3912,7 +3912,7 @@ def broadcast_test(test_id: int, teacher: Teacher = Depends(get_current_teacher)
     if test.status != "active" or (test.end_time and test.end_time <= utcnow()):
         raise HTTPException(status_code=409, detail="Test yakunlangan — e'lon qilib bo'lmaydi")
     if test.enrollment_type == "closed":
-        raise HTTPException(status_code=409, detail="Yopiq testga o'quvchilar o'zi kira olmaydi — e'lon qilib bo'lmaydi")
+        raise HTTPException(status_code=409, detail="Offline testga o'quvchilar o'zi kira olmaydi — e'lon qilib bo'lmaydi")
     if not BOT_TOKEN:
         raise HTTPException(status_code=503, detail="Bot ulanmagan")
 
@@ -4088,7 +4088,7 @@ def add_students(
 
     test = _get_own_test(db, teacher, test_id)
     if test.enrollment_type != "closed":
-        raise HTTPException(status_code=400, detail="O'quvchi qo'shish faqat yopiq testlarda")
+        raise HTTPException(status_code=400, detail="O'quvchi qo'shish faqat offline testlarda")
     if test.status == "closed":
         raise HTTPException(status_code=400, detail="Test yakunlangan")
 
@@ -4420,7 +4420,7 @@ def _paper_test(db: Session, teacher: Teacher, test_id: int) -> Test:
     # Titul faqat oflayn (yopiq) testda — onlayn testda o'quvchi javobini ilovada belgilaydi
     test = _get_own_test(db, teacher, test_id)
     if test.enrollment_type != "closed":
-        raise HTTPException(status_code=400, detail="Varaq skanerlash faqat oflayn (yopiq) testlarda")
+        raise HTTPException(status_code=400, detail="Varaq skanerlash faqat offline testlarda")
     if test.status == "closed":
         raise HTTPException(status_code=400, detail="Test yakunlangan — avval qayta oching")
     return test
@@ -4638,7 +4638,7 @@ def update_test_price(
     # Yaratishdagi qoidalar bu yerda ham amal qiladi — aks holda bepul yopiq
     # testni keyin pullik qilib, to'lov tizimini chetlab o'tish mumkin bo'lardi.
     if body.price > 0 and test.enrollment_type == "closed":
-        raise HTTPException(status_code=422, detail="Yopiq testni pullik qilib bo'lmaydi")
+        raise HTTPException(status_code=422, detail="Offline testni pullik qilib bo'lmaydi")
     if body.price > 0 and not _can_sell_tests(teacher):
         raise HTTPException(status_code=422, detail="Pullik test uchun avval karta raqamingizni kiriting")
 
