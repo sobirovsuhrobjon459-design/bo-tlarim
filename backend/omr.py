@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import io
 import itertools
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
@@ -39,6 +40,22 @@ UNSURE_RATIO = 0.25
 # Ism yoziladigan katakning chap qismi (birinchi sahifa, punktlarda, tepadan sanalganda):
 # ism odatda shu yerda — telefonda kattaroq, o'qilishi oson ko'rinadi
 NAME_BOX = (120, 80, 420, 100)
+
+
+@dataclass(frozen=True)
+class SheetPage:
+    """
+    Titul o'lchami (punktlarda). 6-versiya ixcham titul A4 ning 1/3, 1/2 qismi yoki to'liq A4
+    bo'ladi (savollar soniga qarab) — burchak va chet belgilari shu titulning o'z chetida.
+    """
+
+    width: float = PAGE_WIDTH
+    height: float = PAGE_HEIGHT
+    edge_marks: int = EDGE_MARKS
+    name_box: bool = True  # ism yoziladigan katak bor (ixcham titulda yo'q)
+
+
+A4_PAGE = SheetPage()
 
 
 class ScanError(Exception):
@@ -90,7 +107,7 @@ def _corner_candidates(gray: np.ndarray) -> list[tuple[float, float, float]]:
     return candidates
 
 
-def _edge_marks_score(gray: np.ndarray, points: np.ndarray) -> float:
+def _edge_marks_score(gray: np.ndarray, points: np.ndarray, sheet: SheetPage = A4_PAGE) -> float:
     """
     3-versiya titulda burchaklar orasida chap va o'ng chetda 10 tadan kvadrat bor.
     To'rtta nuqta haqiqatan varaq burchaklari bo'lsa, shu kvadratlar aynan kutilgan
@@ -98,23 +115,23 @@ def _edge_marks_score(gray: np.ndarray, points: np.ndarray) -> float:
     """
 
     page_corners = np.array([
-        (CORNER_OFFSET, CORNER_OFFSET), (PAGE_WIDTH - CORNER_OFFSET, CORNER_OFFSET),
-        (PAGE_WIDTH - CORNER_OFFSET, PAGE_HEIGHT - CORNER_OFFSET), (CORNER_OFFSET, PAGE_HEIGHT - CORNER_OFFSET),
+        (CORNER_OFFSET, CORNER_OFFSET), (sheet.width - CORNER_OFFSET, CORNER_OFFSET),
+        (sheet.width - CORNER_OFFSET, sheet.height - CORNER_OFFSET), (CORNER_OFFSET, sheet.height - CORNER_OFFSET),
     ], np.float32)
     matrix = cv2.getPerspectiveTransform(page_corners, points)
-    step = (PAGE_HEIGHT - 2 * CORNER_OFFSET) / (EDGE_MARKS + 1)
-    sides = (CORNER_OFFSET, PAGE_WIDTH - CORNER_OFFSET)
-    marks = [(x, CORNER_OFFSET + index * step) for index in range(1, EDGE_MARKS + 1) for x in sides]
+    step = (sheet.height - 2 * CORNER_OFFSET) / (sheet.edge_marks + 1)
+    sides = (CORNER_OFFSET, sheet.width - CORNER_OFFSET)
+    marks = [(x, CORNER_OFFSET + index * step) for index in range(1, sheet.edge_marks + 1) for x in sides]
     # Belgilar orasi butunlay oq bo'lishi kerak (doirachalar ustuni bunday emas — u yerda qatorlar zich)
     gaps = [(x, CORNER_OFFSET + (index + part) * step)
-            for index in range(EDGE_MARKS + 1) for part in (0.3, 0.5, 0.7) for x in sides]
+            for index in range(sheet.edge_marks + 1) for part in (0.3, 0.5, 0.7) for x in sides]
     # Tepadagi ikki burchak orasi ham bo'sh (sarlavha pastroqda)
-    gaps += [(CORNER_OFFSET + 30 + index * (PAGE_WIDTH - 2 * CORNER_OFFSET - 60) / 11, CORNER_OFFSET)
+    gaps += [(CORNER_OFFSET + 30 + index * (sheet.width - 2 * CORNER_OFFSET - 60) / 11, CORNER_OFFSET)
              for index in range(12)]
     projected = cv2.perspectiveTransform(np.array([marks + gaps + page_corners.tolist()], np.float32), matrix)[0]
 
     side_px = (np.linalg.norm(points[3] - points[0]) + np.linalg.norm(points[2] - points[1])) / 2
-    radius = max(1, round(EDGE_MARK_SIZE / 2 * 0.6 * side_px / (PAGE_HEIGHT - 2 * CORNER_OFFSET)))
+    radius = max(1, round(EDGE_MARK_SIZE / 2 * 0.6 * side_px / (sheet.height - 2 * CORNER_OFFSET)))
     height, width = gray.shape
 
     def window(x: float, y: float) -> np.ndarray:
@@ -134,7 +151,8 @@ def _edge_marks_score(gray: np.ndarray, points: np.ndarray) -> float:
     return hits / (len(mark_values) + len(gap_values))
 
 
-def _marked_edges(gray: np.ndarray, candidates: list[tuple[float, float, float]]) -> list[tuple]:
+def _marked_edges(gray: np.ndarray, candidates: list[tuple[float, float, float]],
+                  sheet: SheetPage = A4_PAGE) -> list[tuple]:
     """
     Varaqning chap/o'ng cheti bo'lishi mumkin bo'lgan dog'lar juftlari: orasida 10 ta
     chet belgisi teng oraliqda qatorlashib turadi. Kadrda qayerda bo'lishidan qat'i nazar
@@ -151,7 +169,7 @@ def _marked_edges(gray: np.ndarray, candidates: list[tuple[float, float, float]]
     bottom = np.where(swap, first, second)
     length = np.hypot(*(points[bottom, :2] - points[top, :2]).T)
     radius = (points[top, 2] + points[bottom, 2]) / 2
-    expected = radius * (PAGE_HEIGHT - 2 * CORNER_OFFSET) / CORNER_RADIUS / 1.2  # radius ~ 1,2 x yarim tomon
+    expected = radius * (sheet.height - 2 * CORNER_OFFSET) / CORNER_RADIUS / 1.2  # radius ~ 1,2 x yarim tomon
     spread = np.abs(points[top, 2] - points[bottom, 2]) / np.maximum(points[top, 2], points[bottom, 2])
     keep = (spread <= 0.45) & (length >= expected * 0.45) & (length <= expected * 2.2)
     top, bottom, radius = top[keep], bottom[keep], radius[keep]
@@ -169,7 +187,7 @@ def _marked_edges(gray: np.ndarray, candidates: list[tuple[float, float, float]]
         # Perspektiva: varaqning yaqinroq uchi kattaroq ko'rinadi — belgilar orasi ham shunga qarab
         # o'zgaradi. Uchlaridagi dog'lar o'lchamidan taxmin qilinadi (u -> t proyektiv moslik).
         near = np.sqrt(points[top[group], 2] / points[bottom[group], 2])[:, None]
-        steps = EDGE_MARKS + 1
+        steps = sheet.edge_marks + 1
 
         def sample(image: np.ndarray, u: np.ndarray) -> np.ndarray:
             t = u[None, :] * near / ((1 - u[None, :]) + u[None, :] * near)
@@ -182,13 +200,13 @@ def _marked_edges(gray: np.ndarray, candidates: list[tuple[float, float, float]]
         jitter = np.linspace(-0.15, 0.15, 5)
         mark_u = (np.arange(1, steps)[:, None] + jitter[None, :]).ravel() / steps
         gap_u = (np.arange(steps)[:, None] + np.array([0.35, 0.5, 0.65])[None, :]).ravel() / steps
-        marks = sample(darkest, mark_u).reshape(len(start), EDGE_MARKS, len(jitter)).min(axis=2)
+        marks = sample(darkest, mark_u).reshape(len(start), sheet.edge_marks, len(jitter)).min(axis=2)
         gaps = sample(average, gap_u)
         ends = np.minimum(sample(average, np.array([0.0])), sample(average, np.array([1.0])))[:, 0]
         paper = np.median(gaps, axis=1)
         threshold = (paper + ends) / 2
         score = ((marks < threshold[:, None]).sum(axis=1) + (gaps > threshold[:, None]).sum(axis=1)) / (
-            EDGE_MARKS + gaps.shape[1]
+            sheet.edge_marks + gaps.shape[1]
         )
         score[paper - ends < 30] = 0
         for index in np.nonzero(score >= EDGE_SCORE)[0]:
@@ -210,11 +228,12 @@ def _nearly_rectangular(points: np.ndarray) -> bool:
     return True
 
 
-def _corners_from_edges(gray: np.ndarray, candidates: list[tuple[float, float, float]]) -> np.ndarray | None:
+def _corners_from_edges(gray: np.ndarray, candidates: list[tuple[float, float, float]],
+                        sheet: SheetPage = A4_PAGE) -> np.ndarray | None:
     """Ikkita belgili chetdan (chap va o'ng) varaq; chet belgilari hammasi joyida bo'lgani olinadi."""
 
-    expected_ratio = (PAGE_WIDTH - 2 * CORNER_OFFSET) / (PAGE_HEIGHT - 2 * CORNER_OFFSET)
-    edges = _marked_edges(gray, candidates)
+    expected_ratio = (sheet.width - 2 * CORNER_OFFSET) / (sheet.height - 2 * CORNER_OFFSET)
+    edges = _marked_edges(gray, candidates, sheet)
     shapes = []
     for (_, top_a, bottom_a), (_, top_b, bottom_b) in itertools.combinations(edges, 2):
         if {top_a, bottom_a} & {top_b, bottom_b}:
@@ -244,7 +263,7 @@ def _corners_from_edges(gray: np.ndarray, candidates: list[tuple[float, float, f
     # Kattasidan boshlab: haqiqiy burchaklar varaqdagi hamma narsani o'rab turadi
     best_score, best = 0.0, None
     for _, points in sorted(shapes, key=lambda shape: -shape[0]):
-        score = _edge_marks_score(gray, points)
+        score = _edge_marks_score(gray, points, sheet)
         if score > best_score:
             best_score, best = score, points
         if score >= 0.95:
@@ -252,7 +271,7 @@ def _corners_from_edges(gray: np.ndarray, candidates: list[tuple[float, float, f
     return best if best_score >= MARKS_SCORE else None
 
 
-def _find_corners(gray: np.ndarray, edge_marks: bool = False) -> np.ndarray:
+def _find_corners(gray: np.ndarray, edge_marks: bool = False, sheet: SheetPage = A4_PAGE) -> np.ndarray:
     """
     Varaqning 4 ta burchak nuqtasi (chap-tepa, o'ng-tepa, o'ng-past, chap-past).
 
@@ -267,7 +286,7 @@ def _find_corners(gray: np.ndarray, edge_marks: bool = False) -> np.ndarray:
     if len(candidates) < 4:
         raise ScanError(_CORNERS_HINT)
     if edge_marks:
-        found = _corners_from_edges(gray, candidates)
+        found = _corners_from_edges(gray, candidates, sheet)
         if found is not None:
             return found
     height, width = gray.shape
@@ -276,7 +295,7 @@ def _find_corners(gray: np.ndarray, edge_marks: bool = False) -> np.ndarray:
         sorted(candidates, key=lambda c, corner=corner: (c[0] - corner[0]) ** 2 + (c[1] - corner[1]) ** 2)[:8]
         for corner in image_corners
     ]
-    expected_ratio = (PAGE_WIDTH - 2 * CORNER_OFFSET) / (PAGE_HEIGHT - 2 * CORNER_OFFSET)
+    expected_ratio = (sheet.width - 2 * CORNER_OFFSET) / (sheet.height - 2 * CORNER_OFFSET)
     min_side = min(width, height) * 0.25
 
     # Shakli A4'ga yetarlicha mos kombinatsiyalar orasidan ENG KATTA maydonlisi olinadi:
@@ -308,7 +327,7 @@ def _find_corners(gray: np.ndarray, edge_marks: bool = False) -> np.ndarray:
     if edge_marks:
         best_score, best = 0.0, None
         for _, points in shapes[:300]:
-            score = _edge_marks_score(gray, points)
+            score = _edge_marks_score(gray, points, sheet)
             if score > best_score:
                 best_score, best = score, points
         if best_score >= MARKS_SCORE:
@@ -324,18 +343,18 @@ _CORNERS_HINT = (
 )
 
 
-def _warp(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+def _warp(image: np.ndarray, corners: np.ndarray, sheet: SheetPage = A4_PAGE) -> np.ndarray:
     target = np.array(
         [
             (CORNER_OFFSET, CORNER_OFFSET),
-            (PAGE_WIDTH - CORNER_OFFSET, CORNER_OFFSET),
-            (PAGE_WIDTH - CORNER_OFFSET, PAGE_HEIGHT - CORNER_OFFSET),
-            (CORNER_OFFSET, PAGE_HEIGHT - CORNER_OFFSET),
+            (sheet.width - CORNER_OFFSET, CORNER_OFFSET),
+            (sheet.width - CORNER_OFFSET, sheet.height - CORNER_OFFSET),
+            (CORNER_OFFSET, sheet.height - CORNER_OFFSET),
         ],
         dtype=np.float32,
     ) * SCALE
     matrix = cv2.getPerspectiveTransform(corners, target)
-    size = (round(PAGE_WIDTH * SCALE), round(PAGE_HEIGHT * SCALE))
+    size = (round(sheet.width * SCALE), round(sheet.height * SCALE))
     return cv2.warpPerspective(image, matrix, size, flags=cv2.INTER_LINEAR, borderValue=(255, 255, 255))
 
 
@@ -428,7 +447,8 @@ def _inner_fill(maps: "_ResponseMaps", x: float, y: float, radius: float) -> flo
     return float(_sample(inner_map, x + dx.ravel(), y + dy.ravel()).max())
 
 
-def _mark_offsets(binary: np.ndarray, marks: list[dict]) -> dict[str, list[tuple[float, float, float]]]:
+def _mark_offsets(binary: np.ndarray, marks: list[dict],
+                  sheet: SheetPage = A4_PAGE) -> dict[str, list[tuple[float, float, float]]]:
     """
     Chetdagi tekislash belgilarining haqiqiy joyi: kutilgan joy atrofida qora kvadrat
     qidiriladi. Natija: {"left": [(y, dx, dy), ...], "right": [...]} — punktlarda.
@@ -437,7 +457,7 @@ def _mark_offsets(binary: np.ndarray, marks: list[dict]) -> dict[str, list[tuple
     offsets: dict[str, list[tuple[float, float, float]]] = {"left": [], "right": []}
     window = 9  # ±9 pt
     for mark in marks:
-        x, y = mark["x"], PAGE_HEIGHT - mark["y"]
+        x, y = mark["x"], sheet.height - mark["y"]
         x0, y0 = round((x - window) * SCALE), round((y - window) * SCALE)
         patch = binary[max(0, y0): round((y + window) * SCALE), max(0, x0): round((x + window) * SCALE)]
         if patch.size == 0:
@@ -483,13 +503,14 @@ class PreparedSheet:
     qaytadan hisoblanmaydi — eng og'ir ish shu yerda.
     """
 
-    def __init__(self, data: bytes, bubbles: list[dict], page: int = 1) -> None:
+    def __init__(self, data: bytes, bubbles: list[dict], page: int = 1, sheet: SheetPage = A4_PAGE) -> None:
         image = _load_image(data)
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         page_bubbles = [bubble for bubble in bubbles if bubble["page"] == page]
         self.edge_marks = any(bubble["kind"] == "mark" for bubble in page_bubbles)
-        corners = _find_corners(gray, edge_marks=self.edge_marks)
-        self.warped = _warp(image, corners)
+        self.sheet = sheet
+        corners = _find_corners(gray, edge_marks=self.edge_marks, sheet=sheet)
+        self.warped = _warp(image, corners, sheet)
         warped_gray = cv2.cvtColor(self.warped, cv2.COLOR_BGR2GRAY)
         warped_gray = cv2.GaussianBlur(warped_gray, (3, 3), 0)
         self.binary = cv2.adaptiveThreshold(
@@ -499,7 +520,7 @@ class PreparedSheet:
 
 
 def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
-                      prepared: PreparedSheet | None = None) -> dict:
+                      prepared: PreparedSheet | None = None, sheet: SheetPage = A4_PAGE) -> dict:
     """
     Surat + varaqdagi doirachalar ro'yxati (generate_answer_sheet_pdf'dan) → o'qilgan javoblar.
 
@@ -513,13 +534,14 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
     """
 
     page_bubbles = [bubble for bubble in bubbles if bubble["page"] == page]
-    if prepared is None or prepared.edge_marks != any(bubble["kind"] == "mark" for bubble in page_bubbles):
-        prepared = PreparedSheet(data, bubbles, page)
+    if (prepared is None or prepared.sheet != sheet
+            or prepared.edge_marks != any(bubble["kind"] == "mark" for bubble in page_bubbles)):
+        prepared = PreparedSheet(data, bubbles, page, sheet)
     warped, binary = prepared.warped, prepared.binary
 
     # 3-versiya titul: chet belgilari bo'yicha mahalliy tuzatish (egilgan qog'oz)
-    offsets = _mark_offsets(binary, [bubble for bubble in page_bubbles if bubble["kind"] == "mark"])
-    left_x, right_x = CORNER_OFFSET, PAGE_WIDTH - CORNER_OFFSET
+    offsets = _mark_offsets(binary, [bubble for bubble in page_bubbles if bubble["kind"] == "mark"], sheet)
+    left_x, right_x = CORNER_OFFSET, sheet.width - CORNER_OFFSET
 
     def corrected(x: float, y: float) -> tuple[float, float]:
         ldx, ldy = _interpolate(offsets["left"], y)
@@ -542,7 +564,7 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
     row_shift: dict = {}
     aligned: list[tuple[float, float, tuple[float, float]]] = []
     for ref, row in sorted(rows.items(), key=lambda item: (round(item[1][0]["x"] / 40), -item[1][0]["y"])):
-        centers = [corrected(bubble["x"], PAGE_HEIGHT - bubble["y"]) for bubble in row]
+        centers = [corrected(bubble["x"], sheet.height - bubble["y"]) for bubble in row]
         x0, y0 = centers[0]
         # Eng yaqin tekislangan qatordan boshlanadi; u uzoq bo'lsa — kengroq qidiriladi
         nearest = min(aligned, key=lambda item: (item[0] - x0) ** 2 + (item[1] - y0) ** 2, default=None)
@@ -555,7 +577,7 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
         if bubble["kind"] == "mark":
             continue
         # PDF koordinatasi pastdan, rasm esa tepadan sanaladi
-        x, y = corrected(bubble["x"], PAGE_HEIGHT - bubble["y"])
+        x, y = corrected(bubble["x"], sheet.height - bubble["y"])
         if bubble["kind"] == "code":
             code_bits[int(bubble["letter"])] = _fill_ratio(binary, x, y, bubble["r"], square=True)
             continue
@@ -593,7 +615,7 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
         result.append({**entry, "chosen": chosen, "status": status})
 
     name_image = None
-    if page == 1:
+    if page == 1 and sheet.name_box:
         x1, y1, x2, y2 = (round(value * SCALE) for value in NAME_BOX)
         crop = warped[max(0, y1 - 6): y2 + 6, max(0, x1 - 6): x2 + 6]
         ok, png = cv2.imencode(".png", crop)

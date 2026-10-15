@@ -1698,7 +1698,8 @@ def sheet_code(test: Test) -> int:
     return (test.id * 2654435761) % (1 << SHEET_CODE_BITS) or 1
 
 
-def _draw_sheet_marks(sheet, test: Test, width: float, height: float, bubbles: list | None, page: int) -> None:
+def _draw_sheet_marks(sheet, test: Test, width: float, height: float, bubbles: list | None, page: int,
+                      edge_marks: int = SHEET_EDGE_MARKS) -> None:
     """
     3-versiya: burchaklarda kvadratlar, chap/o'ng chetda tekislash belgilari va pastda
     imtihon kodi. Skaner varaqni burchaklar bo'yicha tekislab, har qatorni eng yaqin
@@ -1710,9 +1711,9 @@ def _draw_sheet_marks(sheet, test: Test, width: float, height: float, bubbles: l
                  (SHEET_CORNER, SHEET_CORNER), (width - SHEET_CORNER, SHEET_CORNER)]:
         sheet.rect(x - half, y - half, SHEET_CORNER_SIZE, SHEET_CORNER_SIZE, stroke=0, fill=1)
 
-    step = (height - 2 * SHEET_CORNER) / (SHEET_EDGE_MARKS + 1)
+    step = (height - 2 * SHEET_CORNER) / (edge_marks + 1)
     edge_half = SHEET_EDGE_SIZE / 2
-    for index in range(1, SHEET_EDGE_MARKS + 1):
+    for index in range(1, edge_marks + 1):
         y = SHEET_CORNER + index * step
         for side, x in (("left", SHEET_CORNER), ("right", width - SHEET_CORNER)):
             sheet.rect(x - edge_half, y - edge_half, SHEET_EDGE_SIZE, SHEET_EDGE_SIZE, stroke=0, fill=1)
@@ -2032,6 +2033,186 @@ def _draw_answer_sheet(sheet, test: Test, with_answers: bool, bubbles: list | No
         sheet.drawCentredString(width / 2, 44, "To'g'ri javob doirachasini to'liq bo'yang.")
 
 
+# 6-versiya — ixcham titul: ism yoziladigan maydon va yozma savollar yo'q, faqat doirachalar
+# (ID, variant, savollar). O'lchami savollar soniga qarab A4 ning 1/3, 1/2 qismi yoki to'liq A4 —
+# bitta A4 ga 3 ta yoki 2 ta titul sig'adi (qog'oz tejaladi). Burchak va chet belgilari har
+# titulning o'z chetida, shuning uchun qirqilgan titul ham, qirqilmagani ham o'qiladi.
+COMPACT_HEIGHTS = (A4[1] / 3, A4[1] / 2, A4[1])
+COMPACT_LEFT = 48
+COMPACT_TOP = 58      # sarlavha ostidan (titul tepasidan, punktlarda)
+COMPACT_BOTTOM = 46   # pastki imtihon kodi kataklari ustida
+COMPACT_ROW = 15
+COMPACT_RADIUS = 5.0
+COMPACT_GAP = 15
+COMPACT_DIGIT_STEP = 12.5
+COMPACT_ID_GAP = 16
+COMPACT_EDGE_STEP = (A4[1] - 2 * SHEET_CORNER) / (SHEET_EDGE_MARKS + 1)  # A4 dagidek oraliq
+
+
+def _compact_plan(test: Test, variants: list[str] | None = None, key_override: dict | None = None) -> dict:
+    """Ixcham titul: o'lchami, chet belgilari soni va savollarning sahifa/ustunlarga bo'linishi."""
+
+    items = [item for item in _answer_sheet_items(test, key_override) if item[1] != "text"]
+    width = A4[0]
+    options = max((item[2] for item in items), default=4)
+    column_width = 26 + options * COMPACT_GAP + 6
+    id_right = COMPACT_LEFT + 18 + 3 * COMPACT_ID_GAP + COMPACT_RADIUS  # 4 ta ID ustuni
+    questions_x = id_right + (30 if variants else 0) + 14
+    right = width - COMPACT_LEFT
+
+    def capacity(height: float, first: bool) -> tuple[int, int]:
+        rows = int((height - COMPACT_TOP - COMPACT_BOTTOM - 12) // COMPACT_ROW)
+        columns = int((right - (questions_x if first else COMPACT_LEFT)) // column_width)
+        return rows, columns
+
+    for height in COMPACT_HEIGHTS:
+        rows, columns = capacity(height, True)
+        if rows * columns >= len(items):
+            break
+    pages = []
+    rest = items
+    while rest or not pages:
+        rows, columns = capacity(height, not pages)
+        chunk, rest = rest[: rows * columns], rest[rows * columns:]
+        # Ustunlar teng to'ldiriladi (25 ta savol 4 ustunda: 7, 7, 7, 4)
+        per_column = max(1, math.ceil(len(chunk) / columns)) if not rest and not pages else rows
+        pages.append([chunk[index: index + per_column] for index in range(0, len(chunk), per_column)])
+    return {
+        "width": width,
+        "height": height,
+        "edge_marks": max(2, round((height - 2 * SHEET_CORNER) / COMPACT_EDGE_STEP) - 1),
+        "pages": pages,
+        "column_width": column_width,
+        "questions_x": questions_x,
+        "id_right": id_right,
+    }
+
+
+def _sheet_geometry(test: Test, variants: list[str] | None = None) -> dict | None:
+    """Skaner uchun titul o'lchami (ixcham titulda); oddiy A4 titulda — None."""
+
+    if (test.sheet_version or 1) < 6:
+        return None
+    plan = _compact_plan(test, variants)
+    return {"width": plan["width"], "height": plan["height"], "edge_marks": plan["edge_marks"], "name_box": False}
+
+
+def _draw_compact_card(sheet, test: Test, plan: dict, page: int, with_answers: bool, student: tuple | None,
+                       bubbles: list | None, variants: list[str] | None, key_variant: str | None) -> None:
+    """Ixcham titulning bitta sahifasi — (0, 0) titulning chap-past burchagi."""
+
+    width, height = plan["width"], plan["height"]
+
+    def top(distance: float) -> float:
+        """Titul tepasidan sanalgan masofa → PDF koordinatasi (pastdan)."""
+        return height - distance
+
+    def note(item: dict) -> None:
+        if bubbles is not None:
+            bubbles.append({"page": page, **item})
+
+    _draw_sheet_marks(sheet, test, width, height, bubbles, page, plan["edge_marks"])
+
+    # Sarlavha — bitta qator
+    sheet.setFont(REPORT_FONT_BOLD, 9)
+    sheet.drawString(COMPACT_LEFT, top(47), test.title[:48] + (f" — {page}-sahifa" if page > 1 else ""))
+    sheet.setFont(REPORT_FONT, 8)
+    if with_answers:
+        info = f"JAVOBLAR KALITI{f' — {key_variant} variant' if key_variant else ''}  ·  Kod {test.code}"
+    elif student:
+        info = f"{student[1][:40]}  ·  Kod {test.code}"
+    else:
+        info = f"Kod {test.code}  ·  {test.subject}  ·  doirachani to'liq bo'yang"
+    sheet.drawRightString(width - COMPACT_LEFT, top(47), info)
+
+    rows_top = COMPACT_TOP + 12  # birinchi qator tepasi
+    if page == 1:
+        # O'quvchi ID: 4 ustun, har ustunda 0–9; tepada raqam yoziladigan katakchalar
+        digits = f"{student[0]:04d}" if student else None
+        first_x = COMPACT_LEFT + 18
+        sheet.setFont("Helvetica-Bold", 8)
+        sheet.drawString(COMPACT_LEFT, top(COMPACT_TOP + 7), "ID")
+        for column in range(4):
+            x = first_x + column * COMPACT_ID_GAP
+            sheet.rect(x - 6, top(COMPACT_TOP + 10), 12, 12, stroke=1, fill=0)
+            if digits:
+                sheet.setFont("Helvetica-Bold", 9)
+                sheet.drawCentredString(x, top(COMPACT_TOP + 7), digits[column])
+        for digit in range(10):
+            center = top(rows_top + 6.5 + digit * COMPACT_DIGIT_STEP)
+            sheet.setFont("Helvetica-Bold", 7)
+            sheet.drawCentredString(first_x - 13, center - 2.5, str(digit))
+            for column in range(4):
+                x = first_x + column * COMPACT_ID_GAP
+                filled = digits is not None and int(digits[column]) == digit
+                sheet.circle(x, center, COMPACT_RADIUS, stroke=1, fill=1 if filled else 0)
+                note({"ref": f"id{column}", "label": "ID", "kind": "id", "letter": str(digit),
+                      "x": x, "y": center, "r": COMPACT_RADIUS})
+        if variants:
+            # Variant — ID yonida ustun bo'lib (harfi doiracha o'ng tomonida)
+            student_variant = student[2] if student and len(student) > 2 else None
+            x = plan["id_right"] + 14
+            sheet.setFont("Helvetica-Bold", 7)
+            sheet.drawCentredString(x + 3, top(COMPACT_TOP + 7), "Var.")
+            for index, name in enumerate(variants):
+                center = top(rows_top + 6.5 + index * COMPACT_DIGIT_STEP)
+                sheet.circle(x, center, COMPACT_RADIUS, stroke=1, fill=1 if student_variant == name else 0)
+                sheet.drawString(x + COMPACT_RADIUS + 2, center - 2.5, name)
+                note({"ref": "variant", "label": "Variant", "kind": "variant", "letter": name,
+                      "x": x, "y": center, "r": COMPACT_RADIUS})
+
+    start_x = plan["questions_x"] if page == 1 else COMPACT_LEFT
+    for index, column in enumerate(plan["pages"][page - 1]):
+        column_x = start_x + index * plan["column_width"]
+        bubble_x = column_x + 26 + COMPACT_RADIUS
+        sheet.setFont("Helvetica-Bold", 7)
+        for option in range(max(item[2] for item in column)):
+            sheet.drawCentredString(bubble_x + option * COMPACT_GAP, top(COMPACT_TOP + 7), chr(65 + option))
+        for row, (label, question_type, options, correct, ref) in enumerate(column):
+            center = top(rows_top + (row + 0.5) * COMPACT_ROW)
+            sheet.setFont("Helvetica", 8)
+            sheet.drawRightString(column_x + 20, center - 3, f"{label}.")
+            correct_letters = set((correct or "").split(","))
+            for option in range(options):
+                letter = chr(65 + option)
+                x = bubble_x + option * COMPACT_GAP
+                filled = with_answers and letter in correct_letters
+                sheet.circle(x, center, COMPACT_RADIUS, stroke=1, fill=1 if filled else 0)
+                note({"ref": ref, "label": label, "kind": question_type, "letter": letter,
+                      "x": x, "y": center, "r": COMPACT_RADIUS})
+
+
+def _draw_compact_sheets(sheet, test: Test, with_answers: bool, bubbles: list | None, students: list | None,
+                         variants: list[str] | None, key_override: dict | None, key_variant: str | None) -> None:
+    """Ixcham titullar: bitta A4 ga sig'ganicha (ostma-ost, orasida qirqish chizig'i)."""
+
+    plan = _compact_plan(test, variants, key_override)
+    page_count = len(plan["pages"])
+    per_sheet = int(A4[1] // (plan["height"] - 1)) if page_count == 1 else 1
+    # Bo'sh titul — A4 to'liq to'ldiriladi (3 yoki 2 nusxa); ismli — har o'quvchiga bittadan
+    cards = list(students) if students else [None] * (1 if with_answers else per_sheet)
+    slot = 0
+    for index, student in enumerate(cards):
+        for page in range(1, page_count + 1):
+            if slot == per_sheet:
+                sheet.showPage()
+                slot = 0
+            offset = A4[1] - (slot + 1) * plan["height"]
+            sheet.saveState()
+            sheet.translate(0, offset)
+            _draw_compact_card(sheet, test, plan, page, with_answers, student,
+                               bubbles if index == 0 else None, variants, key_variant)
+            sheet.restoreState()
+            if slot:
+                # Qirqish chizig'i — titullar orasida
+                sheet.saveState()
+                sheet.setDash(4, 4)
+                sheet.setStrokeColor(colors.grey)
+                sheet.line(12, offset + plan["height"], A4[0] - 12, offset + plan["height"])
+                sheet.restoreState()
+            slot += 1
+
+
 def generate_answer_sheet_pdf(test: Test, with_answers: bool = False, bubbles: list | None = None,
                               students: list[tuple] | None = None, variants: list[str] | None = None,
                               key_override: dict | None = None, key_variant: str | None = None) -> bytes:
@@ -2052,6 +2233,10 @@ def generate_answer_sheet_pdf(test: Test, with_answers: bool = False, bubbles: l
 
     buffer = io.BytesIO()
     sheet = pdf_canvas.Canvas(buffer, pagesize=A4)
+    if (test.sheet_version or 1) >= 6:
+        _draw_compact_sheets(sheet, test, with_answers, bubbles, students, variants, key_override, key_variant)
+        sheet.save()
+        return buffer.getvalue()
     for index, student in enumerate(students or [None]):
         if index:
             sheet.showPage()
@@ -4733,7 +4918,7 @@ def _paper_test(db: Session, teacher: Teacher, test_id: int) -> Test:
 def scan_sheet(
     test_id: int, body: SheetScanIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
 ):
-    from .omr import PreparedSheet, ScanError, scan_answer_sheet  # og'ir kutubxona (OpenCV) — faqat kerak bo'lganda
+    from .omr import A4_PAGE, PreparedSheet, ScanError, SheetPage, scan_answer_sheet  # og'ir kutubxona (OpenCV) — faqat kerak bo'lganda
 
     test = _paper_test(db, teacher, test_id)
     variants, bubbles, page_count = _sheet_layout(test, db, body.page)
@@ -4743,8 +4928,10 @@ def scan_sheet(
     except ValueError:
         raise HTTPException(status_code=422, detail="Rasm buzilgan — qaytadan suratga oling")
     try:
-        prepared = PreparedSheet(image, bubbles, page=body.page)
-        result = scan_answer_sheet(image, bubbles, page=body.page, prepared=prepared)
+        geometry = _sheet_geometry(test, variants)
+        shape = SheetPage(**geometry) if geometry else A4_PAGE  # ixcham titul — o'z o'lchami bilan
+        prepared = PreparedSheet(image, bubbles, page=body.page, sheet=shape)
+        result = scan_answer_sheet(image, bubbles, page=body.page, prepared=prepared, sheet=shape)
         if test.sheet_version == 5 and body.page == 1 and result["sheet_number_status"] != "ok":
             # Oldin chop etilgan 3 xonali ID'li titul bo'lishi mumkin — shu ko'rinishda qayta o'qiladi
             old_bubbles = _old_id_bubbles(test, variants)
@@ -4843,6 +5030,8 @@ def scan_layout(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
         "bubbles": bubbles,
         # 5-versiya testda oldin chop etilgan 3 xonali ID'li titul ham o'qilsin
         "old_bubbles": _old_id_bubbles(test, variants) if test.sheet_version == 5 else None,
+        # Ixcham titul (6-versiya): o'lchami va chet belgilari soni; A4 titulda — None
+        "sheet_page": _sheet_geometry(test, variants),
         "page_count": page_count,
         "sheet_code": sheet_code(test),
         # Natija ekranida doirachalarni ranglash uchun (yashil — to'g'ri, qizil — xato, sariq — to'g'ri javob)

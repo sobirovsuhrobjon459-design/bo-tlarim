@@ -6503,8 +6503,15 @@ function renderNewTestForm(testType, draft = {}) {
   const subject = typeSubjects.includes(draft.subject) ? draft.subject : typeSubjects[0];
   const subjectOptions = typeSubjects.map((item) => selectOption(item, item, subject)).join("");
 
+  // Offline test — mock emas: o'qituvchi savollar sonini o'zi kiritadi, hammasi A/B/C/D, yozmasiz
+  // (titul ixcham chiqadi — savollar soniga qarab bitta A4 ga 2–3 ta)
+  const offline = draft.enrollment === "closed" && !draft.paid;
   // Fan bo'yicha tuzilish faqat Rash testda (Milliy sertifikat mockida) qo'llanadi
-  const structure = type === "rash" ? subjectStructure(subject, preset) : { ...preset, options: {}, note: "" };
+  const structure = offline
+    ? { ...preset, testCount: "", optionCount: 4, textCount: 0, textParts: 1, partOverrides: {}, options: {}, note: "" }
+    : type === "rash"
+      ? subjectStructure(subject, preset)
+      : { ...preset, options: {}, note: "" };
   // Kalitdagi yozma javoblar ham fanga mos klaviatura bilan kiritiladi
   answerKeyboard = SUBJECT_PRESETS[subject]?.keyboard || "math";
 
@@ -6536,13 +6543,15 @@ function renderNewTestForm(testType, draft = {}) {
 
     <input class="input" id="field-title" placeholder="Test nomini kiriting" value="${escapeHtml(draft.title || "")}" />
 
-    <label class="field-label" for="field-type">Test turi</label>
-    <select class="input" id="field-type">
-      ${Object.entries(TEST_TYPES)
-        .map(([value, item]) => selectOption(value, item.label, type))
-        .join("")}
-    </select>
-    <p class="subtitle" style="margin:-6px 0 0">${preset.hint}</p>
+    <div style="display:${offline ? "none" : "block"}">
+      <label class="field-label" for="field-type">Test turi</label>
+      <select class="input" id="field-type">
+        ${Object.entries(TEST_TYPES)
+          .map(([value, item]) => selectOption(value, item.label, type))
+          .join("")}
+      </select>
+      <p class="subtitle" style="margin:-6px 0 0">${preset.hint}</p>
+    </div>
 
     <label class="field-label" for="field-subject">Fanni tanlang</label>
     <select class="input" id="field-subject">
@@ -6570,7 +6579,7 @@ function renderNewTestForm(testType, draft = {}) {
     <input class="input" id="field-end-time" type="datetime-local" value="${draft.endTime || ""}" />
 
     <label class="field-label" for="field-duration">Davomiyligi (daqiqa)</label>
-    <input class="input" id="field-duration" type="number" min="1" value="${draft.duration ?? preset.duration}" />
+    <input class="input" id="field-duration" type="number" min="1" value="${draft.duration ?? (offline ? 60 : preset.duration)}" />
   `;
 
   const channelSettings = `
@@ -6597,21 +6606,22 @@ function renderNewTestForm(testType, draft = {}) {
   `;
 
   const testCount = draft.testCount ?? structure.testCount;
-  const optionCount = draft.optionCount ?? preset.optionCount;
-  const textCount = draft.textCount ?? structure.textCount;
+  const optionCount = offline ? 4 : draft.optionCount ?? preset.optionCount;
+  const textCount = offline ? 0 : draft.textCount ?? structure.textCount;
 
   const questionsSection = `
     <div class="panel">
       <div class="row-between" style="gap:8px;align-items:flex-end">
         <div style="flex:1">
-          <label class="field-label" for="field-test-count">Test savollari</label>
-          <input class="input" id="field-test-count" type="number" min="0" max="300" value="${testCount}" style="margin:0" />
+          <label class="field-label" for="field-test-count">${offline ? "Nechta test savoli?" : "Test savollari"}</label>
+          <input class="input" id="field-test-count" type="number" min="0" max="300" value="${testCount}"
+                 ${offline ? `placeholder="masalan 25"` : ""} style="margin:0" />
         </div>
-        <div style="flex:1">
+        <div style="flex:1;display:${offline ? "none" : "block"}">
           <label class="field-label" for="field-option-count">Variantlar</label>
           <input class="input" id="field-option-count" type="number" min="2" max="8" value="${optionCount}" style="margin:0" />
         </div>
-        <div style="flex:1;display:${preset.allowText ? "block" : "none"}">
+        <div style="flex:1;display:${preset.allowText && !offline ? "block" : "none"}">
           <label class="field-label" for="field-text-count">Yozma</label>
           <input class="input" id="field-text-count" type="number" min="0" max="300" value="${textCount}" style="margin:0" />
         </div>
@@ -6652,7 +6662,7 @@ function renderNewTestForm(testType, draft = {}) {
 
   // Fan almashtirilganda, o'sha fandagi Milliy sertifikat tuzilishi qo'llanadi
   subjectSelect.addEventListener("change", () => {
-    if (type !== "rash") return;
+    if (type !== "rash" || offline) return;
 
     const next = subjectStructure(subjectSelect.value, preset);
     const container = document.getElementById("key-questions-container");
@@ -6717,12 +6727,30 @@ function renderNewTestForm(testType, draft = {}) {
     enrollmentHint.textContent = "O'quvchilar test kodini kiritib, testni ilovada ishlaydi";
   }
 
-  enrollmentOpenButton.addEventListener("click", selectOpenEnrollment);
+  // Online ↔ offline almashganda savollar qismi qaytadan chiziladi (offline — mock emas, faqat A/B/C/D)
+  const switchEnrollment = (value) => {
+    const carried = collectTestFormDraft();
+    delete carried.testCount;
+    delete carried.optionCount;
+    delete carried.textCount;
+    delete carried.answers;
+    delete carried.duration;
+    renderNewTestForm(type, { ...carried, enrollment: value });
+  };
+
+  enrollmentOpenButton.addEventListener("click", () => {
+    if (offline) switchEnrollment("open");
+    else selectOpenEnrollment();
+  });
   if (draft.paid) selectOpenEnrollment(); // pullik test faqat ochiq bo'ladi
   enrollmentClosedButton.addEventListener("click", () => {
     // Pullik test faqat ochiq bo'ladi — o'quvchi o'zi to'lab, o'zi ishlaydi.
     if (document.getElementById("price-toggle").dataset.value === "paid") {
       showToast("Pullik test faqat online bo'ladi");
+      return;
+    }
+    if (!offline) {
+      switchEnrollment("closed");
       return;
     }
     enrollmentToggle.dataset.value = "closed";
@@ -6836,9 +6864,17 @@ function renderNewTestForm(testType, draft = {}) {
   ["field-test-count", "field-text-count"].forEach((id) => {
     document.getElementById(id).addEventListener("input", updateTotalHint);
   });
+  if (offline) {
+    // Savollar soni yozilishi bilan javob katakchalari chiqadi (kiritilgan javoblar saqlanadi)
+    document.getElementById("field-test-count").addEventListener("input", (event) => {
+      const value = Number(event.target.value);
+      if (value >= 1 && value <= 300) buildKeyQuestionRows();
+    });
+  }
 
   updateTotalHint();
-  buildKeyQuestionRows(draft.answers);
+  // Offline'da savollar soni hali kiritilmagan — "kamida bitta savol" deb ogohlantirilmaydi
+  if (!offline || Number(testCount) > 0) buildKeyQuestionRows(draft.answers);
 }
 
 function collectTestFormDraft() {
@@ -7356,7 +7392,16 @@ function stopLiveScan() {
 }
 
 // Varaq o'lchamlari (punktlarda) — backend/omr.py va titul chizilishi bilan bir xil
-const SHEET_PAGE = { width: 595.28, height: 841.89, corner: 32, cornerSize: 14, edgeMarks: 10, edgeMarkSize: 8 };
+const A4_SHEET_PAGE = { width: 595.28, height: 841.89, corner: 32, cornerSize: 14, edgeMarks: 10, edgeMarkSize: 8, nameBox: true };
+// Skanerlanayotgan titul o'lchami: ixcham titul (6-versiya) A4 ning 1/3, 1/2 qismi yoki to'liq A4 —
+// /scan/layout dagi sheet_page bo'yicha; eski titullar — A4
+let SHEET_PAGE = A4_SHEET_PAGE;
+
+function sheetPageOf(layout) {
+  const page = layout?.sheet_page;
+  if (!page) return A4_SHEET_PAGE;
+  return { ...A4_SHEET_PAGE, width: page.width, height: page.height, edgeMarks: page.edge_marks, nameBox: page.name_box };
+}
 
 // 4 nuqtadan 4 nuqtaga perspektiv moslik (varaqdagi punkt → kadr pikseli)
 function perspectiveMap(from, to) {
@@ -7489,6 +7534,7 @@ function findSheetCorners(pixels, width, height, edgeMarks = false) {
 function cornersFromEdgeMarks(gray, integral, width, height, blobs) {
   const page = SHEET_PAGE;
   const span = page.height - 2 * page.corner;
+  const shape = (page.width - 2 * page.corner) / span; // titul eni / bo'yi (burchaklar orasi)
   const steps = page.edgeMarks + 1;
   if (blobs.length > 300) return null;
   const at = (x, y) =>
@@ -7573,7 +7619,7 @@ function cornersFromEdgeMarks(gray, integral, width, height, blobs) {
       const bottom = distance(corners[3], corners[2]);
       const leftSide = distance(corners[0], corners[3]);
       const rightSide = distance(corners[1], corners[2]);
-      if (Math.abs((top + bottom) / (leftSide + rightSide) - 0.684) / 0.684 > 0.3) continue;
+      if (Math.abs((top + bottom) / (leftSide + rightSide) - shape) / shape > 0.3) continue;
       const sizes = corners.map((corner) => corner.size);
       if ((Math.max(...sizes) - Math.min(...sizes)) / Math.max(...sizes) > 0.45) continue;
       if (Math.max(top, bottom) > 1.5 * Math.min(top, bottom)) continue;
@@ -8112,7 +8158,7 @@ function createScanWorker() {
     return null;
   }
   const source = [
-    `const SHEET_PAGE = ${JSON.stringify(SHEET_PAGE)};`,
+    `let SHEET_PAGE = ${JSON.stringify(A4_SHEET_PAGE)};`,
     `const READ_SCALE = ${READ_SCALE};`,
     `const FILLED_RATIO = ${FILLED_RATIO};`,
     `const UNSURE_RATIO = ${UNSURE_RATIO};`,
@@ -8137,6 +8183,7 @@ function createScanWorker() {
       if ("layout" in data) {
         layout = data.layout;
         page = data.page;
+        SHEET_PAGE = data.sheetPage;
         return;
       }
       const { bitmap, edgeMarks, skipRead } = data;
@@ -8314,13 +8361,15 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
   stopLiveScan();
   liveWorker = createScanWorker();
   const worker = liveWorker;
+  SHEET_PAGE = A4_SHEET_PAGE; // titul tuzilishi kelguncha
   // Titul tuzilishi bo'lsa varaq telefonning o'zida o'qiladi; olinmasa (internet yo'q) — eski yo'l: surat serverga
   let layout = null;
   if ((test.sheet_version || 1) >= 3) {
     loadScanLayout(testId)
       .then((value) => {
         layout = value;
-        worker?.postMessage({ layout: value, page });
+        SHEET_PAGE = sheetPageOf(value);
+        worker?.postMessage({ layout: value, page, sheetPage: SHEET_PAGE });
       })
       .catch(() => {});
   }
@@ -8434,7 +8483,7 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     try {
       const scan = await api(`/api/teacher/tests/${testId}/scan/result`, {
         method: "POST",
-        body: { ...result, positions: undefined, highlights: undefined, page, name_image: page === 1 ? sheetNameImage(sheet) : null },
+        body: { ...result, positions: undefined, highlights: undefined, page, name_image: page === 1 && SHEET_PAGE.nameBox ? sheetNameImage(sheet) : null },
       });
       stopLiveScan();
       liveSession = liveSession || { count: 0 };

@@ -4263,36 +4263,43 @@ def test_android_ilovaga_bot_orqali_kirish():
 
 
 def _sheet_photo(test_id: int, marks: dict[int, str], skew: bool = True, code_of: int | None = None) -> str:
-    """Varaq "surati": doirachalar joyi PDF'dan olinadi, belgilanganlari bo'yaladi, so'ng qiyshaytiriladi."""
+    """
+    Varaq "surati": chop etiladigan PDF'ning o'zi rasmga aylantiriladi (ixcham titulda — A4 dagi
+    birinchi titul kesib olinadi), belgilangan doirachalar bo'yaladi, so'ng qiyshaytiriladi.
+    """
 
+    import fitz
     from PIL import Image, ImageDraw
 
     from backend.database import Test
-    from backend.omr import PAGE_HEIGHT, PAGE_WIDTH
 
     with SessionLocal() as session:
         bubbles: list[dict] = []
         sheet_test = session.get(Test, test_id)
-        main.generate_answer_sheet_pdf(sheet_test, bubbles=bubbles, variants=main._variant_names(session, sheet_test) or None)
+        variants = main._variant_names(session, sheet_test) or None
+        pdf = main.generate_answer_sheet_pdf(sheet_test, bubbles=bubbles, variants=variants)
+        geometry = main._sheet_geometry(sheet_test, variants)
         session.expunge(sheet_test)
     zoom = 2.0
-    page = Image.new("RGB", (round(PAGE_WIDTH * zoom), round(PAGE_HEIGHT * zoom)), "white")
+    rendered = fitz.open(stream=pdf, filetype="pdf")[0].get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+    page = Image.frombytes("RGB", (rendered.width, rendered.height), rendered.samples)
+    height = geometry["height"] if geometry else page.height / zoom
+    page = page.crop((0, 0, page.width, round(height * zoom)))
     draw = ImageDraw.Draw(page)
-    code = main.sheet_code(sheet_test) if code_of is None else code_of
-    for x, y in [(32, 32), (PAGE_WIDTH - 32, 32), (32, PAGE_HEIGHT - 32), (PAGE_WIDTH - 32, PAGE_HEIGHT - 32)]:
-        box = [(x - 7) * zoom, (y - 7) * zoom, (x + 7) * zoom, (y + 7) * zoom]
-        if sheet_test.sheet_version >= 3:
-            draw.rectangle(box, fill="black")
-        else:
-            draw.ellipse(box, fill="black")
     for bubble in bubbles:
-        cx, cy, r = bubble["x"] * zoom, (PAGE_HEIGHT - bubble["y"]) * zoom, bubble["r"] * zoom
-        if bubble["kind"] in ("mark", "code"):
-            if bubble["kind"] == "mark" or code >> int(bubble["letter"]) & 1:
-                draw.rectangle([cx - r, cy - r, cx + r, cy + r], fill="black")
+        if bubble["page"] != 1:
             continue
-        filled = bubble["letter"] in marks.get(bubble["ref"], "").split(",")
-        draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline="black", width=2, fill=(40, 40, 40) if filled else None)
+        cx, cy, r = bubble["x"] * zoom, (height - bubble["y"]) * zoom, bubble["r"] * zoom
+        if bubble["kind"] == "code":
+            if code_of is not None:
+                # Boshqa imtihon kodi: katak qayta bo'yaladi
+                fill = "black" if code_of >> int(bubble["letter"]) & 1 else "white"
+                draw.rectangle([cx - r - 1, cy - r - 1, cx + r + 1, cy + r + 1], fill=fill)
+            continue
+        if bubble["kind"] == "mark":
+            continue
+        if bubble["letter"] in marks.get(bubble["ref"], "").split(","):
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline="black", width=2, fill=(40, 40, 40))
     if skew:
         background = Image.new("RGB", (page.width + 300, page.height + 300), (90, 70, 60))
         background.paste(page.rotate(4, expand=True, fillcolor=(90, 70, 60)), (120, 110))
@@ -4300,6 +4307,59 @@ def _sheet_photo(test_id: int, marks: dict[int, str], skew: bool = True, code_of
     buffer = io.BytesIO()
     page.save(buffer, "JPEG", quality=85)
     return base64.b64encode(buffer.getvalue()).decode()
+
+
+def test_ixcham_titul_savollar_soniga_moslashadi():
+    """6-versiya: ism va yozma savolsiz titul; o'lchami savollar soniga qarab, bitta A4 ga bir nechtasi."""
+
+    import fitz
+
+    from backend.database import Test
+
+    reset_database()
+    register_teacher()
+
+    def closed_test(count: int) -> int:
+        questions = [{"number": n, "question_type": "single", "option_count": 4, "correct": "ABCD"[n % 4]}
+                     for n in range(1, count + 1)]
+        return create_test(enrollment_type="closed", key_questions=questions)["id"]
+
+    sizes = {}
+    for count in (25, 70, 150, 300):
+        test_id = closed_test(count)
+        layout = client.get(f"/api/teacher/tests/{test_id}/scan/layout", headers=as_user(555)).json()
+        sizes[count] = (round(layout["sheet_page"]["height"]), layout["page_count"])
+        questions = {bubble["ref"] for bubble in layout["bubbles"] if bubble["kind"] == "single"}
+        assert len(questions) == count
+        sheet = client.get(f"/api/teacher/tests/{test_id}/answer-sheet", headers=as_user(555))
+        pages = fitz.open(stream=sheet.content, filetype="pdf")
+        if count == 25:
+            # Bo'sh titul: bitta A4 da 3 ta nusxa (har birida 4 ta burchak, imtihon kodi)
+            assert len(pages) == 1 and pages[0].get_text().count("Sinov test") == 3
+    assert sizes == {25: (281, 1), 70: (421, 1), 150: (842, 1), 300: (842, 2)}, sizes
+
+    # Yozma savol titulga chiqmaydi (doirachasi yo'q); kodi va burchaklari joyida
+    test_id = create_test(enrollment_type="closed")["id"]
+    layout = client.get(f"/api/teacher/tests/{test_id}/scan/layout", headers=as_user(555)).json()
+    assert 4 not in {bubble["ref"] for bubble in layout["bubbles"]}
+
+    # 25 savol: ID va javoblar o'qiladi
+    test_id = closed_test(25)
+    photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "1", "id3": "3", 1: "B", 13: "D", 25: "A"})
+    scanned = client.post(f"/api/teacher/tests/{test_id}/scan", json={"image_base64": photo}, headers=as_user(555))
+    assert scanned.status_code == 200, scanned.text
+    body = scanned.json()
+    assert body["answers"] == {"1": "B", "13": "D", "25": "A"} and body["sheet_number"] == 13, body["answers"]
+
+    # Oldin chop etilgan 5-versiya (A4) titul avvalgidek o'qiladi
+    with SessionLocal() as session:
+        session.get(Test, test_id).sheet_version = 5
+        session.commit()
+    layout = client.get(f"/api/teacher/tests/{test_id}/scan/layout", headers=as_user(555)).json()
+    assert layout["sheet_page"] is None and layout["old_bubbles"]
+    scanned = client.post(f"/api/teacher/tests/{test_id}/scan", json={"image_base64": _sheet_photo(test_id, {2: "C"})},
+                          headers=as_user(555)).json()
+    assert scanned["answers"] == {"2": "C"} and scanned["name_image"].startswith("data:image/png"), scanned["answers"]
 
 
 def test_ilovada_oqilgan_varaq_natijasi_qabul_qilinadi():
@@ -4315,7 +4375,9 @@ def test_ilovada_oqilgan_varaq_natijasi_qabul_qilinadi():
     kinds = {bubble["kind"] for bubble in layout["bubbles"]}
     assert {"mark", "code", "id", "single"} <= kinds, kinds
     assert layout["page_count"] == 1 and isinstance(layout["sheet_code"], int)
-    assert layout["old_bubbles"], "5-versiya testda eski 3 xonali ID'li titul tuzilishi ham beriladi"
+    # Yangi test — ixcham titul (6-versiya): A4 ning 1/3 qismi, eski ID tuzilishi kerak emas
+    assert layout["old_bubbles"] is None and layout["sheet_page"]["height"] < 300, layout["sheet_page"]
+    assert layout["sheet_page"]["name_box"] is False
     # Natija ekranida ranglash uchun kalit (yozma savol yo'q — u titulda bo'yalmaydi)
     assert layout["keys"] == {"A": {"1": "B", "2": "C", "3": "A,C"}}, layout["keys"]
 
@@ -4376,7 +4438,7 @@ def test_javoblar_varaqasi_skanerlanadi():
     body = scanned.json()
     assert body["answers"] == {"1": "B", "2": "A", "3": "A,C"}, body["questions"]
     assert all(q["status"] == "ok" for q in body["questions"]), body["questions"]
-    assert body["page_count"] == 1 and body["name_image"].startswith("data:image/png;base64,")
+    assert body["page_count"] == 1 and body["name_image"] is None  # ixcham titulda ism maydoni yo'q
     assert [s["name"] for s in body["pending_students"]] == ["Ro'yxatdagi Bola"]
 
     # Ikki doiracha bo'yalgan oddiy savol — tanlanmaydi, o'qituvchiga belgilanadi
@@ -4428,7 +4490,7 @@ def test_varaqdagi_oquvchi_raqami_boyicha_taniladi():
                 headers=as_user(555))
     detail = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1, "Birinchi Bola"), (2, "Ikkinchi Bola")]
-    assert detail["sheet_version"] == 5
+    assert detail["sheet_version"] == 6
 
     url = f"/api/teacher/tests/{test_id}/scan"
     photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "0", "id3": "2", 1: "B", 2: "C"})
@@ -4665,7 +4727,7 @@ def test_skaner_natijasi_sinf_natijalariga_yoziladi():
     assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json() == {"added": 0}
     detail = client.get(base, headers=as_user(701)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1001, "Ali Valiyev"), (1002, "Zuhra Karimova")]
-    assert detail["sheet_version"] == 5
+    assert detail["sheet_version"] == 6
 
     # Zuhra (1002) varag'i: 1-savol to'g'ri, 2-savol to'g'ri
     scanned = client.post(f"{base}/scan", json={"image_base64": _sheet_photo(test["id"], {
