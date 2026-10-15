@@ -1021,6 +1021,19 @@ class SheetScanIn(BaseModel):
     page: int = Field(default=1, ge=1, le=10)
 
 
+class SheetResultIn(BaseModel):
+    """Ilovada (telefonning o'zida) o'qilgan varaq — /scan natijasi bilan bir xil ko'rinishda."""
+
+    page: int = Field(default=1, ge=1, le=10)
+    answers: dict[str, str] = Field(default_factory=dict)
+    questions: list[dict] = Field(default_factory=list, max_length=500)
+    name_image: str | None = Field(default=None, max_length=2_000_000)
+    sheet_number: int | None = Field(default=None, ge=0, le=9999)
+    sheet_number_status: str = Field(default="none", max_length=20)
+    variant: str | None = Field(default=None, max_length=5)
+    sheet_code: int | None = None
+
+
 class SheetScanSaveIn(BaseModel):
     """
     Skanerlangan (o'qituvchi tekshirib tuzatgan) javoblarni saqlash: ro'yxatdagi

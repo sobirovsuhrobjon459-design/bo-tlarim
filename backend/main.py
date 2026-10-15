@@ -127,6 +127,7 @@ from .database import (
     StudentsBulkIn,
     SessionLocal,
     StudentAnswer,
+    SheetResultIn,
     SheetScanIn,
     SheetScanSaveIn,
     StudentAnswersIn,
@@ -4735,14 +4736,7 @@ def scan_sheet(
     from .omr import PreparedSheet, ScanError, scan_answer_sheet  # og'ir kutubxona (OpenCV) — faqat kerak bo'lganda
 
     test = _paper_test(db, teacher, test_id)
-    bubbles: list[dict] = []
-    variants = _variant_names(db, test)
-    generate_answer_sheet_pdf(test, bubbles=bubbles, variants=variants or None)
-    if not bubbles:
-        raise HTTPException(status_code=400, detail="Bu testda belgilanadigan (variantli) savol yo'q")
-    page_count = max(bubble["page"] for bubble in bubbles)
-    if body.page > page_count:
-        raise HTTPException(status_code=422, detail=f"Varaq {page_count} sahifali")
+    variants, bubbles, page_count = _sheet_layout(test, db, body.page)
 
     try:
         image = base64.b64decode(body.image_base64.split(",")[-1], validate=True)
@@ -4753,17 +4747,45 @@ def scan_sheet(
         result = scan_answer_sheet(image, bubbles, page=body.page, prepared=prepared)
         if test.sheet_version == 5 and body.page == 1 and result["sheet_number_status"] != "ok":
             # Oldin chop etilgan 3 xonali ID'li titul bo'lishi mumkin — shu ko'rinishda qayta o'qiladi
-            old_bubbles: list[dict] = []
-            generate_answer_sheet_pdf(SimpleNamespace(
-                mode=test.mode, key_questions=test.key_questions, questions=test.questions, title=test.title,
-                code=test.code, subject=test.subject, id=test.id, sheet_version=4,
-            ), bubbles=old_bubbles, variants=variants or None)
+            old_bubbles = _old_id_bubbles(test, variants)
             # Burchak va chet belgilari ikkala titulda bir xil — tekislangan varaq qayta ishlatiladi
             old_result = scan_answer_sheet(image, old_bubbles, page=1, prepared=prepared)
             if old_result["sheet_number_status"] == "ok":
                 result = old_result
     except ScanError as error:
         raise HTTPException(status_code=422, detail=str(error))
+    return _scan_response(db, teacher, test, result, body.page, variants, page_count)
+
+
+def _sheet_layout(test: Test, db: Session, page: int = 1) -> tuple[list[str], list[dict], int]:
+    """Titulning doirachalari (varaqdagi joyi bilan), variantlar va sahifalar soni."""
+
+    bubbles: list[dict] = []
+    variants = _variant_names(db, test)
+    generate_answer_sheet_pdf(test, bubbles=bubbles, variants=variants or None)
+    if not bubbles:
+        raise HTTPException(status_code=400, detail="Bu testda belgilanadigan (variantli) savol yo'q")
+    page_count = max(bubble["page"] for bubble in bubbles)
+    if page > page_count:
+        raise HTTPException(status_code=422, detail=f"Varaq {page_count} sahifali")
+    return variants, bubbles, page_count
+
+
+def _old_id_bubbles(test: Test, variants: list[str]) -> list[dict]:
+    """Oldin chop etilgan 3 xonali ID'li (4-versiya) titulning doirachalari — 5-versiya test uchun."""
+
+    old_bubbles: list[dict] = []
+    generate_answer_sheet_pdf(SimpleNamespace(
+        mode=test.mode, key_questions=test.key_questions, questions=test.questions, title=test.title,
+        code=test.code, subject=test.subject, id=test.id, sheet_version=4,
+    ), bubbles=old_bubbles, variants=variants or None)
+    return old_bubbles
+
+
+def _scan_response(db: Session, teacher: Teacher, test: Test, result: dict, page: int,
+                   variants: list[str], page_count: int) -> dict:
+    """O'qilgan varaq (serverda yoki telefonda) → imtihon kodi tekshiruvi, ID bo'yicha o'quvchi, ro'yxat."""
+
     if result.get("sheet_code") is not None and result["sheet_code"] != sheet_code(test):
         raise HTTPException(
             status_code=422,
@@ -4804,8 +4826,37 @@ def scan_sheet(
             .order_by(Attempt.offline_name)
         ).all()
     ]
-    return {**result, "match": match, "variants": variants, "page": body.page, "page_count": page_count,
+    return {**result, "match": match, "variants": variants, "page": page, "page_count": page_count,
             "pending_students": pending}
+
+
+@app.get("/api/teacher/tests/{test_id}/scan/layout")
+def scan_layout(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """
+    Ilovadagi skaner varaqni telefonning o'zida o'qiydi (surat serverga yuborilmaydi — tez).
+    Buning uchun titul tuzilishi: har doiracha, chet belgisi va kod katagining varaqdagi joyi.
+    """
+
+    test = _paper_test(db, teacher, test_id)
+    variants, bubbles, page_count = _sheet_layout(test, db)
+    return {
+        "bubbles": bubbles,
+        # 5-versiya testda oldin chop etilgan 3 xonali ID'li titul ham o'qilsin
+        "old_bubbles": _old_id_bubbles(test, variants) if test.sheet_version == 5 else None,
+        "page_count": page_count,
+        "sheet_code": sheet_code(test),
+    }
+
+
+@app.post("/api/teacher/tests/{test_id}/scan/result")
+def scan_result(
+    test_id: int, body: SheetResultIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
+):
+    """Telefonda o'qilgan varaq natijasi — o'quvchi ID bo'yicha topiladi (javob /scan bilan bir xil)."""
+
+    test = _paper_test(db, teacher, test_id)
+    variants, _, page_count = _sheet_layout(test, db, body.page)
+    return _scan_response(db, teacher, test, body.model_dump(exclude={"page"}), body.page, variants, page_count)
 
 
 @app.post("/api/teacher/tests/{test_id}/scan/save")

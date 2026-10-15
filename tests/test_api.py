@@ -4302,6 +4302,39 @@ def _sheet_photo(test_id: int, marks: dict[int, str], skew: bool = True, code_of
     return base64.b64encode(buffer.getvalue()).decode()
 
 
+def test_ilovada_oqilgan_varaq_natijasi_qabul_qilinadi():
+    """Ilova varaqni telefonda o'qiydi: titul tuzilishini oladi, serverga faqat javoblarni yuboradi."""
+
+    reset_database()
+    register_teacher()
+    test_id = create_test(enrollment_type="closed")["id"]
+    base = f"/api/teacher/tests/{test_id}"
+    client.post(f"{base}/students", json={"names": ["Birinchi Bola", "Ikkinchi Bola"]}, headers=as_user(555))
+
+    layout = client.get(f"{base}/scan/layout", headers=as_user(555)).json()
+    kinds = {bubble["kind"] for bubble in layout["bubbles"]}
+    assert {"mark", "code", "id", "single"} <= kinds, kinds
+    assert layout["page_count"] == 1 and isinstance(layout["sheet_code"], int)
+    assert layout["old_bubbles"], "5-versiya testda eski 3 xonali ID'li titul tuzilishi ham beriladi"
+
+    result = {"answers": {"1": "B"}, "questions": [{"ref": 1, "label": "1", "kind": "single", "options": ["A", "B"],
+                                                    "chosen": "B", "status": "ok"}],
+              "sheet_number": 2, "sheet_number_status": "ok", "variant": None, "sheet_code": layout["sheet_code"]}
+    scanned = client.post(f"{base}/scan/result", json=result, headers=as_user(555))
+    assert scanned.status_code == 200, scanned.text
+    body = scanned.json()
+    assert body["match"]["name"] == "Ikkinchi Bola" and body["answers"] == {"1": "B"}, body
+    assert body["page_count"] == 1 and [s["name"] for s in body["pending_students"]] == ["Birinchi Bola", "Ikkinchi Bola"]
+    saved = client.post(f"{base}/scan/save", json={"attempt_id": body["match"]["id"], "answers": body["answers"]},
+                        headers=as_user(555))
+    assert saved.status_code == 200 and saved.json()["correct"] == 1, saved.text
+
+    # Boshqa imtihonning titul kodi — rad etiladi
+    other = client.post(f"{base}/scan/result", json={**result, "sheet_code": (layout["sheet_code"] + 1) % 4096},
+                        headers=as_user(555))
+    assert other.status_code == 422, other.text
+
+
 def test_varaq_atrofidagi_qora_narsalar_skanerni_adashtirmaydi():
     """Stol ustida varaqdan tashqarida qora dog'lar bor — burchak deb olinmaydi (chet belgilari tekshiriladi)."""
 

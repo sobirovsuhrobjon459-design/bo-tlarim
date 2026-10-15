@@ -7281,6 +7281,10 @@ async function scanSheetFromPhoto(testId, test, page = 1, collected = null) {
 // Rasm serverda o'qiladi; ko'p sahifali varaqda sahifalar javoblari bitta o'quvchiga yig'iladi
 async function readSheetImage(testId, image, page, collected) {
   const scan = await api(`/api/teacher/tests/${testId}/scan`, { method: "POST", body: { image_base64: image, page } });
+  return mergeScan(scan, collected);
+}
+
+function mergeScan(scan, collected) {
   const merged = collected || { questions: [], nameImage: null, pending: scan.pending_students };
   merged.questions = merged.questions.filter((question) => !scan.questions.some((item) => item.ref === question.ref));
   merged.questions.push(...scan.questions);
@@ -7300,10 +7304,12 @@ async function readSheetImage(testId, image, page, collected) {
 /* ---------- Jonli skaner: kamerani varaqqa tutish kifoya ---------- */
 
 /*
-  Kamera kadrlari telefonning o'zida kichraytirib ko'riladi: burchakdagi 4 ta
-  qora nuqta topilib, ~1 soniya qimirlamay tursa — to'liq o'lchamli kadr serverga
-  yuboriladi (o'qish o'sha OpenCV skaneri). O'quvchi raqamdan tanilsa va shubhali
-  savol bo'lmasa — natija o'zi saqlanadi va kamera keyingi varaqni kutadi.
+  Kamera kadrlari telefonning o'zida ko'riladi: burchaklar va chet belgilari topilishi
+  bilan varaq shu kadrning o'zida o'qiladi (titul tuzilishi serverdan bir marta olinadi);
+  ketma-ket ikki kadr bir xil natija bersa — serverga faqat javoblar boradi. Titul
+  tuzilishi olinmasa (internet yo'q) yoki "Hozir suratga olish" bosilsa — eski yo'l:
+  surat serverda o'qiladi. O'quvchi raqamdan tanilsa va shubhali savol bo'lmasa —
+  natija o'zi saqlanadi va kamera keyingi varaqni kutadi.
 */
 let liveStream = null;
 let liveTimer = null;
@@ -7603,8 +7609,452 @@ function cornersFromEdgeMarks(gray, integral, width, height, blobs) {
   return bestScore >= 0.9 ? best : null;
 }
 
+/* ---------- Varaqni telefonning o'zida o'qish (ilovadagi skaner) ---------- */
+
+/*
+  backend/omr.py dagi scan_answer_sheet bilan bir xil usul, faqat kamera kadrining o'zida:
+  burchaklar topilgach varaq tekislanadi, qora-oqqa ajratiladi, chet belgilari bo'yicha
+  egilish tuzatiladi, har savol qatori chop etilgan halqalarga moslanadi va doirachalar
+  ichining qoraygani o'lchanadi. Surat serverga yuborilmaydi — natija bir zumda.
+*/
+const READ_SCALE = 2; // tekislangan varaqda 1 punkt = 2 piksel
+const FILLED_RATIO = 0.5;
+const UNSURE_RATIO = 0.25;
+const NAME_BOX = [120, 80, 420, 100];
+
+// Burchak kvadratining aniq markazi (kichik kadrda topilgani taxminiy) — atrofidagi qora dog' markazi
+function refineCorner(gray, width, height, x, y, radius) {
+  const r = Math.max(3, Math.round(radius));
+  let low = 255;
+  let high = 0;
+  for (let dy = -r; dy <= r; dy += 1) {
+    for (let dx = -r; dx <= r; dx += 1) {
+      const px = Math.round(x) + dx;
+      const py = Math.round(y) + dy;
+      if (px < 0 || py < 0 || px >= width || py >= height) continue;
+      const value = gray[py * width + px];
+      if (value < low) low = value;
+      if (value > high) high = value;
+    }
+  }
+  if (high - low < 30) return { x, y };
+  const threshold = (low + high) / 2;
+  let sumX = 0;
+  let sumY = 0;
+  let count = 0;
+  for (let dy = -r; dy <= r; dy += 1) {
+    for (let dx = -r; dx <= r; dx += 1) {
+      const px = Math.round(x) + dx;
+      const py = Math.round(y) + dy;
+      if (px < 0 || py < 0 || px >= width || py >= height) continue;
+      if (gray[py * width + px] < threshold) {
+        sumX += px;
+        sumY += py;
+        count += 1;
+      }
+    }
+  }
+  return count ? { x: sumX / count, y: sumY / count } : { x, y };
+}
+
+// Tekislangan varaq: qora-oq (1 — qora) va kulrang nusxa; bir kadr uchun bir marta tayyorlanadi
+function prepareSheetFrame(gray, width, height, corners) {
+  const page = SHEET_PAGE;
+  const W = Math.round(page.width * READ_SCALE);
+  const H = Math.round(page.height * READ_SCALE);
+  const pageCorners = [
+    [page.corner, page.corner],
+    [page.width - page.corner, page.corner],
+    [page.width - page.corner, page.height - page.corner],
+    [page.corner, page.height - page.corner],
+  ].map(([x, y]) => [x * READ_SCALE, y * READ_SCALE]);
+  const map = perspectiveMap(pageCorners, corners.map((corner) => [corner.x, corner.y]));
+  if (!map) return null;
+
+  // Perspektivani to'g'rilash (bilinear) — chetdan tashqarisi oq
+  const warped = new Uint8ClampedArray(W * H);
+  for (let y = 0; y < H; y += 1) {
+    for (let x = 0; x < W; x += 1) {
+      const [u, v] = map(x, y);
+      const x0 = Math.floor(u);
+      const y0 = Math.floor(v);
+      if (x0 < 0 || y0 < 0 || x0 >= width - 1 || y0 >= height - 1) {
+        warped[y * W + x] = 255;
+        continue;
+      }
+      const fx = u - x0;
+      const fy = v - y0;
+      const i = y0 * width + x0;
+      const top = gray[i] + (gray[i + 1] - gray[i]) * fx;
+      const bottom = gray[i + width] + (gray[i + width + 1] - gray[i + width]) * fx;
+      warped[y * W + x] = top + (bottom - top) * fy;
+    }
+  }
+
+  // Yengil xiralash (3×3) va mahalliy o'rtacha bo'yicha qora-oq (serverdagi adaptiveThreshold kabi)
+  const blurred = new Float32Array(W * H);
+  for (let y = 0; y < H; y += 1) {
+    for (let x = 0; x < W; x += 1) {
+      let sum = 0;
+      let weight = 0;
+      for (let dy = -1; dy <= 1; dy += 1) {
+        const yy = Math.min(H - 1, Math.max(0, y + dy));
+        for (let dx = -1; dx <= 1; dx += 1) {
+          const xx = Math.min(W - 1, Math.max(0, x + dx));
+          const w = (dx ? 1 : 2) * (dy ? 1 : 2);
+          sum += warped[yy * W + xx] * w;
+          weight += w;
+        }
+      }
+      blurred[y * W + x] = sum / weight;
+    }
+  }
+  const row = W + 1;
+  const integral = new Float64Array(row * (H + 1));
+  for (let y = 0; y < H; y += 1) {
+    let rowSum = 0;
+    for (let x = 0; x < W; x += 1) {
+      rowSum += blurred[y * W + x];
+      integral[(y + 1) * row + x + 1] = integral[y * row + x + 1] + rowSum;
+    }
+  }
+  const half = Math.round(40 * READ_SCALE) >> 1;
+  const binary = new Uint8Array(W * H);
+  for (let y = 0; y < H; y += 1) {
+    const y0 = Math.max(0, y - half);
+    const y1 = Math.min(H, y + half + 1);
+    for (let x = 0; x < W; x += 1) {
+      const x0 = Math.max(0, x - half);
+      const x1 = Math.min(W, x + half + 1);
+      const mean =
+        (integral[y1 * row + x1] - integral[y0 * row + x1] - integral[y1 * row + x0] + integral[y0 * row + x0]) /
+        ((x1 - x0) * (y1 - y0));
+      binary[y * W + x] = blurred[y * W + x] <= mean - 18 ? 1 : 0;
+    }
+  }
+  // Qora piksellar soni uchun integral — kvadrat ichidagi ulush bir zumda
+  const binaryIntegral = new Float64Array(row * (H + 1));
+  for (let y = 0; y < H; y += 1) {
+    let rowSum = 0;
+    for (let x = 0; x < W; x += 1) {
+      rowSum += binary[y * W + x];
+      binaryIntegral[(y + 1) * row + x + 1] = binaryIntegral[y * row + x + 1] + rowSum;
+    }
+  }
+  return { W, H, warped, binary, binaryIntegral, masks: new Map() };
+}
+
+// Doiracha atrofidagi halqa (chop etilgan chegara) va ichki doira — nuqtalar ro'yxati
+function bubbleMasks(sheet, radius) {
+  const key = Math.round(radius * 100);
+  if (!sheet.masks.has(key)) {
+    const size = Math.round(radius * READ_SCALE * 1.4);
+    const unit = Math.max(1, size / 1.4);
+    const ring = [];
+    const inner = [];
+    for (let dy = -size; dy <= size; dy += 1) {
+      for (let dx = -size; dx <= size; dx += 1) {
+        const distance = Math.sqrt(dx * dx + dy * dy) / unit;
+        if (distance >= 0.82 && distance <= 1.18) ring.push(dy * sheet.W + dx, dx, dy);
+        if (distance <= 0.55) inner.push(dy * sheet.W + dx, dx, dy);
+      }
+    }
+    sheet.masks.set(key, { ring, inner });
+  }
+  return sheet.masks.get(key);
+}
+
+// Niqob ostidagi qora ulush (punktlardagi nuqta atrofida); varaqdan tashqarisi oq hisoblanadi
+function maskFill(sheet, mask, x, y) {
+  const cx = Math.round(x * READ_SCALE);
+  const cy = Math.round(y * READ_SCALE);
+  const { W, H, binary } = sheet;
+  if (cx < 0 || cy < 0 || cx >= W || cy >= H) return 0;
+  const base = cy * W + cx;
+  let dark = 0;
+  for (let i = 0; i < mask.length; i += 3) {
+    const px = cx + mask[i + 1];
+    const py = cy + mask[i + 2];
+    if (px >= 0 && py >= 0 && px < W && py < H) dark += binary[base + mask[i]];
+  }
+  return dark / (mask.length / 3);
+}
+
+function boxFill(sheet, x, y, r) {
+  const { W, H, binaryIntegral } = sheet;
+  const row = W + 1;
+  const x0 = Math.max(0, Math.round(x * READ_SCALE) - r);
+  const x1 = Math.min(W, Math.round(x * READ_SCALE) + r + 1);
+  const y0 = Math.max(0, Math.round(y * READ_SCALE) - r);
+  const y1 = Math.min(H, Math.round(y * READ_SCALE) + r + 1);
+  if (x1 <= x0 || y1 <= y0) return 0;
+  return (
+    (binaryIntegral[y1 * row + x1] - binaryIntegral[y0 * row + x1] - binaryIntegral[y1 * row + x0] + binaryIntegral[y0 * row + x0]) /
+    ((x1 - x0) * (y1 - y0))
+  );
+}
+
+// Chetdagi tekislash belgilarining haqiqiy joyi (kutilgan joy atrofida qora kvadrat)
+function edgeMarkOffsets(sheet, marks) {
+  const offsets = { left: [], right: [] };
+  const { W, H, binary } = sheet;
+  const window = 9;
+  for (const mark of marks) {
+    const x = mark.x;
+    const y = SHEET_PAGE.height - mark.y;
+    const x0 = Math.max(0, Math.round((x - window) * READ_SCALE));
+    const y0 = Math.max(0, Math.round((y - window) * READ_SCALE));
+    const x1 = Math.min(W, Math.round((x + window) * READ_SCALE));
+    const y1 = Math.min(H, Math.round((y + window) * READ_SCALE));
+    if (x1 <= x0 || y1 <= y0) continue;
+    const pw = x1 - x0;
+    const seen = new Uint8Array(pw * (y1 - y0));
+    const expected = (2 * mark.r * READ_SCALE) ** 2;
+    let best = null;
+    for (let start = 0; start < seen.length; start += 1) {
+      const sx = start % pw;
+      const sy = (start - sx) / pw;
+      if (seen[start] || !binary[(y0 + sy) * W + x0 + sx]) continue;
+      const stack = [start];
+      seen[start] = 1;
+      let area = 0;
+      let sumX = 0;
+      let sumY = 0;
+      while (stack.length) {
+        const index = stack.pop();
+        const px = index % pw;
+        const py = (index - px) / pw;
+        area += 1;
+        sumX += px;
+        sumY += py;
+        for (let dy = -1; dy <= 1; dy += 1) {
+          for (let dx = -1; dx <= 1; dx += 1) {
+            const nx = px + dx;
+            const ny = py + dy;
+            if (nx < 0 || ny < 0 || nx >= pw || ny >= y1 - y0) continue;
+            const next = ny * pw + nx;
+            if (seen[next] || !binary[(y0 + ny) * W + x0 + nx]) continue;
+            seen[next] = 1;
+            stack.push(next);
+          }
+        }
+      }
+      if (area < 0.4 * expected || area > 2.2 * expected) continue;
+      const cx = sumX / area / READ_SCALE + x0 / READ_SCALE;
+      const cy = sumY / area / READ_SCALE + y0 / READ_SCALE;
+      const distance = (cx - x) ** 2 + (cy - y) ** 2;
+      if (!best || distance < best[0]) best = [distance, cx - x, cy - y];
+    }
+    if (best) offsets[mark.ref].push([y, best[1], best[2]]);
+  }
+  offsets.left.sort((a, b) => a[0] - b[0]);
+  offsets.right.sort((a, b) => a[0] - b[0]);
+  return offsets;
+}
+
+function interpolateOffset(points, y) {
+  if (!points.length) return [0, 0];
+  if (y <= points[0][0]) return [points[0][1], points[0][2]];
+  const last = points[points.length - 1];
+  if (y >= last[0]) return [last[1], last[2]];
+  for (let i = 1; i < points.length; i += 1) {
+    const [y1, dx1, dy1] = points[i - 1];
+    const [y2, dx2, dy2] = points[i];
+    if (y1 <= y && y <= y2) {
+      const t = y2 > y1 ? (y - y1) / (y2 - y1) : 0;
+      return [dx1 + (dx2 - dx1) * t, dy1 + (dy2 - dy1) * t];
+    }
+  }
+  return [0, 0];
+}
+
+// Tayyorlangan varaqdan javoblarni o'qish (doirachalar joyi — serverdan olingan titul tuzilishi)
+function readSheetAnswers(sheet, bubbles, page = 1) {
+  const pageBubbles = bubbles.filter((bubble) => bubble.page === page);
+  const offsets = edgeMarkOffsets(sheet, pageBubbles.filter((bubble) => bubble.kind === "mark"));
+  const leftX = SHEET_PAGE.corner;
+  const rightX = SHEET_PAGE.width - SHEET_PAGE.corner;
+  const corrected = (x, y) => {
+    const [ldx, ldy] = interpolateOffset(offsets.left, y);
+    const [rdx, rdy] = interpolateOffset(offsets.right, y);
+    const t = Math.min(1, Math.max(0, (x - leftX) / (rightX - leftX)));
+    return [x + ldx + (rdx - ldx) * t, y + ldy + (rdy - ldy) * t];
+  };
+
+  // Har savol qatori chop etilgan halqalari ustiga moslanadi (ustun bo'yicha tepadan pastga)
+  const rows = new Map();
+  for (const bubble of pageBubbles) {
+    if (bubble.kind === "mark" || bubble.kind === "code") continue;
+    if (!rows.has(bubble.ref)) rows.set(bubble.ref, []);
+    rows.get(bubble.ref).push(bubble);
+  }
+  const ordered = [...rows.entries()].sort(
+    ([, a], [, b]) => Math.round(a[0].x / 40) - Math.round(b[0].x / 40) || b[0].y - a[0].y
+  );
+  const rowShift = new Map();
+  const aligned = [];
+  for (const [ref, row] of ordered) {
+    const centers = row.map((bubble) => corrected(bubble.x, SHEET_PAGE.height - bubble.y));
+    const [x0, y0] = centers[0];
+    let nearest = null;
+    for (const item of aligned) {
+      const distance = (item[0] - x0) ** 2 + (item[1] - y0) ** 2;
+      if (!nearest || distance < nearest[0]) nearest = [distance, item];
+    }
+    const start = nearest ? nearest[1][2] : [0, 0];
+    const far = !nearest || Math.abs(nearest[1][0] - x0) >= 40 || Math.abs(nearest[1][1] - y0) >= 60;
+    const reach = far ? 8 : 5;
+    const radius = row[0].r;
+    const { ring } = bubbleMasks(sheet, radius);
+    let best = null;
+    for (let gy = -reach; gy <= reach; gy += 1) {
+      for (let gx = -reach; gx <= reach; gx += 1) {
+        const dx = start[0] + gx * radius * 0.16;
+        const dy = start[1] + gy * radius * 0.16;
+        let score = 0;
+        for (const [cx, cy] of centers) score += maskFill(sheet, ring, cx + dx, cy + dy);
+        if (!best || score > best[0]) best = [score, dx, dy];
+      }
+    }
+    rowShift.set(ref, [best[1], best[2]]);
+    aligned.push([x0, y0, [best[1], best[2]]]);
+  }
+
+  const codeBits = new Map();
+  const questions = new Map();
+  const idRows = new Map();
+  const variantRatios = new Map();
+  for (const bubble of pageBubbles) {
+    if (bubble.kind === "mark") continue;
+    const [x, y] = corrected(bubble.x, SHEET_PAGE.height - bubble.y);
+    if (bubble.kind === "code") {
+      // Kod katagi: atrofidagi bir necha joydan eng qorasi (serverdagi _fill_ratio square)
+      const inner = Math.max(2, Math.round(bubble.r * READ_SCALE * 0.55));
+      const shift = bubble.r * 0.25;
+      let ratio = 0;
+      for (const dx of [-shift, -shift / 2, 0, shift / 2, shift]) {
+        for (const dy of [-shift, -shift / 2, 0, shift / 2, shift]) ratio = Math.max(ratio, boxFill(sheet, x + dx, y + dy, inner));
+      }
+      codeBits.set(Number(bubble.letter), ratio);
+      continue;
+    }
+    const [dx, dy] = rowShift.get(bubble.ref);
+    const { inner } = bubbleMasks(sheet, bubble.r);
+    let ratio = 0;
+    for (const ox of [-0.1, 0, 0.1]) {
+      for (const oy of [-0.1, 0, 0.1]) ratio = Math.max(ratio, maskFill(sheet, inner, x + dx + ox * bubble.r, y + dy + oy * bubble.r));
+    }
+    if (bubble.kind === "id") {
+      if (!idRows.has(bubble.ref)) idRows.set(bubble.ref, new Map());
+      idRows.get(bubble.ref).set(bubble.letter, ratio);
+      continue;
+    }
+    if (bubble.kind === "variant") {
+      variantRatios.set(bubble.letter, ratio);
+      continue;
+    }
+    if (!questions.has(bubble.ref)) {
+      questions.set(bubble.ref, { ref: bubble.ref, label: bubble.label, kind: bubble.kind, options: [], ratios: {} });
+    }
+    const entry = questions.get(bubble.ref);
+    entry.options.push(bubble.letter);
+    entry.ratios[bubble.letter] = ratio;
+  }
+
+  const answers = {};
+  const result = [];
+  for (const entry of questions.values()) {
+    const filled = entry.options.filter((letter) => entry.ratios[letter] >= FILLED_RATIO);
+    const unsure = entry.options.filter((letter) => entry.ratios[letter] >= UNSURE_RATIO && entry.ratios[letter] < FILLED_RATIO);
+    let status;
+    if (entry.kind === "multi") status = unsure.length ? "unsure" : filled.length ? "ok" : "empty";
+    else if (filled.length > 1) status = "multiple";
+    else if (filled.length) status = unsure.length ? "unsure" : "ok";
+    else status = unsure.length ? "unsure" : "empty";
+    const chosen = entry.kind === "multi" || filled.length === 1 ? filled.join(",") : "";
+    if (chosen) answers[String(entry.ref)] = chosen;
+    result.push({ ...entry, chosen, status });
+  }
+
+  let sheetNumber = null;
+  let numberStatus = "none";
+  if (idRows.size) {
+    const digits = [...idRows.keys()].sort().map((ref) => {
+      const filled = [...idRows.get(ref).entries()].filter(([, ratio]) => ratio >= FILLED_RATIO).map(([digit]) => digit);
+      return filled.length === 1 ? filled[0] : null;
+    });
+    if (digits.every((digit) => digit === null)) numberStatus = "empty";
+    else if (digits.some((digit) => digit === null) || Number(digits.join("")) === 0) numberStatus = "unclear";
+    else {
+      sheetNumber = Number(digits.join(""));
+      numberStatus = "ok";
+    }
+  }
+
+  const markedVariants = [...variantRatios.entries()].filter(([, ratio]) => ratio >= FILLED_RATIO).map(([name]) => name);
+  const variant = markedVariants.length === 1 ? markedVariants[0] : null;
+
+  let sheetCode = null;
+  if (codeBits.size && [...codeBits.values()].every((ratio) => ratio >= FILLED_RATIO || ratio < UNSURE_RATIO)) {
+    sheetCode = 0;
+    for (const [bit, ratio] of codeBits) if (ratio >= FILLED_RATIO) sheetCode += 2 ** bit;
+  }
+
+  return {
+    answers,
+    questions: result,
+    sheet_number: sheetNumber,
+    sheet_number_status: numberStatus,
+    variant,
+    sheet_code: sheetCode,
+  };
+}
+
+// Titul tuzilishi (doirachalar joyi) — har test uchun bir marta serverdan olinadi
+const scanLayouts = new Map();
+async function loadScanLayout(testId) {
+  if (!scanLayouts.has(testId)) {
+    const layout = await api(`/api/teacher/tests/${testId}/scan/layout`);
+    scanLayouts.set(testId, layout);
+  }
+  return scanLayouts.get(testId);
+}
+
+// Ism yozilgan katak (tekislangan varaqdan) — o'qituvchi ismni ko'rib yozishi uchun
+function sheetNameImage(sheet) {
+  const [x1, y1, x2, y2] = NAME_BOX.map((value) => Math.round(value * READ_SCALE));
+  const left = Math.max(0, x1 - 4);
+  const top = Math.max(0, y1 - 4);
+  const width = Math.min(sheet.W, x2 + 4) - left;
+  const height = Math.min(sheet.H, y2 + 4) - top;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  const image = context.createImageData(width, height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const value = sheet.warped[(top + y) * sheet.W + left + x];
+      const i = (y * width + x) * 4;
+      image.data[i] = image.data[i + 1] = image.data[i + 2] = value;
+      image.data[i + 3] = 255;
+    }
+  }
+  context.putImageData(image, 0, 0);
+  return canvas.toDataURL("image/png");
+}
+
 async function startLiveScan(testId, test, page = 1, collected = null) {
   stopLiveScan();
+  // Titul tuzilishi bo'lsa varaq telefonning o'zida o'qiladi; olinmasa (internet yo'q) — eski yo'l: surat serverga
+  let layout = null;
+  if ((test.sheet_version || 1) >= 3) {
+    loadScanLayout(testId)
+      .then((value) => {
+        layout = value;
+      })
+      .catch(() => {});
+  }
   showPage(`
     <div class="page-header">
       <button class="back-button" type="button" data-action="back-live" style="margin:0">←</button>
@@ -7678,6 +8128,80 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
   let busy = false;
   let waitForNewSheet = false; // saqlangan varaq hali kamera oldida — almashtirilishini kutamiz
   let restUntil = 0;
+  const frame = document.createElement("canvas");
+  const frameContext = frame.getContext("2d", { willReadFrequently: true });
+  let lastRead = null; // oldingi kadrda o'qilgan natija — ikkinchi kadr ham shuni bersa, qabul qilinadi
+
+  // To'liq o'lchamli kadrda varaqni o'qish (burchaklar kichik kadrda topilgan)
+  const readFrameHere = (corners, probeWidth) => {
+    const factor = Math.min(1, 1600 / Math.max(video.videoWidth, video.videoHeight));
+    frame.width = Math.round(video.videoWidth * factor);
+    frame.height = Math.round(video.videoHeight * factor);
+    frameContext.drawImage(video, 0, 0, frame.width, frame.height);
+    const pixels = frameContext.getImageData(0, 0, frame.width, frame.height).data;
+    const gray = new Float32Array(frame.width * frame.height);
+    for (let i = 0, p = 0; i < gray.length; i += 1, p += 4) {
+      gray[i] = pixels[p] * 0.299 + pixels[p + 1] * 0.587 + pixels[p + 2] * 0.114;
+    }
+    const k = frame.width / probeWidth;
+    const full = corners.map((corner) => refineCorner(gray, frame.width, frame.height, corner.x * k, corner.y * k, corner.size * k));
+    const sheet = prepareSheetFrame(gray, frame.width, frame.height, full);
+    if (!sheet) return null;
+    let result = readSheetAnswers(sheet, layout.bubbles, page);
+    if (page === 1 && layout.old_bubbles && result.sheet_number_status !== "ok") {
+      // Oldin chop etilgan 3 xonali ID'li titul
+      const old = readSheetAnswers(sheet, layout.old_bubbles, 1);
+      if (old.sheet_number_status === "ok") result = old;
+    }
+    return { result, sheet };
+  };
+
+  const resume = (message) => {
+    if (message) status.textContent = message;
+    busy = false;
+    previous = null;
+    steady = 0;
+    lastRead = null;
+    liveTimer = setInterval(tick, 250);
+  };
+
+  // Telefonda o'qilgan natija: serverga faqat javoblar boradi (o'quvchi ID bo'yicha topiladi)
+  const accept = async ({ result, sheet }) => {
+    busy = true;
+    clearInterval(liveTimer);
+    const signature = result.sheet_number
+      ? `#${result.sheet_number}`
+      : result.questions.map((question) => question.chosen || "-").join("");
+    if (page === 1 && liveSession?.lastSignature && signature === liveSession.lastSignature) {
+      waitForNewSheet = true;
+      resume("✅ Bu varaq saqlangan — keyingisini qo'ying");
+      return;
+    }
+    status.textContent = "✅ O'qildi";
+    try {
+      const scan = await api(`/api/teacher/tests/${testId}/scan/result`, {
+        method: "POST",
+        body: { ...result, page, name_image: page === 1 ? sheetNameImage(sheet) : null },
+      });
+      stopLiveScan();
+      liveSession = liveSession || { count: 0 };
+      const merged = mergeScan(scan, collected);
+      merged.live = true;
+      renderScanReview(testId, test, merged);
+    } catch (error) {
+      if (!video.isConnected) return;
+      if (isOfflineError(error) && page === 1) {
+        // Internet yo'q — kadr navbatga, keyin serverda o'qiladi
+        await queueSheet(testId, frame.toDataURL("image/jpeg", 0.85));
+        liveSession = liveSession || { count: 0 };
+        liveSession.count += 1;
+        waitForNewSheet = true;
+        resume("📥 Navbatga qo'shildi (internet yo'q) — keyingisini qo'ying");
+        return;
+      }
+      resume(`⚠️ ${error.message}`);
+    }
+  };
 
   const capture = async () => {
     if (busy || !video.videoWidth) return;
@@ -7759,6 +8283,7 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     if (!corners) {
       previous = null;
       steady = 0;
+      lastRead = null;
       waitForNewSheet = false; // varaq olib qo'yildi
       return;
     }
@@ -7778,6 +8303,27 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     });
     draw.closePath();
     draw.stroke();
+
+    if (layout) {
+      // Varaq shu yerning o'zida o'qiladi; ketma-ket ikki kadr bir xil natija bersa — qabul
+      const read = readFrameHere(corners, width);
+      restUntil = performance.now() + (performance.now() - started) * 0.5;
+      if (!read) return;
+      const { result } = read;
+      if (result.sheet_code !== null && result.sheet_code !== layout.sheet_code) {
+        lastRead = null;
+        status.textContent = "⚠️ Bu titul boshqa imtihonniki — shu imtihonning varag'ini qo'ying";
+        return;
+      }
+      const signature = JSON.stringify([result.answers, result.sheet_number, result.variant, result.sheet_code]);
+      if (signature !== lastRead) {
+        lastRead = signature;
+        status.textContent = "🔎 O'qilmoqda…";
+        return;
+      }
+      accept(read);
+      return;
+    }
 
     const moved = previous
       ? Math.max(...corners.map((corner, index) => Math.hypot(corner.x - previous[index].x, corner.y - previous[index].y)))
