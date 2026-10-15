@@ -7334,6 +7334,8 @@ function mergeScan(scan, collected) {
 */
 let liveStream = null;
 let liveTimer = null;
+let liveWorker = null; // kadrlarni alohida oqimda o'qiydigan Web Worker
+const LIVE_FRAME_GAP = 150; // kadrlar orasi (ms): 30 kadr/s da har 5-kadr — telefon qizib ketmasin
 let liveSession = null; // { count, lastSignature } — ketma-ket skanerlanganlar soni va oxirgi varaq
 
 // Varaqni tanish uchun "iz": raqami bo'lsa — raqam, bo'lmasa — o'qilgan javoblar
@@ -7344,6 +7346,11 @@ function sheetSignature(scan) {
 function stopLiveScan() {
   clearInterval(liveTimer);
   liveTimer = null;
+  if (liveWorker) {
+    liveWorker.terminate();
+    URL.revokeObjectURL(liveWorker.url);
+    liveWorker = null;
+  }
   liveStream?.getTracks().forEach((track) => track.stop());
   liveStream = null;
 }
@@ -7353,6 +7360,15 @@ const SHEET_PAGE = { width: 595.28, height: 841.89, corner: 32, cornerSize: 14, 
 
 // 4 nuqtadan 4 nuqtaga perspektiv moslik (varaqdagi punkt → kadr pikseli)
 function perspectiveMap(from, to) {
+  const h = perspectiveMatrix(from, to);
+  if (!h) return null;
+  return (x, y) => {
+    const w = h[6] * x + h[7] * y + 1;
+    return [(h[0] * x + h[1] * y + h[2]) / w, (h[3] * x + h[4] * y + h[5]) / w];
+  };
+}
+
+function perspectiveMatrix(from, to) {
   const rows = [];
   from.forEach(([x, y], index) => {
     const [u, v] = to[index];
@@ -7370,11 +7386,7 @@ function perspectiveMap(from, to) {
       for (let k = column; k < 9; k += 1) rows[row][k] -= factor * rows[column][k];
     }
   }
-  const h = rows.map((row, index) => row[8] / row[index]);
-  return (x, y) => {
-    const w = h[6] * x + h[7] * y + 1;
-    return [(h[0] * x + h[1] * y + h[2]) / w, (h[3] * x + h[4] * y + h[5]) / w];
-  };
+  return rows.map((row, index) => row[8] / row[index]);
 }
 
 // Kichraytirilgan kadrda burchak kvadratlarini topish. Titulda chet belgilari bo'lsa (3-versiyadan),
@@ -7689,14 +7701,18 @@ function prepareSheetFrame(gray, width, height, corners) {
     [page.width - page.corner, page.height - page.corner],
     [page.corner, page.height - page.corner],
   ].map(([x, y]) => [x * READ_SCALE, y * READ_SCALE]);
-  const map = perspectiveMap(pageCorners, corners.map((corner) => [corner.x, corner.y]));
-  if (!map) return null;
+  const h = perspectiveMatrix(pageCorners, corners.map((corner) => [corner.x, corner.y]));
+  if (!h) return null;
+  const [h0, h1, h2, h3, h4, h5, h6, h7] = h;
 
-  // Perspektivani to'g'rilash (bilinear) — chetdan tashqarisi oq
+  // Perspektivani to'g'rilash (bilinear) — chetdan tashqarisi oq. Har piksel uchun massiv
+  // yaratilmaydi (2 mln piksel — telefonda eng sekin joyi shu edi)
   const warped = new Uint8ClampedArray(W * H);
   for (let y = 0; y < H; y += 1) {
     for (let x = 0; x < W; x += 1) {
-      const [u, v] = map(x, y);
+      const w = h6 * x + h7 * y + 1;
+      const u = (h0 * x + h1 * y + h2) / w;
+      const v = (h3 * x + h4 * y + h5) / w;
       const x0 = Math.floor(u);
       const y0 = Math.floor(v);
       if (x0 < 0 || y0 < 0 || x0 >= width - 1 || y0 >= height - 1) {
@@ -7712,23 +7728,23 @@ function prepareSheetFrame(gray, width, height, corners) {
     }
   }
 
-  // Yengil xiralash (3×3) va mahalliy o'rtacha bo'yicha qora-oq (serverdagi adaptiveThreshold kabi)
+  // Yengil xiralash (3×3, [1 2 1]×[1 2 1]) — ikki o'tishda: avval gorizontal, keyin vertikal.
+  // So'ng mahalliy o'rtacha bo'yicha qora-oq (serverdagi adaptiveThreshold kabi)
+  const across = new Uint16Array(W * H);
+  for (let y = 0; y < H; y += 1) {
+    const start = y * W;
+    for (let x = 0; x < W; x += 1) {
+      const left = warped[start + (x > 0 ? x - 1 : 0)];
+      const right = warped[start + (x < W - 1 ? x + 1 : W - 1)];
+      across[start + x] = left + 2 * warped[start + x] + right;
+    }
+  }
   const blurred = new Float32Array(W * H);
   for (let y = 0; y < H; y += 1) {
-    for (let x = 0; x < W; x += 1) {
-      let sum = 0;
-      let weight = 0;
-      for (let dy = -1; dy <= 1; dy += 1) {
-        const yy = Math.min(H - 1, Math.max(0, y + dy));
-        for (let dx = -1; dx <= 1; dx += 1) {
-          const xx = Math.min(W - 1, Math.max(0, x + dx));
-          const w = (dx ? 1 : 2) * (dy ? 1 : 2);
-          sum += warped[yy * W + xx] * w;
-          weight += w;
-        }
-      }
-      blurred[y * W + x] = sum / weight;
-    }
+    const up = (y > 0 ? y - 1 : 0) * W;
+    const down = (y < H - 1 ? y + 1 : H - 1) * W;
+    const start = y * W;
+    for (let x = 0; x < W; x += 1) blurred[start + x] = (across[up + x] + 2 * across[start + x] + across[down + x]) / 16;
   }
   const row = W + 1;
   const integral = new Float64Array(row * (H + 1));
@@ -7741,24 +7757,27 @@ function prepareSheetFrame(gray, width, height, corners) {
   }
   const half = Math.round(40 * READ_SCALE) >> 1;
   const binary = new Uint8Array(W * H);
-  for (let y = 0; y < H; y += 1) {
-    const y0 = Math.max(0, y - half);
-    const y1 = Math.min(H, y + half + 1);
-    for (let x = 0; x < W; x += 1) {
-      const x0 = Math.max(0, x - half);
-      const x1 = Math.min(W, x + half + 1);
-      const mean =
-        (integral[y1 * row + x1] - integral[y0 * row + x1] - integral[y1 * row + x0] + integral[y0 * row + x0]) /
-        ((x1 - x0) * (y1 - y0));
-      binary[y * W + x] = blurred[y * W + x] <= mean - 18 ? 1 : 0;
-    }
+  // Qora piksellar soni uchun integral — kvadrat ichidagi ulush bir zumda (qora-oq bilan bir o'tishda)
+  const binaryIntegral = new Int32Array(row * (H + 1));
+  const left = new Int32Array(W);
+  const right = new Int32Array(W);
+  for (let x = 0; x < W; x += 1) {
+    left[x] = Math.max(0, x - half);
+    right[x] = Math.min(W, x + half + 1);
   }
-  // Qora piksellar soni uchun integral — kvadrat ichidagi ulush bir zumda
-  const binaryIntegral = new Float64Array(row * (H + 1));
   for (let y = 0; y < H; y += 1) {
+    const top = Math.max(0, y - half) * row;
+    const bottom = Math.min(H, y + half + 1) * row;
+    const rows = (bottom - top) / row;
+    const start = y * W;
     let rowSum = 0;
     for (let x = 0; x < W; x += 1) {
-      rowSum += binary[y * W + x];
+      const x0 = left[x];
+      const x1 = right[x];
+      const mean = (integral[bottom + x1] - integral[top + x1] - integral[bottom + x0] + integral[top + x0]) / ((x1 - x0) * rows);
+      const dark = blurred[start + x] <= mean - 18 ? 1 : 0;
+      binary[start + x] = dark;
+      rowSum += dark;
       binaryIntegral[(y + 1) * row + x + 1] = binaryIntegral[y * row + x + 1] + rowSum;
     }
   }
@@ -8038,6 +8057,109 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
   };
 }
 
+// Bitta kamera kadri: kichraytirilgan kadrda burchaklar; topilsa va titul tuzilishi bo'lsa — to'liq
+// o'lchamli kadrda varaq o'qiladi. Web Worker ichida ham, asosiy oqimda ham bir xil ishlaydi
+// (source — video yoki ImageBitmap)
+function analyzeFrame(source, sourceWidth, sourceHeight, options) {
+  const pool = analyzeFrame.pool || (analyzeFrame.pool = {});
+  const context = (name, width, height) => {
+    if (!pool[name]) {
+      const canvas = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
+      pool[name] = canvas.getContext("2d", { willReadFrequently: true });
+    }
+    const draw = pool[name];
+    if (draw.canvas.width !== width) draw.canvas.width = width;
+    if (draw.canvas.height !== height) draw.canvas.height = height;
+    draw.drawImage(source, 0, 0, width, height);
+    return draw.getImageData(0, 0, width, height).data;
+  };
+
+  // Kadr kichraytiriladi (uzun tomoni 720 px) — chet belgilari ko'rinadigan darajada
+  const factor = 720 / Math.max(sourceWidth, sourceHeight);
+  const width = Math.round(sourceWidth * factor);
+  const height = Math.round(sourceHeight * factor);
+  const corners = findSheetCorners(context("probe", width, height), width, height, options.edgeMarks);
+  const answer = { width, height, corners, read: null };
+  if (!corners || !options.layout || options.skipRead) return answer;
+
+  const scale = Math.min(1, 1600 / Math.max(sourceWidth, sourceHeight));
+  const fullWidth = Math.round(sourceWidth * scale);
+  const fullHeight = Math.round(sourceHeight * scale);
+  const pixels = context("full", fullWidth, fullHeight);
+  const gray = new Float32Array(fullWidth * fullHeight);
+  for (let i = 0, p = 0; i < gray.length; i += 1, p += 4) {
+    gray[i] = pixels[p] * 0.299 + pixels[p + 1] * 0.587 + pixels[p + 2] * 0.114;
+  }
+  const k = fullWidth / width;
+  const full = corners.map((corner) => refineCorner(gray, fullWidth, fullHeight, corner.x * k, corner.y * k, corner.size * k));
+  const sheet = prepareSheetFrame(gray, fullWidth, fullHeight, full);
+  if (!sheet) return answer;
+  let result = readSheetAnswers(sheet, options.layout.bubbles, options.page);
+  if (options.page === 1 && options.layout.old_bubbles && result.sheet_number_status !== "ok") {
+    // Oldin chop etilgan 3 xonali ID'li titul
+    const old = readSheetAnswers(sheet, options.layout.old_bubbles, 1);
+    if (old.sheet_number_status === "ok") result = old;
+  }
+  // Natija ekraniga faqat tekislangan kulrang varaq kerak
+  answer.read = { result, sheet: { W: sheet.W, H: sheet.H, warped: sheet.warped } };
+  return answer;
+}
+
+// Kadrlar alohida oqimda (Web Worker) o'qiladi — ekran va kamera qotmaydi. Worker shu fayldagi
+// funksiyalarning o'zidan yig'iladi; ishlamasa (eski WebView) — null, kadr asosiy oqimda o'qiladi
+function createScanWorker() {
+  if (typeof Worker === "undefined" || typeof OffscreenCanvas === "undefined" || typeof createImageBitmap === "undefined") {
+    return null;
+  }
+  const source = [
+    `const SHEET_PAGE = ${JSON.stringify(SHEET_PAGE)};`,
+    `const READ_SCALE = ${READ_SCALE};`,
+    `const FILLED_RATIO = ${FILLED_RATIO};`,
+    `const UNSURE_RATIO = ${UNSURE_RATIO};`,
+    ...[
+      perspectiveMatrix,
+      perspectiveMap,
+      findSheetCorners,
+      cornersFromEdgeMarks,
+      refineCorner,
+      prepareSheetFrame,
+      bubbleMasks,
+      maskFill,
+      boxFill,
+      edgeMarkOffsets,
+      interpolateOffset,
+      readSheetAnswers,
+      analyzeFrame,
+    ].map(String),
+    `let layout = null;
+    let page = 1;
+    onmessage = ({ data }) => {
+      if ("layout" in data) {
+        layout = data.layout;
+        page = data.page;
+        return;
+      }
+      const { bitmap, edgeMarks, skipRead } = data;
+      let answer;
+      try {
+        answer = analyzeFrame(bitmap, bitmap.width, bitmap.height, { edgeMarks, skipRead, layout, page });
+      } catch (error) {
+        answer = { error: String(error) };
+      }
+      bitmap.close();
+      postMessage(answer, answer.read ? [answer.read.sheet.warped.buffer] : []);
+    };`,
+  ].join("\n");
+  try {
+    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+    const worker = new Worker(url);
+    worker.url = url;
+    return worker;
+  } catch {
+    return null;
+  }
+}
+
 // Titul tuzilishi (doirachalar joyi) — har test uchun bir marta serverdan olinadi
 const scanLayouts = new Map();
 async function loadScanLayout(testId) {
@@ -8190,12 +8312,15 @@ function drawScanGuide(draw, width, height, corners) {
 
 async function startLiveScan(testId, test, page = 1, collected = null) {
   stopLiveScan();
+  liveWorker = createScanWorker();
+  const worker = liveWorker;
   // Titul tuzilishi bo'lsa varaq telefonning o'zida o'qiladi; olinmasa (internet yo'q) — eski yo'l: surat serverga
   let layout = null;
   if ((test.sheet_version || 1) >= 3) {
     loadScanLayout(testId)
       .then((value) => {
         layout = value;
+        worker?.postMessage({ layout: value, page });
       })
       .catch(() => {});
   }
@@ -8265,39 +8390,23 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
   await video.play().catch(() => {});
   status.textContent = "Varaqning 4 ta qora burchagini ekrandagi kvadratlarga tushiring";
 
-  const probe = document.createElement("canvas");
-  const probeContext = probe.getContext("2d", { willReadFrequently: true });
   let previous = null;
   let steady = 0;
   let busy = false;
+  let analyzing = false; // kadr worker'da o'qilmoqda — keyingisi navbat kutmaydi, o'tkazib yuboriladi
   let waitForNewSheet = false; // saqlangan varaq hali kamera oldida — almashtirilishini kutamiz
   let restUntil = 0;
-  const frame = document.createElement("canvas");
-  const frameContext = frame.getContext("2d", { willReadFrequently: true });
   let lastRead = null; // oldingi kadrda o'qilgan natija — ikkinchi kadr ham shuni bersa, qabul qilinadi
+  const edgeMarks = (test.sheet_version || 1) >= 3;
 
-  // To'liq o'lchamli kadrda varaqni o'qish (burchaklar kichik kadrda topilgan)
-  const readFrameHere = (corners, probeWidth) => {
+  // Kameradagi kadrning surati (JPEG) — serverda o'qish yoki internet yo'q bo'lsa navbat uchun
+  const snapshot = () => {
+    const full = document.createElement("canvas");
     const factor = Math.min(1, 1600 / Math.max(video.videoWidth, video.videoHeight));
-    frame.width = Math.round(video.videoWidth * factor);
-    frame.height = Math.round(video.videoHeight * factor);
-    frameContext.drawImage(video, 0, 0, frame.width, frame.height);
-    const pixels = frameContext.getImageData(0, 0, frame.width, frame.height).data;
-    const gray = new Float32Array(frame.width * frame.height);
-    for (let i = 0, p = 0; i < gray.length; i += 1, p += 4) {
-      gray[i] = pixels[p] * 0.299 + pixels[p + 1] * 0.587 + pixels[p + 2] * 0.114;
-    }
-    const k = frame.width / probeWidth;
-    const full = corners.map((corner) => refineCorner(gray, frame.width, frame.height, corner.x * k, corner.y * k, corner.size * k));
-    const sheet = prepareSheetFrame(gray, frame.width, frame.height, full);
-    if (!sheet) return null;
-    let result = readSheetAnswers(sheet, layout.bubbles, page);
-    if (page === 1 && layout.old_bubbles && result.sheet_number_status !== "ok") {
-      // Oldin chop etilgan 3 xonali ID'li titul
-      const old = readSheetAnswers(sheet, layout.old_bubbles, 1);
-      if (old.sheet_number_status === "ok") result = old;
-    }
-    return { result, sheet };
+    full.width = Math.round(video.videoWidth * factor);
+    full.height = Math.round(video.videoHeight * factor);
+    full.getContext("2d").drawImage(video, 0, 0, full.width, full.height);
+    return full.toDataURL("image/jpeg", 0.85);
   };
 
   const resume = (message) => {
@@ -8306,7 +8415,7 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     previous = null;
     steady = 0;
     lastRead = null;
-    liveTimer = setInterval(tick, 250);
+    liveTimer = setInterval(tick, LIVE_FRAME_GAP);
   };
 
   // Telefonda o'qilgan natija: serverga faqat javoblar boradi (o'quvchi ID bo'yicha topiladi)
@@ -8340,7 +8449,7 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
       if (!video.isConnected) return;
       if (isOfflineError(error) && page === 1) {
         // Internet yo'q — kadr navbatga, keyin serverda o'qiladi
-        await queueSheet(testId, frame.toDataURL("image/jpeg", 0.85));
+        await queueSheet(testId, snapshot());
         liveSession = liveSession || { count: 0 };
         liveSession.count += 1;
         waitForNewSheet = true;
@@ -8356,12 +8465,7 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     busy = true;
     clearInterval(liveTimer);
     status.textContent = "⏳ Varaq o'qilmoqda…";
-    const full = document.createElement("canvas");
-    const factor = Math.min(1, 1600 / Math.max(video.videoWidth, video.videoHeight));
-    full.width = Math.round(video.videoWidth * factor);
-    full.height = Math.round(video.videoHeight * factor);
-    full.getContext("2d").drawImage(video, 0, 0, full.width, full.height);
-    const image = full.toDataURL("image/jpeg", 0.85);
+    const image = snapshot();
     try {
       const scan = await readSheetImage(testId, image, page, collected);
       if (page === 1 && liveSession?.lastSignature && sheetSignature(scan) === liveSession.lastSignature) {
@@ -8371,7 +8475,7 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
         busy = false;
         previous = null;
         steady = 0;
-        liveTimer = setInterval(tick, 250);
+        liveTimer = setInterval(tick, LIVE_FRAME_GAP);
         return;
       }
       stopLiveScan();
@@ -8389,14 +8493,14 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
         busy = false;
         previous = null;
         steady = 0;
-        liveTimer = setInterval(tick, 250);
+        liveTimer = setInterval(tick, LIVE_FRAME_GAP);
         return;
       }
       status.textContent = `⚠️ ${error.message}`;
       busy = false;
       previous = null;
       steady = 0;
-      liveTimer = setInterval(tick, 250);
+      liveTimer = setInterval(tick, LIVE_FRAME_GAP);
     }
   };
 
@@ -8405,24 +8509,56 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
       stopLiveScan();
       return;
     }
-    if (busy || !video.videoWidth || performance.now() < restUntil) return;
+    if (busy || analyzing || !video.videoWidth || performance.now() < restUntil) return;
+    if (worker && liveWorker === worker) {
+      // Kadr alohida oqimga beriladi; javob kelguncha yangi kadr olinmaydi
+      analyzing = true;
+      createImageBitmap(video)
+        .then((bitmap) => {
+          if (liveWorker !== worker) {
+            bitmap.close();
+            analyzing = false;
+            return;
+          }
+          worker.postMessage({ bitmap, edgeMarks, skipRead: waitForNewSheet }, [bitmap]);
+        })
+        .catch(() => {
+          // Bu WebView'da ishlamadi — kadrlar asosiy oqimda o'qiladi
+          analyzing = false;
+          stopWorker();
+        });
+      return;
+    }
     const started = performance.now();
-    // Kadr kichraytiriladi (uzun tomoni 720 px) — chet belgilari ko'rinadigan darajada
-    const factor = 720 / Math.max(video.videoWidth, video.videoHeight);
-    const width = Math.round(video.videoWidth * factor);
-    const height = Math.round(video.videoHeight * factor);
-    probe.width = width;
-    probe.height = height;
-    probeContext.drawImage(video, 0, 0, width, height);
-    const corners = findSheetCorners(
-      probeContext.getImageData(0, 0, width, height).data,
-      width,
-      height,
-      (test.sheet_version || 1) >= 3
-    );
+    const answer = analyzeFrame(video, video.videoWidth, video.videoHeight, { edgeMarks, layout, page, skipRead: waitForNewSheet });
     // Sekin telefonda qizib ketmasin: tekshiruv qancha vaqt olgan bo'lsa, shuncha dam olinadi
-    restUntil = performance.now() + (performance.now() - started) * 1.5;
+    restUntil = performance.now() + (performance.now() - started) * (answer.read ? 0.5 : 1.5);
+    handle(answer);
+  };
 
+  const stopWorker = () => {
+    if (liveWorker !== worker) return;
+    worker.terminate();
+    URL.revokeObjectURL(worker.url);
+    liveWorker = null;
+  };
+  if (worker) {
+    worker.onmessage = ({ data }) => {
+      analyzing = false;
+      if (liveWorker !== worker || !video.isConnected) return;
+      if (data.error) {
+        stopWorker();
+        return;
+      }
+      if (!busy) handle(data);
+    };
+    worker.onerror = () => {
+      analyzing = false;
+      stopWorker();
+    };
+  }
+
+  const handle = ({ width, height, corners, read }) => {
     // Topilgan burchaklar videoning ustida ko'rsatiladi
     overlay.width = video.clientWidth;
     overlay.height = video.clientHeight;
@@ -8454,8 +8590,6 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
 
     if (layout) {
       // Varaq shu yerning o'zida o'qiladi; ketma-ket ikki kadr bir xil natija bersa — qabul
-      const read = readFrameHere(corners, width);
-      restUntil = performance.now() + (performance.now() - started) * 0.5;
       if (!read) return;
       const { result } = read;
       if (result.sheet_code !== null && result.sheet_code !== layout.sheet_code) {
@@ -8483,7 +8617,7 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
   };
 
   document.getElementById("live-capture").addEventListener("click", () => capture());
-  liveTimer = setInterval(tick, 250);
+  liveTimer = setInterval(tick, LIVE_FRAME_GAP);
 }
 
 const SCAN_STATUS_NOTE = {
