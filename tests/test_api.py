@@ -4236,7 +4236,7 @@ def test_android_ilovaga_bot_orqali_kirish():
     assert client.get(f"/api/app-login/{old}").status_code == 410
 
 
-def _sheet_photo(test_id: int, marks: dict[int, str], skew: bool = True) -> str:
+def _sheet_photo(test_id: int, marks: dict[int, str], skew: bool = True, code_of: int | None = None) -> str:
     """Varaq "surati": doirachalar joyi PDF'dan olinadi, belgilanganlari bo'yaladi, so'ng qiyshaytiriladi."""
 
     from PIL import Image, ImageDraw
@@ -4248,13 +4248,23 @@ def _sheet_photo(test_id: int, marks: dict[int, str], skew: bool = True) -> str:
         bubbles: list[dict] = []
         sheet_test = session.get(Test, test_id)
         main.generate_answer_sheet_pdf(sheet_test, bubbles=bubbles, variants=main._variant_names(session, sheet_test) or None)
+        session.expunge(sheet_test)
     zoom = 2.0
     page = Image.new("RGB", (round(PAGE_WIDTH * zoom), round(PAGE_HEIGHT * zoom)), "white")
     draw = ImageDraw.Draw(page)
+    code = main.sheet_code(sheet_test) if code_of is None else code_of
     for x, y in [(32, 32), (PAGE_WIDTH - 32, 32), (32, PAGE_HEIGHT - 32), (PAGE_WIDTH - 32, PAGE_HEIGHT - 32)]:
-        draw.ellipse([(x - 7) * zoom, (y - 7) * zoom, (x + 7) * zoom, (y + 7) * zoom], fill="black")
+        box = [(x - 7) * zoom, (y - 7) * zoom, (x + 7) * zoom, (y + 7) * zoom]
+        if sheet_test.sheet_version >= 3:
+            draw.rectangle(box, fill="black")
+        else:
+            draw.ellipse(box, fill="black")
     for bubble in bubbles:
         cx, cy, r = bubble["x"] * zoom, (PAGE_HEIGHT - bubble["y"]) * zoom, bubble["r"] * zoom
+        if bubble["kind"] in ("mark", "code"):
+            if bubble["kind"] == "mark" or code >> int(bubble["letter"]) & 1:
+                draw.rectangle([cx - r, cy - r, cx + r, cy + r], fill="black")
+            continue
         filled = bubble["letter"] in marks.get(bubble["ref"], "").split(",")
         draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline="black", width=2, fill=(40, 40, 40) if filled else None)
     if skew:
@@ -4287,6 +4297,11 @@ def test_javoblar_varaqasi_skanerlanadi():
     double = client.post(url, json={"image_base64": _sheet_photo(test_id, {1: "A,B"})}, headers=as_user(555)).json()
     first = next(q for q in double["questions"] if q["ref"] == 1)
     assert first["status"] == "multiple" and first["chosen"] == "" and "1" not in double["answers"], first
+
+    # Boshqa imtihonning tituli (kodi boshqacha) — qabul qilinmaydi
+    other = client.post(url, json={"image_base64": _sheet_photo(test_id, {1: "B"}, code_of=main.sheet_code(SimpleNamespace(id=test_id + 1)))},
+                        headers=as_user(555))
+    assert other.status_code == 422 and "boshqa imtihon" in other.json()["detail"], other.text
 
     blank = io.BytesIO()
     from PIL import Image
@@ -4327,7 +4342,7 @@ def test_varaqdagi_oquvchi_raqami_boyicha_taniladi():
                 headers=as_user(555))
     detail = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1, "Birinchi Bola"), (2, "Ikkinchi Bola")]
-    assert detail["sheet_version"] == 2
+    assert detail["sheet_version"] == 3
 
     url = f"/api/teacher/tests/{test_id}/scan"
     photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "2", 1: "B", 2: "C"})

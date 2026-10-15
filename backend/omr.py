@@ -73,11 +73,14 @@ def _corner_candidates(gray: np.ndarray) -> list[tuple[float, float, float]]:
         if not min_radius <= radius <= max_radius:
             continue
         area = cv2.contourArea(contour)
-        if area < 0.6 * np.pi * radius * radius:  # dumaloq emas (harf, chiziq)
+        # Doira yoki kvadrat (yangi titulda burchaklar kvadrat); harf va chiziqlar o'tmaydi
+        if area < 0.5 * np.pi * radius * radius:
             continue
-        mask = np.zeros_like(binary)
-        cv2.drawContours(mask, [contour], -1, 255, -1)
-        if cv2.mean(binary, mask=mask)[0] < 0.8 * 255:  # ichi bo'sh doiracha
+        # Ichi to'liq qorami (bo'sh doiracha emas) — faqat dog' atrofidagi kichik hudud tekshiriladi
+        left, top, box_width, box_height = cv2.boundingRect(contour)
+        mask = np.zeros((box_height, box_width), np.uint8)
+        cv2.drawContours(mask, [contour], -1, 255, -1, offset=(-left, -top))
+        if cv2.mean(binary[top: top + box_height, left: left + box_width], mask=mask)[0] < 0.8 * 255:
             continue
         candidates.append((x, y, radius))
     return candidates
@@ -153,7 +156,7 @@ def _warp(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
     return cv2.warpPerspective(image, matrix, size, flags=cv2.INTER_LINEAR, borderValue=(255, 255, 255))
 
 
-def _fill_ratio(binary: np.ndarray, x: float, y: float, radius: float) -> float:
+def _fill_ratio(binary: np.ndarray, x: float, y: float, radius: float, square: bool = False) -> float:
     """
     Doiracha ichining qoraygan ulushi. Chizilgan chegarasi hisobga olinmaydi (ichki 55%).
     Qog'oz biroz egilgan bo'lsa ham topilishi uchun yaqin atrof (radiusning 25% igacha) ham tekshiriladi.
@@ -168,10 +171,126 @@ def _fill_ratio(binary: np.ndarray, x: float, y: float, radius: float) -> float:
         if patch.size == 0:
             continue
         yy, xx = np.ogrid[-inner: inner + 1, -inner: inner + 1]
-        disk = (xx * xx + yy * yy) <= inner * inner
+        disk = (xx * xx + yy * yy) <= inner * inner if not square else np.ones((2 * inner + 1, 2 * inner + 1), bool)
         disk = disk[: patch.shape[0], : patch.shape[1]]
         best = max(best, float((patch[disk] > 0).mean()))
     return best
+
+
+def _disk(radius_px: int, inner: float, outer: float) -> tuple[np.ndarray, np.ndarray]:
+    """Doiracha atrofidagi kvadrat ichida: halqa (chegara) va ichki doira niqoblari."""
+
+    yy, xx = np.ogrid[-radius_px: radius_px + 1, -radius_px: radius_px + 1]
+    distance = np.sqrt(xx * xx + yy * yy) / max(1, radius_px / 1.4)
+    return (distance >= inner) & (distance <= outer), distance <= 0.55
+
+
+class _ResponseMaps:
+    """
+    Har bir nuqta uchun: atrofidagi halqa (chop etilgan chegara) va ichki doira qanchalik
+    qora — bir marta hisoblanadi (har doiracha o'lchami uchun), keyin faqat o'qiladi. Tez.
+    """
+
+    def __init__(self, binary: np.ndarray) -> None:
+        self.binary = (binary > 0).astype(np.float32)
+        self.cache: dict[float, tuple[np.ndarray, np.ndarray]] = {}
+
+    def get(self, radius: float) -> tuple[np.ndarray, np.ndarray]:
+        key = round(radius, 2)
+        if key not in self.cache:
+            ring, inner = _disk(round(radius * SCALE * 1.4), 0.82, 1.18)
+            maps = []
+            for mask in (ring, inner):
+                kernel = mask.astype(np.float32) / mask.sum()
+                maps.append(cv2.filter2D(self.binary, -1, kernel, borderType=cv2.BORDER_CONSTANT))
+            self.cache[key] = (maps[0], maps[1])
+        return self.cache[key]
+
+
+def _sample(image: np.ndarray, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+    """Xaritadan qiymatlar (punktlardagi koordinatalar); chetdan chiqqanlari — 0."""
+
+    columns = np.rint(xs * SCALE).astype(int)
+    rows = np.rint(ys * SCALE).astype(int)
+    inside = (columns >= 0) & (columns < image.shape[1]) & (rows >= 0) & (rows < image.shape[0])
+    values = np.zeros(columns.shape, np.float32)
+    values[inside] = image[rows[inside], columns[inside]]
+    return values
+
+
+def _align_row(maps: "_ResponseMaps", centers: list[tuple[float, float]], radius: float,
+               start: tuple[float, float] = (0.0, 0.0)) -> tuple[float, float]:
+    """
+    Bitta savol qatori doirachalarini chop etilgan halqalari ustiga aniq joylashtiradi:
+    qator butunligicha ±0,8 radius oralig'ida siljitib, halqalar eng qora bo'lgan joy olinadi.
+    Qog'oz o'rtasidan bo'rtgan bo'lsa ham (chet belgilari buni ko'rmaydi) doiracha topiladi.
+    """
+
+    ring_map, _ = maps.get(radius)
+    grid = np.arange(-5, 6) * radius * 0.16
+    dx, dy = np.meshgrid(start[0] + grid, start[1] + grid)
+    dx, dy = dx.ravel(), dy.ravel()
+    points = np.array(centers, np.float32)
+    scores = _sample(ring_map, points[:, 0][None, :] + dx[:, None], points[:, 1][None, :] + dy[:, None]).sum(axis=1)
+    best = int(np.argmax(scores))
+    return float(dx[best]), float(dy[best])
+
+
+def _inner_fill(maps: "_ResponseMaps", x: float, y: float, radius: float) -> float:
+    """Halqaga moslangan doiracha ichining qoraygan ulushi (chegarasi hisobga olinmaydi)."""
+
+    _, inner_map = maps.get(radius)
+    offsets = np.array([-0.1, 0, 0.1]) * radius
+    dx, dy = np.meshgrid(offsets, offsets)
+    return float(_sample(inner_map, x + dx.ravel(), y + dy.ravel()).max())
+
+
+def _mark_offsets(binary: np.ndarray, marks: list[dict]) -> dict[str, list[tuple[float, float, float]]]:
+    """
+    Chetdagi tekislash belgilarining haqiqiy joyi: kutilgan joy atrofida qora kvadrat
+    qidiriladi. Natija: {"left": [(y, dx, dy), ...], "right": [...]} — punktlarda.
+    """
+
+    offsets: dict[str, list[tuple[float, float, float]]] = {"left": [], "right": []}
+    window = 9  # ±9 pt
+    for mark in marks:
+        x, y = mark["x"], PAGE_HEIGHT - mark["y"]
+        x0, y0 = round((x - window) * SCALE), round((y - window) * SCALE)
+        patch = binary[max(0, y0): round((y + window) * SCALE), max(0, x0): round((x + window) * SCALE)]
+        if patch.size == 0:
+            continue
+        count, labels, stats, centroids = cv2.connectedComponentsWithStats(patch, connectivity=8)
+        expected_area = (2 * mark["r"] * SCALE) ** 2
+        best = None
+        for label in range(1, count):
+            area = stats[label, cv2.CC_STAT_AREA]
+            if not 0.4 * expected_area <= area <= 2.2 * expected_area:
+                continue
+            cx = centroids[label][0] / SCALE + max(0, x0) / SCALE
+            cy = centroids[label][1] / SCALE + max(0, y0) / SCALE
+            distance = (cx - x) ** 2 + (cy - y) ** 2
+            if best is None or distance < best[0]:
+                best = (distance, cx - x, cy - y)
+        if best:
+            offsets[mark["ref"]].append((y, best[1], best[2]))
+    return offsets
+
+
+def _interpolate(points: list[tuple[float, float, float]], y: float) -> tuple[float, float]:
+    """Shu balandlikdagi siljish: eng yaqin ikki belgi orasida chiziqli."""
+
+    if not points:
+        return 0.0, 0.0
+    points = sorted(points)
+    if y <= points[0][0]:
+        return points[0][1], points[0][2]
+    if y >= points[-1][0]:
+        return points[-1][1], points[-1][2]
+    for (y1, dx1, dy1), (y2, dx2, dy2) in zip(points, points[1:]):
+        if y1 <= y <= y2:
+            t = (y - y1) / (y2 - y1) if y2 > y1 else 0
+            return dx1 + (dx2 - dx1) * t, dy1 + (dy2 - dy1) * t
+    return 0.0, 0.0
 
 
 def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1) -> dict:
@@ -194,14 +313,49 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1) -> dict:
         warped_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, round(40 * SCALE) | 1, 18
     )
 
+    # 3-versiya titul: chet belgilari bo'yicha mahalliy tuzatish (egilgan qog'oz)
+    page_bubbles = [bubble for bubble in bubbles if bubble["page"] == page]
+    offsets = _mark_offsets(binary, [bubble for bubble in page_bubbles if bubble["kind"] == "mark"])
+    left_x, right_x = CORNER_OFFSET, PAGE_WIDTH - CORNER_OFFSET
+
+    def corrected(x: float, y: float) -> tuple[float, float]:
+        ldx, ldy = _interpolate(offsets["left"], y)
+        rdx, rdy = _interpolate(offsets["right"], y)
+        t = min(1.0, max(0.0, (x - left_x) / (right_x - left_x)))
+        return x + ldx + (rdx - ldx) * t, y + ldy + (rdy - ldy) * t
+
+    code_bits: dict[int, float] = {}
     questions: dict = {}
     id_rows: dict[str, dict[str, float]] = {}
     variant_ratios: dict[str, float] = {}
-    for bubble in bubbles:
-        if bubble["page"] != page:
+    # Har savol qatori (va raqam/variant qatori) chop etilgan halqalari bo'yicha tekislanadi
+    rows: dict = {}
+    for bubble in page_bubbles:
+        if bubble["kind"] not in ("mark", "code"):
+            rows.setdefault(bubble["ref"], []).append(bubble)
+    # Qatorlar ustun bo'yicha tepadan pastga: har biri eng yaqin tekislangan qatorning
+    # siljishidan boshlab qidiriladi — qog'oz silliq egiladi, kuchli bo'rtish ham "kuzatiladi"
+    maps = _ResponseMaps(binary)
+    row_shift: dict = {}
+    aligned: list[tuple[float, float, tuple[float, float]]] = []
+    for ref, row in sorted(rows.items(), key=lambda item: (round(item[1][0]["x"] / 40), -item[1][0]["y"])):
+        centers = [corrected(bubble["x"], PAGE_HEIGHT - bubble["y"]) for bubble in row]
+        x0, y0 = centers[0]
+        near = [item for item in aligned if abs(item[0] - x0) < 40 and abs(item[1] - y0) < 60]
+        start = min(near, key=lambda item: abs(item[1] - y0))[2] if near else (0.0, 0.0)
+        row_shift[ref] = _align_row(maps, centers, row[0]["r"], start)
+        aligned.append((x0, y0, row_shift[ref]))
+
+    for bubble in page_bubbles:
+        if bubble["kind"] == "mark":
             continue
         # PDF koordinatasi pastdan, rasm esa tepadan sanaladi
-        ratio = _fill_ratio(binary, bubble["x"], PAGE_HEIGHT - bubble["y"], bubble["r"])
+        x, y = corrected(bubble["x"], PAGE_HEIGHT - bubble["y"])
+        if bubble["kind"] == "code":
+            code_bits[int(bubble["letter"])] = _fill_ratio(binary, x, y, bubble["r"], square=True)
+            continue
+        dx, dy = row_shift[bubble["ref"]]
+        ratio = _inner_fill(maps, x + dx, y + dy, bubble["r"])
         if bubble["kind"] == "id":
             id_rows.setdefault(bubble["ref"], {})[bubble["letter"]] = ratio
             continue
@@ -217,7 +371,7 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1) -> dict:
     answers: dict[str, str] = {}
     result = []
     for entry in questions.values():
-        ratios = entry.pop("ratios")
+        ratios = entry["ratios"]
         filled = [letter for letter in entry["options"] if ratios[letter] >= FILLED_RATIO]
         unsure = [letter for letter in entry["options"] if UNSURE_RATIO <= ratios[letter] < FILLED_RATIO]
         if entry["kind"] == "multi":
@@ -259,5 +413,11 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1) -> dict:
     marked_variants = [name for name, ratio in variant_ratios.items() if ratio >= FILLED_RATIO]
     variant = marked_variants[0] if len(marked_variants) == 1 else None
 
+    # Imtihon kodi (3-versiya): har katak aniq bo'yalgan yoki aniq bo'sh bo'lsa o'qiladi
+    sheet_code = None
+    if code_bits and all(ratio >= FILLED_RATIO or ratio < UNSURE_RATIO for ratio in code_bits.values()):
+        sheet_code = sum(1 << bit for bit, ratio in code_bits.items() if ratio >= FILLED_RATIO)
+
     return {"answers": answers, "questions": result, "name_image": name_image,
-            "sheet_number": sheet_number, "sheet_number_status": number_status, "variant": variant}
+            "sheet_number": sheet_number, "sheet_number_status": number_status, "variant": variant,
+            "sheet_code": sheet_code}

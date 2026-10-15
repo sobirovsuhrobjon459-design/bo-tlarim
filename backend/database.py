@@ -243,9 +243,10 @@ class Test(Base):
     required_channel: Mapped[str | None] = mapped_column(String(100), default=None)
 
     # Javoblar varaqasi ko'rinishi: 2 — "O'quvchi raqami" doirachalari bilan (skaner
-    # o'quvchini o'zi taniydi). Eski testlar 1 da qoladi — oldin chop etilgan
-    # varaqlar ham to'g'ri skanerlanishi uchun.
-    sheet_version: Mapped[int] = mapped_column(default=2)
+    # o'quvchini o'zi taniydi); 3 — kvadrat burchaklar, chetlarda tekislash belgilari
+    # va pastda imtihon kodi (boshqa imtihon tituli bilan adashmaydi). Eski testlar
+    # o'z versiyasida qoladi — oldin chop etilgan varaqlar ham to'g'ri skanerlanishi uchun.
+    sheet_version: Mapped[int] = mapped_column(default=3)
 
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     # O'qituvchi "o'chirgan" test. Bazadan butunlay o'chirilmaydi: unga bog'liq

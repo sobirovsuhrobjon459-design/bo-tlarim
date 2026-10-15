@@ -1651,7 +1651,59 @@ def _latex_to_plain(value: str) -> str:
     return "".join(char for char in text if ord(char) < 256)
 
 
-def _draw_corner_marks(sheet, width: float, height: float) -> None:
+# 3-versiya titul: chetdagi tekislash belgilari va imtihon kodi (punktlarda)
+SHEET_CORNER = 32           # burchak belgisi markazi chetdan
+SHEET_CORNER_SIZE = 14      # burchak kvadrati
+SHEET_EDGE_MARKS = 10       # chap va o'ng chetdagi belgilar soni (burchaklar orasida)
+SHEET_EDGE_SIZE = 8
+SHEET_CODE_BITS = 12        # pastki chetdagi imtihon kodi kataklari
+SHEET_CODE_SIZE = 9
+
+
+def sheet_code(test: Test) -> int:
+    """Imtihon kodi (12 bit) — titul boshqa imtihonniki emasligini tekshirish uchun."""
+    return (test.id * 2654435761) % (1 << SHEET_CODE_BITS) or 1
+
+
+def _draw_sheet_marks(sheet, test: Test, width: float, height: float, bubbles: list | None, page: int) -> None:
+    """
+    3-versiya: burchaklarda kvadratlar, chap/o'ng chetda tekislash belgilari va pastda
+    imtihon kodi. Skaner varaqni burchaklar bo'yicha tekislab, har qatorni eng yaqin
+    chet belgisiga qarab aniqlashtiradi — egilgan yoki qiyshaygan qog'ozda ham adashmaydi.
+    """
+
+    half = SHEET_CORNER_SIZE / 2
+    for x, y in [(SHEET_CORNER, height - SHEET_CORNER), (width - SHEET_CORNER, height - SHEET_CORNER),
+                 (SHEET_CORNER, SHEET_CORNER), (width - SHEET_CORNER, SHEET_CORNER)]:
+        sheet.rect(x - half, y - half, SHEET_CORNER_SIZE, SHEET_CORNER_SIZE, stroke=0, fill=1)
+
+    step = (height - 2 * SHEET_CORNER) / (SHEET_EDGE_MARKS + 1)
+    edge_half = SHEET_EDGE_SIZE / 2
+    for index in range(1, SHEET_EDGE_MARKS + 1):
+        y = SHEET_CORNER + index * step
+        for side, x in (("left", SHEET_CORNER), ("right", width - SHEET_CORNER)):
+            sheet.rect(x - edge_half, y - edge_half, SHEET_EDGE_SIZE, SHEET_EDGE_SIZE, stroke=0, fill=1)
+            if bubbles is not None:
+                bubbles.append({"page": page, "kind": "mark", "ref": side, "x": x, "y": y, "r": edge_half})
+
+    code = sheet_code(test)
+    first_x, last_x = SHEET_CORNER + 48, width - SHEET_CORNER - 48
+    gap = (last_x - first_x) / (SHEET_CODE_BITS - 1)
+    code_half = SHEET_CODE_SIZE / 2
+    for bit in range(SHEET_CODE_BITS):
+        x = first_x + bit * gap
+        if code >> bit & 1:
+            sheet.rect(x - code_half, SHEET_CORNER - code_half, SHEET_CODE_SIZE, SHEET_CODE_SIZE, stroke=0, fill=1)
+        if bubbles is not None:
+            bubbles.append({"page": page, "kind": "code", "ref": "code", "letter": str(bit),
+                            "x": x, "y": SHEET_CORNER, "r": code_half})
+
+
+def _draw_corner_marks(sheet, width: float, height: float, test: Test | None = None,
+                       bubbles: list | None = None, page: int = 1) -> None:
+    if test is not None and (test.sheet_version or 1) >= 3:
+        _draw_sheet_marks(sheet, test, width, height, bubbles, page)
+        return
     """Burchaklardagi qora nuqtalar — varaqni rasmga olganda chetlarini aniqlash uchun."""
     for x, y in [(32, height - 32), (width - 32, height - 32), (32, 32), (width - 32, 32)]:
         sheet.circle(x, y, 7, stroke=0, fill=1)
@@ -1671,7 +1723,7 @@ def _draw_sheet_header(sheet, test: Test, width: float, height: float, with_answ
     ism yozib, raqam bo'yab qo'yilgan shaxsiy varaq chiqadi.
     """
 
-    _draw_corner_marks(sheet, width, height)
+    _draw_corner_marks(sheet, width, height, test, bubbles, 1)
 
     sheet.setFont("Helvetica-Bold", 15)
     sheet.drawCentredString(width / 2, height - 56, test.title)
@@ -1880,9 +1932,9 @@ def _draw_answer_sheet(sheet, test: Test, with_answers: bool, bubbles: list | No
         if index and position == 0:
             # Sig'magan ustunlar keyingi sahifaga o'tadi
             sheet.showPage()
-            _draw_corner_marks(sheet, width, height)
-            top_y = height - 70
             page += 1
+            _draw_corner_marks(sheet, width, height, test, bubbles, page)
+            top_y = height - 70
 
         _draw_sheet_column(
             sheet,
@@ -1898,7 +1950,7 @@ def _draw_answer_sheet(sheet, test: Test, with_answers: bool, bubbles: list | No
 
     if not with_answers:
         sheet.setFont("Helvetica", 8)
-        sheet.drawCentredString(width / 2, 40, "To'g'ri javob doirachasini to'liq bo'yang.")
+        sheet.drawCentredString(width / 2, 44, "To'g'ri javob doirachasini to'liq bo'yang.")
 
 
 def generate_answer_sheet_pdf(test: Test, with_answers: bool = False, bubbles: list | None = None,
@@ -4398,6 +4450,11 @@ def scan_sheet(
         result = scan_answer_sheet(image, bubbles, page=body.page)
     except ScanError as error:
         raise HTTPException(status_code=422, detail=str(error))
+    if result.get("sheet_code") is not None and result["sheet_code"] != sheet_code(test):
+        raise HTTPException(
+            status_code=422,
+            detail="Bu titul boshqa imtihonniki — shu imtihonning varag'ini skanerlang",
+        )
 
     # Varaqdagi raqam bo'yicha o'quvchi topiladi (ro'yxatda bo'lsa)
     _ensure_sheet_numbers(db, test)

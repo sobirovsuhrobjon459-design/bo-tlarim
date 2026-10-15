@@ -7178,7 +7178,7 @@ function pickSheetPhoto() {
 }
 
 // Telefon surati 5–10 MB bo'ladi — yuborishdan oldin kichraytiriladi (skanerga 2000 px yetadi)
-async function shrinkPhoto(file, maxSide = 2000) {
+async function shrinkPhoto(file, maxSide = 1600) {
   const url = URL.createObjectURL(file);
   try {
     const image = await new Promise((resolve, reject) => {
@@ -7192,7 +7192,7 @@ async function shrinkPhoto(file, maxSide = 2000) {
     canvas.width = Math.round(image.naturalWidth * factor);
     canvas.height = Math.round(image.naturalHeight * factor);
     canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/jpeg", 0.88);
+    return canvas.toDataURL("image/jpeg", 0.85);
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -7429,11 +7429,11 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     clearInterval(liveTimer);
     status.textContent = "⏳ Varaq o'qilmoqda…";
     const full = document.createElement("canvas");
-    const factor = Math.min(1, 2000 / Math.max(video.videoWidth, video.videoHeight));
+    const factor = Math.min(1, 1600 / Math.max(video.videoWidth, video.videoHeight));
     full.width = Math.round(video.videoWidth * factor);
     full.height = Math.round(video.videoHeight * factor);
     full.getContext("2d").drawImage(video, 0, 0, full.width, full.height);
-    const image = full.toDataURL("image/jpeg", 0.9);
+    const image = full.toDataURL("image/jpeg", 0.85);
     try {
       const scan = await readSheetImage(testId, image, page, collected);
       if (page === 1 && liveSession?.lastSignature && sheetSignature(scan) === liveSession.lastSignature) {
