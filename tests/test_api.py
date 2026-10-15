@@ -4415,7 +4415,8 @@ def test_varaqdagi_oquvchi_raqami_boyicha_taniladi():
     assert (17, "Yangi Bola") in [(s["number"], s["name"]) for s in detail["students"]], detail["students"]
 
     named = client.get(f"/api/teacher/tests/{test_id}/answer-sheet", params={"named": "true"}, headers=as_user(555))
-    assert named.status_code == 200 and named.content.startswith(b"%PDF") and named.content.count(b"/Type /Page") >= 3
+    # To'liq titul emas — bitta sahifada ism va ID ro'yxati
+    assert named.status_code == 200 and named.content.startswith(b"%PDF") and named.content.count(b"/Type /Page\n") == 1
 
     # Eski test (raqamsiz varaq) ham skanerlanadi, ismli varaq esa yo'q
     old = create_test(enrollment_type="closed")

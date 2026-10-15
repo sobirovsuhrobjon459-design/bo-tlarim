@@ -8414,7 +8414,7 @@ async function renderTestDetail(testId) {
            <button class="btn btn-ghost" id="answer-key-button">🔑 To'g'ri javoblar (kalit)</button>
            ${
              test.sheet_version >= 2
-               ? `<button class="btn btn-ghost" id="named-sheets-button">👥 Ismli varaqlar (har o'quvchiga)</button>`
+               ? `<button class="btn btn-ghost" id="named-sheets-button">👥 O'quvchilar ro'yxati (ism va ID)</button>`
                : ""
            }
            ${test.mode === "key" ? `<button class="btn btn-ghost" id="variants-button">🔀 Variantlar${test.variants.length ? ` (${test.variants.join(", ")})` : " (A/B/C/D)"}</button>` : ""}
@@ -8488,14 +8488,14 @@ async function renderTestDetail(testId) {
   document.getElementById("named-sheets-button")?.addEventListener(
     "click",
     guarded(() => {
-      // Ismli varaq har o'quvchiga alohida chiqadi — avval ro'yxat kerak
+      // O'quvchilar ro'yxati (ism va ID) — avval o'quvchilar qo'shilgan bo'lishi kerak
       if (!test.students.some((student) => student.editable)) {
         throw new Error("O'quvchi qo'shilmagan — avval «O'quvchilarni qo'shish» orqali o'quvchilarni qo'shing");
       }
       return deliverPdf(
         `/api/teacher/tests/${testId}/answer-sheet?named=true`,
         `${test.code}_ismli_varaqlar.pdf`,
-        "👥 Ismli varaqlar Telegramga yuborildi"
+        "👥 O'quvchilar ro'yxati Telegramga yuborildi"
       );
     })
   );

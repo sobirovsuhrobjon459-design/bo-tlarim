@@ -2060,6 +2060,60 @@ def generate_answer_sheet_pdf(test: Test, with_answers: bool = False, bubbles: l
     return buffer.getvalue()
 
 
+def generate_student_id_list_pdf(test: Test, students: list[tuple]) -> bytes:
+    """
+    "Ismli varaqlar" — o'quvchilar ro'yxati: ism-familiya va ID (variant bo'lsa — u ham).
+    To'liq titul emas: o'quvchi bo'sh titulga ismini va shu ID'ni o'zi yozib, bo'yaydi.
+    students = [(ID, ism, variant), ...]
+    """
+
+    buffer = io.BytesIO()
+    sheet = pdf_canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    margin, row_height = 50, 22
+    with_variant = len({variant for _, _, variant in students}) > 1
+    digits = 4 if (test.sheet_version or 1) >= 5 else 3  # titulda bo'yaladigan xonalar soni (masalan 0007)
+    number_x, name_x, id_x, variant_x = margin, margin + 34, width - margin - (150 if with_variant else 80), width - margin - 70
+
+    def header(first: bool) -> float:
+        y = height - margin
+        if first:
+            sheet.setFont(REPORT_FONT_BOLD, 15)
+            sheet.drawString(margin, y, test.title[:70])
+            y -= 18
+            sheet.setFont(REPORT_FONT, 10)
+            sheet.setFillColor(REPORT_MUTED)
+            sheet.drawString(margin, y, f"Test kodi: {test.code}  ·  {test.subject}  ·  {len(students)} ta o'quvchi")
+            sheet.setFillColor(colors.black)
+            y -= 26
+        sheet.setFont(REPORT_FONT_BOLD, 11)
+        sheet.drawString(number_x, y, "№")
+        sheet.drawString(name_x, y, "Ism-familiya")
+        sheet.drawString(id_x, y, "ID")
+        if with_variant:
+            sheet.drawString(variant_x, y, "Variant")
+        sheet.setStrokeColor(REPORT_GRID)
+        sheet.line(margin, y - 7, width - margin, y - 7)
+        return y - row_height
+
+    y = header(True)
+    for index, (number, name, variant) in enumerate(students, start=1):
+        if y < margin:
+            sheet.showPage()
+            y = header(False)
+        sheet.setFont(REPORT_FONT, 11)
+        sheet.drawString(number_x, y, str(index))
+        sheet.drawString(name_x, y, name[:60])
+        sheet.setFont(REPORT_FONT_BOLD, 12)
+        sheet.drawString(id_x, y, str(number).zfill(digits))
+        if with_variant:
+            sheet.drawString(variant_x, y, variant)
+        sheet.line(margin, y - 7, width - margin, y - 7)
+        y -= row_height
+    sheet.save()
+    return buffer.getvalue()
+
+
 def _question_count(test: Test) -> int:
     """
     Savollar soni. "key" rejimida a/b qismlar bitta savol deb sanaladi,
@@ -5395,10 +5449,11 @@ def download_answer_sheet(
     """Javoblar varaqasini brauzerga yuklab beradi (answers=true bo'lsa — to'g'ri javobli kalit)."""
 
     test = _get_own_test(db, teacher, test_id)
-    pdf_bytes = generate_answer_sheet_pdf(
-        test, with_answers=answers, students=_named_sheet_students(db, test, named and not answers),
-        **_sheet_variant_options(db, test, answers, variant),
-    )
+    students = _named_sheet_students(db, test, named and not answers)
+    if students:
+        pdf_bytes = generate_student_id_list_pdf(test, students)  # faqat ism va ID — to'liq titul emas
+    else:
+        pdf_bytes = generate_answer_sheet_pdf(test, with_answers=answers, **_sheet_variant_options(db, test, answers, variant))
     file_name = f"{test.code}_{'kalit' if answers else 'ismli_varaqlar' if named else 'javoblar_varaqasi'}.pdf"
 
     return StreamingResponse(
@@ -5434,13 +5489,16 @@ def send_answer_sheet_to_telegram(
         caption = _answer_sheet_caption(test)
     students = _named_sheet_students(db, test, named and not answers)
     if students:
-        caption = f"👥 Ismli varaqlar — {len(students)} ta o'quvchi\n📝 {test.title} ({test.code})\n\nChop etib, har o'quvchiga o'z varag'ini bering."
+        caption = (f"👥 O'quvchilar ro'yxati — {len(students)} ta (ism va ID)\n📝 {test.title} ({test.code})\n\n"
+                   "Har o'quvchi titulga ismini va o'z ID'sini yozib, bo'yaydi.")
+        pdf_bytes = generate_student_id_list_pdf(test, students)
+    else:
+        pdf_bytes = generate_answer_sheet_pdf(test, with_answers=answers, **_sheet_variant_options(db, test, answers, variant))
 
     _send_pdf_to_telegram(
         user.tg_id,
         f"{test.code}_{'kalit' if answers else 'ismli_varaqlar' if students else 'javoblar_varaqasi'}.pdf",
-        generate_answer_sheet_pdf(test, with_answers=answers, students=students,
-                                  **_sheet_variant_options(db, test, answers, variant)),
+        pdf_bytes,
         caption=caption,
     )
     return {"ok": True}
