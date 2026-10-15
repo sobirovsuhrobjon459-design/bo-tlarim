@@ -4342,10 +4342,10 @@ def test_varaqdagi_oquvchi_raqami_boyicha_taniladi():
                 headers=as_user(555))
     detail = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1, "Birinchi Bola"), (2, "Ikkinchi Bola")]
-    assert detail["sheet_version"] == 4
+    assert detail["sheet_version"] == 5
 
     url = f"/api/teacher/tests/{test_id}/scan"
-    photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "2", 1: "B", 2: "C"})
+    photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "0", "id3": "2", 1: "B", 2: "C"})
     scanned = client.post(url, json={"image_base64": photo}, headers=as_user(555)).json()
     assert scanned["sheet_number"] == 2 and scanned["sheet_number_status"] == "ok", scanned
     assert scanned["match"]["name"] == "Ikkinchi Bola" and scanned["match"]["status"] == "pending", scanned["match"]
@@ -4356,7 +4356,7 @@ def test_varaqdagi_oquvchi_raqami_boyicha_taniladi():
     assert again["match"]["status"] == "done"  # qayta skanerlansa — "natijasi bor" deb ogohlantiriladi
 
     # Ro'yxatda yo'q raqam — yangi o'quvchi shu raqam bilan saqlanadi
-    unknown = client.post(url, json={"image_base64": _sheet_photo(test_id, {"id0": "0", "id1": "1", "id2": "7"})},
+    unknown = client.post(url, json={"image_base64": _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "1", "id3": "7"})},
                           headers=as_user(555)).json()
     assert unknown["sheet_number"] == 17 and unknown["match"] is None, unknown
     client.post(f"{url}/save", json={"name": "Yangi Bola", "sheet_number": 17, "answers": {}}, headers=as_user(555))
@@ -4437,7 +4437,7 @@ def test_variantlar_alohida_kalit_bilan_tekshiriladi():
     assert [(s["number"], s["variant"]) for s in detail["students"]] == [(1, "A"), (2, "B")], detail["students"]
 
     # 2-o'quvchi (B variant) varaqi: B kaliti bo'yicha hammasi to'g'ri
-    photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "2", "variant": "B", 1: "C", 2: "A", 3: "B,D"})
+    photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "0", "id3": "2", "variant": "B", 1: "C", 2: "A", 3: "B,D"})
     scanned = client.post(f"{base}/scan", json={"image_base64": photo}, headers=headers).json()
     assert scanned["variant"] == "B" and scanned["match"]["variant"] == "B", scanned
     saved = client.post(f"{base}/scan/save", json={"attempt_id": scanned["match"]["id"], "variant": "B",
@@ -4527,3 +4527,59 @@ def test_maktab_oquvchilariga_4_xonali_id():
     first = client.post(f"/api/classes/{other_school['id']}/students", json={"full_name": "Birinchi"},
                         headers=as_user(801)).json()
     assert first["students"][0]["code"] == 1001
+
+
+def test_skaner_natijasi_sinf_natijalariga_yoziladi():
+    reset_database()
+    school_class = _school_with_class(701)  # 10/2
+    register_teacher(701, "Aziza", "Karimova")
+    cid = school_class["id"]
+    client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Ali Valiyev", "Zuhra Karimova"]}, headers=as_user(701))
+    other = client.post("/api/classes", json={"name": "11-A"}, headers=as_user(701)).json()
+    client.post(f"/api/classes/{other['id']}/students", json={"full_name": "Jasur Umarov"}, headers=as_user(701))  # ID 1003
+
+    test = create_test(701, enrollment_type="closed")
+    base = f"/api/teacher/tests/{test['id']}"
+    listed = client.get(f"{base}/classes", headers=as_user(701)).json()
+    assert listed["available"] and [(c["name"], c["students"], c["attached"]) for c in listed["classes"]] == [
+        ("10/2", 2, False), ("11-A", 1, False)], listed
+    attached = client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701))
+    assert attached.json() == {"added": 2}, attached.text
+    assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json() == {"added": 0}
+    detail = client.get(base, headers=as_user(701)).json()
+    assert [(s["number"], s["name"]) for s in detail["students"]] == [(1001, "Ali Valiyev"), (1002, "Zuhra Karimova")]
+    assert detail["sheet_version"] == 5
+
+    # Zuhra (1002) varag'i: 1-savol to'g'ri, 2-savol to'g'ri
+    scanned = client.post(f"{base}/scan", json={"image_base64": _sheet_photo(test["id"], {
+        "id0": "1", "id1": "0", "id2": "0", "id3": "2", 1: "B", 2: "C"})}, headers=as_user(701)).json()
+    assert scanned["sheet_number"] == 1002 and scanned["match"]["name"] == "Zuhra Karimova", scanned
+    client.post(f"{base}/scan/save", json={"attempt_id": scanned["match"]["id"], "answers": scanned["answers"]},
+                headers=as_user(701))
+
+    class_tests = client.get(f"/api/classes/{cid}/tests", headers=as_user(701)).json()
+    assert len(class_tests) == 1 and class_tests[0]["title"] == "Sinov test" and class_tests[0]["max_score"] == 4, class_tests
+    scores = {row["name"]: row["score"] for row in client.get(f"/api/class-tests/{class_tests[0]['id']}",
+                                                               headers=as_user(701)).json()["scores"]}
+    assert scores == {"Zuhra Karimova": 2, "Ali Valiyev": None}, scores
+
+    # Biriktirilmagan sinf o'quvchisi (Jasur, 1003) ham ID bo'yicha topiladi va o'z sinfiga yoziladi
+    jasur = client.post(f"{base}/scan", json={"image_base64": _sheet_photo(test["id"], {
+        "id0": "1", "id1": "0", "id2": "0", "id3": "3", 1: "B"})}, headers=as_user(701)).json()
+    assert jasur["match"]["name"] == "Jasur Umarov", jasur
+    client.post(f"{base}/scan/save", json={"attempt_id": jasur["match"]["id"], "answers": jasur["answers"]},
+                headers=as_user(701))
+    other_tests = client.get(f"/api/classes/{other['id']}/tests", headers=as_user(701)).json()
+    assert len(other_tests) == 1
+    assert client.get(f"/api/class-tests/{other_tests[0]['id']}", headers=as_user(701)).json()["scores"][0]["score"] == 1
+
+    # Qayta skanerlab tuzatilsa — sinfdagi ball ham yangilanadi (yangi test yaratilmaydi)
+    client.post(f"{base}/scan/save", json={"attempt_id": scanned["match"]["id"], "answers": {"1": "B"}}, headers=as_user(701))
+    class_tests = client.get(f"/api/classes/{cid}/tests", headers=as_user(701)).json()
+    assert len(class_tests) == 1
+    scores = {row["name"]: row["score"] for row in client.get(f"/api/class-tests/{class_tests[0]['id']}",
+                                                               headers=as_user(701)).json()["scores"]}
+    assert scores["Zuhra Karimova"] == 1, scores
+
+    named = client.get(f"{base}/answer-sheet", params={"named": "true"}, headers=as_user(701))
+    assert named.status_code == 200 and named.content.startswith(b"%PDF")

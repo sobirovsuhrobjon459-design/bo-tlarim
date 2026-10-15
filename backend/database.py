@@ -245,9 +245,9 @@ class Test(Base):
     # Javoblar varaqasi ko'rinishi: 2 — "O'quvchi raqami" doirachalari bilan (skaner
     # o'quvchini o'zi taniydi); 3 — kvadrat burchaklar, chetlarda tekislash belgilari
     # va pastda imtihon kodi (boshqa imtihon tituli bilan adashmaydi); 4 — o'quvchi ID
-    # vertikal 3 ustunda (0–9). Eski testlar o'z versiyasida qoladi — oldin chop
-    # etilgan varaqlar ham to'g'ri skanerlanishi uchun.
-    sheet_version: Mapped[int] = mapped_column(default=4)
+    # vertikal 3 ustunda (0–9); 5 — ID 4 xonali (maktab o'quvchilari ID'si 1001, 1002 ...).
+    # Eski testlar o'z versiyasida qoladi — oldin chop etilgan varaqlar ham to'g'ri skanerlanishi uchun.
+    sheet_version: Mapped[int] = mapped_column(default=5)
 
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     # O'qituvchi "o'chirgan" test. Bazadan butunlay o'chirilmaydi: unga bog'liq
@@ -351,6 +351,8 @@ class Attempt(Base):
     sheet_number: Mapped[int | None] = mapped_column(default=None)
     # Qaysi variant kaliti bilan tekshiriladi (B, C, D); bo'sh — asosiy (A)
     variant: Mapped[str | None] = mapped_column(String(2), default=None)
+    # Maktab sinfidagi o'quvchi (offline imtihon sinfga biriktirilganda) — natija sinfga ham yoziladi
+    class_student_id: Mapped[int | None] = mapped_column(default=None, index=True)
     started_at: Mapped[datetime] = mapped_column(default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(default=None)
     # pending  — o'qituvchi yopiq testga qo'shgan, javoblari hali kiritilmagan
@@ -651,6 +653,8 @@ class ClassTest(Base):
     subject: Mapped[str] = mapped_column(String(100), default="")
     taken_on: Mapped[date] = mapped_column()
     max_score: Mapped[float] = mapped_column()
+    # Skaner orqali tekshirilgan offline imtihondan avtomatik yaratilgan bo'lsa — o'sha test
+    source_test_id: Mapped[int | None] = mapped_column(default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     updated_at: Mapped[datetime | None] = mapped_column(default=None)
     deleted_at: Mapped[datetime | None] = mapped_column(default=None)
@@ -987,6 +991,12 @@ class StudentAnswersIn(BaseModel):
     variant: str | None = Field(default=None, pattern="^[A-D]$")
 
 
+class TestClassesIn(BaseModel):
+    """Offline imtihonga biriktiriladigan maktab sinflari."""
+
+    class_ids: list[int] = Field(min_length=1, max_length=50)
+
+
 class VariantKeyIn(BaseModel):
     """Variant kaliti: {savol_raqami: to'g'ri javob}."""
 
@@ -1008,7 +1018,7 @@ class SheetScanSaveIn(BaseModel):
 
     name: str = Field(default="", max_length=200)
     attempt_id: int | None = None
-    sheet_number: int | None = Field(default=None, ge=1, le=999)
+    sheet_number: int | None = Field(default=None, ge=1, le=9999)
     variant: str | None = Field(default=None, pattern="^[A-D]$")
     answers: dict[str, str] = {}
 

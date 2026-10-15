@@ -131,6 +131,7 @@ from .database import (
     SheetScanSaveIn,
     StudentAnswersIn,
     StudentNamesIn,
+    TestClassesIn,
     TestVariant,
     VariantKeyIn,
     Teacher,
@@ -187,12 +188,14 @@ def _add_missing_columns() -> None:
         },
         "test_attempts": {
             "offline_name": "VARCHAR(200)", "saved_answers": "TEXT", "sheet_number": "INTEGER", "variant": "VARCHAR(2)",
+            "class_student_id": "INTEGER",
         },
         "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)"},
         "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)"},
         "school_classes": {"curator_user_id": "INTEGER"},
         "private_schools": {"monthly_fee": "INTEGER DEFAULT 0"},
         "class_students": {"discount_percent": "INTEGER DEFAULT 0", "student_code": "INTEGER"},
+        "class_tests": {"source_test_id": "INTEGER"},
         "promo_codes": {"per_teacher_limit": "INTEGER DEFAULT 3"},
         "school_members": {"position": "VARCHAR(20)", "phone": "VARCHAR(20)", "birth_date": "DATE", "passport": "VARCHAR(20)"},
         "attendances": {
@@ -715,7 +718,7 @@ def _ensure_sheet_numbers(db: Session, test: Test) -> None:
             continue
         while next_number in taken:
             next_number += 1
-        if next_number > 999:
+        if next_number > 9999:
             break
         attempt.sheet_number = next_number
         taken.add(next_number)
@@ -1753,9 +1756,10 @@ def _draw_sheet_header(sheet, test: Test, width: float, height: float, with_answ
     if (test.sheet_version or 1) < 2:
         return name_y - 16
 
-    number_digits = f"{student[0]:03d}" if student else None
+    id_width = 4 if test.sheet_version >= 5 else 3
+    number_digits = f"{student[0]:0{id_width}d}" if student else None
     if test.sheet_version >= 4:
-        id_bottom, hint_x, hint_top = _draw_vertical_id(sheet, name_y, number_digits, bubbles)
+        id_bottom, hint_x, hint_top = _draw_vertical_id(sheet, name_y, number_digits, bubbles, id_width)
     else:
         id_bottom, hint_x, hint_top = _draw_horizontal_id(sheet, name_y, number_digits, bubbles)
 
@@ -1776,13 +1780,13 @@ def _draw_sheet_header(sheet, test: Test, width: float, height: float, with_answ
 
     if student:
         sheet.setFont("Helvetica-Bold", 12)
-        sheet.drawString(hint_x, hint_top - 14, f"No {student[0]:03d}")
+        sheet.drawString(hint_x, hint_top - 14, f"ID {number_digits}")
     else:
         sheet.setFont("Helvetica", 7)
         along = "har ustunda" if test.sheet_version >= 4 else "har qatorda"
         sheet.drawString(hint_x, hint_top, "ID raqamingizni o'qituvchidan oling,")
         sheet.drawString(hint_x, hint_top - 9, f"katakchalarga yozing va {along} bittadan bo'yang.")
-        sheet.drawString(hint_x, hint_top - 18, "Masalan 7 -> 0, 0, 7;  23 -> 0, 2, 3")
+        sheet.drawString(hint_x, hint_top - 18, "Masalan 1023 -> 1, 0, 2, 3" if id_width == 4 else "Masalan 7 -> 0, 0, 7;  23 -> 0, 2, 3")
     return id_bottom
 
 
@@ -1790,17 +1794,18 @@ SHEET_ID_COLUMN_GAP = 18
 SHEET_ID_DIGIT_STEP = 12.5
 
 
-def _draw_vertical_id(sheet, name_y: float, digits: str | None, bubbles: list | None) -> tuple[float, float, float]:
+def _draw_vertical_id(sheet, name_y: float, digits: str | None, bubbles: list | None,
+                      columns: int = 3) -> tuple[float, float, float]:
     """
-    O'quvchi ID (4-versiya): 3 ustun (yuzlik, o'nlik, birlik), har ustunda yuqoridan
-    pastga 0–9. Tepada raqam yoziladigan katakchalar. (pastki chegara, izoh x, izoh y)
+    O'quvchi ID (4–5-versiya): 3 yoki 4 ustun, har ustunda yuqoridan pastga 0–9.
+    Tepada raqam yoziladigan katakchalar. (pastki chegara, izoh x, izoh y)
     """
 
     radius = SHEET_ID_RADIUS
     first_x = SHEET_MARGIN + 30
     sheet.setFont("Helvetica-Bold", 8)
     sheet.drawString(SHEET_MARGIN, name_y - 14, "O'quvchi ID:")
-    for column in range(3):
+    for column in range(columns):
         x = first_x + column * SHEET_ID_COLUMN_GAP
         sheet.rect(x - 7, name_y - 36, 14, 14, stroke=1, fill=0)
         if digits:
@@ -1810,7 +1815,7 @@ def _draw_vertical_id(sheet, name_y: float, digits: str | None, bubbles: list | 
         center_y = name_y - 48 - digit * SHEET_ID_DIGIT_STEP
         sheet.setFont("Helvetica-Bold", 7)
         sheet.drawCentredString(first_x - 16, center_y - 2.5, str(digit))
-        for column in range(3):
+        for column in range(columns):
             x = first_x + column * SHEET_ID_COLUMN_GAP
             filled = digits is not None and int(digits[column]) == digit
             sheet.circle(x, center_y, radius, stroke=1, fill=1 if filled else 0)
@@ -1818,7 +1823,7 @@ def _draw_vertical_id(sheet, name_y: float, digits: str | None, bubbles: list | 
                 bubbles.append({"page": 1, "ref": f"id{column}", "label": "ID", "kind": "id", "letter": str(digit),
                                 "x": x, "y": center_y, "r": radius})
     bottom = name_y - 48 - 9 * SHEET_ID_DIGIT_STEP - radius - 12
-    return bottom, first_x + 2 * SHEET_ID_COLUMN_GAP + 24, name_y - 50
+    return bottom, first_x + (columns - 1) * SHEET_ID_COLUMN_GAP + 24, name_y - 50
 
 
 def _draw_horizontal_id(sheet, name_y: float, number_digits: str | None, bubbles: list | None) -> tuple[float, float, float]:
@@ -4353,6 +4358,11 @@ def _store_offline_answers(db: Session, test: Test, teacher: Teacher, attempt: A
         add_credits(teacher, -1)
 
     db.commit()
+    try:
+        _sync_class_result(db, test, teacher, attempt)
+    except Exception:  # natija imtihonda saqlangan — sinfga yozilmasa ham yo'qolmaydi
+        db.rollback()
+        logging.getLogger("backend").warning("Sinf natijasiga yozib bo'lmadi", exc_info=True)
 
     return {
         "name": attempt.offline_name,
@@ -4361,6 +4371,118 @@ def _store_offline_answers(db: Session, test: Test, teacher: Teacher, attempt: A
         "total": total_questions,
         "percent": attempt.percent,
     }
+
+
+# ---------- Offline imtihon ↔ maktab sinflari ----------
+# Imtihonga maktab sinflari biriktiriladi: sinf o'quvchilari o'z 4 xonali ID'si bilan
+# imtihon ro'yxatiga tushadi (ismli varaqlar ham shu ID bilan). Skanerlangan natija
+# o'quvchining sinfidagi "Natijalar" bo'limiga yoziladi (har sinf uchun bitta test).
+
+
+def _student_attempt(db: Session, test: Test, student: ClassStudent) -> Attempt:
+    """Maktab o'quvchisi uchun imtihondagi yozuv (bo'lmasa — yaratiladi, ID'si bilan)."""
+
+    attempt = db.scalar(
+        select(Attempt).where(
+            Attempt.test_id == test.id, Attempt.class_student_id == student.id, Attempt.status.in_(("pending", "done"))
+        )
+    )
+    if attempt:
+        return attempt
+    number_taken = student.student_code and db.scalar(
+        select(Attempt.id).where(Attempt.test_id == test.id, Attempt.sheet_number == student.student_code)
+    )
+    attempt = Attempt(
+        test_id=test.id, offline_name=student.full_name[:200], status="pending", class_student_id=student.id,
+        sheet_number=None if number_taken else student.student_code,
+    )
+    db.add(attempt)
+    db.flush()
+    return attempt
+
+
+def _sync_class_result(db: Session, test: Test, teacher: Teacher, attempt: Attempt) -> None:
+    """Skanerlangan (yoki kiritilgan) natija o'quvchining sinf natijalariga yoziladi."""
+
+    if not attempt.class_student_id or attempt.status != "done":
+        return
+    student = db.get(ClassStudent, attempt.class_student_id)
+    school_class = db.get(SchoolClass, student.class_id) if student else None
+    if not school_class or school_class.deleted_at is not None:
+        return
+    class_test = db.scalar(
+        select(ClassTest).where(
+            ClassTest.source_test_id == test.id, ClassTest.class_id == school_class.id, ClassTest.deleted_at.is_(None)
+        )
+    )
+    if not class_test:
+        class_test = ClassTest(
+            class_id=school_class.id, teacher_user_id=teacher.user_id, title=test.title[:200],
+            subject=test.subject or "", taken_on=(utcnow() + TASHKENT_OFFSET).date(),
+            max_score=float(_question_count(test)), source_test_id=test.id,
+        )
+        db.add(class_test)
+        db.flush()
+        _save_scores(db, class_test, school_class, {})  # hali skanerlanmaganlar — "kelmadi"
+        db.flush()
+        db.refresh(class_test)
+    score = next((item for item in class_test.scores if item.student_id == student.id), None)
+    if score is None:
+        score = ClassTestScore(test_id=class_test.id, student_id=student.id, student_name=student.full_name)
+        db.add(score)
+    score.score = float(attempt.correct)
+    class_test.updated_at = utcnow()
+    db.commit()
+
+
+@app.get("/api/teacher/tests/{test_id}/classes")
+def test_school_classes(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    test = _paper_test(db, teacher, test_id)
+    member = _active_membership(db, teacher.user)
+    if not member:
+        return {"available": False, "classes": []}
+    attached = set(
+        db.scalars(
+            select(ClassStudent.class_id)
+            .join(Attempt, Attempt.class_student_id == ClassStudent.id)
+            .where(Attempt.test_id == test.id, Attempt.status.in_(("pending", "done")))
+        ).all()
+    )
+    classes = db.scalars(
+        select(SchoolClass)
+        .where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None))
+        .order_by(SchoolClass.name)
+    ).all()
+    return {
+        "available": True,
+        "classes": [
+            {"id": item.id, "name": item.name, "students": len(_active_students(item)), "attached": item.id in attached}
+            for item in classes
+        ],
+    }
+
+
+@app.post("/api/teacher/tests/{test_id}/classes")
+def attach_school_classes(
+    test_id: int, body: TestClassesIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
+):
+    test = _paper_test(db, teacher, test_id)
+    member = _active_membership(db, teacher.user)
+    if not member:
+        raise HTTPException(status_code=403, detail="Siz hech qaysi maktabga a'zo emassiz")
+    _assign_student_codes(db, member.school_id)
+    added = 0
+    for class_id in body.class_ids:
+        school_class = db.get(SchoolClass, class_id)
+        if not school_class or school_class.school_id != member.school_id or school_class.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Sinf topilmadi")
+        for student in _active_students(school_class):
+            before = db.scalar(select(func.count()).select_from(Attempt).where(Attempt.test_id == test.id))
+            _student_attempt(db, test, student)
+            added += db.scalar(select(func.count()).select_from(Attempt).where(Attempt.test_id == test.id)) - before
+    db.commit()
+    _ensure_sheet_numbers(db, test)
+    return {"added": added}
 
 
 # ---------- Variantlar (A/B/C/D) ----------
@@ -4551,6 +4673,17 @@ def scan_sheet(
                 Attempt.sheet_number == result["sheet_number"],
             )
         )
+        if not found:
+            member = _active_membership(db, teacher.user)
+            student = member and db.scalar(
+                select(ClassStudent)
+                .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
+                .where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None),
+                       ClassStudent.removed_at.is_(None), ClassStudent.student_code == result["sheet_number"])
+            )
+            if student:
+                found = _student_attempt(db, test, student)  # maktab o'quvchisi — imtihon ro'yxatiga qo'shiladi
+                db.commit()
         if found:
             match = {"id": found.id, "name": found.offline_name, "status": found.status, "variant": found.variant}
 

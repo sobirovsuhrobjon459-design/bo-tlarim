@@ -951,3 +951,20 @@ select:focus {
 #scan-queue-slot .btn {
   margin-top: 10px;
 }
+
+/* Imtihonga sinf biriktirish */
+.attach-class {
+  align-items: center;
+  gap: 12px;
+}
+
+.attach-class input {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  accent-color: var(--color-primary);
+}
+
+.attach-class.is-attached {
+  opacity: 0.7;
+}

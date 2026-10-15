@@ -7690,11 +7690,11 @@ function renderScanReview(testId, test, scan) {
 function scanNumberHtml(scan) {
   if (scan.match) {
     const already = scan.match.status === "done";
-    return `<p style="margin:0 0 10px">🔢 Raqam <b>${String(scan.sheetNumber).padStart(3, "0")}</b> → <b>${escapeHtml(scan.match.name)}</b></p>
+    return `<p style="margin:0 0 10px">🔢 ID <b>${scan.sheetNumber}</b> → <b>${escapeHtml(scan.match.name)}</b></p>
       ${already ? `<div class="notice" style="margin:0 0 10px">Bu o'quvchining natijasi allaqachon bor — saqlansangiz yangisi bilan almashadi.</div>` : ""}`;
   }
   if (scan.sheetNumber) {
-    return `<p class="subtitle" style="margin:0 0 10px">🔢 Raqam <b>${String(scan.sheetNumber).padStart(3, "0")}</b> — ro'yxatda yo'q. Ismini yozing, raqami shu bo'lib saqlanadi.</p>`;
+    return `<p class="subtitle" style="margin:0 0 10px">🔢 ID <b>${scan.sheetNumber}</b> — ro'yxatda ham, maktabda ham yo'q. Ismini yozing, ID shu bo'lib saqlanadi.</p>`;
   }
   if (scan.numberStatus === "unclear") {
     return `<div class="notice" style="margin:0 0 10px">🔢 O'quvchi raqami aniq o'qilmadi — ro'yxatdan tanlang yoki ismini yozing.</div>`;
@@ -8044,6 +8044,55 @@ async function renderScanQueue(testId, test) {
   });
 }
 
+/*
+  Offline imtihonga maktab sinflarini biriktirish: sinf o'quvchilari o'z 4 xonali ID'si
+  bilan imtihon ro'yxatiga tushadi; skanerlangan natija ularning sinfidagi
+  "Natijalar" bo'limiga ham yoziladi.
+*/
+async function renderAttachClasses(testId) {
+  const { available, classes } = await api(`/api/teacher/tests/${testId}/classes`);
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-attach" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">Sinfni biriktirish</h2>
+    </div>
+    ${
+      !available
+        ? `<p class="subtitle">Siz hech qaysi maktabga a'zo emassiz. «Ta'lim muassasalari → Xususiy maktab» bo'limida maktabga qo'shiling.</p>`
+        : `<p class="subtitle">Tanlangan sinflarning o'quvchilari o'z ID raqami bilan imtihonga qo'shiladi.
+             Skanerlangan natija o'quvchining sinfidagi «📊 Natijalar» bo'limiga ham yoziladi.</p>
+           ${
+             classes.length
+               ? classes
+                   .map(
+                     (item) => `
+                       <label class="card attach-class${item.attached ? " is-attached" : ""}">
+                         <input type="checkbox" value="${item.id}" ${item.attached ? "checked disabled" : ""} />
+                         <div class="card-body" style="flex:1">
+                           <b>${escapeHtml(item.name)}</b>
+                           <p>👥 ${item.students} ta o'quvchi${item.attached ? " · ✅ biriktirilgan" : ""}</p>
+                         </div>
+                       </label>`
+                   )
+                   .join("")
+               : `<p class="subtitle">Maktabda hali sinf yo'q.</p>`
+           }
+           ${classes.some((item) => !item.attached) ? `<button class="btn" id="attach-classes-button">🏫 Biriktirish</button>` : ""}`
+    }
+  `);
+  document.querySelector('[data-action="back-attach"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
+  document.getElementById("attach-classes-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const classIds = [...document.querySelectorAll(".attach-class input:checked:not(:disabled)")].map((input) => Number(input.value));
+      if (!classIds.length) throw new Error("Kamida bitta sinfni tanlang");
+      const { added } = await api(`/api/teacher/tests/${testId}/classes`, { method: "POST", body: { class_ids: classIds } });
+      showToast(`✅ ${added} ta o'quvchi imtihonga qo'shildi`);
+      await renderTestDetail(testId);
+    })
+  );
+}
+
 async function renderTestDetail(testId) {
   const test = await api(`/api/teacher/tests/${testId}`);
   const isClosedTest = test.enrollment_type === "closed";
@@ -8112,6 +8161,7 @@ async function renderTestDetail(testId) {
         : ""
     }
     ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
+    ${isClosedTest && !isFinished ? `<button class="btn btn-ghost" id="attach-classes-button-open">🏫 Sinfni biriktirish</button>` : ""}
     ${isClosedTest ? `<div id="scan-queue-slot"></div>` : ""}
     ${!isFinished && !isClosedTest && !test.broadcast_at
       ? `<button class="btn" id="broadcast-button">📢 Hammaga e'lon qilish</button>`
@@ -8164,6 +8214,7 @@ async function renderTestDetail(testId) {
   );
 
   document.getElementById("scan-sheet-button")?.addEventListener("click", guarded(() => scanSheetPage(testId, test)));
+  document.getElementById("attach-classes-button-open")?.addEventListener("click", guarded(() => renderAttachClasses(testId)));
   document.getElementById("variants-button")?.addEventListener("click", guarded(() => renderVariantsPage(testId, test)));
   queueAll().then((items) => {
     const mine = items.filter((item) => item.testId === testId);
