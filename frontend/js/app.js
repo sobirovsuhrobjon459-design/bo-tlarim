@@ -779,9 +779,11 @@ function openExternalLink(url) {
   // ochilishi kerak, qolganlari (masalan Payme to'lov sahifasi) brauzerda.
   if (!url) return;
 
-  // Ilovada havolani Android o'zi ochadi (t.me — Telegram ilovasida, qolgani brauzerda)
+  // Ilovada havolani Android o'zi ochadi (t.me — Telegram ilovasida, qolgani brauzerda).
+  // window.open emas: Android WebView yangi oynaning manzilini ilovaga bermaydi va
+  // havola ochilmay qolardi. Oddiy o'tishni esa ilova ushlab, tashqarida ochadi.
   if (IN_APP && !telegram?.initData) {
-    window.open(url, "_blank");
+    window.location.href = url;
     return;
   }
 
@@ -8215,7 +8217,7 @@ async function startAppLogin() {
   const status = document.getElementById("app-login-status");
   const { token, link, expires_in: expiresIn } = await api("/api/app-login", { method: "POST", body: {} });
   const botName = link.split("/").pop().split("?")[0];
-  window.open(link, "_blank");
+  openExternalLink(link);
 
   // Qaysi bot va qaysi akkaunt ekani aniq yozilsin; Telegram ochilmasa — qayta ochish tugmasi
   document.getElementById("app-login-button").remove();
@@ -8227,7 +8229,7 @@ async function startAppLogin() {
       <p class="subtitle" style="margin:12px 0 0">👤 Ilovaga Telegram'da <b>hozir ochiq turgan akkaunt</b> bilan kirasiz.
         Telegram'da bir nechta akkaunt bo'lsa — avval keraklisiga o'ting, so'ng tugmani bosing.</p>
     </div>
-    <a class="btn" href="${escapeHtml(link)}" target="_blank" rel="noopener" style="margin-top:12px;text-decoration:none">✈️ @${escapeHtml(botName)} ni ochish</a>
+    <a class="btn" href="${escapeHtml(link)}" style="margin-top:12px;text-decoration:none">✈️ @${escapeHtml(botName)} ni ochish</a>
     <p class="subtitle" style="text-align:center;margin-top:12px">⏳ Tasdiqlash kutilmoqda…</p>
   `;
 
