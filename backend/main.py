@@ -3868,6 +3868,20 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
     if body.price > 0 and not _can_sell_tests(teacher):
         raise HTTPException(status_code=422, detail="Pullik test uchun avval karta raqamingizni kiriting")
 
+    # Tugash vaqti o'tib ketgan test darhol o'zi yopilib, o'quvchilarga "Test yakunlangan" chiqardi
+    # (masalan soatda 15:00 o'rniga 03:00 tanlansa) — yaratishda ham tahrirlashdagidek tekshiriladi
+    start_time, end_time = _as_utc_naive(body.start_time), _as_utc_naive(body.end_time)
+    if end_time is not None and end_time <= utcnow():
+        raise HTTPException(
+            status_code=422,
+            detail=f"Tugash vaqti o'tib ketgan ({_local_time(end_time)}) — kelajakdagi vaqtni tanlang",
+        )
+    if start_time and end_time and end_time <= start_time:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Tugash vaqti ({_local_time(end_time)}) boshlanish vaqtidan ({_local_time(start_time)}) keyin bo'lishi kerak",
+        )
+
     # Majburiy obuna so'ralgan bo'lsa, bot kanalni haqiqatan tekshira olishini
     # SHU YERDA aniqlaymiz. Aks holda o'qituvchi testni tarqatib yuborgandan
     # keyin, o'quvchilar kira olmay qolganda bilardi.
@@ -3889,8 +3903,8 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         telegram_group_id=body.telegram_group_id,
         required_channel=required_channel,
         enrollment_type=body.enrollment_type,
-        start_time=body.start_time,
-        end_time=body.end_time,
+        start_time=start_time,
+        end_time=end_time,
         questions=[Question(**question.model_dump()) for question in body.questions] if body.mode == "full" else [],
         key_questions=(
             [KeyQuestion(**key_question.model_dump()) for key_question in body.key_questions]

@@ -3423,6 +3423,32 @@ def test_oquvchi_yakunlangan_testini_koradi():
     assert client.get(url, headers=as_user(902)).status_code == 404
 
 
+def test_otgan_tugash_vaqti_bilan_test_yaratilmaydi():
+    """Tugash vaqti o'tgan test o'zi yopilib, o'quvchilarga "Test yakunlangan" chiqardi — endi yaratilmaydi."""
+
+    reset_database()
+    register_teacher()
+    now = utcnow()
+    iso = lambda moment: moment.strftime("%Y-%m-%dT%H:%M:%S")  # noqa: E731
+    body = {"title": "Vaqtli", "subject": "Matematika", "mode": "key", "enrollment_type": "open", "price": 0,
+            "duration": 30, "key_questions": [{"number": 1, "question_type": "single", "option_count": 4, "correct": "B"}]}
+
+    # 12:00 da boshlanib, soatda adashib 03:00 (allaqachon o'tgan) tanlangan
+    past = client.post("/api/teacher/tests", headers=as_user(555), json={
+        **body, "start_time": iso(now + timedelta(hours=1)), "end_time": iso(now - timedelta(hours=9))})
+    assert past.status_code == 422 and "o'tib ketgan" in past.json()["detail"], past.text
+    reversed_window = client.post("/api/teacher/tests", headers=as_user(555), json={
+        **body, "start_time": iso(now + timedelta(hours=5)), "end_time": iso(now + timedelta(hours=2))})
+    assert reversed_window.status_code == 422, reversed_window.text
+
+    # To'g'ri oyna: hozir boshlanib 3 soat ochiq — o'quvchi kira oladi, fondagi tekshiruv yopmaydi
+    created = client.post("/api/teacher/tests", headers=as_user(555), json={
+        **body, "start_time": iso(now - timedelta(minutes=1)), "end_time": iso(now + timedelta(hours=3))}).json()
+    main._finish_expired_tests_once()
+    started = client.post(f"/api/tests/{created['code']}/start", headers=as_user(900))
+    assert started.status_code == 200, started.text
+
+
 def test_oqituvchi_testni_tahrirlaydi_va_vaqtini_chozadi():
     reset_database()
     register_teacher(tg_id=555)
