@@ -13,6 +13,7 @@ bo'lsa ham ".config" nisbiy import orqali, paket sifatida ishga tushiriladi:
 """
 
 import asyncio
+import html
 import logging
 
 from aiogram import Bot, Dispatcher, F
@@ -429,9 +430,13 @@ async def _ask_app_login(message: Message, token: str) -> None:
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"applogin:{token}")
     ]])
+    user = message.from_user
+    account = html.escape(user.full_name or "—") + (f" (@{html.escape(user.username)})" if user.username else "")
     await message.answer(
         "📱 <b>TestWay ilovasiga kirish</b>\n\n"
-        "Ilovaga shu Telegram akkauntingiz bilan kirasiz — testlar, natijalar va kreditlar bir xil bo'ladi.\n\n"
+        f"👤 Akkaunt: <b>{account}</b>\n🆔 ID: <code>{user.id}</code>\n\n"
+        "Ilovaga SHU akkaunt bilan kirasiz — testlar, natijalar va kreditlar bir xil bo'ladi. "
+        "Boshqa akkaunt kerak bo'lsa — Telegram'da o'sha akkauntga o'ting va ilovada qaytadan «Kirish»ni bosing.\n\n"
         "⚠️ Faqat HOZIR o'zingiz ilovada «Telegram orqali kirish»ni bosgan bo'lsangiz tasdiqlang. "
         "Bu havolani sizga boshqa odam yuborgan bo'lsa — bosmang.",
         parse_mode="HTML",

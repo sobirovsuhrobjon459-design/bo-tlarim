@@ -1143,7 +1143,12 @@ function renderHome(userName, backendOk) {
 
     ${statusHtml}
     ${supportCardHtml(undefined, { bottom: true })}
-    ${IN_APP && appSession ? `<button class="btn btn-ghost" id="app-logout-button" style="margin-top:12px">🚪 Akkauntdan chiqish</button>` : ""}
+    ${
+      IN_APP && appSession
+        ? `<p class="subtitle" style="text-align:center;margin:16px 0 0">👤 Kirgan akkaunt: <b>${escapeHtml(userName || "—")}</b>${homeSnapshot?.tg_id ? ` · ID ${homeSnapshot.tg_id}` : ""}</p>
+           <button class="btn btn-ghost" id="app-logout-button" style="margin-top:8px">🚪 Akkauntdan chiqish</button>`
+        : ""
+    }
   `);
 
   document.getElementById("app-logout-button")?.addEventListener("click", guarded(appLogout));
@@ -8209,8 +8214,22 @@ function renderAppLogin(errorText = "") {
 async function startAppLogin() {
   const status = document.getElementById("app-login-status");
   const { token, link, expires_in: expiresIn } = await api("/api/app-login", { method: "POST", body: {} });
+  const botName = link.split("/").pop().split("?")[0];
   window.open(link, "_blank");
-  status.textContent = "Botda «✅ Tasdiqlash» tugmasini bosing, so'ng shu yerga qayting…";
+
+  // Qaysi bot va qaysi akkaunt ekani aniq yozilsin; Telegram ochilmasa — qayta ochish tugmasi
+  document.getElementById("app-login-button").remove();
+  status.outerHTML = `
+    <div class="card" style="cursor:default;display:block;margin-top:20px">
+      <p style="margin:0"><b>1.</b> Telegram'da <b>@${escapeHtml(botName)}</b> boti ochiladi.</p>
+      <p style="margin:8px 0 0"><b>2.</b> Botdagi <b>«✅ Tasdiqlash»</b> tugmasini bosing.</p>
+      <p style="margin:8px 0 0"><b>3.</b> Shu ilovaga qayting — kirish o'zi bo'ladi.</p>
+      <p class="subtitle" style="margin:12px 0 0">👤 Ilovaga Telegram'da <b>hozir ochiq turgan akkaunt</b> bilan kirasiz.
+        Telegram'da bir nechta akkaunt bo'lsa — avval keraklisiga o'ting, so'ng tugmani bosing.</p>
+    </div>
+    <a class="btn" href="${escapeHtml(link)}" target="_blank" rel="noopener" style="margin-top:12px;text-decoration:none">✈️ @${escapeHtml(botName)} ni ochish</a>
+    <p class="subtitle" style="text-align:center;margin-top:12px">⏳ Tasdiqlash kutilmoqda…</p>
+  `;
 
   const deadline = Date.now() + expiresIn * 1000;
   clearInterval(appLoginPoll);
@@ -8225,6 +8244,10 @@ async function startAppLogin() {
       clearInterval(appLoginPoll);
       setAppSession(result.session);
       startApp();
+      // Qaysi akkaunt bilan kirgani darhol ko'rinsin
+      api("/api/me")
+        .then((me) => showToast(`✅ Kirdingiz: ${me.full_name || "foydalanuvchi"} (ID ${me.tg_id})`))
+        .catch(() => {});
     } catch (error) {
       if (error.status === 410) renderAppLogin(error.message);
     }
