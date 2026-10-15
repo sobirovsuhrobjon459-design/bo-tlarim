@@ -378,6 +378,7 @@ function animatePageEntrance(page) {
 }
 
 function showPage(html, { exitRoot = false } = {}) {
+  stopLiveScan(); // jonli skaner kamerasi boshqa sahifada yonib qolmasin
   // Menyu avval yashiriladi — kerak bo'lsa, sahifa o'zi qaytadan ko'rsatadi.
   // Ikkalasi bitta qadamda bo'lgani uchun ekranda miltillash sezilmaydi.
   hideBottomNav();
@@ -7198,13 +7199,25 @@ async function shrinkPhoto(file, maxSide = 2000) {
 }
 
 async function scanSheetPage(testId, test, page = 1, collected = null) {
+  // Kamera bo'lsa — jonli skaner (o'zi suratga oladi), bo'lmasa — oddiy surat
+  if (navigator.mediaDevices?.getUserMedia && !liveScanUnavailable) {
+    await startLiveScan(testId, test, page, collected);
+    return;
+  }
+  await scanSheetFromPhoto(testId, test, page, collected);
+}
+
+async function scanSheetFromPhoto(testId, test, page = 1, collected = null) {
   const file = await pickSheetPhoto();
   if (!file) return;
   showToast("⏳ Varaq o'qilmoqda…");
   const image = await shrinkPhoto(file);
-  const scan = await api(`/api/teacher/tests/${testId}/scan`, { method: "POST", body: { image_base64: image, page } });
+  renderScanReview(testId, test, await readSheetImage(testId, image, page, collected));
+}
 
-  // Ko'p sahifali varaq: sahifalar javoblari bitta o'quvchiga yig'iladi
+// Rasm serverda o'qiladi; ko'p sahifali varaqda sahifalar javoblari bitta o'quvchiga yig'iladi
+async function readSheetImage(testId, image, page, collected) {
+  const scan = await api(`/api/teacher/tests/${testId}/scan`, { method: "POST", body: { image_base64: image, page } });
   const merged = collected || { questions: [], nameImage: null, pending: scan.pending_students };
   merged.questions = merged.questions.filter((question) => !scan.questions.some((item) => item.ref === question.ref));
   merged.questions.push(...scan.questions);
@@ -7218,7 +7231,281 @@ async function scanSheetPage(testId, test, page = 1, collected = null) {
   }
   merged.page = scan.page;
   merged.pageCount = scan.page_count;
-  renderScanReview(testId, test, merged);
+  return merged;
+}
+
+/* ---------- Jonli skaner: kamerani varaqqa tutish kifoya ---------- */
+
+/*
+  Kamera kadrlari telefonning o'zida kichraytirib ko'riladi: burchakdagi 4 ta
+  qora nuqta topilib, ~1 soniya qimirlamay tursa — to'liq o'lchamli kadr serverga
+  yuboriladi (o'qish o'sha OpenCV skaneri). O'quvchi raqamdan tanilsa va shubhali
+  savol bo'lmasa — natija o'zi saqlanadi va kamera keyingi varaqni kutadi.
+*/
+let liveStream = null;
+let liveTimer = null;
+let liveScanUnavailable = false;
+let liveSession = null; // { count, lastSignature } — ketma-ket skanerlanganlar soni va oxirgi varaq
+
+// Varaqni tanish uchun "iz": raqami bo'lsa — raqam, bo'lmasa — o'qilgan javoblar
+function sheetSignature(scan) {
+  return scan.sheetNumber ? `#${scan.sheetNumber}` : scan.questions.map((question) => question.chosen || "-").join("");
+}
+
+function stopLiveScan() {
+  clearInterval(liveTimer);
+  liveTimer = null;
+  liveStream?.getTracks().forEach((track) => track.stop());
+  liveStream = null;
+}
+
+// Kichraytirilgan kadrda burchak nuqtalarini topish: to'liq bo'yalgan, dumaloq qora dog'lar
+function findSheetCorners(pixels, width, height) {
+  const gray = new Float32Array(width * height);
+  for (let i = 0, p = 0; i < gray.length; i += 1, p += 4) {
+    gray[i] = pixels[p] * 0.299 + pixels[p + 1] * 0.587 + pixels[p + 2] * 0.114;
+  }
+  // Mahalliy o'rtacha (integral rasm) — soya va notekis yorug'likka chidamli
+  const integral = new Float64Array((width + 1) * (height + 1));
+  for (let y = 0; y < height; y += 1) {
+    let rowSum = 0;
+    for (let x = 0; x < width; x += 1) {
+      rowSum += gray[y * width + x];
+      integral[(y + 1) * (width + 1) + x + 1] = integral[y * (width + 1) + x + 1] + rowSum;
+    }
+  }
+  const radius = Math.max(6, Math.round(width / 40));
+  const dark = new Uint8Array(width * height);
+  for (let y = 0; y < height; y += 1) {
+    const y0 = Math.max(0, y - radius);
+    const y1 = Math.min(height, y + radius + 1);
+    for (let x = 0; x < width; x += 1) {
+      const x0 = Math.max(0, x - radius);
+      const x1 = Math.min(width, x + radius + 1);
+      const sum =
+        integral[y1 * (width + 1) + x1] - integral[y0 * (width + 1) + x1] - integral[y1 * (width + 1) + x0] + integral[y0 * (width + 1) + x0];
+      const mean = sum / ((x1 - x0) * (y1 - y0));
+      const value = gray[y * width + x];
+      dark[y * width + x] = value < mean * 0.7 && value < 120 ? 1 : 0;
+    }
+  }
+
+  const blobs = [];
+  const stack = [];
+  const minArea = Math.max(6, (width / 320) ** 2 * 6);
+  const maxArea = (width * 0.045) ** 2;
+  for (let start = 0; start < dark.length; start += 1) {
+    if (!dark[start]) continue;
+    dark[start] = 0;
+    stack.push(start);
+    let area = 0;
+    let sumX = 0;
+    let sumY = 0;
+    let minX = width;
+    let maxX = 0;
+    let minY = height;
+    let maxY = 0;
+    while (stack.length) {
+      const index = stack.pop();
+      const x = index % width;
+      const y = (index - x) / width;
+      area += 1;
+      sumX += x;
+      sumY += y;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      if (x > 0 && dark[index - 1]) { dark[index - 1] = 0; stack.push(index - 1); }
+      if (x < width - 1 && dark[index + 1]) { dark[index + 1] = 0; stack.push(index + 1); }
+      if (y > 0 && dark[index - width]) { dark[index - width] = 0; stack.push(index - width); }
+      if (y < height - 1 && dark[index + width]) { dark[index + width] = 0; stack.push(index + width); }
+    }
+    const boxWidth = maxX - minX + 1;
+    const boxHeight = maxY - minY + 1;
+    const fill = area / (boxWidth * boxHeight);
+    const aspect = boxWidth / boxHeight;
+    if (area >= minArea && area <= maxArea && fill > 0.55 && aspect > 0.6 && aspect < 1.6) {
+      blobs.push({ x: sumX / area, y: sumY / area, size: Math.sqrt(area) });
+    }
+  }
+  if (blobs.length < 4) return null;
+
+  // Har burchakka eng chekkadagi dog' (varaqdagi boshqa hamma narsani o'rab turadi)
+  const pick = (score) => blobs.reduce((best, blob) => (score(blob) > score(best) ? blob : best));
+  const corners = [
+    pick((b) => -(b.x + b.y)),
+    pick((b) => b.x - b.y),
+    pick((b) => b.x + b.y),
+    pick((b) => b.y - b.x),
+  ];
+  if (new Set(corners).size < 4) return null;
+  const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const top = distance(corners[0], corners[1]);
+  const bottom = distance(corners[3], corners[2]);
+  const left = distance(corners[0], corners[3]);
+  const right = distance(corners[1], corners[2]);
+  if (Math.min(top, bottom, left, right) < Math.min(width, height) * 0.3) return null;
+  const ratio = (top + bottom) / (left + right);
+  if (Math.abs(ratio - 0.684) / 0.684 > 0.3) return null;
+  const sizes = corners.map((corner) => corner.size);
+  if (Math.max(...sizes) > Math.min(...sizes) * 2.2) return null;
+  return corners;
+}
+
+async function startLiveScan(testId, test, page = 1, collected = null) {
+  stopLiveScan();
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-live" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">Skaner${page > 1 ? ` · ${page}-sahifa` : ""}</h2>
+    </div>
+    <div class="live-scan">
+      <video id="live-video" playsinline muted autoplay></video>
+      <canvas id="live-overlay"></canvas>
+    </div>
+    <p class="live-status" id="live-status">📷 Kamera ochilmoqda…</p>
+    ${liveSession?.count ? `<p class="subtitle" style="text-align:center;margin:0 0 8px">✅ Skanerlandi: <b>${liveSession.count}</b> ta varaq</p>` : ""}
+    <button class="btn" id="live-capture">📸 Hozir suratga olish</button>
+    <button class="btn btn-ghost" id="live-photo">🖼 Galereyadan / oddiy surat</button>
+  `);
+
+  const status = document.getElementById("live-status");
+  const video = document.getElementById("live-video");
+  const overlay = document.getElementById("live-overlay");
+  const leave = () => {
+    stopLiveScan();
+    liveSession = null;
+  };
+  document.querySelector('[data-action="back-live"]').addEventListener(
+    "click",
+    guarded(async () => {
+      leave();
+      await renderTestDetail(testId);
+    })
+  );
+  document.getElementById("live-photo").addEventListener(
+    "click",
+    guarded(async () => {
+      stopLiveScan();
+      await scanSheetFromPhoto(testId, test, page, collected);
+    })
+  );
+
+  try {
+    liveStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1440 } },
+      audio: false,
+    });
+  } catch (_) {
+    liveScanUnavailable = true; // shu sessiyada qayta so'ralmaydi — oddiy suratga o'tiladi
+    status.textContent = "Kameraga ruxsat berilmadi. «Galereyadan / oddiy surat» tugmasi bilan davom eting.";
+    document.getElementById("live-capture").remove();
+    return;
+  }
+  if (!video.isConnected) {
+    stopLiveScan();
+    return;
+  }
+  video.srcObject = liveStream;
+  await video.play().catch(() => {});
+  status.textContent = "Varaqni ramkaga to'liq sig'diring — 4 burchakdagi qora nuqta ko'rinsin";
+
+  const probe = document.createElement("canvas");
+  const probeContext = probe.getContext("2d", { willReadFrequently: true });
+  let previous = null;
+  let steady = 0;
+  let busy = false;
+  let waitForNewSheet = false; // saqlangan varaq hali kamera oldida — almashtirilishini kutamiz
+
+  const capture = async () => {
+    if (busy || !video.videoWidth) return;
+    busy = true;
+    clearInterval(liveTimer);
+    status.textContent = "⏳ Varaq o'qilmoqda…";
+    const full = document.createElement("canvas");
+    const factor = Math.min(1, 2000 / Math.max(video.videoWidth, video.videoHeight));
+    full.width = Math.round(video.videoWidth * factor);
+    full.height = Math.round(video.videoHeight * factor);
+    full.getContext("2d").drawImage(video, 0, 0, full.width, full.height);
+    try {
+      const scan = await readSheetImage(testId, full.toDataURL("image/jpeg", 0.9), page, collected);
+      if (page === 1 && liveSession?.lastSignature && sheetSignature(scan) === liveSession.lastSignature) {
+        // Hozirgina saqlangan varaq — qayta o'qilmaydi
+        status.textContent = "✅ Bu varaq saqlangan — keyingisini qo'ying";
+        waitForNewSheet = true;
+        busy = false;
+        previous = null;
+        steady = 0;
+        liveTimer = setInterval(tick, 250);
+        return;
+      }
+      stopLiveScan();
+      liveSession = liveSession || { count: 0 };
+      scan.live = true;
+      renderScanReview(testId, test, scan);
+    } catch (error) {
+      if (!video.isConnected) return;
+      status.textContent = `⚠️ ${error.message}`;
+      busy = false;
+      previous = null;
+      steady = 0;
+      liveTimer = setInterval(tick, 250);
+    }
+  };
+
+  const tick = () => {
+    if (!video.isConnected) {
+      stopLiveScan();
+      return;
+    }
+    if (busy || !video.videoWidth) return;
+    const width = 400;
+    const height = Math.round((width * video.videoHeight) / video.videoWidth);
+    probe.width = width;
+    probe.height = height;
+    probeContext.drawImage(video, 0, 0, width, height);
+    const corners = findSheetCorners(probeContext.getImageData(0, 0, width, height).data, width, height);
+
+    // Topilgan burchaklar videoning ustida ko'rsatiladi
+    overlay.width = video.clientWidth;
+    overlay.height = video.clientHeight;
+    const draw = overlay.getContext("2d");
+    draw.clearRect(0, 0, overlay.width, overlay.height);
+    if (!corners) {
+      previous = null;
+      steady = 0;
+      waitForNewSheet = false; // varaq olib qo'yildi
+      return;
+    }
+    if (waitForNewSheet) return;
+    // Video "cover" bilan qirqib ko'rsatiladi — belgilar ham xuddi shunday joylashtiriladi
+    const scale = Math.max(overlay.width / width, overlay.height / height);
+    const offsetX = (overlay.width - width * scale) / 2;
+    const offsetY = (overlay.height - height * scale) / 2;
+    draw.strokeStyle = steady >= 2 ? "#22c55e" : "#facc15";
+    draw.lineWidth = 4;
+    draw.beginPath();
+    corners.forEach((corner, index) => {
+      const x = corner.x * scale + offsetX;
+      const y = corner.y * scale + offsetY;
+      if (index) draw.lineTo(x, y);
+      else draw.moveTo(x, y);
+    });
+    draw.closePath();
+    draw.stroke();
+
+    const moved = previous
+      ? Math.max(...corners.map((corner, index) => Math.hypot(corner.x - previous[index].x, corner.y - previous[index].y)))
+      : Infinity;
+    steady = moved < width * 0.015 ? steady + 1 : 0;
+    previous = corners;
+    status.textContent = steady ? "✋ Qimirlatmang…" : "Varaq topildi — telefonni qimirlatmay turing";
+    if (steady >= 3) capture();
+  };
+
+  document.getElementById("live-capture").addEventListener("click", () => capture());
+  liveTimer = setInterval(tick, 250);
 }
 
 const SCAN_STATUS_NOTE = {
@@ -7339,6 +7626,7 @@ function renderScanReview(testId, test, scan) {
   document
     .getElementById("scan-retake")
     .addEventListener("click", guarded(() => scanSheetPage(testId, test, scan.page, scan.page > 1 ? scan : null)));
+  if (scan.live) document.getElementById("scan-retake").textContent = "📷 Qayta skanerlash";
   document.getElementById("scan-next-page")?.addEventListener("click", guarded(() => scanSheetPage(testId, test, scan.page + 1, scan)));
   const save = async () => {
     // Ro'yxatdan tanlangan yoki raqam bo'yicha topilgan (natijasi bor bo'lsa ham) o'quvchi
@@ -7364,7 +7652,11 @@ function renderScanReview(testId, test, scan) {
       },
     });
     unsavedChanges = false;
-    renderScanSaved(testId, test, result);
+    if (scan.live && liveSession) {
+      liveSession.count += 1;
+      liveSession.lastSignature = sheetSignature(scan);
+    }
+    renderScanSaved(testId, test, result, scan.live);
   };
   document.getElementById("scan-save")?.addEventListener("click", guarded(save));
 
@@ -7391,7 +7683,7 @@ function scanNumberHtml(scan) {
   return "";
 }
 
-function renderScanSaved(testId, test, result) {
+function renderScanSaved(testId, test, result, live = false) {
   showPage(`
     <div style="text-align:center;padding-top:30px">
       <div class="result-number">✅</div>
@@ -7402,7 +7694,21 @@ function renderScanSaved(testId, test, result) {
     <button class="btn btn-ghost" id="scan-done">⬅️ Testga qaytish</button>
   `);
   document.getElementById("scan-next-sheet").addEventListener("click", guarded(() => scanSheetPage(testId, test)));
-  document.getElementById("scan-done").addEventListener("click", guarded(() => renderTestDetail(testId)));
+  document.getElementById("scan-done").addEventListener(
+    "click",
+    guarded(() => {
+      liveSession = null;
+      return renderTestDetail(testId);
+    })
+  );
+  // Jonli skanerda — 1,5 soniyadan keyin kamera o'zi keyingi varaqqa ochiladi
+  if (live) {
+    const next = document.getElementById("scan-next-sheet");
+    next.textContent = "📷 Keyingi varaq (kamera ochilmoqda…)";
+    setTimeout(() => {
+      if (next.isConnected) next.click();
+    }, 1500);
+  }
 }
 
 /* ---------- Variantlar (A/B/C/D) ---------- */

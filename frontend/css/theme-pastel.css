@@ -921,3 +921,27 @@ select:focus {
 .variant-text-row {
   grid-template-columns: 34px 1fr;
 }
+
+/* Jonli skaner: kamera ko'rinishi va topilgan burchaklar */
+.live-scan {
+  position: relative;
+  overflow: hidden;
+  border-radius: 18px;
+  background: #0f172a;
+  aspect-ratio: 3 / 4;
+}
+
+.live-scan video,
+.live-scan canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.live-status {
+  margin: 12px 4px;
+  text-align: center;
+  font-weight: 700;
+}
