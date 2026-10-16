@@ -8217,14 +8217,53 @@ function createScanWorker() {
   }
 }
 
-// Titul tuzilishi (doirachalar joyi) — har test uchun bir marta serverdan olinadi
+// Titul tuzilishi: doirachalar joyi, javob kalitlari, o'quvchilar ro'yxati (ID → ism). Telefonda
+// saqlanadi — varaq internetsiz ham shu yerda tekshiriladi. Internet bo'lsa yangilanib turadi
 const scanLayouts = new Map();
-async function loadScanLayout(testId) {
+const scanLayoutKey = (testId) => `testway-scan-layout-${testId}`;
+
+function cachedScanLayout(testId) {
   if (!scanLayouts.has(testId)) {
-    const layout = await api(`/api/teacher/tests/${testId}/scan/layout`);
-    scanLayouts.set(testId, layout);
+    try {
+      const saved = JSON.parse(localStorage.getItem(scanLayoutKey(testId)) || "null");
+      if (saved) scanLayouts.set(testId, saved);
+    } catch (_) {
+      /* xotira yopiq */
+    }
   }
-  return scanLayouts.get(testId);
+  return scanLayouts.get(testId) || null;
+}
+
+function storeScanLayout(testId, layout) {
+  scanLayouts.set(testId, layout);
+  try {
+    localStorage.setItem(scanLayoutKey(testId), JSON.stringify(layout));
+  } catch (_) {
+    /* xotira to'la yoki yopiq — shu sessiyada xotirada qoladi */
+  }
+}
+
+async function loadScanLayout(testId, { fresh = false } = {}) {
+  if (!fresh && cachedScanLayout(testId)) return cachedScanLayout(testId);
+  try {
+    const layout = await api(`/api/teacher/tests/${testId}/scan/layout`);
+    storeScanLayout(testId, layout);
+    return layout;
+  } catch (error) {
+    // Internet yo'q — oldin saqlangani bilan ishlanadi
+    const saved = cachedScanLayout(testId);
+    if (!saved) throw error;
+    return saved;
+  }
+}
+
+// Varaqdagi ID bo'yicha o'quvchi — saqlangan ro'yxatdan (imtihon ro'yxati, bo'lmasa maktab o'quvchisi)
+function localSheetMatch(layout, number) {
+  if (!number) return null;
+  const student = (layout.students || []).find((item) => item.number === number);
+  if (student) return { id: student.id, name: student.name, status: student.status, variant: student.variant };
+  const pupil = (layout.school_students || []).find((item) => item.code === number);
+  return pupil ? { id: null, name: pupil.name, status: "pending", variant: null, school: true } : null;
 }
 
 // Natija ekrani: tekislangan varaq, doirachalar ustida rang — yashil (to'g'ri), qizil (xato),
@@ -8375,12 +8414,16 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
   // Titul tuzilishi bo'lsa varaq telefonning o'zida o'qiladi; olinmasa (internet yo'q) — eski yo'l: surat serverga
   let layout = null;
   if ((test.sheet_version || 1) >= 3) {
-    loadScanLayout(testId)
-      .then((value) => {
-        layout = value;
-        SHEET_PAGE = sheetPageOf(value);
-        worker?.postMessage({ layout: value, page, sheetPage: SHEET_PAGE });
-      })
+    const useLayout = (value) => {
+      layout = value;
+      SHEET_PAGE = sheetPageOf(value);
+      worker?.postMessage({ layout: value, page, sheetPage: SHEET_PAGE });
+    };
+    // Telefonda saqlangani bilan darhol boshlanadi; internet bo'lsa yangisi (o'quvchilar ro'yxati) fonda olinadi
+    const saved = cachedScanLayout(testId);
+    if (saved) useLayout(saved);
+    loadScanLayout(testId, { fresh: true })
+      .then(useLayout)
       .catch(() => {});
   }
   showPage(`
@@ -8477,7 +8520,8 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     liveTimer = setInterval(tick, LIVE_FRAME_GAP);
   };
 
-  // Telefonda o'qilgan natija: serverga faqat javoblar boradi (o'quvchi ID bo'yicha topiladi)
+  // Telefonda o'qilgan natija: serverni kutmaydi — o'quvchi ID bo'yicha saqlangan ro'yxatdan topiladi,
+  // javoblar saqlangan kalit bilan tekshiriladi. Saqlash navbat orqali (internet bo'lmasa ham)
   const accept = async ({ result, sheet }) => {
     busy = true;
     clearInterval(liveTimer);
@@ -8490,33 +8534,29 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
       return;
     }
     status.textContent = "✅ O'qildi";
-    try {
-      const scan = await api(`/api/teacher/tests/${testId}/scan/result`, {
-        method: "POST",
-        body: { ...result, positions: undefined, highlights: undefined, page, name_image: page === 1 && SHEET_PAGE.nameBox ? sheetNameImage(sheet) : null },
-      });
-      stopLiveScan();
-      liveSession = liveSession || { count: 0 };
-      const merged = mergeScan(scan, collected);
-      merged.live = true;
-      merged.sheetViews = {
-        ...(merged.sheetViews || {}),
-        [page]: { sheet, positions: result.positions, highlights: result.highlights },
-      };
-      renderScanReview(testId, test, merged);
-    } catch (error) {
-      if (!video.isConnected) return;
-      if (isOfflineError(error) && page === 1) {
-        // Internet yo'q — kadr navbatga, keyin serverda o'qiladi
-        await queueSheet(testId, snapshot());
-        liveSession = liveSession || { count: 0 };
-        liveSession.count += 1;
-        waitForNewSheet = true;
-        resume("📥 Navbatga qo'shildi (internet yo'q) — keyingisini qo'ying");
-        return;
-      }
-      resume(`⚠️ ${error.message}`);
-    }
+    const scan = {
+      ...result,
+      positions: undefined,
+      highlights: undefined,
+      name_image: page === 1 && SHEET_PAGE.nameBox ? sheetNameImage(sheet) : null,
+      match: page === 1 ? localSheetMatch(layout, result.sheet_number) : null,
+      variants: layout.variants || [],
+      page,
+      page_count: layout.page_count,
+      pending_students: (layout.students || [])
+        .filter((student) => student.status === "pending")
+        .map(({ id, name }) => ({ id, name })),
+    };
+    stopLiveScan();
+    liveSession = liveSession || { count: 0 };
+    const merged = mergeScan(scan, collected);
+    merged.live = true;
+    merged.local = true;
+    merged.sheetViews = {
+      ...(merged.sheetViews || {}),
+      [page]: { sheet, positions: result.positions, highlights: result.highlights },
+    };
+    renderScanReview(testId, test, merged);
   };
 
   const capture = async () => {
@@ -8838,7 +8878,9 @@ function renderScanReview(testId, test, scan) {
     // Ro'yxatdan tanlangan yoki raqam bo'yicha topilgan (natijasi bor bo'lsa ham) o'quvchi
     const attemptId = scan.match?.id || Number(select?.value) || null;
     const name = nameInput.value.trim();
-    if (!attemptId && name.length < 2) {
+    // Maktab o'quvchisi (ID bo'yicha topilgan, imtihon ro'yxatida hali yo'q) — server ID bo'yicha qo'shadi
+    const bySchoolId = Boolean(scan.match?.school && scan.sheetNumber);
+    if (!attemptId && !bySchoolId && name.length < 2) {
       document.getElementById("scan-student-pick").hidden = false;
       nameInput.hidden = false;
       nameInput.focus();
@@ -8847,16 +8889,16 @@ function renderScanReview(testId, test, scan) {
     const answers = Object.fromEntries(
       scan.questions.filter((question) => question.chosen).map((question) => [String(question.ref), question.chosen])
     );
-    const result = await api(`/api/teacher/tests/${testId}/scan/save`, {
-      method: "POST",
-      body: {
-        attempt_id: attemptId,
-        name,
-        answers,
-        sheet_number: scan.sheetNumber || null,
-        variant: scan.variants?.length ? scan.variant || "A" : null,
-      },
-    });
+    const body = {
+      attempt_id: attemptId,
+      name: attemptId || bySchoolId ? "" : name,
+      answers,
+      sheet_number: scan.sheetNumber || null,
+      variant: scan.variants?.length ? scan.variant || "A" : null,
+    };
+    const result = scan.local
+      ? await saveCheckedSheet(testId, scan, body, scan.match?.name || select?.selectedOptions[0]?.textContent || name)
+      : await api(`/api/teacher/tests/${testId}/scan/save`, { method: "POST", body });
     unsavedChanges = false;
     if (scan.queueId) await queueDelete(scan.queueId);
     if (scan.live && liveSession) {
@@ -9138,21 +9180,63 @@ function isOfflineError(error) {
   return !error?.status && (error instanceof TypeError || !navigator.onLine);
 }
 
+// Telefonda tekshirilgan varaq: natija saqlangan kalit bo'yicha darhol hisoblanadi, javoblar esa
+// navbatga yoziladi (telefon xotirasida — ilova yopilsa ham yo'qolmaydi) va internet bo'lishi bilan
+// serverga yuboriladi. O'quvchi ro'yxatda "natijasi bor" bo'lib belgilanadi
+async function saveCheckedSheet(testId, scan, body, studentName) {
+  const layout = cachedScanLayout(testId);
+  const key = layout?.keys?.[body.variant || "A"] || layout?.keys?.A || {};
+  const score = sheetScore(scan.questions, key);
+  const total = score.right + score.wrong + score.empty;
+  const result = {
+    name: studentName || "O'quvchi",
+    correct: score.right,
+    total,
+    percent: total ? Math.round((score.right * 100) / total) : 0,
+  };
+  try {
+    await queuePut({ kind: "answers", testId, body, name: result.name, status: "new", createdAt: Date.now() });
+  } catch (_) {
+    // Telefon xotirasiga yozib bo'lmadi — to'g'ridan-to'g'ri serverga
+    return api(`/api/teacher/tests/${testId}/scan/save`, { method: "POST", body });
+  }
+  if (layout) {
+    const student = layout.students?.find((item) => item.id === body.attempt_id || (body.sheet_number && item.number === body.sheet_number));
+    if (student) student.status = "done";
+    storeScanLayout(testId, layout);
+  }
+  processScanQueue();
+  return result;
+}
+
 async function queueSheet(testId, image) {
   await queuePut({ testId, image, status: "new", createdAt: Date.now() });
   showToast("📥 Internet yo'q — varaq navbatga qo'shildi, internet kelganda yuboriladi");
 }
 
 let queueRunning = false;
+let queueAgain = false; // yuborish paytida yangi varaq qo'shildi — tugagach yana aylanadi
 
 async function processScanQueue() {
-  if (queueRunning || !navigator.onLine) return;
+  if (queueRunning) {
+    queueAgain = true;
+    return;
+  }
+  if (!navigator.onLine) return;
   queueRunning = true;
+  queueAgain = false;
   let saved = 0;
+  let failed = 0;
   try {
     for (const item of await queueAll()) {
       if (item.status !== "new") continue;
       try {
+        if (item.kind === "answers") {
+          // Telefonda tekshirilgan varaq — faqat javoblar
+          await api(`/api/teacher/tests/${item.testId}/scan/save`, { method: "POST", body: item.body });
+          await queueDelete(item.id);
+          continue;
+        }
         const scan = await readSheetImage(item.testId, item.image, 1, null);
         const flagged = scan.questions.some((question) => question.status === "multiple" || question.status === "unsure");
         const variantKnown = !scan.variants?.length || Boolean(scan.variant);
@@ -9172,12 +9256,15 @@ async function processScanQueue() {
       } catch (error) {
         if (isOfflineError(error)) break;
         await queuePut({ ...item, status: "error", error: error.message });
+        failed += 1;
       }
     }
   } finally {
     queueRunning = false;
   }
+  if (queueAgain) setTimeout(processScanQueue, 0);
   if (saved) showToast(`📤 Navbatdagi ${saved} ta varaq tekshirildi va saqlandi`);
+  if (failed) showToast(`⚠️ ${failed} ta varaq saqlanmadi — test sahifasidagi navbatni oching`);
 }
 
 window.addEventListener("online", () => processScanQueue());
@@ -9204,7 +9291,7 @@ async function renderScanQueue(testId, test) {
               (item) => `
                 <div class="card" ${item.status === "review" ? `data-queue-review="${item.id}"` : 'style="cursor:default"'}>
                   <div class="card-body" style="flex:1">
-                    <b>${item.scan?.match ? escapeHtml(item.scan.match.name) : `Varaq #${item.id}`}</b>
+                    <b>${item.name ? escapeHtml(item.name) : item.scan?.match ? escapeHtml(item.scan.match.name) : `Varaq #${item.id}`}</b>
                     <p>${statusText[item.status]}${item.error ? ` — ${escapeHtml(item.error)}` : ""} · ${formatDateTime(new Date(item.createdAt).toISOString())}</p>
                   </div>
                   ${item.status === "review" ? "<span>›</span>" : deleteButton("data-queue-delete", item.id)}
@@ -9294,6 +9381,11 @@ async function renderAttachClasses(testId) {
 async function renderTestDetail(testId) {
   const test = await api(`/api/teacher/tests/${testId}`);
   const isClosedTest = test.enrollment_type === "closed";
+  if (isClosedTest && test.status !== "closed" && (test.sheet_version || 1) >= 3) {
+    // Javob kaliti va o'quvchilar ro'yxati telefonda saqlanadi — skaner internetsiz ham tekshiradi
+    loadScanLayout(testId, { fresh: true }).catch(() => {});
+    processScanQueue(); // telefonda tekshirilib, hali yuborilmagan natijalar bo'lsa
+  }
   const isFinished = test.status === "closed";
 
   const studentRow = (student) => `

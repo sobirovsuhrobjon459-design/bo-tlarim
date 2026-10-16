@@ -4969,6 +4969,38 @@ def _old_id_bubbles(test: Test, variants: list[str]) -> list[dict]:
     return old_bubbles
 
 
+def _school_students_query(member):
+    """O'qituvchi maktabidagi (faol sinflardagi) o'quvchilar — 4 xonali ID'si bilan."""
+    return (
+        select(ClassStudent)
+        .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
+        .where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None),
+               ClassStudent.removed_at.is_(None), ClassStudent.student_code.is_not(None))
+    )
+
+
+def _attempt_by_sheet_number(db: Session, teacher: Teacher, test: Test, number: int) -> Attempt | None:
+    """Varaqdagi ID bo'yicha o'quvchi: imtihon ro'yxatidan, bo'lmasa maktab o'quvchisi (ro'yxatga qo'shiladi)."""
+
+    found = db.scalar(
+        select(Attempt).where(
+            Attempt.test_id == test.id,
+            Attempt.user_id.is_(None),
+            Attempt.status.in_(("pending", "done")),
+            Attempt.sheet_number == number,
+        )
+    )
+    if found:
+        return found
+    member = _active_membership(db, teacher.user)
+    student = member and db.scalar(_school_students_query(member).where(ClassStudent.student_code == number))
+    if not student:
+        return None
+    found = _student_attempt(db, test, student)  # maktab o'quvchisi — imtihon ro'yxatiga qo'shiladi
+    db.commit()
+    return found
+
+
 def _scan_response(db: Session, teacher: Teacher, test: Test, result: dict, page: int,
                    variants: list[str], page_count: int) -> dict:
     """O'qilgan varaq (serverda yoki telefonda) → imtihon kodi tekshiruvi, ID bo'yicha o'quvchi, ro'yxat."""
@@ -4982,28 +5014,9 @@ def _scan_response(db: Session, teacher: Teacher, test: Test, result: dict, page
     # Varaqdagi raqam bo'yicha o'quvchi topiladi (ro'yxatda bo'lsa)
     _ensure_sheet_numbers(db, test)
     match = None
-    if result.get("sheet_number"):
-        found = db.scalar(
-            select(Attempt).where(
-                Attempt.test_id == test.id,
-                Attempt.user_id.is_(None),
-                Attempt.status.in_(("pending", "done")),
-                Attempt.sheet_number == result["sheet_number"],
-            )
-        )
-        if not found:
-            member = _active_membership(db, teacher.user)
-            student = member and db.scalar(
-                select(ClassStudent)
-                .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
-                .where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None),
-                       ClassStudent.removed_at.is_(None), ClassStudent.student_code == result["sheet_number"])
-            )
-            if student:
-                found = _student_attempt(db, test, student)  # maktab o'quvchisi — imtihon ro'yxatiga qo'shiladi
-                db.commit()
-        if found:
-            match = {"id": found.id, "name": found.offline_name, "status": found.status, "variant": found.variant}
+    found = _attempt_by_sheet_number(db, teacher, test, result["sheet_number"]) if result.get("sheet_number") else None
+    if found:
+        match = {"id": found.id, "name": found.offline_name, "status": found.status, "variant": found.variant}
 
     pending = [
         {"id": attempt.id, "name": attempt.offline_name}
@@ -5026,8 +5039,24 @@ def scan_layout(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
 
     test = _paper_test(db, teacher, test_id)
     variants, bubbles, page_count = _sheet_layout(test, db)
+    _ensure_sheet_numbers(db, test)
+    attempts = db.scalars(
+        select(Attempt)
+        .where(Attempt.test_id == test.id, Attempt.user_id.is_(None), Attempt.status.in_(("pending", "done")))
+        .order_by(Attempt.offline_name)
+    ).all()
+    member = _active_membership(db, teacher.user)
+    school = db.scalars(_school_students_query(member)).all() if member else []
     return {
         "bubbles": bubbles,
+        "variants": variants,
+        # Telefon varaqni internetsiz tekshiradi: ID → o'quvchi shu ro'yxatlardan topiladi
+        "students": [
+            {"id": attempt.id, "name": attempt.offline_name, "number": attempt.sheet_number,
+             "status": attempt.status, "variant": attempt.variant}
+            for attempt in attempts
+        ],
+        "school_students": [{"code": student.student_code, "name": student.full_name} for student in school],
         # 5-versiya testda oldin chop etilgan 3 xonali ID'li titul ham o'qilsin
         "old_bubbles": _old_id_bubbles(test, variants) if test.sheet_version == 5 else None,
         # Ixcham titul (6-versiya): o'lchami va chet belgilari soni; A4 titulda — None
@@ -5070,6 +5099,12 @@ def save_scanned_sheet(
     _check_variant(db, test, body.variant)
     if body.attempt_id:
         attempt = _get_offline_attempt(db, test, body.attempt_id)
+    elif body.sheet_number and not body.name.strip():
+        # Telefonda o'qilgan varaq: o'quvchi ID bo'yicha shu yerda topiladi (internetsiz tekshirilgan bo'lsa ham)
+        _ensure_sheet_numbers(db, test)
+        attempt = _attempt_by_sheet_number(db, teacher, test, body.sheet_number)
+        if not attempt:
+            raise HTTPException(status_code=422, detail=f"ID {body.sheet_number} ro'yxatda yo'q — ismini yozing")
     else:
         name = " ".join(body.name.split())
         if len(name) < 2:
