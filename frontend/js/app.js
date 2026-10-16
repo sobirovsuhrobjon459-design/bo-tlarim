@@ -6456,6 +6456,9 @@ function subjectStructure(subject, typePreset) {
 
 // Test turlari. Ikkalasi ham "javoblar kaliti" usulida ishlaydi (savol matni
 // o'qituvchining kanalida bo'ladi), farqi — standart savollar tuzilishida.
+// Offline test tituli (bloklari kvadratli) — ko'pi bilan 90 savol: yarim A4 ga sig'adi
+const OFFLINE_MAX_QUESTIONS = 90;
+
 const TEST_TYPES = {
   rash: {
     label: "Rash test",
@@ -6630,7 +6633,7 @@ function renderNewTestForm(testType, draft = {}) {
       <div class="row-between" style="gap:8px;align-items:flex-end">
         <div style="flex:1">
           <label class="field-label" for="field-test-count">${offline ? "Nechta test savoli?" : "Test savollari"}</label>
-          <input class="input" id="field-test-count" type="number" min="0" max="300" value="${testCount}"
+          <input class="input" id="field-test-count" type="number" min="0" max="${offline ? OFFLINE_MAX_QUESTIONS : 300}" value="${testCount}"
                  ${offline ? `placeholder="masalan 25"` : ""} style="margin:0" />
         </div>
         <div style="flex:1;display:${offline ? "none" : "block"}">
@@ -6884,7 +6887,7 @@ function renderNewTestForm(testType, draft = {}) {
     // Savollar soni yozilishi bilan javob katakchalari chiqadi (kiritilgan javoblar saqlanadi)
     document.getElementById("field-test-count").addEventListener("input", (event) => {
       const value = Number(event.target.value);
-      if (value >= 1 && value <= 300) buildKeyQuestionRows();
+      if (value >= 1 && value <= OFFLINE_MAX_QUESTIONS) buildKeyQuestionRows();
     });
   }
 
@@ -7133,6 +7136,9 @@ async function saveNewTest() {
   const keyRows = [...document.querySelectorAll("#key-questions-container .key-row")];
   if (!keyRows.length) {
     throw new Error("Avval savollar sonini kiriting");
+  }
+  if (body.enrollment_type === "closed" && keyRows.length > OFFLINE_MAX_QUESTIONS) {
+    throw new Error(`Offline testda ko'pi bilan ${OFFLINE_MAX_QUESTIONS} ta savol bo'ladi (titulga sig'ishi uchun)`);
   }
 
   const emptyRow = keyRows.find((row) => !row.dataset.answer);
@@ -7619,8 +7625,12 @@ function cornersFromEdgeMarks(gray, integral, width, height, blobs) {
       if (score >= 0.8) edges.push({ score, a, b, length });
     }
   }
-  // Haqiqiy chet — eng uzunlaridan (burchaklar varaqdagi hamma narsani o'rab turadi)
-  edges.sort((p, q) => Math.round(q.score * 10) - Math.round(p.score * 10) || q.length - p.length);
+  // Haqiqiy chet: uchlarida katta burchak kvadratlari (14 pt — doirachadan ~1,5 baravar katta), so'ng eng
+  // uzuni. Bo'yalgan doirachalar ustuni ham "chet"ga o'xshaydi — ular ro'yxatdan haqiqiy chetni siqib chiqarmasin
+  const endSize = (edge) => Math.round(((edge.a.size + edge.b.size) / 2) * 2);
+  edges.sort(
+    (p, q) => Math.round(q.score * 10) - Math.round(p.score * 10) || endSize(q) - endSize(p) || q.length - p.length
+  );
   edges = edges.slice(0, 60);
 
   // 2) Ikki chetdan to'rtburchak: A4 shakli, qarama-qarshi tomonlari deyarli teng, burchaklari 90° ga yaqin
@@ -7899,59 +7909,63 @@ function boxFill(sheet, x, y, r) {
 // Chetdagi tekislash belgilarining haqiqiy joyi (kutilgan joy atrofida qora kvadrat)
 function edgeMarkOffsets(sheet, marks) {
   const offsets = { left: [], right: [] };
-  const { W, H, binary } = sheet;
-  const window = 9;
   for (const mark of marks) {
-    const x = mark.x;
     const y = SHEET_PAGE.height - mark.y;
-    const x0 = Math.max(0, Math.round((x - window) * READ_SCALE));
-    const y0 = Math.max(0, Math.round((y - window) * READ_SCALE));
-    const x1 = Math.min(W, Math.round((x + window) * READ_SCALE));
-    const y1 = Math.min(H, Math.round((y + window) * READ_SCALE));
-    if (x1 <= x0 || y1 <= y0) continue;
-    const pw = x1 - x0;
-    const seen = new Uint8Array(pw * (y1 - y0));
-    const expected = (2 * mark.r * READ_SCALE) ** 2;
-    let best = null;
-    for (let start = 0; start < seen.length; start += 1) {
-      const sx = start % pw;
-      const sy = (start - sx) / pw;
-      if (seen[start] || !binary[(y0 + sy) * W + x0 + sx]) continue;
-      const stack = [start];
-      seen[start] = 1;
-      let area = 0;
-      let sumX = 0;
-      let sumY = 0;
-      while (stack.length) {
-        const index = stack.pop();
-        const px = index % pw;
-        const py = (index - px) / pw;
-        area += 1;
-        sumX += px;
-        sumY += py;
-        for (let dy = -1; dy <= 1; dy += 1) {
-          for (let dx = -1; dx <= 1; dx += 1) {
-            const nx = px + dx;
-            const ny = py + dy;
-            if (nx < 0 || ny < 0 || nx >= pw || ny >= y1 - y0) continue;
-            const next = ny * pw + nx;
-            if (seen[next] || !binary[(y0 + ny) * W + x0 + nx]) continue;
-            seen[next] = 1;
-            stack.push(next);
-          }
-        }
-      }
-      if (area < 0.4 * expected || area > 2.2 * expected) continue;
-      const cx = sumX / area / READ_SCALE + x0 / READ_SCALE;
-      const cy = sumY / area / READ_SCALE + y0 / READ_SCALE;
-      const distance = (cx - x) ** 2 + (cy - y) ** 2;
-      if (!best || distance < best[0]) best = [distance, cx - x, cy - y];
-    }
-    if (best) offsets[mark.ref].push([y, best[1], best[2]]);
+    const found = locateMark(sheet, mark.x, y, mark.r, 9);
+    if (found) offsets[mark.ref].push([y, found[0], found[1]]);
   }
   offsets.left.sort((a, b) => a[0] - b[0]);
   offsets.right.sort((a, b) => a[0] - b[0]);
   return offsets;
+}
+
+// Kutilgan joy (x, y — punktlarda) atrofidagi (±window) qora kvadrat: haqiqiy joyi farqi [dx, dy] yoki null
+function locateMark(sheet, x, y, half, window) {
+  const { W, H, binary } = sheet;
+  const x0 = Math.max(0, Math.round((x - window) * READ_SCALE));
+  const y0 = Math.max(0, Math.round((y - window) * READ_SCALE));
+  const x1 = Math.min(W, Math.round((x + window) * READ_SCALE));
+  const y1 = Math.min(H, Math.round((y + window) * READ_SCALE));
+  if (x1 <= x0 || y1 <= y0) return null;
+  const pw = x1 - x0;
+  const seen = new Uint8Array(pw * (y1 - y0));
+  const expected = (2 * half * READ_SCALE) ** 2;
+  let best = null;
+  for (let start = 0; start < seen.length; start += 1) {
+    const sx = start % pw;
+    const sy = (start - sx) / pw;
+    if (seen[start] || !binary[(y0 + sy) * W + x0 + sx]) continue;
+    const stack = [start];
+    seen[start] = 1;
+    let area = 0;
+    let sumX = 0;
+    let sumY = 0;
+    while (stack.length) {
+      const index = stack.pop();
+      const px = index % pw;
+      const py = (index - px) / pw;
+      area += 1;
+      sumX += px;
+      sumY += py;
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          const nx = px + dx;
+          const ny = py + dy;
+          if (nx < 0 || ny < 0 || nx >= pw || ny >= y1 - y0) continue;
+          const next = ny * pw + nx;
+          if (seen[next] || !binary[(y0 + ny) * W + x0 + nx]) continue;
+          seen[next] = 1;
+          stack.push(next);
+        }
+      }
+    }
+    if (area < 0.4 * expected || area > 2.2 * expected) continue;
+    const cx = sumX / area / READ_SCALE + x0 / READ_SCALE;
+    const cy = sumY / area / READ_SCALE + y0 / READ_SCALE;
+    const distance = (cx - x) ** 2 + (cy - y) ** 2;
+    if (!best || distance < best[0]) best = [distance, cx - x, cy - y];
+  }
+  return best ? [best[1], best[2]] : null;
 }
 
 function interpolateOffset(points, y) {
@@ -7983,10 +7997,40 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
     return [x + ldx + (rdx - ldx) * t, y + ldy + (rdy - ldy) * t];
   };
 
+  // 7-versiya: har 5 savollik blok burchagidagi kvadratlar — doiracha joyi o'z blokining 4 kvadrati
+  // orasida (bilinear) aniqlanadi; topilmagan kvadrat o'rniga chet belgilari bo'yicha joy
+  const anchorShift = new Map();
+  for (const anchor of pageBubbles) {
+    if (anchor.kind !== "anchor") continue;
+    const x = anchor.x;
+    const y = SHEET_PAGE.height - anchor.y;
+    const [cx, cy] = corrected(x, y);
+    const [fx, fy] = locateMark(sheet, cx, cy, anchor.r, 5) || [0, 0];
+    anchorShift.set(anchor.letter, [x, y, cx + fx - x, cy + fy - y]);
+  }
+  const placed = (bubble) => {
+    const x = bubble.x;
+    const y = SHEET_PAGE.height - bubble.y;
+    const block = bubble.block;
+    if (!block || block.some((corner) => !anchorShift.has(corner))) return corrected(x, y);
+    const [topLeft, topRight, bottomRight, bottomLeft] = block.map((corner) => anchorShift.get(corner));
+    const u = (x - topLeft[0]) / (topRight[0] - topLeft[0]);
+    const v = (y - topLeft[1]) / (bottomLeft[1] - topLeft[1]);
+    const weights = [(1 - u) * (1 - v), u * (1 - v), u * v, (1 - u) * v];
+    const shifts = [topLeft, topRight, bottomRight, bottomLeft];
+    let dx = 0;
+    let dy = 0;
+    weights.forEach((weight, index) => {
+      dx += weight * shifts[index][2];
+      dy += weight * shifts[index][3];
+    });
+    return [x + dx, y + dy];
+  };
+
   // Har savol qatori chop etilgan halqalari ustiga moslanadi (ustun bo'yicha tepadan pastga)
   const rows = new Map();
   for (const bubble of pageBubbles) {
-    if (bubble.kind === "mark" || bubble.kind === "code") continue;
+    if (bubble.kind === "mark" || bubble.kind === "code" || bubble.kind === "anchor") continue;
     if (!rows.has(bubble.ref)) rows.set(bubble.ref, []);
     rows.get(bubble.ref).push(bubble);
   }
@@ -7996,7 +8040,7 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
   const rowShift = new Map();
   const aligned = [];
   for (const [ref, row] of ordered) {
-    const centers = row.map((bubble) => corrected(bubble.x, SHEET_PAGE.height - bubble.y));
+    const centers = row.map(placed);
     const [x0, y0] = centers[0];
     let nearest = null;
     for (const item of aligned) {
@@ -8029,12 +8073,13 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
   const idRows = new Map();
   const variantRatios = new Map();
   for (const bubble of pageBubbles) {
-    if (bubble.kind === "mark") continue;
-    const [x, y] = corrected(bubble.x, SHEET_PAGE.height - bubble.y);
+    if (bubble.kind === "mark" || bubble.kind === "anchor") continue;
+    const [x, y] = placed(bubble);
     if (bubble.kind === "code") {
-      // Kod katagi: atrofidagi bir necha joydan eng qorasi (serverdagi _fill_ratio square)
+      // Kod katagi: atrofidagi bir necha joydan eng qorasi (serverdagi _fill_ratio square). Kataklar
+      // orasi keng (≈40 pt) — qog'oz bukilib siljigan katak ham topilsin
       const inner = Math.max(2, Math.round(bubble.r * READ_SCALE * 0.55));
-      const shift = bubble.r * 0.25;
+      const shift = bubble.r * 0.8;
       let ratio = 0;
       for (const dx of [-shift, -shift / 2, 0, shift / 2, shift]) {
         for (const dy of [-shift, -shift / 2, 0, shift / 2, shift]) ratio = Math.max(ratio, boxFill(sheet, x + dx, y + dy, inner));
@@ -8199,6 +8244,7 @@ function createScanWorker() {
       maskFill,
       boxFill,
       edgeMarkOffsets,
+      locateMark,
       interpolateOffset,
       readSheetAnswers,
       analyzeFrame,

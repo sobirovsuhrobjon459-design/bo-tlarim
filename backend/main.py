@@ -2093,7 +2093,7 @@ def _sheet_geometry(test: Test, variants: list[str] | None = None) -> dict | Non
 
     if (test.sheet_version or 1) < 6:
         return None
-    plan = _compact_plan(test, variants)
+    plan = (_grid_plan if test.sheet_version >= 7 else _compact_plan)(test, variants)
     return {"width": plan["width"], "height": plan["height"], "edge_marks": plan["edge_marks"], "name_box": False}
 
 
@@ -2182,11 +2182,185 @@ def _draw_compact_card(sheet, test: Test, plan: dict, page: int, with_answers: b
                       "x": x, "y": center, "r": COMPACT_RADIUS})
 
 
+# 7-versiya — bloklarga bo'lingan titul (EvalBee uslubida): har 5 savollik blok to'rt burchagidan
+# kichik qora kvadratlar (anchor) bilan o'ralgan. Skaner har doirachani o'z blokidagi 4 kvadrat
+# bo'yicha joylashtiradi — qog'oz egilgan, bukilgan yoki qiyshiq tutilganda ham doiracha joyi aniq.
+# Ism maydoni yo'q (o'quvchi ID bilan taniladi). 50 tagacha savol — A4 ning 1/3 qismi (bitta A4 ga 3 ta),
+# 100 tagacha — yarmi (2 ta).
+GRID_LEFT = 44            # birinchi blok chizig'i (chet belgilaridan ichkarida)
+GRID_TOP = 58             # birinchi qator kvadratlari (sarlavha ostida)
+GRID_BOTTOM = 46          # pastki imtihon kodi ustida
+GRID_ROW = 13             # savol qatorlari orasi
+GRID_BLOCK_ROWS = 5       # blokdagi savollar
+GRID_HEADER = 9           # blok tepasidagi A B C D qatori
+GRID_BLOCK = GRID_HEADER + GRID_BLOCK_ROWS * GRID_ROW + 5  # blok balandligi (kvadratlar orasi) — 79
+GRID_RADIUS = 4.5
+GRID_GAP = 13             # doirachalar orasi (markazdan markazga)
+GRID_ANCHOR = 7           # blok kvadrati tomoni
+
+
+def _grid_plan(test: Test, variants: list[str] | None = None, key_override: dict | None = None) -> dict:
+    """Bloklarga bo'lingan titul: o'lchami, ustunlar va har savolning bloki (ustun, blok qatori, qator)."""
+
+    items = [item for item in _answer_sheet_items(test, key_override) if item[1] != "text"]
+    width = A4[0]
+    options = max((item[2] for item in items), default=4)
+    column_width = 26 + options * GRID_GAP
+    id_width = 32 + 4 * GRID_GAP + (24 if variants else 0)  # ID: raqam yorlig'i + 4 ustun (+ variant)
+    right = width - GRID_LEFT
+
+    def capacity(height: float, first: bool) -> tuple[int, int]:
+        block_rows = int((height - GRID_TOP - GRID_BOTTOM) // GRID_BLOCK)
+        start = GRID_LEFT + (id_width if first else 0)
+        return block_rows, int((right - start) // column_width)
+
+    for height in COMPACT_HEIGHTS:
+        block_rows, columns = capacity(height, True)
+        if block_rows * columns * GRID_BLOCK_ROWS >= len(items):
+            break
+    pages = []
+    rest = items
+    while rest or not pages:
+        block_rows, columns = capacity(height, not pages)
+        size = block_rows * columns * GRID_BLOCK_ROWS
+        chunk, rest = rest[:size], rest[size:]
+        # Ustun bo'ylab pastga: 1-ustunda 1–5, 6–10 ...; to'lgach keyingi ustun
+        placed = []
+        for index, item in enumerate(chunk):
+            column, within = divmod(index, block_rows * GRID_BLOCK_ROWS)
+            placed.append((item, column, within // GRID_BLOCK_ROWS, within % GRID_BLOCK_ROWS))
+        pages.append(placed)
+    return {
+        "width": width,
+        "height": height,
+        "edge_marks": max(2, round((height - 2 * SHEET_CORNER) / COMPACT_EDGE_STEP) - 1),
+        "pages": pages,
+        "column_width": column_width,
+        "id_width": id_width,
+        "grid": True,
+    }
+
+
+def _draw_grid_card(sheet, test: Test, plan: dict, page: int, with_answers: bool, student: tuple | None,
+                    bubbles: list | None, variants: list[str] | None, key_variant: str | None) -> None:
+    """Bloklarga bo'lingan titulning bitta sahifasi — (0, 0) titulning chap-past burchagi."""
+
+    width, height = plan["width"], plan["height"]
+    column_width = plan["column_width"]
+    questions_x = GRID_LEFT + (plan["id_width"] if page == 1 else 0)
+
+    def top(distance: float) -> float:
+        """Titul tepasidan sanalgan masofa → PDF koordinatasi (pastdan)."""
+        return height - distance
+
+    def note(item: dict) -> None:
+        if bubbles is not None:
+            bubbles.append({"page": page, **item})
+
+    # Blok kvadratlari: chiziqlar kesishmasi (x — ustun chegarasi, y — blok qatori chegarasi)
+    anchors: dict[tuple[float, int], str] = {}
+
+    def anchor(x: float, row: int) -> str:
+        key = (round(x, 2), row)
+        if key not in anchors:
+            anchors[key] = f"{len(anchors)}"
+            y = top(GRID_TOP + row * GRID_BLOCK)
+            sheet.rect(x - GRID_ANCHOR / 2, y - GRID_ANCHOR / 2, GRID_ANCHOR, GRID_ANCHOR, stroke=0, fill=1)
+            note({"kind": "anchor", "ref": "anchor", "letter": anchors[key], "x": x, "y": y, "r": GRID_ANCHOR / 2})
+        return anchors[key]
+
+    def block(left: float, right_x: float, row: int) -> list[str]:
+        """Blokning 4 kvadrati: chap-tepa, o'ng-tepa, o'ng-past, chap-past."""
+        return [anchor(left, row), anchor(right_x, row), anchor(right_x, row + 1), anchor(left, row + 1)]
+
+    def row_center(block_row: int, line: int) -> float:
+        return top(GRID_TOP + block_row * GRID_BLOCK + GRID_HEADER + (line + 0.5) * GRID_ROW)
+
+    _draw_sheet_marks(sheet, test, width, height, bubbles, page, plan["edge_marks"])
+
+    # Sarlavha — bitta qator
+    sheet.setFont(REPORT_FONT_BOLD, 9)
+    sheet.drawString(GRID_LEFT, top(47), test.title[:48] + (f" — {page}-sahifa" if page > 1 else ""))
+    sheet.setFont(REPORT_FONT, 8)
+    if with_answers:
+        info = f"JAVOBLAR KALITI{f' — {key_variant} variant' if key_variant else ''}  ·  Kod {test.code}"
+    elif student:
+        info = f"{student[1][:40]}  ·  Kod {test.code}"
+    else:
+        info = f"Kod {test.code}  ·  {test.subject}  ·  doirachani to'liq bo'yang"
+    sheet.drawRightString(width - GRID_LEFT, top(47), info)
+
+    if page == 1:
+        # O'quvchi ID: 4 ustun; 0–4 birinchi blokda, 5–9 ikkinchisida (savol qatorlari bilan bir tekisda)
+        digits = f"{student[0]:04d}" if student else None
+        first_x = GRID_LEFT + 24 + GRID_RADIUS
+        id_right = GRID_LEFT + plan["id_width"]
+        for block_row in (0, 1):
+            corners = block(GRID_LEFT, id_right, block_row)
+            sheet.setFont("Helvetica-Bold", 7)
+            if block_row == 0:
+                sheet.drawString(GRID_LEFT + 7, top(GRID_TOP + 7.5), "ID")
+                for column in range(4):
+                    x = first_x + column * GRID_GAP
+                    sheet.rect(x - 5, top(GRID_TOP + 8.5), 10, 8, stroke=1, fill=0)
+                    if digits:
+                        sheet.drawCentredString(x, top(GRID_TOP + 7), digits[column])
+            for line in range(GRID_BLOCK_ROWS):
+                digit = block_row * GRID_BLOCK_ROWS + line
+                center = row_center(block_row, line)
+                sheet.setFont("Helvetica-Bold", 7)
+                sheet.drawCentredString(GRID_LEFT + 14, center - 2.5, str(digit))
+                for column in range(4):
+                    x = first_x + column * GRID_GAP
+                    filled = digits is not None and int(digits[column]) == digit
+                    sheet.circle(x, center, GRID_RADIUS, stroke=1, fill=1 if filled else 0)
+                    note({"ref": f"id{column}", "label": "ID", "kind": "id", "letter": str(digit),
+                          "x": x, "y": center, "r": GRID_RADIUS, "block": corners})
+            if variants and block_row == 0:
+                # Variant — ID yonida ustun (harfi doiracha o'ng tomonida)
+                student_variant = student[2] if student and len(student) > 2 else None
+                x = first_x + 4 * GRID_GAP + 2
+                sheet.setFont("Helvetica-Bold", 6)
+                sheet.drawCentredString(x + 3, top(GRID_TOP + 7), "Var.")
+                for line, name in enumerate(variants[:GRID_BLOCK_ROWS]):
+                    center = row_center(0, line)
+                    sheet.circle(x, center, GRID_RADIUS, stroke=1, fill=1 if student_variant == name else 0)
+                    sheet.setFont("Helvetica-Bold", 7)
+                    sheet.drawString(x + GRID_RADIUS + 1.5, center - 2.5, name)
+                    note({"ref": "variant", "label": "Variant", "kind": "variant", "letter": name,
+                          "x": x, "y": center, "r": GRID_RADIUS, "block": corners})
+
+    headers_drawn = set()
+    for (label, question_type, options, correct, ref), column, block_row, line in plan["pages"][page - 1]:
+        left = questions_x + column * column_width
+        corners = block(left, left + column_width, block_row)
+        bubble_x = left + 22 + GRID_RADIUS
+        if (column, block_row) not in headers_drawn:
+            headers_drawn.add((column, block_row))
+            sheet.setFont("Helvetica-Bold", 6.5)
+            for option in range(options):
+                sheet.drawCentredString(bubble_x + option * GRID_GAP, top(GRID_TOP + block_row * GRID_BLOCK + 7.5),
+                                        chr(65 + option))
+        center = row_center(block_row, line)
+        sheet.setFont("Helvetica", 7.5)
+        sheet.drawRightString(left + 18, center - 2.7, f"{label}")
+        correct_letters = set((correct or "").split(","))
+        for option in range(options):
+            letter = chr(65 + option)
+            x = bubble_x + option * GRID_GAP
+            filled = with_answers and letter in correct_letters
+            sheet.circle(x, center, GRID_RADIUS, stroke=1, fill=1 if filled else 0)
+            note({"ref": ref, "label": label, "kind": question_type, "letter": letter,
+                  "x": x, "y": center, "r": GRID_RADIUS, "block": corners})
+
+
 def _draw_compact_sheets(sheet, test: Test, with_answers: bool, bubbles: list | None, students: list | None,
                          variants: list[str] | None, key_override: dict | None, key_variant: str | None) -> None:
     """Ixcham titullar: bitta A4 ga sig'ganicha (ostma-ost, orasida qirqish chizig'i)."""
 
-    plan = _compact_plan(test, variants, key_override)
+    grid = (test.sheet_version or 1) >= 7
+    plan = (_grid_plan if grid else _compact_plan)(test, variants, key_override)
+    draw_card = _draw_grid_card if grid else _draw_compact_card
     page_count = len(plan["pages"])
     per_sheet = int(A4[1] // (plan["height"] - 1)) if page_count == 1 else 1
     # Bo'sh titul — A4 to'liq to'ldiriladi (3 yoki 2 nusxa); ismli — har o'quvchiga bittadan
@@ -2200,8 +2374,8 @@ def _draw_compact_sheets(sheet, test: Test, with_answers: bool, bubbles: list | 
             offset = A4[1] - (slot + 1) * plan["height"]
             sheet.saveState()
             sheet.translate(0, offset)
-            _draw_compact_card(sheet, test, plan, page, with_answers, student,
-                               bubbles if index == 0 else None, variants, key_variant)
+            draw_card(sheet, test, plan, page, with_answers, student,
+                      bubbles if index == 0 else None, variants, key_variant)
             sheet.restoreState()
             if slot:
                 # Qirqish chizig'i — titullar orasida

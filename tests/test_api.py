@@ -57,6 +57,31 @@ from backend.database import Attempt, Base, SessionLocal, Teacher, engine, utcno
 client = TestClient(main.app)
 
 
+class _TelegramUnauthorized:
+    """Soxta token bilan Telegram nima qaytarsa — shu (401), lekin tarmoqqa chiqmasdan."""
+
+    status_code = 401
+    text = '{"ok":false,"error_code":401,"description":"Unauthorized"}'
+
+    def json(self) -> dict:
+        return {"ok": False, "error_code": 401, "description": "Unauthorized"}
+
+
+def _without_telegram(request):
+    # Testlar Telegram'ga haqiqiy so'rov yubormaydi: tarmoq sekin bo'lsa, fondagi bot xabarlari
+    # navbati (har xabar 5 × 15 s gacha urinadi) boshqa testlarni kutdirib, ularni yiqitardi
+    def call(url, *args, **kwargs):
+        if "api.telegram.org" in str(url):
+            return _TelegramUnauthorized()
+        return request(url, *args, **kwargs)
+
+    return call
+
+
+main.httpx.post = _without_telegram(main.httpx.post)
+main.httpx.get = _without_telegram(main.httpx.get)
+
+
 # ========== Yordamchi funksiyalar ==========
 
 
@@ -4338,6 +4363,11 @@ def test_ixcham_titul_savollar_soniga_moslashadi():
             assert len(pages) == 1 and pages[0].get_text().count("Sinov test") == 3
     assert sizes == {25: (281, 1), 70: (421, 1), 150: (842, 1), 300: (842, 2)}, sizes
 
+    # 7-versiya: har 5 savollik blok 4 ta kvadrat bilan o'ralgan, har doiracha o'z blokini biladi
+    anchors = {bubble["letter"] for bubble in layout["bubbles"] if bubble["kind"] == "anchor"}
+    blocks = [bubble["block"] for bubble in layout["bubbles"] if bubble["kind"] in ("single", "id")]
+    assert anchors and all(len(block) == 4 and set(block) <= anchors for block in blocks)
+
     # Yozma savol titulga chiqmaydi (doirachasi yo'q); kodi va burchaklari joyida
     test_id = create_test(enrollment_type="closed")["id"]
     layout = client.get(f"/api/teacher/tests/{test_id}/scan/layout", headers=as_user(555)).json()
@@ -4350,6 +4380,14 @@ def test_ixcham_titul_savollar_soniga_moslashadi():
     assert scanned.status_code == 200, scanned.text
     body = scanned.json()
     assert body["answers"] == {"1": "B", "13": "D", "25": "A"} and body["sheet_number"] == 13, body["answers"]
+
+    # Oldin chop etilgan 6-versiya (bloksiz ixcham) titul avvalgidek o'qiladi
+    with SessionLocal() as session:
+        session.get(Test, test_id).sheet_version = 6
+        session.commit()
+    photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "0", "id3": "2", 4: "C"})
+    scanned = client.post(f"/api/teacher/tests/{test_id}/scan", json={"image_base64": photo}, headers=as_user(555)).json()
+    assert scanned["answers"] == {"4": "C"} and scanned["sheet_number"] == 2, scanned
 
     # Oldin chop etilgan 5-versiya (A4) titul avvalgidek o'qiladi
     with SessionLocal() as session:
@@ -4517,7 +4555,7 @@ def test_varaqdagi_oquvchi_raqami_boyicha_taniladi():
                 headers=as_user(555))
     detail = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1, "Birinchi Bola"), (2, "Ikkinchi Bola")]
-    assert detail["sheet_version"] == 6
+    assert detail["sheet_version"] == 7
 
     url = f"/api/teacher/tests/{test_id}/scan"
     photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "0", "id3": "2", 1: "B", 2: "C"})
@@ -4754,7 +4792,7 @@ def test_skaner_natijasi_sinf_natijalariga_yoziladi():
     assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json() == {"added": 0}
     detail = client.get(base, headers=as_user(701)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1001, "Ali Valiyev"), (1002, "Zuhra Karimova")]
-    assert detail["sheet_version"] == 6
+    assert detail["sheet_version"] == 7
 
     # Zuhra (1002) varag'i: 1-savol to'g'ri, 2-savol to'g'ri
     scanned = client.post(f"{base}/scan", json={"image_base64": _sheet_photo(test["id"], {

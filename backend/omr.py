@@ -212,7 +212,10 @@ def _marked_edges(gray: np.ndarray, candidates: list[tuple[float, float, float]]
         for index in np.nonzero(score >= EDGE_SCORE)[0]:
             edges.append((float(score[index]), candidates[top[group][index]], candidates[bottom[group][index]]))
     # Haqiqiy chet — eng uzunlaridan (burchaklar varaqdagi hamma narsani o'rab turadi)
-    edges.sort(key=lambda edge: (-round(edge[0], 1), -np.hypot(edge[2][0] - edge[1][0], edge[2][1] - edge[1][1])))
+    # Uchlarida katta burchak kvadratlari (doirachadan ~1,5 baravar katta) bo'lgani oldin — bo'yalgan doirachalar
+    # ustuni ham "chet"ga o'xshaydi, ular haqiqiy chetni ro'yxatdan siqib chiqarmasin
+    edges.sort(key=lambda edge: (-round(edge[0], 1), -round(edge[1][2] + edge[2][2]),
+                                 -np.hypot(edge[2][0] - edge[1][0], edge[2][1] - edge[1][1])))
     return edges[:60]
 
 
@@ -455,28 +458,31 @@ def _mark_offsets(binary: np.ndarray, marks: list[dict],
     """
 
     offsets: dict[str, list[tuple[float, float, float]]] = {"left": [], "right": []}
-    window = 9  # ±9 pt
     for mark in marks:
-        x, y = mark["x"], sheet.height - mark["y"]
-        x0, y0 = round((x - window) * SCALE), round((y - window) * SCALE)
-        patch = binary[max(0, y0): round((y + window) * SCALE), max(0, x0): round((x + window) * SCALE)]
-        if patch.size == 0:
-            continue
-        count, labels, stats, centroids = cv2.connectedComponentsWithStats(patch, connectivity=8)
-        expected_area = (2 * mark["r"] * SCALE) ** 2
-        best = None
-        for label in range(1, count):
-            area = stats[label, cv2.CC_STAT_AREA]
-            if not 0.4 * expected_area <= area <= 2.2 * expected_area:
-                continue
-            cx = centroids[label][0] / SCALE + max(0, x0) / SCALE
-            cy = centroids[label][1] / SCALE + max(0, y0) / SCALE
-            distance = (cx - x) ** 2 + (cy - y) ** 2
-            if best is None or distance < best[0]:
-                best = (distance, cx - x, cy - y)
-        if best:
-            offsets[mark["ref"]].append((y, best[1], best[2]))
+        y = sheet.height - mark["y"]
+        found = _locate_mark(binary, mark["x"], y, mark["r"], window=9)
+        if found:
+            offsets[mark["ref"]].append((y, *found))
     return offsets
+
+
+def _locate_mark(binary: np.ndarray, x: float, y: float, half: float, window: float) -> tuple[float, float] | None:
+    """Kutilgan joy (x, y) atrofidagi (±window pt) qora kvadrat: haqiqiy joyi farqi (dx, dy) yoki None."""
+
+    x0, y0 = round((x - window) * SCALE), round((y - window) * SCALE)
+    patch = binary[max(0, y0): round((y + window) * SCALE), max(0, x0): round((x + window) * SCALE)]
+    if patch.size == 0:
+        return None
+    count, labels, stats, centroids = cv2.connectedComponentsWithStats(patch, connectivity=8)
+    expected_area = (2 * half * SCALE) ** 2
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    centers = centroids[1:] / SCALE + np.array([max(0, x0), max(0, y0)]) / SCALE
+    fits = (areas >= 0.4 * expected_area) & (areas <= 2.2 * expected_area)
+    if not fits.any():
+        return None
+    distance = np.where(fits, ((centers - (x, y)) ** 2).sum(axis=1), np.inf)
+    cx, cy = centers[int(distance.argmin())]
+    return float(cx - x), float(cy - y)
 
 
 def _interpolate(points: list[tuple[float, float, float]], y: float) -> tuple[float, float]:
@@ -549,6 +555,30 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
         t = min(1.0, max(0.0, (x - left_x) / (right_x - left_x)))
         return x + ldx + (rdx - ldx) * t, y + ldy + (rdy - ldy) * t
 
+    # 7-versiya: har 5 savollik blok burchagidagi kvadratlar — doiracha joyi o'z blokining
+    # 4 kvadrati orasida (bilinear) aniqlanadi; topilmagan kvadrat o'rniga chet belgilari bo'yicha joy
+    anchor_shift: dict[str, tuple[float, float, float, float]] = {}
+    for anchor in page_bubbles:
+        if anchor["kind"] != "anchor":
+            continue
+        x, y = anchor["x"], sheet.height - anchor["y"]
+        cx, cy = corrected(x, y)
+        found = _locate_mark(binary, cx, cy, anchor["r"], window=5) or (0.0, 0.0)
+        anchor_shift[anchor["letter"]] = (x, y, cx + found[0] - x, cy + found[1] - y)
+
+    def placed(bubble: dict) -> tuple[float, float]:
+        x, y = bubble["x"], sheet.height - bubble["y"]
+        corners = bubble.get("block")
+        if not corners or any(corner not in anchor_shift for corner in corners):
+            return corrected(x, y)
+        top_left, top_right, bottom_right, bottom_left = (anchor_shift[corner] for corner in corners)
+        u = (x - top_left[0]) / (top_right[0] - top_left[0])
+        v = (y - top_left[1]) / (bottom_left[1] - top_left[1])
+        weights = ((1 - u) * (1 - v), u * (1 - v), u * v, (1 - u) * v)
+        shifts = (top_left, top_right, bottom_right, bottom_left)
+        return (x + sum(w * shift[2] for w, shift in zip(weights, shifts)),
+                y + sum(w * shift[3] for w, shift in zip(weights, shifts)))
+
     code_bits: dict[int, float] = {}
     questions: dict = {}
     id_rows: dict[str, dict[str, float]] = {}
@@ -556,7 +586,7 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
     # Har savol qatori (va raqam/variant qatori) chop etilgan halqalari bo'yicha tekislanadi
     rows: dict = {}
     for bubble in page_bubbles:
-        if bubble["kind"] not in ("mark", "code"):
+        if bubble["kind"] not in ("mark", "code", "anchor"):
             rows.setdefault(bubble["ref"], []).append(bubble)
     # Qatorlar ustun bo'yicha tepadan pastga: har biri eng yaqin tekislangan qatorning
     # siljishidan boshlab qidiriladi — qog'oz silliq egiladi, kuchli bo'rtish ham "kuzatiladi"
@@ -564,7 +594,7 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
     row_shift: dict = {}
     aligned: list[tuple[float, float, tuple[float, float]]] = []
     for ref, row in sorted(rows.items(), key=lambda item: (round(item[1][0]["x"] / 40), -item[1][0]["y"])):
-        centers = [corrected(bubble["x"], sheet.height - bubble["y"]) for bubble in row]
+        centers = [placed(bubble) for bubble in row]
         x0, y0 = centers[0]
         # Eng yaqin tekislangan qatordan boshlanadi; u uzoq bo'lsa — kengroq qidiriladi
         nearest = min(aligned, key=lambda item: (item[0] - x0) ** 2 + (item[1] - y0) ** 2, default=None)
@@ -574,10 +604,10 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
         aligned.append((x0, y0, row_shift[ref]))
 
     for bubble in page_bubbles:
-        if bubble["kind"] == "mark":
+        if bubble["kind"] in ("mark", "anchor"):
             continue
         # PDF koordinatasi pastdan, rasm esa tepadan sanaladi
-        x, y = corrected(bubble["x"], sheet.height - bubble["y"])
+        x, y = placed(bubble)
         if bubble["kind"] == "code":
             code_bits[int(bubble["letter"])] = _fill_ratio(binary, x, y, bubble["r"], square=True)
             continue
