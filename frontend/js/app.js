@@ -8883,14 +8883,22 @@ function renderScanReview(testId, test, scan) {
       ${scan.pageCount > 1 ? ` · 📄 ${scan.page}/${scan.pageCount}-sahifa` : ""}
     </p>
     ${needsCheck.length ? `<div class="notice">Sariq qatorlarni varaqqa qarab tuzating: harfni bosing (qayta bosilsa — bekor).</div>` : ""}
-    <div class="panel scan-grid">${scan.questions.map(questionRow).join("")}</div>
+    ${needsCheck.length ? `<div class="panel scan-grid">${needsCheck.map(questionRow).join("")}</div>` : ""}
+    <!-- Hamma javoblar yopiq turadi — bosilganda ochiladi (85 ta savol bir ekranda turmasin) -->
+    <button type="button" class="btn btn-ghost" id="scan-toggle-all" style="margin-top:10px">
+      📋 Barcha javoblar (${scan.questions.length}) — ko'rish
+    </button>
+    <div class="panel scan-grid" id="scan-all" hidden>
+      ${scan.questions.filter((question) => !needsCheck.includes(question)).map(questionRow).join("")}
+    </div>
     <p class="subtitle" style="margin:8px 4px 0">Yozma savollar javobini saqlagandan keyin o'quvchilar ro'yxatidan (✏️) kiriting.</p>
     ${
       morePages
         ? `<button class="btn" id="scan-next-page" style="margin-top:14px">📷 ${scan.page + 1}-sahifani skanerlash</button>`
-        : `<button class="btn" id="scan-save" style="margin-top:14px">💾 Saqlash va tekshirish</button>`
+        : `<button class="btn" id="scan-save" style="margin-top:14px">✅ Qabul qilish — keyingi titul</button>`
     }
-    <button class="btn btn-ghost" id="scan-retake">📷 Qayta suratga olish</button>
+    <button class="btn btn-ghost" id="scan-retake">🔄 Qaytadan skanerlash</button>
+    ${morePages ? "" : `<button class="btn btn-ghost" id="scan-reject">❌ Qabul qilinmasin</button>`}
   `);
   markUnsaved();
 
@@ -8957,9 +8965,29 @@ function renderScanReview(testId, test, scan) {
   document
     .getElementById("scan-retake")
     .addEventListener("click", guarded(() => scanSheetPage(testId, test, scan.page, scan.page > 1 ? scan : null)));
-  if (scan.live) document.getElementById("scan-retake").textContent = "📷 Qayta skanerlash";
+  document.getElementById("scan-toggle-all").addEventListener("click", (event) => {
+    const list = document.getElementById("scan-all");
+    list.hidden = !list.hidden;
+    event.currentTarget.textContent = list.hidden
+      ? `📋 Barcha javoblar (${scan.questions.length}) — ko'rish`
+      : "📋 Javoblarni yopish";
+  });
+  // Bu varaq saqlanmaydi — keyingi titulga o'tiladi (navbatdagi varaq navbatda qoladi)
+  document.getElementById("scan-reject")?.addEventListener(
+    "click",
+    guarded(async () => {
+      unsavedChanges = false;
+      showToast("❌ Varaq qabul qilinmadi");
+      if (scan.queueId) {
+        await renderScanQueue(testId, test);
+        return;
+      }
+      await scanSheetPage(testId, test);
+    })
+  );
   document.getElementById("scan-next-page")?.addEventListener("click", guarded(() => scanSheetPage(testId, test, scan.page + 1, scan)));
-  const save = async () => {
+  // next — o'qituvchi «Qabul qilish» ni bosdi: saqlanib, darhol keyingi titulga o'tiladi
+  const save = async (next = false) => {
     // Ro'yxatdan tanlangan yoki raqam bo'yicha topilgan (natijasi bor bo'lsa ham) o'quvchi
     const attemptId = scan.match?.id || Number(select?.value) || null;
     const name = nameInput.value.trim();
@@ -8990,9 +9018,15 @@ function renderScanReview(testId, test, scan) {
       liveSession.count += 1;
       liveSession.lastSignature = sheetSignature(scan);
     }
+    if (next && scan.live) {
+      const number = scan.sheetNumber ? `ID ${String(scan.sheetNumber).padStart(4, "0")} · ` : "";
+      showToast(`✅ ${number}${result.name} — ${result.correct}/${result.total} · ${result.percent}%`);
+      await scanSheetPage(testId, test);
+      return;
+    }
     renderScanSaved(testId, test, result, scan.live, scan);
   };
-  document.getElementById("scan-save")?.addEventListener("click", guarded(save));
+  document.getElementById("scan-save")?.addEventListener("click", guarded(() => save(true)));
 
   // Ketma-ket skanerlash: o'quvchi raqamidan tanildi, shubhali savol yo'q — o'zi saqlanadi
   const variantKnown = !scan.variants?.length || Boolean(scan.variant);
