@@ -10637,7 +10637,7 @@ async function startAppLogin() {
         Telegram'da bir nechta akkaunt bo'lsa — avval keraklisiga o'ting, so'ng tugmani bosing.</p>
     </div>
     <a class="btn" href="${escapeHtml(link)}" style="margin-top:12px;text-decoration:none">✈️ @${escapeHtml(botName)} ni ochish</a>
-    <p class="subtitle" style="text-align:center;margin-top:12px">⏳ Tasdiqlash kutilmoqda…</p>
+    <p style="text-align:center;margin:22px 0 0;font-size:22px;font-weight:800">⏳ Tasdiqlash kutilmoqda…</p>
   `;
 
   const deadline = Date.now() + expiresIn * 1000;
