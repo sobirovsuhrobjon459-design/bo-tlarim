@@ -425,8 +425,10 @@ select:focus {
   transform: scale(0.94);
 }
 
+/* Suzuvchi menyu (12 + 68 px), uning fon yopqichi (14 px) va ko'tarilgan "+" tugmasi — eng pastdagi
+   tugma (masalan "Savol statistikasi") menyu ostida qolmay, uning ustiga chiqa olsin */
 #app {
-  padding-bottom: calc(112px + var(--keyboard-height, 0px));
+  padding-bottom: calc(150px + env(safe-area-inset-bottom) + var(--keyboard-height, 0px));
 }
 
 /* ---------- Asosiy blok (hero) — o'qituvchi va o'quvchi bosh sahifasi ---------- */
