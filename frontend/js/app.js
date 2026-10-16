@@ -8522,7 +8522,6 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     </div>
     <p class="live-status" id="live-status">📷 Kamera ochilmoqda…</p>
     ${liveSession?.count ? `<p class="subtitle" style="text-align:center;margin:0 0 8px">✅ Skanerlandi: <b>${liveSession.count}</b> ta varaq</p>` : ""}
-    <button class="btn" id="live-capture">📸 Hozir suratga olish</button>
     <button class="btn btn-ghost" id="live-photo">🖼 Galereyadan / oddiy surat</button>
   `);
 
@@ -8566,7 +8565,6 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
             ? "Orqa kamera topilmadi."
             : "Bu yerda jonli skaner ishlamaydi.";
     status.textContent = `⚠️ ${reason} Hozircha «Galereyadan / oddiy surat» bilan davom etishingiz mumkin.`;
-    document.getElementById("live-capture").remove();
     return;
   }
   if (!video.isConnected) {
@@ -8808,7 +8806,6 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     if (steady >= 3) capture();
   };
 
-  document.getElementById("live-capture").addEventListener("click", () => capture());
   liveTimer = setInterval(tick, LIVE_FRAME_GAP);
 }
 
