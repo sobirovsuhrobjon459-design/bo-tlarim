@@ -8854,6 +8854,15 @@ function renderScanReview(testId, test, scan) {
            <p class="subtitle" style="margin:0 4px 12px;font-size:12px">🟢 to'g'ri · 🔴 xato · 🟡 nuqta — to'g'ri javob · 🟡 halqa — o'qilgan ID · 🟧 tekshiring</p>`
         : ""
     }
+    <!-- Amallar — rasmning darhol tagida; o'quvchi ma'lumoti (ism, ID) undan pastda -->
+    ${
+      morePages
+        ? `<button class="btn" id="scan-next-page" style="margin-top:4px">📷 ${scan.page + 1}-sahifani skanerlash</button>`
+        : `<button class="btn" id="scan-save" style="margin-top:4px">✅ Qabul qilish — keyingi titul</button>`
+    }
+    <button class="btn btn-ghost" id="scan-retake">🔄 Qaytadan skanerlash</button>
+    ${morePages ? "" : `<button class="btn btn-ghost" id="scan-reject">❌ Qabul qilinmasin</button>`}
+    <div style="height:14px"></div>
     <div class="card" style="cursor:default;display:block">
       ${scanNumberHtml(scan)}
       <p class="subtitle" style="margin:0 0 8px">Varaqdagi ism:</p>
@@ -8889,13 +8898,6 @@ function renderScanReview(testId, test, scan) {
       ${scan.questions.filter((question) => !needsCheck.includes(question)).map(questionRow).join("")}
     </div>
     <p class="subtitle" style="margin:8px 4px 0">Yozma savollar javobini saqlagandan keyin o'quvchilar ro'yxatidan (✏️) kiriting.</p>
-    ${
-      morePages
-        ? `<button class="btn" id="scan-next-page" style="margin-top:14px">📷 ${scan.page + 1}-sahifani skanerlash</button>`
-        : `<button class="btn" id="scan-save" style="margin-top:14px">✅ Qabul qilish — keyingi titul</button>`
-    }
-    <button class="btn btn-ghost" id="scan-retake">🔄 Qaytadan skanerlash</button>
-    ${morePages ? "" : `<button class="btn btn-ghost" id="scan-reject">❌ Qabul qilinmasin</button>`}
   `);
   markUnsaved();
 
