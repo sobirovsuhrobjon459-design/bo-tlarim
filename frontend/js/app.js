@@ -8503,9 +8503,10 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
       READ_SCALE = SHEET_PAGE.readScale;
       worker?.postMessage({ layout: value, page, sheetPage: SHEET_PAGE });
     };
-    // Telefonda saqlangani bilan darhol boshlanadi; internet bo'lsa yangisi (o'quvchilar ro'yxati) fonda olinadi
+    // Telefonda saqlangani bilan darhol boshlanadi; internet bo'lsa yangisi (o'quvchilar ro'yxati) fonda olinadi.
+    // Titul versiyasi o'zgargan bo'lsa (masalan yotiq titul tik titulga o'tgan) — eskisi ishlatilmaydi
     const saved = cachedScanLayout(testId);
-    if (saved) useLayout(saved);
+    if (saved && saved.sheet_version === (test.sheet_version || 1)) useLayout(saved);
     loadScanLayout(testId, { fresh: true })
       .then(useLayout)
       .catch(() => {});

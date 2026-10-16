@@ -4433,6 +4433,30 @@ def test_evalbee_uslubidagi_titul():
     assert body["name_image"].startswith("data:image/png")
 
 
+def test_yotiq_titulli_natijasiz_test_tik_titulga_otadi():
+    """6–7-versiya (yotiq ixcham titul): natija kiritilmagan bo'lsa — 8-versiya; natijasi borga tegilmaydi."""
+
+    from backend.database import Test
+
+    reset_database()
+    register_teacher()
+    empty = create_test(enrollment_type="closed")["id"]
+    scanned = create_test(enrollment_type="closed")["id"]
+    client.post(f"/api/teacher/tests/{scanned}/students", json={"names": ["Bola"]}, headers=as_user(555))
+    with SessionLocal() as session:
+        session.get(Test, empty).sheet_version = 7
+        session.get(Test, scanned).sheet_version = 7
+        session.commit()
+    saved = client.post(f"/api/teacher/tests/{scanned}/scan/save", json={"sheet_number": 1, "answers": {"1": "B"}},
+                        headers=as_user(555))
+    assert saved.status_code == 200, saved.text
+
+    main._upgrade_sheet_versions()
+    with SessionLocal() as session:
+        assert session.get(Test, empty).sheet_version == 8
+        assert session.get(Test, scanned).sheet_version == 7
+
+
 def test_javoblar_kaliti_royxat_korinishida():
     """O'qituvchi kaliti titul emas — "1 — B" ro'yxati (yozma javob matn bo'lib)."""
 

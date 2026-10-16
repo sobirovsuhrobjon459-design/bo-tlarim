@@ -255,6 +255,12 @@ def _upgrade_sheet_versions() -> None:
     with engine.begin() as connection:
         if "tests" in inspect(engine).get_table_names():
             connection.execute(text("UPDATE tests SET sheet_version = 5 WHERE sheet_version = 4"))
+            # 6–7-versiya (yotiq ixcham titul) — hali birorta natija kiritilmagan bo'lsa, EvalBee uslubidagi
+            # tik titulga (8) o'tadi. Natijasi bor testga tegilmaydi — uning varaqlari tarqatilgan
+            connection.execute(text(
+                "UPDATE tests SET sheet_version = 8 WHERE sheet_version IN (6, 7) AND NOT EXISTS ("
+                "SELECT 1 FROM test_attempts WHERE test_attempts.test_id = tests.id AND test_attempts.status = 'done')"
+            ))
 
 
 _upgrade_sheet_versions()
@@ -5448,6 +5454,7 @@ def scan_layout(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
     school = db.scalars(_school_students_query(member)).all() if member else []
     return {
         "bubbles": bubbles,
+        "sheet_version": test.sheet_version or 1,
         "variants": variants,
         # Telefon varaqni internetsiz tekshiradi: ID → o'quvchi shu ro'yxatlardan topiladi
         "students": [
