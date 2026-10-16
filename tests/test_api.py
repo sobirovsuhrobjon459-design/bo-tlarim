@@ -4400,6 +4400,22 @@ def test_ixcham_titul_savollar_soniga_moslashadi():
     assert scanned["answers"] == {"2": "C"} and scanned["name_image"].startswith("data:image/png"), scanned["answers"]
 
 
+def test_javoblar_kaliti_royxat_korinishida():
+    """O'qituvchi kaliti titul emas — "1 — B" ro'yxati (yozma javob matn bo'lib)."""
+
+    import fitz
+
+    reset_database()
+    register_teacher()
+    test_id = create_test(enrollment_type="closed")["id"]
+    key = client.get(f"/api/teacher/tests/{test_id}/answer-sheet", params={"answers": "true"}, headers=as_user(555))
+    assert key.status_code == 200
+    text = fitz.open(stream=key.content, filetype="pdf")[0].get_text()
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    assert "JAVOBLAR KALITI" in lines[0]
+    assert ["1 — B", "2 — C", "3 — A, C", "4 — 2sqrt(3)"] == lines[-4:], lines
+
+
 def test_telefon_internetsiz_tekshirgan_varaq_id_boyicha_saqlanadi():
     """Titul tuzilishida o'quvchilar ro'yxati (ID → ism) bor; navbatdan faqat ID va javoblar keladi."""
 

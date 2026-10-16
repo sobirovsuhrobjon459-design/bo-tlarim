@@ -2405,6 +2405,9 @@ def generate_answer_sheet_pdf(test: Test, with_answers: bool = False, bubbles: l
     bo'yalgan alohida varaq (skaner ularni o'zi taniydi).
     """
 
+    if with_answers:
+        # O'qituvchi kaliti — titul emas, ro'yxat: 1 — B, 2 — C ... (tagma-tag o'qish qulay)
+        return generate_answer_key_pdf(test, key_override, key_variant)
     buffer = io.BytesIO()
     sheet = pdf_canvas.Canvas(buffer, pagesize=A4)
     if (test.sheet_version or 1) >= 6:
@@ -2416,6 +2419,62 @@ def generate_answer_sheet_pdf(test: Test, with_answers: bool = False, bubbles: l
             sheet.showPage()
         _draw_answer_sheet(sheet, test, with_answers, bubbles if index == 0 else None, student,
                            variants, key_override, key_variant)
+    sheet.save()
+    return buffer.getvalue()
+
+
+KEY_ROW = 17          # kalit ro'yxatida qatorlar orasi
+KEY_ROWS = 40         # bitta ustunda
+KEY_COLUMNS = 4       # bitta sahifada ko'pi bilan
+
+
+def generate_answer_key_pdf(test: Test, key_override: dict | None = None, key_variant: str | None = None) -> bytes:
+    """
+    O'qituvchi uchun javoblar kaliti: har qatorda "1 — B", ustun bo'ylab pastga (har 5 savoldan keyin
+    ingichka chiziq — qator adashmaydi). Yozma savolning javobi matn bo'lib yoziladi.
+    """
+
+    buffer = io.BytesIO()
+    sheet = pdf_canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    margin = 50
+    items = _answer_sheet_items(test, key_override)
+    per_page = KEY_ROWS * KEY_COLUMNS
+    pages = [items[start: start + per_page] for start in range(0, len(items), per_page)] or [[]]
+    for page_index, page_items in enumerate(pages):
+        if page_index:
+            sheet.showPage()
+        y = height - margin
+        sheet.setFont(REPORT_FONT_BOLD, 15)
+        title = "JAVOBLAR KALITI" + (f" — {key_variant} variant" if key_variant else "")
+        sheet.drawString(margin, y, title)
+        sheet.setFont(REPORT_FONT, 10)
+        sheet.setFillColor(REPORT_MUTED)
+        sheet.drawRightString(width - margin, y, f"{page_index + 1} / {len(pages)}" if len(pages) > 1 else "")
+        y -= 17
+        sheet.drawString(margin, y, f"{test.title[:70]}  ·  Kod {test.code}  ·  {test.subject}  ·  {len(items)} ta savol")
+        sheet.setFillColor(colors.black)
+        top_y = y - 28
+
+        columns = [page_items[start: start + KEY_ROWS] for start in range(0, len(page_items), KEY_ROWS)]
+        column_width = (width - 2 * margin) / max(len(columns), 2)
+        for column_index, column in enumerate(columns):
+            x = margin + column_index * column_width
+            for row, (label, question_type, _, correct, _) in enumerate(column):
+                row_y = top_y - row * KEY_ROW
+                if row and row % 5 == 0:
+                    sheet.setStrokeColor(REPORT_GRID)
+                    sheet.line(x, row_y + KEY_ROW - 4, x + column_width - 16, row_y + KEY_ROW - 4)
+                sheet.setFont(REPORT_FONT, 11)
+                sheet.drawRightString(x + 28, row_y, f"{label}")
+                sheet.drawString(x + 34, row_y, "—")
+                if question_type == "text":
+                    answer = " / ".join(_latex_to_plain(variant) for variant in _split_accepted_variants(correct))
+                    sheet.setFont(REPORT_FONT, 10)
+                    sheet.drawString(x + 50, row_y, answer[: max(8, int((column_width - 66) / 5.5))])
+                else:
+                    sheet.setFont(REPORT_FONT_BOLD, 12)
+                    sheet.drawString(x + 50, row_y, (correct or "").replace(",", ", "))
     sheet.save()
     return buffer.getvalue()
 
