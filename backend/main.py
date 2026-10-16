@@ -5497,6 +5497,57 @@ def scan_result(
     return _scan_response(db, teacher, test, body.model_dump(exclude={"page"}), body.page, variants, page_count)
 
 
+@app.post("/api/teacher/tests/{test_id}/scan/finish")
+def finish_scanning(
+    test_id: int,
+    teacher: Teacher = Depends(get_current_teacher),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Varaqlarni skanerlash tugadi: natijalar ro'yxati (reyting — ism, ID, ball) va PDF hisobot
+    bot orqali o'qituvchining Telegram chatiga yuboriladi.
+    """
+
+    test = _get_own_test(db, teacher, test_id)
+    if test.enrollment_type != "closed":
+        raise HTTPException(status_code=400, detail="Varaq skanerlash faqat offline testlarda")
+    attempts = db.scalars(
+        select(Attempt)
+        .where(Attempt.test_id == test.id, Attempt.user_id.is_(None), Attempt.status.in_(("pending", "done")))
+        .order_by(Attempt.offline_name)
+    ).all()
+    done = sorted((attempt for attempt in attempts if attempt.status == "done"),
+                  key=lambda attempt: (-attempt.percent, attempt.offline_name or ""))
+    total = _question_count(test)
+    lines = [
+        f"📋 {test.title} (kod {test.code}) — natijalar",
+        f"✅ Tekshirildi: {len(done)} / {len(attempts)} ta o'quvchi",
+        "",
+    ]
+    for place, attempt in enumerate(done, start=1):
+        name = attempt.offline_name or "Noma'lum"
+        number = f" · ID {attempt.sheet_number:04d}" if attempt.sheet_number else ""
+        lines.append(f"{place}. {name}{number} — {attempt.correct}/{total} · {round(attempt.percent, 1)}%")
+    waiting = [attempt.offline_name or "Noma'lum" for attempt in attempts if attempt.status == "pending"]
+    if waiting:
+        lines += ["", f"⏳ Hali tekshirilmagan ({len(waiting)}): " + ", ".join(waiting[:60])
+                  + (" …" if len(waiting) > 60 else "")]
+
+    # Telegram xabari 4096 belgigacha — qatorlar bo'yicha bo'laklanadi
+    chunks, current = [], ""
+    for line in lines:
+        if current and len(current) + len(line) + 1 > 3900:
+            chunks.append(current)
+            current = ""
+        current = f"{current}\n{line}" if current else line
+    chunks.append(current)
+    delivered = all([_telegram_send_message(user.tg_id, chunk) for chunk in chunks])
+    if done:
+        _send_pdf_to_telegram(user.tg_id, f"{test.code}.pdf", generate_test_report_pdf(db, test, teacher))
+    return {"ok": delivered, "checked": len(done), "total": len(attempts)}
+
+
 @app.post("/api/teacher/tests/{test_id}/scan/save")
 def save_scanned_sheet(
     test_id: int, body: SheetScanSaveIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)

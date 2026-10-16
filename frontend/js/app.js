@@ -9021,17 +9021,23 @@ function renderScanSaved(testId, test, result, live = false, scan = null) {
   // Ilovada o'qilgan varaq — rangli ko'rinishi ham (qaysi javob to'g'ri/xato)
   const layout = scanLayouts.get(testId);
   const views = layout?.keys && scan?.sheetViews ? Object.entries(scan.sheetViews) : [];
+  // O'qituvchi o'quvchini ko'rib oladi (ID → ism-familiya, ball), so'ng o'zi «Keyingi titul» ni bosadi
+  const number = scan?.sheetNumber ? String(scan.sheetNumber).padStart(4, "0") : null;
   showPage(`
     <div style="text-align:center;padding-top:${views.length ? 8 : 30}px">
       <div class="result-number">✅</div>
-      <h2 style="margin:6px 0">${escapeHtml(result.name)}</h2>
-      <p class="subtitle">${result.correct} / ${result.total} to'g'ri · <b>${result.percent}%</b></p>
+      ${number ? `<p style="margin:4px 0 0;font-size:18px;font-weight:700">🔢 ID ${number}</p>` : ""}
+      <h2 style="margin:4px 0 6px;font-size:26px">${escapeHtml(result.name)}</h2>
+      <p style="margin:0;font-size:18px">${result.correct} / ${result.total} to'g'ri · <b>${result.percent}%</b></p>
+      ${liveSession?.count ? `<p class="subtitle" style="margin:8px 0 0">📚 Shu safar tekshirildi: <b>${liveSession.count}</b> ta titul</p>` : ""}
     </div>
     ${views.map(([page]) => `<canvas class="scan-sheet-canvas" data-page="${page}" style="width:100%;display:block;border-radius:12px;margin:0 0 10px;background:#fff"></canvas>`).join("")}
-    <button class="btn" id="scan-next-sheet" style="margin-top:20px">📷 Keyingi varaqni skanerlash</button>
+    <button class="btn" id="scan-next-sheet" style="margin-top:20px;font-size:18px">➡️ Keyingi titul</button>
+    <button class="btn btn-ghost" id="scan-finish">🏁 Yakunlash — natijalarni botga yuborish</button>
     <button class="btn btn-ghost" id="scan-done">⬅️ Testga qaytish</button>
   `);
   document.getElementById("scan-next-sheet").addEventListener("click", guarded(() => scanSheetPage(testId, test)));
+  document.getElementById("scan-finish").addEventListener("click", guarded(() => finishScanning(testId)));
   document.getElementById("scan-done").addEventListener(
     "click",
     guarded(() => {
@@ -9045,14 +9051,33 @@ function renderScanSaved(testId, test, result, live = false, scan = null) {
       paintSheetView(canvas, scan.sheetViews[canvas.dataset.page], scan.questions, key);
     });
   }
-  // Jonli skanerda kamera o'zi keyingi varaqqa ochiladi (rangli varaq bo'lsa — ko'rib olishga vaqt)
-  if (live) {
-    const next = document.getElementById("scan-next-sheet");
-    next.textContent = "📷 Keyingi varaq (kamera ochilmoqda…)";
-    setTimeout(() => {
-      if (next.isConnected) next.click();
-    }, views.length ? 2500 : 1500);
+}
+
+// Skanerlash tugadi: telefonda navbatda turgan natijalar avval serverga yetkaziladi, so'ng ro'yxat
+// (ism, ID, ball) va PDF hisobot bot orqali o'qituvchining Telegram chatiga yuboriladi
+async function finishScanning(testId) {
+  const waiting = async () => (await queueAll()).filter((item) => item.testId === testId);
+  for (let attempt = 0; attempt < 20 && navigator.onLine; attempt += 1) {
+    if (!(await waiting()).some((item) => item.status === "new")) break;
+    await processScanQueue();
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
+  const left = await waiting();
+  const unsent = left.filter((item) => item.status === "new").length;
+  if (unsent) {
+    throw new Error(
+      `📶 ${unsent} ta natija hali serverga yetmagan (internet yo'q) — ular telefonda saqlangan. ` +
+        "Internet bo'lganda «Yakunlash» ni qayta bosing."
+    );
+  }
+  const failed = left.length;
+  const result = await api(`/api/teacher/tests/${testId}/scan/finish`, { method: "POST", body: {} });
+  liveSession = null;
+  showToast(
+    `📨 Botga yuborildi: ${result.checked} / ${result.total} ta o'quvchi natijasi` +
+      (failed ? ` · ⚠️ ${failed} ta varaq navbatda (tekshiring)` : "")
+  );
+  await renderTestDetail(testId);
 }
 
 /* ---------- Variantlar (A/B/C/D) ---------- */

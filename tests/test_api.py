@@ -4457,6 +4457,34 @@ def test_yotiq_titulli_natijasiz_test_tik_titulga_otadi():
         assert session.get(Test, scanned).sheet_version == 7
 
 
+def test_skanerlash_yakunlansa_natijalar_botga_yuboriladi():
+    """«Yakunlash»: o'qituvchi chatiga reyting (ism, ID, ball) va PDF hisobot ketadi."""
+
+    reset_database()
+    register_teacher()
+    test_id = create_test(enrollment_type="closed")["id"]
+    base = f"/api/teacher/tests/{test_id}"
+    client.post(f"{base}/students", json={"names": ["Birinchi Bola", "Ikkinchi Bola", "Uchinchi Bola"]},
+                headers=as_user(555))
+    client.post(f"{base}/scan/save", json={"sheet_number": 2, "answers": {"1": "B", "2": "C"}}, headers=as_user(555))
+    client.post(f"{base}/scan/save", json={"sheet_number": 1, "answers": {"1": "B"}}, headers=as_user(555))
+
+    messages, pdfs = [], []
+    originals = (main._telegram_send_message, main._send_pdf_to_telegram)
+    main._telegram_send_message = lambda chat, text, markup=None: messages.append((chat, text)) or True
+    main._send_pdf_to_telegram = lambda chat, name, data, caption="", *args, **kwargs: pdfs.append((chat, name, data[:4]))
+    try:
+        finished = client.post(f"{base}/scan/finish", headers=as_user(555))
+    finally:
+        main._telegram_send_message, main._send_pdf_to_telegram = originals
+    assert finished.status_code == 200 and finished.json() == {"ok": True, "checked": 2, "total": 3}, finished.text
+    text = "\n".join(text for _, text in messages)
+    assert all(chat == 555 for chat, _ in messages) and "Tekshirildi: 2 / 3" in text, text
+    assert "1. Ikkinchi Bola · ID 0002 — 2/4 · 50.0%" in text and "2. Birinchi Bola · ID 0001 — 1/4 · 25.0%" in text, text
+    assert "Hali tekshirilmagan (1): Uchinchi Bola" in text
+    assert pdfs and pdfs[0][0] == 555 and pdfs[0][2] == b"%PDF"
+
+
 def test_javoblar_kaliti_royxat_korinishida():
     """O'qituvchi kaliti titul emas — "1 — B" ro'yxati (yozma javob matn bo'lib)."""
 
