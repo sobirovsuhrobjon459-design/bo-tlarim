@@ -6456,8 +6456,8 @@ function subjectStructure(subject, typePreset) {
 
 // Test turlari. Ikkalasi ham "javoblar kaliti" usulida ishlaydi (savol matni
 // o'qituvchining kanalida bo'ladi), farqi — standart savollar tuzilishida.
-// Offline test tituli (bloklari kvadratli) — ko'pi bilan 90 savol: yarim A4 ga sig'adi
-const OFFLINE_MAX_QUESTIONS = 90;
+// Offline test tituli — ko'pi bilan 120 savol (titul savollar soniga qarab kichrayadi/kattalashadi)
+const OFFLINE_MAX_QUESTIONS = 120;
 
 const TEST_TYPES = {
   rash: {

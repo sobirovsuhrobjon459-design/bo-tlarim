@@ -180,10 +180,11 @@ def _marked_edges(gray: np.ndarray, candidates: list[tuple[float, float, float]]
     height, width = gray.shape
     edges = []
     # Belgi kichik: atrofidagi eng qora nuqta olinadi (ozgina siljigan bo'lsa ham topilsin)
-    for kernel in sorted({max(3, 2 * round(r * 0.4) + 1) for r in radius}):
+    # Oyna ±0,8 radius: bukilgan qog'ozda belgi to'g'ri chiziqdan biroz chetga suriladi
+    for kernel in sorted({max(3, 2 * round(r * 0.8) + 1) for r in radius}):
         darkest = cv2.erode(gray, np.ones((kernel, kernel), np.uint8))
         average = cv2.blur(gray, (kernel, kernel))
-        group = np.array([max(3, 2 * round(r * 0.4) + 1) == kernel for r in radius])
+        group = np.array([max(3, 2 * round(r * 0.8) + 1) == kernel for r in radius])
         start, end = points[top[group], :2], points[bottom[group], :2]
         # Perspektiva: varaqning yaqinroq uchi kattaroq ko'rinadi — belgilar orasi ham shunga qarab
         # o'zgaradi. Uchlaridagi dog'lar o'lchamidan taxmin qilinadi (u -> t proyektiv moslik).
