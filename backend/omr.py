@@ -53,6 +53,7 @@ class SheetPage:
     height: float = PAGE_HEIGHT
     edge_marks: int = EDGE_MARKS
     name_box: bool = True  # ism yoziladigan katak bor (ixcham titulda yo'q)
+    name_area: tuple[float, float, float, float] | list[float] = NAME_BOX  # ism katagi (tepadan, punktlarda)
 
 
 A4_PAGE = SheetPage()
@@ -646,7 +647,7 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
 
     name_image = None
     if page == 1 and sheet.name_box:
-        x1, y1, x2, y2 = (round(value * SCALE) for value in NAME_BOX)
+        x1, y1, x2, y2 = (round(value * SCALE) for value in sheet.name_area)
         crop = warped[max(0, y1 - 6): y2 + 6, max(0, x1 - 6): x2 + 6]
         ok, png = cv2.imencode(".png", crop)
         if ok:

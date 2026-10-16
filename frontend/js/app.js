@@ -7414,7 +7414,16 @@ function stopLiveScan() {
 }
 
 // Varaq o'lchamlari (punktlarda) — backend/omr.py va titul chizilishi bilan bir xil
-const A4_SHEET_PAGE = { width: 595.28, height: 841.89, corner: 32, cornerSize: 14, edgeMarks: 10, edgeMarkSize: 8, nameBox: true };
+const A4_SHEET_PAGE = {
+  width: 595.28,
+  height: 841.89,
+  corner: 32,
+  cornerSize: 14,
+  edgeMarks: 10,
+  edgeMarkSize: 8,
+  nameBox: true,
+  readScale: 2,
+};
 // Skanerlanayotgan titul o'lchami: ixcham titul (6-versiya) A4 ning 1/3, 1/2 qismi yoki to'liq A4 —
 // /scan/layout dagi sheet_page bo'yicha; eski titullar — A4
 let SHEET_PAGE = A4_SHEET_PAGE;
@@ -7422,7 +7431,15 @@ let SHEET_PAGE = A4_SHEET_PAGE;
 function sheetPageOf(layout) {
   const page = layout?.sheet_page;
   if (!page) return A4_SHEET_PAGE;
-  return { ...A4_SHEET_PAGE, width: page.width, height: page.height, edgeMarks: page.edge_marks, nameBox: page.name_box };
+  return {
+    ...A4_SHEET_PAGE,
+    width: page.width,
+    height: page.height,
+    edgeMarks: page.edge_marks,
+    nameBox: page.name_box,
+    nameArea: page.name_area || NAME_BOX,
+    readScale: page.height > 600 ? 1.5 : 2, // to'liq A4 (EvalBee uslubi) — kichikroq masshtab, tezroq
+  };
 }
 
 // 4 nuqtadan 4 nuqtaga perspektiv moslik (varaqdagi punkt → kadr pikseli)
@@ -7722,7 +7739,9 @@ function cornersFromEdgeMarks(gray, integral, width, height, blobs) {
   egilish tuzatiladi, har savol qatori chop etilgan halqalarga moslanadi va doirachalar
   ichining qoraygani o'lchanadi. Surat serverga yuborilmaydi — natija bir zumda.
 */
-const READ_SCALE = 2; // tekislangan varaqda 1 punkt = 2 piksel
+// Tekislangan varaqda 1 punkt = 2 piksel; to'liq A4 dagi EvalBee uslubidagi titulda 1,5 (doirachalar
+// kattaroq — aniqlik o'sha, o'qish ~25% tez). Titul tuzilishi kelganda SHEET_PAGE bilan birga o'rnatiladi
+let READ_SCALE = 2;
 const FILLED_RATIO = 0.5;
 const UNSURE_RATIO = 0.25;
 const NAME_BOX = [120, 80, 420, 100];
@@ -8230,7 +8249,7 @@ function createScanWorker() {
   }
   const source = [
     `let SHEET_PAGE = ${JSON.stringify(A4_SHEET_PAGE)};`,
-    `const READ_SCALE = ${READ_SCALE};`,
+    `let READ_SCALE = 2;`,
     `const FILLED_RATIO = ${FILLED_RATIO};`,
     `const UNSURE_RATIO = ${UNSURE_RATIO};`,
     ...[
@@ -8256,6 +8275,7 @@ function createScanWorker() {
         layout = data.layout;
         page = data.page;
         SHEET_PAGE = data.sheetPage;
+        READ_SCALE = SHEET_PAGE.readScale || 2;
         return;
       }
       const { bitmap, edgeMarks, skipRead } = data;
@@ -8416,7 +8436,7 @@ function sheetScore(questions, key) {
 
 // Ism yozilgan katak (tekislangan varaqdan) — o'qituvchi ismni ko'rib yozishi uchun
 function sheetNameImage(sheet) {
-  const [x1, y1, x2, y2] = NAME_BOX.map((value) => Math.round(value * READ_SCALE));
+  const [x1, y1, x2, y2] = (SHEET_PAGE.nameArea || NAME_BOX).map((value) => Math.round(value * READ_SCALE));
   const left = Math.max(0, x1 - 4);
   const top = Math.max(0, y1 - 4);
   const width = Math.min(sheet.W, x2 + 4) - left;
@@ -8473,12 +8493,14 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
   liveWorker = createScanWorker();
   const worker = liveWorker;
   SHEET_PAGE = A4_SHEET_PAGE; // titul tuzilishi kelguncha
+  READ_SCALE = SHEET_PAGE.readScale;
   // Titul tuzilishi bo'lsa varaq telefonning o'zida o'qiladi; olinmasa (internet yo'q) — eski yo'l: surat serverga
   let layout = null;
   if ((test.sheet_version || 1) >= 3) {
     const useLayout = (value) => {
       layout = value;
       SHEET_PAGE = sheetPageOf(value);
+      READ_SCALE = SHEET_PAGE.readScale;
       worker?.postMessage({ layout: value, page, sheetPage: SHEET_PAGE });
     };
     // Telefonda saqlangani bilan darhol boshlanadi; internet bo'lsa yangisi (o'quvchilar ro'yxati) fonda olinadi
