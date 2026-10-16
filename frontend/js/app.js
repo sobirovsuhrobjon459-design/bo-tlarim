@@ -9928,6 +9928,9 @@ async function renderStudentAnswersForm(testId, attemptId) {
   );
 }
 
+// Rasch balli; natija hali yo'q bo'lsa (o'rtacha / eng yuqori — null) — chiziqcha
+const ballText = (value) => (value == null ? "—" : Number(value).toFixed(2));
+
 async function renderResultsTab(selectedId) {
   const tests = await api("/api/teacher/tests");
 
@@ -10024,8 +10027,8 @@ async function renderResultsTab(selectedId) {
         <div class="stat-tile"><span class="stat-value">${summary.participants}</span>Ishtirokchi</div>
         ${
           usesRasch
-            ? `<div class="stat-tile"><span class="stat-value">${summary.avg_ball.toFixed(2)}</span>O'rtacha ball</div>
-               <div class="stat-tile"><span class="stat-value">${summary.max_ball.toFixed(2)}</span>Eng yuqori ball</div>
+            ? `<div class="stat-tile"><span class="stat-value">${ballText(summary.avg_ball)}</span>O'rtacha ball</div>
+               <div class="stat-tile"><span class="stat-value">${ballText(summary.max_ball)}</span>Eng yuqori ball</div>
                <div class="stat-tile"><span class="stat-value">${summary.top_count} ta</span>A+ va A</div>`
             : `<div class="stat-tile"><span class="stat-value">${summary.avg_percent}%</span>O'rtacha foiz</div>
                <div class="stat-tile"><span class="stat-value">${summary.max_percent}%</span>Eng yuqori</div>
@@ -10126,7 +10129,7 @@ function resultLineHtml(row, results) {
               : `✅ ${row.correct} • ❌ ${row.wrong} • ${row.percent}%`
           }</small>
         </span>
-        <span class="result-percent">${usesRasch ? row.ball.toFixed(2) : `${row.percent}%`}<small class="result-grade">${usesRasch ? escapeHtml(row.grade) : `baho ${escapeHtml(row.grade)}`}</small></span>
+        <span class="result-percent">${usesRasch ? ballText(row.ball) : `${row.percent}%`}<small class="result-grade">${usesRasch ? escapeHtml(row.grade) : `baho ${escapeHtml(row.grade)}`}</small></span>
       </div>`;
 }
 
@@ -10408,7 +10411,7 @@ async function renderTestResults(testId) {
         <tr class="result-row">
           <td>${row.rank}</td><td>${escapeHtml(row.name)}</td>
           <td>${row.correct}</td><td>${row.wrong}</td><td>${row.percent}%</td>
-          ${results.uses_rasch ? `<td><b>${row.ball.toFixed(2)}</b></td>` : ""}<td><b>${escapeHtml(row.grade)}</b></td>
+          ${results.uses_rasch ? `<td><b>${ballText(row.ball)}</b></td>` : ""}<td><b>${escapeHtml(row.grade)}</b></td>
         </tr>`;
 
   showPage(`
@@ -10423,8 +10426,8 @@ async function renderTestResults(testId) {
       <div class="stat-tile"><span class="stat-value">${results.summary.participants}</span>Qatnashchilar</div>
       ${
         results.uses_rasch
-          ? `<div class="stat-tile"><span class="stat-value">${results.summary.avg_ball.toFixed(2)}</span>O'rtacha ball</div>
-             <div class="stat-tile"><span class="stat-value">${results.summary.max_ball.toFixed(2)}</span>Eng yuqori ball</div>
+          ? `<div class="stat-tile"><span class="stat-value">${ballText(results.summary.avg_ball)}</span>O'rtacha ball</div>
+             <div class="stat-tile"><span class="stat-value">${ballText(results.summary.max_ball)}</span>Eng yuqori ball</div>
              <div class="stat-tile"><span class="stat-value">${results.summary.top_count} ta</span>A+ va A</div>`
           : `<div class="stat-tile"><span class="stat-value">${results.summary.avg_percent}%</span>O'rtacha foiz</div>
              <div class="stat-tile"><span class="stat-value">${results.summary.max_percent}%</span>Eng yuqori</div>
