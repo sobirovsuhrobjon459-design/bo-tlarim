@@ -7635,7 +7635,8 @@ function cornersFromEdgeMarks(gray, integral, width, height, blobs) {
         if (k === 0) continue;
         let found = false;
         for (const shift of [0, -0.075, 0.075, -0.15, 0.15]) {
-          if (darkest(...point((k + shift) / steps), r) < threshold) {
+          // Belgi kengroq oynada qidiriladi: bukilgan qog'ozda u to'g'ri chiziqdan chetga suriladi
+          if (darkest(...point((k + shift) / steps), Math.max(r, Math.round((a.size + b.size) * 0.3))) < threshold) {
             found = true;
             break;
           }
@@ -7652,7 +7653,7 @@ function cornersFromEdgeMarks(gray, integral, width, height, blobs) {
   edges.sort(
     (p, q) => Math.round(q.score * 10) - Math.round(p.score * 10) || endSize(q) - endSize(p) || q.length - p.length
   );
-  edges = edges.slice(0, 60);
+  edges = edges.slice(0, 200); // soxta chetlar ko'p bo'lsa ham haqiqiysi ro'yxatda qolsin (qiya tutilganda)
 
   // 2) Ikki chetdan to'rtburchak: A4 shakli, qarama-qarshi tomonlari deyarli teng, burchaklari 90° ga yaqin
   const shapes = [];
@@ -7719,12 +7720,22 @@ function cornersFromEdgeMarks(gray, integral, width, height, blobs) {
     const sidePx = (distance(corners[0], corners[3]) + distance(corners[1], corners[2])) / 2;
     const r = Math.max(1, Math.round(((page.edgeMarkSize / 2) * 0.6 * sidePx) / span));
     const sample = ([x, y]) => mean(...map(x, y), r);
+    // Belgi (qora kvadrat) — kutilgan joy atrofida eng qora joy: bukilgan qog'ozda u biroz suriladi
+    const reach = r * 2;
+    const markSample = ([x, y]) => {
+      const [u, v] = map(x, y);
+      let low = 255;
+      for (const dx of [-reach, -reach / 2, 0, reach / 2, reach]) {
+        for (const dy of [-reach, -reach / 2, 0, reach / 2, reach]) low = Math.min(low, mean(u + dx, v + dy, r));
+      }
+      return low;
+    };
     const blankValues = blanks.map(sample);
     const paper = median(blankValues);
-    const darkness = median(pageCorners.map(sample));
+    const darkness = median(pageCorners.map(markSample));
     if (paper - darkness < 30) continue;
     const threshold = (paper + darkness) / 2;
-    const hits = marks.filter((mark) => sample(mark) < threshold).length + blankValues.filter((value) => value > threshold).length;
+    const hits = marks.filter((mark) => markSample(mark) < threshold).length + blankValues.filter((value) => value > threshold).length;
     const score = hits / (marks.length + blanks.length);
     if (score > bestScore) {
       bestScore = score;
@@ -7854,7 +7865,7 @@ function prepareSheetFrame(gray, width, height, corners) {
   // Qog'oz yorqinligi: atrofdagi (~9 pt) eng yorug' nuqta. Soya chegarasida o'rtacha yorqinlik aralashib
   // ketadi — soyadagi oq qog'oz "qora" bo'lib qolmasligi uchun nuqta qog'ozdan sezilarli qora bo'lishi ham
   // shart (aks holda soyada imtihon kodi kataklari noto'g'ri o'qilib, titul "boshqa imtihonniki" bo'lib qolardi)
-  const paper = slidingMax2D(blurred, W, H, Math.max(2, Math.round(9 * READ_SCALE)));
+  const paper = paperBrightness(blurred, W, H, Math.max(2, Math.round(9 * READ_SCALE)));
   const binary = new Uint8Array(W * H);
   // Qora piksellar soni uchun integral — kvadrat ichidagi ulush bir zumda (qora-oq bilan bir o'tishda)
   const binaryIntegral = new Int32Array(row * (H + 1));
@@ -7884,30 +7895,53 @@ function prepareSheetFrame(gray, width, height, corners) {
   return { W, H, warped, binary, binaryIntegral, masks: new Map() };
 }
 
-// Har nuqta atrofidagi (±reach piksel kvadrat) eng katta qiymat — ikki o'tishda, har biri O(n) (van Herk)
-function slidingMax2D(source, width, height, reach) {
-  const size = 2 * reach + 1;
-  const longest = Math.max(width, height) + 2 * reach;
+// Har nuqta atrofidagi to'rtburchakdagi eng katta qiymat: x bo'yicha [−left, +right], y bo'yicha [−up, +down]
+// piksel. Ikki o'tishda, har biri O(n) (van Herk)
+function slidingMaxBox(source, width, height, left, right, up, down) {
+  const longest = Math.max(width + left + right, height + up + down);
   const line = new Float32Array(longest);
   const ahead = new Float32Array(longest);
   const behind = new Float32Array(longest);
-  const pass = (input, output, count, length, stride, step) => {
+  const pass = (input, output, count, length, stride, step, before, after) => {
+    const size = before + after + 1;
+    const total = length + before + after;
     for (let index = 0; index < count; index += 1) {
       const base = index * stride;
-      const total = length + 2 * reach;
       line.fill(-1, 0, total);
-      for (let i = 0; i < length; i += 1) line[reach + i] = input[base + i * step];
+      for (let i = 0; i < length; i += 1) line[before + i] = input[base + i * step];
       for (let i = 0; i < total; i += 1) ahead[i] = i % size === 0 ? line[i] : Math.max(ahead[i - 1], line[i]);
       for (let i = total - 1; i >= 0; i -= 1) {
         behind[i] = i === total - 1 || (i + 1) % size === 0 ? line[i] : Math.max(behind[i + 1], line[i]);
       }
-      for (let i = 0; i < length; i += 1) output[base + i * step] = Math.max(behind[i], ahead[i + 2 * reach]);
+      for (let i = 0; i < length; i += 1) output[base + i * step] = Math.max(behind[i], ahead[i + before + after]);
     }
   };
   const across = new Float32Array(width * height);
   const result = new Float32Array(width * height);
-  pass(source, across, height, width, width, 1); // qatorlar bo'ylab
-  pass(across, result, width, height, 1, width); // ustunlar bo'ylab
+  pass(source, across, height, width, width, 1, left, right); // qatorlar bo'ylab
+  pass(across, result, width, height, 1, width, up, down); // ustunlar bo'ylab
+  return result;
+}
+
+// Har nuqta atrofidagi (±reach piksel kvadrat) eng katta qiymat
+function slidingMax2D(source, width, height, reach) {
+  return slidingMaxBox(source, width, height, reach, reach, reach, reach);
+}
+
+// Qog'oz yorqinligi soya chegarasida ham to'g'ri: chap / o'ng / yuqori / past yarim-oynalardagi eng yorug'
+// joyning eng xirasi. Soya chegarasi yonida chegaradan o'tmaydigan tomon soyadagi qog'ozni beradi;
+// bo'yalgan doiracha esa har tomondan oq qog'oz bilan o'ralgan — u qoraligicha qoladi
+function paperBrightness(source, width, height, reach) {
+  const sides = [
+    slidingMaxBox(source, width, height, reach, 0, reach, reach),
+    slidingMaxBox(source, width, height, 0, reach, reach, reach),
+    slidingMaxBox(source, width, height, reach, reach, reach, 0),
+    slidingMaxBox(source, width, height, reach, reach, 0, reach),
+  ];
+  const result = sides[0];
+  for (let i = 0; i < result.length; i += 1) {
+    result[i] = Math.min(result[i], sides[1][i], sides[2][i], sides[3][i]);
+  }
   return result;
 }
 
@@ -8134,7 +8168,7 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
       // Kod katagi: atrofidagi bir necha joydan eng qorasi (serverdagi _fill_ratio square). Kataklar
       // orasi keng (≈40 pt) — qog'oz bukilib siljigan katak ham topilsin
       const inner = Math.max(2, Math.round(bubble.r * READ_SCALE * 0.55));
-      const shift = bubble.r * 0.8;
+      const shift = bubble.r * 1.6;
       let ratio = 0;
       for (const dx of [-shift, -shift / 2, 0, shift / 2, shift]) {
         for (const dy of [-shift, -shift / 2, 0, shift / 2, shift]) ratio = Math.max(ratio, boxFill(sheet, x + dx, y + dy, inner));
@@ -8295,7 +8329,9 @@ function createScanWorker() {
       cornersFromEdgeMarks,
       refineCorner,
       prepareSheetFrame,
+      slidingMaxBox,
       slidingMax2D,
+      paperBrightness,
       bubbleMasks,
       maskFill,
       boxFill,

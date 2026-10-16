@@ -141,9 +141,17 @@ def _edge_marks_score(gray: np.ndarray, points: np.ndarray, sheet: SheetPage = A
 
     # O'rtacha yorqinlik: belgi ichi to'liq qora (bo'sh doirachaning esa faqat chegarasi qora, o'rtasi oq)
     values = [float(patch.mean()) if (patch := window(x, y)).size else 255.0 for x, y in projected]
-    mark_values = values[: len(marks)]
+    reach = radius * 2
+
+    def darkest_near(x: float, y: float) -> float:
+        """Belgi — kutilgan joy atrofidagi eng qora o'rtacha: bukilgan qog'ozda u biroz suriladi."""
+        means = [patch.mean() for dx in (-reach, -reach / 2, 0, reach / 2, reach)
+                 for dy in (-reach, -reach / 2, 0, reach / 2, reach) if (patch := window(x + dx, y + dy)).size]
+        return float(min(means)) if means else 255.0
+
+    mark_values = [darkest_near(x, y) for x, y in projected[: len(marks)]]
     gap_values = values[len(marks): len(marks) + len(gaps)]
-    corner_values = values[len(marks) + len(gaps):]
+    corner_values = [darkest_near(x, y) for x, y in projected[len(marks) + len(gaps):]]
     paper, dark = float(np.median(gap_values)), float(np.median(corner_values))
     if paper - dark < 30:
         return 0.0
@@ -363,15 +371,16 @@ def _warp(image: np.ndarray, corners: np.ndarray, sheet: SheetPage = A4_PAGE) ->
     return cv2.warpPerspective(image, matrix, size, flags=cv2.INTER_LINEAR, borderValue=(255, 255, 255))
 
 
-def _fill_ratio(binary: np.ndarray, x: float, y: float, radius: float, square: bool = False) -> float:
+def _fill_ratio(binary: np.ndarray, x: float, y: float, radius: float, square: bool = False,
+                reach: float = 0.25) -> float:
     """
     Doiracha ichining qoraygan ulushi. Chizilgan chegarasi hisobga olinmaydi (ichki 55%).
-    Qog'oz biroz egilgan bo'lsa ham topilishi uchun yaqin atrof (radiusning 25% igacha) ham tekshiriladi.
+    Qog'oz biroz egilgan bo'lsa ham topilishi uchun yaqin atrof (radiusning reach ulushigacha) ham tekshiriladi.
     """
 
     inner = max(2, round(radius * SCALE * 0.55))
     best = 0.0
-    shift = radius * 0.25
+    shift = radius * reach
     for dx, dy in itertools.product((-shift, -shift / 2, 0, shift / 2, shift), repeat=2):
         cx, cy = round((x + dx) * SCALE), round((y + dy) * SCALE)
         patch = binary[cy - inner: cy + inner + 1, cx - inner: cx + inner + 1]
@@ -525,9 +534,18 @@ class PreparedSheet:
             warped_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, round(40 * SCALE) | 1, 18
         )
         # Qog'oz yorqinligi — atrofdagi (~9 pt) eng yorug' nuqta. Soya chegarasida o'rtacha yorqinlik aralashib
-        # ketadi: soyadagi oq qog'oz "qora" bo'lib qolmasligi uchun qog'ozdan sezilarli qora bo'lishi ham shart
+        # ketadi: soyadagi oq qog'oz "qora" bo'lib qolmasligi uchun qog'ozdan sezilarli qora bo'lishi ham shart.
+        # Chap / o'ng / yuqori / past yarim-oynalarning eng xirasi olinadi: soya chegarasi yonida chegaradan
+        # o'tmaydigan tomon soyadagi qog'ozni beradi; bo'yalgan doiracha har tomondan oq qog'oz bilan o'ralgan
         reach = round(9 * SCALE)
-        paper = cv2.dilate(warped_gray, np.ones((2 * reach + 1, 2 * reach + 1), np.uint8))
+        full, half = 2 * reach + 1, reach + 1
+        sides = [
+            cv2.dilate(warped_gray, np.ones((full, half), np.uint8), anchor=(reach, reach)),  # chap
+            cv2.dilate(warped_gray, np.ones((full, half), np.uint8), anchor=(0, reach)),  # o'ng
+            cv2.dilate(warped_gray, np.ones((half, full), np.uint8), anchor=(reach, reach)),  # yuqori
+            cv2.dilate(warped_gray, np.ones((half, full), np.uint8), anchor=(reach, 0)),  # past
+        ]
+        paper = np.minimum.reduce(sides)
         self.binary = np.where(warped_gray.astype(np.float32) <= paper.astype(np.float32) * 0.8, binary, 0).astype(np.uint8)
         self.maps = _ResponseMaps(self.binary)
 
@@ -616,7 +634,8 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
         # PDF koordinatasi pastdan, rasm esa tepadan sanaladi
         x, y = placed(bubble)
         if bubble["kind"] == "code":
-            code_bits[int(bubble["letter"])] = _fill_ratio(binary, x, y, bubble["r"], square=True)
+            # Imtihon kodi kataklari orasi keng (~40 pt) — bukilib siljigan katak ham topilsin (telefondagidek)
+            code_bits[int(bubble["letter"])] = _fill_ratio(binary, x, y, bubble["r"], square=True, reach=0.8)
             continue
         dx, dy = row_shift[bubble["ref"]]
         ratio = _inner_fill(maps, x + dx, y + dy, bubble["r"])
