@@ -521,9 +521,14 @@ class PreparedSheet:
         self.warped = _warp(image, corners, sheet)
         warped_gray = cv2.cvtColor(self.warped, cv2.COLOR_BGR2GRAY)
         warped_gray = cv2.GaussianBlur(warped_gray, (3, 3), 0)
-        self.binary = cv2.adaptiveThreshold(
+        binary = cv2.adaptiveThreshold(
             warped_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, round(40 * SCALE) | 1, 18
         )
+        # Qog'oz yorqinligi — atrofdagi (~9 pt) eng yorug' nuqta. Soya chegarasida o'rtacha yorqinlik aralashib
+        # ketadi: soyadagi oq qog'oz "qora" bo'lib qolmasligi uchun qog'ozdan sezilarli qora bo'lishi ham shart
+        reach = round(9 * SCALE)
+        paper = cv2.dilate(warped_gray, np.ones((2 * reach + 1, 2 * reach + 1), np.uint8))
+        self.binary = np.where(warped_gray.astype(np.float32) <= paper.astype(np.float32) * 0.8, binary, 0).astype(np.uint8)
         self.maps = _ResponseMaps(self.binary)
 
 

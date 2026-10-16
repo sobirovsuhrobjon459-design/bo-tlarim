@@ -7480,6 +7480,10 @@ function findSheetCorners(pixels, width, height, edgeMarks = false) {
   for (let i = 0, p = 0; i < gray.length; i += 1, p += 4) {
     gray[i] = pixels[p] * 0.299 + pixels[p + 1] * 0.587 + pixels[p + 2] * 0.114;
   }
+  // Yorug'lik tekislanadi: har nuqta atrofidagi eng yorug' joyga (qog'ozga) nisbatan. Soya tushgan
+  // qog'oz ham oq bo'lib qoladi — soyada burchak va chet belgilari adashmaydi
+  const light = slidingMax2D(gray, width, height, Math.max(4, Math.round(width / 36)));
+  for (let i = 0; i < gray.length; i += 1) gray[i] = Math.min(255, (gray[i] * 255) / Math.max(light[i], 40));
   // Mahalliy o'rtacha (integral rasm) — soya va notekis yorug'likka chidamli
   const integral = new Float64Array((width + 1) * (height + 1));
   for (let y = 0; y < height; y += 1) {
@@ -7847,6 +7851,10 @@ function prepareSheetFrame(gray, width, height, corners) {
     }
   }
   const half = Math.round(40 * READ_SCALE) >> 1;
+  // Qog'oz yorqinligi: atrofdagi (~9 pt) eng yorug' nuqta. Soya chegarasida o'rtacha yorqinlik aralashib
+  // ketadi — soyadagi oq qog'oz "qora" bo'lib qolmasligi uchun nuqta qog'ozdan sezilarli qora bo'lishi ham
+  // shart (aks holda soyada imtihon kodi kataklari noto'g'ri o'qilib, titul "boshqa imtihonniki" bo'lib qolardi)
+  const paper = slidingMax2D(blurred, W, H, Math.max(2, Math.round(9 * READ_SCALE)));
   const binary = new Uint8Array(W * H);
   // Qora piksellar soni uchun integral — kvadrat ichidagi ulush bir zumda (qora-oq bilan bir o'tishda)
   const binaryIntegral = new Int32Array(row * (H + 1));
@@ -7866,13 +7874,41 @@ function prepareSheetFrame(gray, width, height, corners) {
       const x0 = left[x];
       const x1 = right[x];
       const mean = (integral[bottom + x1] - integral[top + x1] - integral[bottom + x0] + integral[top + x0]) / ((x1 - x0) * rows);
-      const dark = blurred[start + x] <= mean - 18 ? 1 : 0;
+      const value = blurred[start + x];
+      const dark = value <= mean - 18 && value <= paper[start + x] * 0.8 ? 1 : 0;
       binary[start + x] = dark;
       rowSum += dark;
       binaryIntegral[(y + 1) * row + x + 1] = binaryIntegral[y * row + x + 1] + rowSum;
     }
   }
   return { W, H, warped, binary, binaryIntegral, masks: new Map() };
+}
+
+// Har nuqta atrofidagi (±reach piksel kvadrat) eng katta qiymat — ikki o'tishda, har biri O(n) (van Herk)
+function slidingMax2D(source, width, height, reach) {
+  const size = 2 * reach + 1;
+  const longest = Math.max(width, height) + 2 * reach;
+  const line = new Float32Array(longest);
+  const ahead = new Float32Array(longest);
+  const behind = new Float32Array(longest);
+  const pass = (input, output, count, length, stride, step) => {
+    for (let index = 0; index < count; index += 1) {
+      const base = index * stride;
+      const total = length + 2 * reach;
+      line.fill(-1, 0, total);
+      for (let i = 0; i < length; i += 1) line[reach + i] = input[base + i * step];
+      for (let i = 0; i < total; i += 1) ahead[i] = i % size === 0 ? line[i] : Math.max(ahead[i - 1], line[i]);
+      for (let i = total - 1; i >= 0; i -= 1) {
+        behind[i] = i === total - 1 || (i + 1) % size === 0 ? line[i] : Math.max(behind[i + 1], line[i]);
+      }
+      for (let i = 0; i < length; i += 1) output[base + i * step] = Math.max(behind[i], ahead[i + 2 * reach]);
+    }
+  };
+  const across = new Float32Array(width * height);
+  const result = new Float32Array(width * height);
+  pass(source, across, height, width, width, 1); // qatorlar bo'ylab
+  pass(across, result, width, height, 1, width); // ustunlar bo'ylab
+  return result;
 }
 
 // Doiracha atrofidagi halqa (chop etilgan chegara) va ichki doira — nuqtalar ro'yxati
@@ -8259,6 +8295,7 @@ function createScanWorker() {
       cornersFromEdgeMarks,
       refineCorner,
       prepareSheetFrame,
+      slidingMax2D,
       bubbleMasks,
       maskFill,
       boxFill,
