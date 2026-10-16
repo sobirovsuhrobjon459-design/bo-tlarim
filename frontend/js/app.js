@@ -163,15 +163,31 @@ async function api(path, { method = "GET", body, keepalive = false } = {}) {
     headers["Content-Type"] = "application/json";
   }
 
-  const response = await fetch(path, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    // keepalive: sahifa yopilayotganda ham so'rov oxirigacha yetib boradi.
-    // Oddiy so'rov bu paytda uzilib ketardi — javoblarni oxirgi marta
-    // saqlash uchun aynan shu kerak.
-    keepalive,
-  });
+  const send = () =>
+    fetch(path, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      // keepalive: sahifa yopilayotganda ham so'rov oxirigacha yetib boradi.
+      // Oddiy so'rov bu paytda uzilib ketardi — javoblarni oxirgi marta
+      // saqlash uchun aynan shu kerak.
+      keepalive,
+    });
+  let response;
+  try {
+    response = await send();
+  } catch (error) {
+    // Tarmoq uzilishi (server qayta ishga tushayotgan, aloqa bir zum yo'qolgan): o'qish so'rovi
+    // bir marta qayta yuboriladi. O'zgartiruvchi so'rov qayta yuborilmaydi — ikki marta bajarilmasin
+    if (method === "GET") {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      response = await send().catch(() => null);
+    }
+    if (!response) {
+      // "Failed to fetch" o'rniga tushunarli xabar (TypeError — isOfflineError uni taniydi)
+      throw new TypeError("📶 Internet aloqasi uzildi — qayta urinib ko'ring");
+    }
+  }
 
   if (!response.ok) {
     let message = "Xatolik yuz berdi";

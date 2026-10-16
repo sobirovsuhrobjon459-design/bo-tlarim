@@ -127,6 +127,9 @@ class _WebShellState extends State<WebShell> {
                   );
                 },
                 onProgressChanged: (controller, progress) => setState(() => _progress = progress / 100),
+                // Sahifa ko'rinishi bilan chiziq yo'qoladi — tashqi skript/shrift sekin yuklansa ham qolib ketmaydi
+                onPageCommitVisible: (controller, url) => setState(() => _progress = 1),
+                onLoadStop: (controller, url) => setState(() => _progress = 1),
                 onReceivedError: (controller, request, error) {
                   if (request.isForMainFrame ?? true) setState(() => _offline = true);
                 },

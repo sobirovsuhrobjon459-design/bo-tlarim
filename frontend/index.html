@@ -5,7 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
   <title>Test Platformasi</title>
 
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <!--
+    Telegram Mini App skripti faqat Telegram ichida kerak. Ilovada (TestWayApp) yuklanmaydi:
+    telegram.org sekin yoki to'silgan tarmoqda sahifa yuklanishi tugamay, tepadagi chiziq qolib ketardi.
+  -->
+  <script>
+    if (!/TestWayApp/i.test(navigator.userAgent)) {
+      document.write('<script src="https://telegram.org/js/telegram-web-app.js"><\/script>');
+    }
+  </script>
 
   <!--
     MathLive — yozma javoblar uchun matematik maydon va klaviatura
