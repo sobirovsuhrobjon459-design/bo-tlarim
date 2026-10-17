@@ -2428,6 +2428,8 @@ def _evalbee_plan(test: Test, variants: list[str] | None = None, key_override: d
     reserved = 3 if variants else 2  # 1-ustunda ID (2 blok) va variant (1 blok)
     if (test.sheet_version or 1) >= 9:
         style = _adaptive_style(reserved + math.ceil(len(items) / 5), reserved)
+        # 10-versiya: ID raqamlari 0–9 oraliqsiz, tekis ketma-ket (9-versiyada 4 va 5 orasida bo'sh joy bor)
+        style["id_tight"] = test.sheet_version >= 10
     else:
         style = SHEET8_STYLE
     block_rows = style["edge_marks"] - 1
@@ -2597,6 +2599,10 @@ def _draw_evalbee_card(sheet, test: Test, plan: dict, page: int, with_answers: b
             for line in range(5):
                 digit = block_row * 5 + line
                 center = row_center(block_row, line)
+                if style.get("id_tight"):
+                    # Raqamlar ustma-ust, oraliqsiz; doiracha qaysi blok ichiga tushsa — o'sha blok kvadratlari
+                    center = line_y(0) - header - (digit + 0.5) * style["row"]
+                    corners = block(0, 0 if line_y(0) - center < style["step"] else 1)
                 sheet.setFont("Helvetica-Bold", style["digit_font"])
                 sheet.drawRightString(line_x(0) + label_right, center - style["digit_font"] * 0.35, str(digit))
                 for column in range(4):

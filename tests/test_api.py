@@ -4423,7 +4423,7 @@ def test_evalbee_uslubidagi_titul():
     for version, anchor_count, height in ((9, 30, 668), (8, 45, 842)):
         test_id = create_test(enrollment_type="closed", key_questions=questions)["id"]
         with SessionLocal() as session:
-            assert session.get(Test, test_id).sheet_version == 9  # yangi test — eng yangi titul
+            assert session.get(Test, test_id).sheet_version == 10  # yangi test — eng yangi titul
             session.get(Test, test_id).sheet_version = version
             session.commit()
         base = f"/api/teacher/tests/{test_id}"
@@ -4515,11 +4515,14 @@ def test_titul_savollar_soniga_moslashadi():
         sizes[count] = (round(page["width"]), round(page["height"]), round(radius, 1), anchors)
         assert page["height"] >= page["width"], page  # tik
 
-        marks = {"id0": "0", "id1": "1", "id2": "2", "id3": "3", 1: "A", count: "C"}
+        # ID ning hamma raqamlari (0–9 oraliqsiz ustunda) — 5–9 qatorlari ham to'g'ri o'qilsin
+        number = {10: "5679", 45: "8051", 120: "0394"}[count]
+        marks = {**{f"id{index}": digit for index, digit in enumerate(number)}, 1: "A", count: "C"}
         scanned = client.post(f"/api/teacher/tests/{test_id}/scan", json={"image_base64": _sheet_photo(test_id, marks)},
                               headers=as_user(555))
         assert scanned.status_code == 200, (count, scanned.text)
-        assert scanned.json()["answers"] == {"1": "A", str(count): "C"} and scanned.json()["sheet_number"] == 123, count
+        assert scanned.json()["answers"] == {"1": "A", str(count): "C"} and scanned.json()["sheet_number"] == int(number), (
+            count, scanned.json()["sheet_number"])
     assert sizes[10][:2] == (376, 470) and sizes[120][:2] == (595, 841), sizes
     assert sizes[10][2] > sizes[120][2], sizes  # kam savolda doiracha kattaroq
     assert sizes[10][3] < sizes[45][3] < sizes[120][3], sizes  # kvadratlar faqat ishlatilgan bloklarda
@@ -4696,7 +4699,7 @@ def test_varaqdagi_oquvchi_raqami_boyicha_taniladi():
                 headers=as_user(555))
     detail = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1, "Birinchi Bola"), (2, "Ikkinchi Bola")]
-    assert detail["sheet_version"] == 9
+    assert detail["sheet_version"] == 10
 
     url = f"/api/teacher/tests/{test_id}/scan"
     photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "0", "id3": "2", 1: "B", 2: "C"})
@@ -4933,7 +4936,7 @@ def test_skaner_natijasi_sinf_natijalariga_yoziladi():
     assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json() == {"added": 0}
     detail = client.get(base, headers=as_user(701)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1001, "Ali Valiyev"), (1002, "Zuhra Karimova")]
-    assert detail["sheet_version"] == 9
+    assert detail["sheet_version"] == 10
 
     # Zuhra (1002) varag'i: 1-savol to'g'ri, 2-savol to'g'ri
     scanned = client.post(f"{base}/scan", json={"image_base64": _sheet_photo(test["id"], {

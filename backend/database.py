@@ -247,7 +247,7 @@ class Test(Base):
     # va pastda imtihon kodi (boshqa imtihon tituli bilan adashmaydi); 4 — o'quvchi ID
     # vertikal 3 ustunda (0–9); 5 — ID 4 xonali (maktab o'quvchilari ID'si 1001, 1002 ...).
     # Eski testlar o'z versiyasida qoladi — oldin chop etilgan varaqlar ham to'g'ri skanerlanishi uchun.
-    sheet_version: Mapped[int] = mapped_column(default=9)  # 6 — ixcham; 7 — bloklari kvadratli; 8–9 — EvalBee uslubi
+    sheet_version: Mapped[int] = mapped_column(default=10)  # 6 — ixcham; 7 — bloklari kvadratli; 8–10 — EvalBee uslubi
 
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     # O'qituvchi "o'chirgan" test. Bazadan butunlay o'chirilmaydi: unga bog'liq
