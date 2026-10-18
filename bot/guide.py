@@ -10,7 +10,7 @@ yuboriladi — ularni boshqaga uzatib, saqlab yoki nusxalab bo'lmaydi.
 Matnni yangilash kerak bo'lsa — faqat shu fayl o'zgartiriladi.
 """
 
-GUIDE_INTRO = """📘 <b>QO'LLANMA — Test Platformasi</b>
+GUIDE_INTRO = """📘 <b>QO'LLANMA — Chittak</b>
 
 Bu bot ichida ilova (Mini App) bor — uni pastdagi <b>PLAY</b> tugmasi ochadi.
 

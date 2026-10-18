@@ -1,5 +1,5 @@
 /*
-  Test Platformasi — yagona stil fayli.
+  Chittak — yagona stil fayli.
 
   Bo'limlar:
   1) Dizayn tizimi (ranglar, shadow, radius — light va dark rejim)
@@ -13,9 +13,9 @@
 :root {
   --color-bg: #f4f5fb;
   --color-surface: #ffffff;
-  --color-primary: #6366f1;
-  --color-primary-dark: #4f46e5;
-  --color-accent: #22d3ee;
+  --color-primary: #00a844;
+  --color-primary-dark: #0a7d3a;
+  --color-accent: #a8f063;
   --color-text: #111827;
   --color-text-muted: #6b7280;
   --color-border: #e5e7eb;
@@ -34,9 +34,9 @@
 [data-theme="dark"] {
   --color-bg: #0f1115;
   --color-surface: #1a1d24;
-  --color-primary: #818cf8;
-  --color-primary-dark: #6366f1;
-  --color-accent: #22d3ee;
+  --color-primary: #00c853;
+  --color-primary-dark: #00a844;
+  --color-accent: #a8f063;
   --color-text: #f3f4f6;
   --color-text-muted: #9ca3af;
   --color-border: #2a2d36;
@@ -60,9 +60,9 @@ body {
   /* Yengil, sekin suzuvchi gradient fon — faqat CSS, og'ir kutubxonasiz */
   background-color: var(--color-bg);
   background-image:
-    radial-gradient(circle at 15% 20%, rgba(99, 102, 241, 0.34), transparent 52%),
-    radial-gradient(circle at 85% 15%, rgba(34, 211, 238, 0.30), transparent 52%),
-    radial-gradient(circle at 50% 95%, rgba(99, 102, 241, 0.26), transparent 58%);
+    radial-gradient(circle at 15% 20%, rgba(0, 168, 68, 0.34), transparent 52%),
+    radial-gradient(circle at 85% 15%, rgba(168, 240, 99, 0.30), transparent 52%),
+    radial-gradient(circle at 50% 95%, rgba(0, 168, 68, 0.26), transparent 58%);
   background-size: 200% 200%;
   background-attachment: fixed;
   animation: drift-bg 18s ease-in-out infinite alternate;
@@ -70,9 +70,9 @@ body {
 
 [data-theme="dark"] body {
   background-image:
-    radial-gradient(circle at 15% 20%, rgba(129, 140, 248, 0.42), transparent 52%),
-    radial-gradient(circle at 85% 15%, rgba(34, 211, 238, 0.34), transparent 52%),
-    radial-gradient(circle at 50% 95%, rgba(129, 140, 248, 0.30), transparent 58%);
+    radial-gradient(circle at 15% 20%, rgba(0, 200, 83, 0.42), transparent 52%),
+    radial-gradient(circle at 85% 15%, rgba(168, 240, 99, 0.34), transparent 52%),
+    radial-gradient(circle at 50% 95%, rgba(0, 200, 83, 0.30), transparent 58%);
 }
 
 @keyframes drift-bg {
@@ -177,7 +177,7 @@ p {
   font-size: 26px;
   line-height: 1;
   border-radius: 14px;
-  background: rgba(99, 102, 241, 0.14);
+  background: rgba(0, 168, 68, 0.14);
   color: var(--color-primary);
   transition: transform 0.15s ease;
 }
@@ -528,7 +528,7 @@ select:focus {
 
 .option.selected {
   border-color: var(--color-accent);
-  background: rgba(34, 211, 238, 0.12);
+  background: rgba(168, 240, 99, 0.12);
   transform: scale(1.01);
 }
 
@@ -602,7 +602,7 @@ math-field.math-input {
 
   /* MathLive ichki ranglari */
   --caret-color: var(--color-primary);
-  --selection-background-color: rgba(99, 102, 241, 0.25);
+  --selection-background-color: rgba(0, 168, 68, 0.25);
   --smart-fence-color: var(--color-primary);
   --placeholder-color: var(--color-text-muted);
 }
@@ -907,8 +907,8 @@ table td {
   vertical-align: middle;
   padding: 3px 10px;
   border-radius: 999px;
-  background: rgba(99, 102, 241, 0.14);
-  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: rgba(0, 168, 68, 0.14);
+  border: 1px solid rgba(0, 168, 68, 0.35);
   color: var(--color-primary);
   font-size: 14px;
   letter-spacing: 0.5px;
@@ -926,7 +926,7 @@ table td {
 
 .copy-code:active {
   transform: scale(0.94);
-  background: rgba(99, 102, 241, 0.3);
+  background: rgba(0, 168, 68, 0.3);
 }
 
 /* O'chirish tugmasi — qizil, yorqin */
@@ -1096,7 +1096,7 @@ table td {
 
 .nav-item.active {
   color: var(--color-primary);
-  background: rgba(99, 102, 241, 0.12);
+  background: rgba(0, 168, 68, 0.12);
 }
 
 /*
@@ -1289,7 +1289,7 @@ body.keyboard-open .bottom-nav {
   font-weight: 600;
   font-family: inherit;
   color: #ffffff;
-  background: var(--color-primary-dark, #4f46e5);
+  background: var(--color-primary-dark, #0a7d3a);
   border: none;
   border-radius: 999px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
@@ -1491,7 +1491,7 @@ body.keyboard-open .bottom-nav {
   justify-content: center;
   font-weight: 700;
   color: var(--color-primary);
-  background: rgba(99, 102, 241, 0.12);
+  background: rgba(0, 168, 68, 0.12);
   border-radius: 50%;
 }
 
@@ -1944,7 +1944,7 @@ select option {
   padding: 8px 14px;
   font-weight: 700;
   color: var(--color-primary);
-  background: rgba(99, 102, 241, 0.12);
+  background: rgba(0, 168, 68, 0.12);
   border-radius: 999px;
 }
 
@@ -2011,8 +2011,8 @@ select option {
   font-weight: 600;
   font-family: inherit;
   color: var(--color-primary);
-  background: rgba(99, 102, 241, 0.12);
-  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: rgba(0, 168, 68, 0.12);
+  border: 1px solid rgba(0, 168, 68, 0.35);
   border-radius: 999px;
   cursor: pointer;
   touch-action: manipulation;
@@ -2244,7 +2244,7 @@ select option {
   display: grid;
   place-items: center;
   color: #fff;
-  background: linear-gradient(135deg, #818cf8, #6366f1);
+  background: linear-gradient(135deg, #00c853, #00a844);
   border: 0;
   border-radius: 50%;
   box-shadow: 0 8px 22px rgba(79, 70, 229, 0.45);
@@ -2271,7 +2271,7 @@ body.keyboard-open .fab {
 }
 
 .member-line.is-tappable:active {
-  background: rgba(99, 102, 241, 0.08);
+  background: rgba(0, 168, 68, 0.08);
 }
 
 .pick-item.is-selected .pick-title {
@@ -2350,7 +2350,7 @@ body.keyboard-open .fab {
 }
 
 .class-row:active {
-  background: rgba(99, 102, 241, 0.08);
+  background: rgba(0, 168, 68, 0.08);
 }
 
 .class-count {
@@ -2362,7 +2362,7 @@ body.keyboard-open .fab {
   align-items: center;
   justify-content: center;
   border-radius: 14px;
-  background: rgba(99, 102, 241, 0.14);
+  background: rgba(0, 168, 68, 0.14);
   color: var(--color-primary);
 }
 
@@ -2377,7 +2377,7 @@ body.keyboard-open .fab {
 }
 
 .class-row.is-mine .class-count {
-  background: linear-gradient(135deg, #818cf8, #6366f1);
+  background: linear-gradient(135deg, #00c853, #00a844);
   color: #fff;
 }
 
@@ -2473,7 +2473,7 @@ body.keyboard-open .fab {
   margin-bottom: 4px;
   font-size: 26px;
   border-radius: 16px;
-  background: rgba(99, 102, 241, 0.14);
+  background: rgba(0, 168, 68, 0.14);
 }
 
 .school-tile b {
@@ -2692,7 +2692,7 @@ body.keyboard-open .fab {
   top: 0;
   bottom: 0;
   width: 40%;
-  background: linear-gradient(90deg, transparent, #818cf8, #6366f1, transparent);
+  background: linear-gradient(90deg, transparent, #00c853, #00a844, transparent);
   animation: top-loader-run 1s ease-in-out infinite;
 }
 
@@ -2718,8 +2718,8 @@ body.keyboard-open .fab {
   width: 20px;
   height: 20px;
   margin-top: -10px;
-  border: 2.5px solid rgba(129, 140, 248, 0.35);
-  border-top-color: #818cf8;
+  border: 2.5px solid rgba(0, 200, 83, 0.35);
+  border-top-color: #00c853;
   border-radius: 50%;
   animation: spin-loader 0.7s linear infinite;
 }
@@ -2769,7 +2769,7 @@ body.keyboard-open .fab {
 
 .filter-chip.active {
   color: #fff;
-  background: linear-gradient(135deg, #818cf8, #6366f1);
+  background: linear-gradient(135deg, #00c853, #00a844);
   border-color: transparent;
 }
 
@@ -2899,7 +2899,7 @@ body.keyboard-open .fab {
 
 .number-chip.is-picked {
   color: #ffffff;
-  background: linear-gradient(135deg, #818cf8, #6366f1);
+  background: linear-gradient(135deg, #00c853, #00a844);
   border-color: transparent;
 }
 
@@ -3074,7 +3074,7 @@ body.keyboard-open .fab {
 
 @keyframes row-flash {
   0%, 100% { background: transparent; }
-  25%, 60% { background: rgba(99, 102, 241, 0.18); background: color-mix(in srgb, var(--color-primary) 18%, transparent); }
+  25%, 60% { background: rgba(0, 168, 68, 0.18); background: color-mix(in srgb, var(--color-primary) 18%, transparent); }
 }
 
 .jump-unanswered {
@@ -3085,7 +3085,7 @@ body.keyboard-open .fab {
   font-size: 12px;
   font-weight: 700;
   color: var(--color-primary);
-  background: rgba(99, 102, 241, 0.12); /* eski WebView uchun zaxira */
+  background: rgba(0, 168, 68, 0.12); /* eski WebView uchun zaxira */
   background: color-mix(in srgb, var(--color-primary) 12%, transparent);
   cursor: pointer;
   touch-action: manipulation;
@@ -3123,7 +3123,7 @@ body.keyboard-open .fab {
 }
 
 .sheet-option.selected {
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.35);
+  box-shadow: 0 4px 12px rgba(0, 168, 68, 0.35);
   box-shadow: 0 4px 12px color-mix(in srgb, var(--color-primary) 35%, transparent);
 }
 

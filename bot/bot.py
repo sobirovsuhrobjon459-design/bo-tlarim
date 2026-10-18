@@ -240,7 +240,7 @@ async def _open_bot(message: Message, payload: str) -> None:
 
     welcome_text = (
         f"Assalomu alaykum, {message.chat.first_name or ''}! 👋\n\n"
-        "🎓 <b>Test Platformasiga xush kelibsiz!</b>\n\n"
+        "🎓 <b>Chittakka xush kelibsiz!</b>\n\n"
         "Bilimingizni sinang, natijangizni kuzating va rivojlaning.\n\n"
         "Boshlash uchun pastda, xabar yozish maydoni yonidagi <b>PLAY</b> tugmasini bosing.\n"
         "📘 Qo'llanma va ilova haqida — /yordam\n\n"
@@ -433,7 +433,7 @@ async def _ask_app_login(message: Message, token: str) -> None:
     user = message.from_user
     account = html.escape(user.full_name or "—") + (f" (@{html.escape(user.username)})" if user.username else "")
     await message.answer(
-        "📱 <b>TestWay ilovasiga kirish</b>\n\n"
+        "📱 <b>Chittak ilovasiga kirish</b>\n\n"
         f"👤 Akkaunt: <b>{account}</b>\n🆔 ID: <code>{user.id}</code>\n\n"
         "Ilovaga SHU akkaunt bilan kirasiz — testlar, natijalar va kreditlar bir xil bo'ladi. "
         "Boshqa akkaunt kerak bo'lsa — Telegram'da o'sha akkauntga o'ting va ilovada qaytadan «Kirish»ni bosing.\n\n"

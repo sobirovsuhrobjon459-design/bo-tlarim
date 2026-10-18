@@ -1,5 +1,5 @@
 /*
-  TestWay service worker — internet bo'lmaganda ham ilova ochilsin.
+  Chittak service worker — internet bo'lmaganda ham ilova ochilsin.
 
   Strategiya: avval tarmoq, bo'lmasa — saqlangan nusxa. Internet bor paytda har
   doim yangi fayl va yangi ma'lumot olinadi (eskirgan ilova ko'rinib qolmaydi),
@@ -9,8 +9,8 @@
   akkaunt bo'lsa, bir-birining ma'lumotini ko'rmaydi). Faqat GET va faqat JSON.
 */
 
-const CACHE = "testway-v1";
-const SHELL = ["/", "/css/style.css", "/css/theme-pastel.css", "/js/app.js"];
+const CACHE = "testway-v3";
+const SHELL = ["/", "/css/style.css", "/css/theme-pastel.css", "/css/theme-chittak.css", "/js/icons.js", "/js/app.js"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

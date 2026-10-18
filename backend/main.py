@@ -118,6 +118,10 @@ from .database import (
     Question,
     SchoolCodeIn,
     SchoolCreateIn,
+    LessonSlot,
+    LessonSlotIn,
+    SchoolAnnouncement,
+    AnnouncementIn,
     SchoolMember,
     SchoolClass,
     SchoolInvite,
@@ -376,7 +380,7 @@ async def lifespan(app: FastAPI):
     awake_task.cancel()
 
 
-app = FastAPI(title="Test Platformasi API", lifespan=lifespan)
+app = FastAPI(title="Chittak API", lifespan=lifespan)
 # JS/CSS fayllar siqilib yuboriladi (~320 KB → ~70 KB) — ilova tezroq ochiladi
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -5894,14 +5898,15 @@ def _draw_certificate_page(pdf, test: Test, teacher: Teacher, row: dict, section
     _draw_certificate_background(pdf, width, height)
 
     # Sarlavha: platforma belgisi va nomi
-    pdf.setFillColor(CERTIFICATE_ACCENT)
-    pdf.circle(width / 2, height - 82, 30, fill=1, stroke=0)
-    pdf.setFillColor(colors.white)
-    pdf.setFont(REPORT_FONT_BOLD, 22)
-    pdf.drawCentredString(width / 2, height - 90, "TP")
+    logo_path = FRONTEND_DIR / "img" / "chittak-icon.png"
+    if logo_path.exists():
+        pdf.drawImage(str(logo_path), width / 2 - 30, height - 112, 60, 60, mask="auto")
+    else:
+        pdf.setFillColor(CERTIFICATE_ACCENT)
+        pdf.circle(width / 2, height - 82, 30, fill=1, stroke=0)
     pdf.setFillColor(CERTIFICATE_INK)
     pdf.setFont(REPORT_FONT_BOLD, 12)
-    pdf.drawCentredString(width / 2, height - 136, "TEST PLATFORMASI")
+    pdf.drawCentredString(width / 2, height - 136, "CHITTAK")
     pdf.setFont(REPORT_FONT, 9.5)
     pdf.setFillColor(CERTIFICATE_MUTED)
     pdf.drawCentredString(width / 2, height - 150, "Mock (sinov) imtihon natijalari")
@@ -9232,6 +9237,440 @@ def payments_summary(month: str | None = None, user: User = Depends(get_current_
     }
 
 
+SHORT_MONTH_NAMES = ["Yan", "Fev", "Mar", "Apr", "May", "Iyun", "Iyul", "Avg", "Sen", "Okt", "Noy", "Dek"]
+
+
+@app.get("/api/schools/overview")
+def school_overview(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Maktab bosh sahifasi uchun qisqa holat: raqamlar, bugun davomat olinmagan
+    sinflar, qarzdorlar va oylar bo'yicha test natijalari. Har kim faqat o'ziga
+    ruxsat etilganini oladi: rahbariyat — butun maktab, kurator — o'z sinfi,
+    fan o'qituvchisi — o'zi olgan davomat va o'zi kiritgan testlar.
+    """
+
+    member = _require_school_member(db, user)
+    school = member.school
+    leader = _is_director(member)
+    head = _can_delete_classes(member)
+
+    classes = db.scalars(
+        select(SchoolClass).where(SchoolClass.school_id == school.id, SchoolClass.deleted_at.is_(None)).order_by(SchoolClass.name)
+    ).all()
+    curated = [item for item in classes if item.curator_user_id == user.id]
+    students_total = sum(len(_active_students(item)) for item in classes)
+
+    # Bugun (Toshkent vaqti) — kun boshi UTC'da
+    local_now = utcnow() + TASHKENT_OFFSET
+    day_start = datetime(local_now.year, local_now.month, local_now.day) - TASHKENT_OFFSET
+
+    # Davomat: rahbariyat — butun maktab, kurator — o'z sinflari, qolganlar — o'zi olgani
+    attendance_query = select(Attendance).where(Attendance.deleted_at.is_(None), Attendance.taken_at >= day_start)
+    if leader:
+        attendance_query = attendance_query.where(Attendance.class_id.in_([item.id for item in classes] or [-1]))
+    else:
+        own = or_(Attendance.teacher_user_id == user.id, Attendance.class_id.in_([item.id for item in curated] or [-1]))
+        attendance_query = attendance_query.where(own)
+    today_attendance = db.scalars(attendance_query).all()
+    marks_total = marks_present = 0
+    for attendance in today_attendance:
+        counts = _attendance_counts(attendance)
+        marks_total += sum(counts.values())
+        marks_present += counts.get("present", 0) + counts.get("late", 0)
+
+    # Bugun birorta ham davomat olinmagan sinflar (o'quvchisi bor sinflargina)
+    watched = classes if leader else curated
+    taken_ids = {attendance.class_id for attendance in today_attendance}
+    missing_attendance = [
+        {"id": item.id, "name": item.name}
+        for item in watched
+        if item.id not in taken_ids and _active_students(item)
+    ]
+
+    # Qarzdorlar (joriy oy): admin/direktor — butun maktab, kurator — o'z sinflari
+    payment_classes = classes if head else curated
+    debtors = debt_sum = None
+    if payment_classes and school.monthly_fee > 0:
+        month = _current_month()
+        debtors = debt_sum = 0
+        for item in payment_classes:
+            totals = class_payments(item.id, month, user, db)["totals"]
+            debtors += totals["debtors"]
+            debt_sum += totals["remaining"]
+
+    # Test natijalari oylar bo'yicha (oxirgi 6 oy): rahbariyat — hammasi, qolganlar — o'zi kiritganlari
+    first_month = _shift_month(_current_month(), -5)
+    first_day = date(int(first_month[:4]), int(first_month[5:]), 1)
+    test_query = select(ClassTest).where(
+        ClassTest.deleted_at.is_(None),
+        ClassTest.class_id.in_([item.id for item in classes] or [-1]),
+        ClassTest.taken_on >= first_day,
+    )
+    if not leader:
+        test_query = test_query.where(ClassTest.teacher_user_id == user.id)
+    by_month: dict[str, list[float]] = {}
+    for test in db.scalars(test_query).all():
+        percents = [score.score / test.max_score * 100 for score in test.scores if score.score is not None and test.max_score]
+        if percents:
+            by_month.setdefault(test.taken_on.strftime("%Y-%m"), []).append(sum(percents) / len(percents))
+    chart = []
+    for offset in range(-5, 1):
+        month = _shift_month(_current_month(), offset)
+        values = by_month.get(month, [])
+        chart.append({
+            "month": month,
+            "label": SHORT_MONTH_NAMES[int(month[5:]) - 1],
+            "average": round(sum(values) / len(values), 1) if values else None,
+            "tests": len(values),
+        })
+
+    # Bugun tug'ilgan kunlar: o'quvchilar va xodimlar (tabriklash uchun)
+    today_md = (local_now.month, local_now.day)
+    birthdays = [
+        {"name": student.full_name, "class_name": item.name, "kind": "student"}
+        for item in classes
+        for student in _active_students(item)
+        if student.birth_date and (student.birth_date.month, student.birth_date.day) == today_md
+    ]
+    birthdays += [
+        {"name": staff.user.full_name if staff.user else "", "class_name": None, "kind": "staff"}
+        for staff in school.members
+        if staff.left_at is None and staff.birth_date and (staff.birth_date.month, staff.birth_date.day) == today_md
+    ]
+
+    latest_announcements = db.scalars(
+        select(SchoolAnnouncement)
+        .where(SchoolAnnouncement.school_id == school.id, SchoolAnnouncement.deleted_at.is_(None))
+        .order_by(SchoolAnnouncement.id.desc())
+        .limit(2)
+    ).all()
+    today_lessons = _today_lessons(db, member, user, classes, local_now, today_attendance)
+
+    return {
+        "today": local_now.date(),
+        "weekday_label": WEEKDAYS[local_now.weekday()],
+        "today_lessons": today_lessons,
+        "birthdays": birthdays,
+        "announcements": [_announcement_view(db, item, member, user) for item in latest_announcements],
+        "month_label": _month_label(_current_month()),
+        "stats": {
+            "students": students_total,
+            "classes": len(classes),
+            "my_classes": len(curated),
+            "lessons_today": len(today_lessons),
+            "attendance_percent": round(marks_present / marks_total * 100) if marks_total else None,
+            "debtors": debtors,
+            "debt_sum": debt_sum,
+        },
+        "missing_attendance": missing_attendance,
+        "classes_without_curator": sum(1 for item in classes if item.curator_user_id is None) if head else 0,
+        "needs_fee": head and school.monthly_fee <= 0,
+        "chart": chart,
+        "can": {
+            "payments": bool(payment_classes),
+            "create_class": head,
+            "invite": member.role == "owner",
+            "results": leader,
+            "announce": leader or bool(curated),
+            "schedule": leader or bool(curated),
+        },
+        "payment_classes": [{"id": item.id, "name": item.name} for item in payment_classes],
+    }
+
+
+# ---------- Dars jadvali ----------
+#
+# Jadvalni har kim ko'radi; tuzadi — rahbariyat (admin, direktor, zam direktor)
+# yoki o'sha sinfning kuratori. Bir sinfda bir vaqtda ikki dars, bir
+# o'qituvchida bir vaqtda ikki sinf bo'lmaydi.
+
+WEEKDAYS = ["Dushanba", "Seshanba", "Chorshanba", "Payshanba", "Juma", "Shanba", "Yakshanba"]
+
+
+def _can_edit_schedule(school_class: SchoolClass, member: SchoolMember) -> bool:
+    return _is_director(member) or school_class.curator_user_id == member.user_id
+
+
+def _slot_view(db: Session, slot: LessonSlot, class_name: str | None = None) -> dict:
+    teacher = db.get(User, slot.teacher_user_id) if slot.teacher_user_id else None
+    if class_name is None:
+        school_class = db.get(SchoolClass, slot.class_id)
+        class_name = school_class.name if school_class else ""
+    return {
+        "id": slot.id,
+        "class_id": slot.class_id,
+        "class_name": class_name,
+        "weekday": slot.weekday,
+        "weekday_label": WEEKDAYS[slot.weekday],
+        "start_time": slot.start_time,
+        "end_time": slot.end_time,
+        "subject": slot.subject,
+        "teacher_user_id": slot.teacher_user_id,
+        "teacher_name": teacher.full_name if teacher else "",
+    }
+
+
+def _active_slots(db: Session, **filters):
+    query = select(LessonSlot).where(LessonSlot.deleted_at.is_(None))
+    for name, value in filters.items():
+        query = query.where(getattr(LessonSlot, name) == value)
+    return db.scalars(query.order_by(LessonSlot.weekday, LessonSlot.start_time)).all()
+
+
+def _check_slot_conflicts(db: Session, school_class: SchoolClass, body: LessonSlotIn, skip_id: int | None = None) -> None:
+    """Sinfda yoki o'qituvchida shu vaqtda boshqa dars bo'lsa — 409."""
+
+    def overlaps(slot: LessonSlot) -> bool:
+        return slot.id != skip_id and slot.start_time < body.end_time and body.start_time < slot.end_time
+
+    for slot in _active_slots(db, class_id=school_class.id, weekday=body.weekday):
+        if overlaps(slot):
+            raise HTTPException(
+                status_code=409,
+                detail=f"{WEEKDAYS[body.weekday]} {slot.start_time}–{slot.end_time} da bu sinfda «{slot.subject or 'dars'}» bor",
+            )
+    if body.teacher_user_id:
+        for slot in _active_slots(db, teacher_user_id=body.teacher_user_id, weekday=body.weekday, school_id=school_class.school_id):
+            if overlaps(slot):
+                other = db.get(SchoolClass, slot.class_id)
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Bu o'qituvchining {WEEKDAYS[body.weekday]} {slot.start_time}–{slot.end_time} da "
+                    f"{other.name if other else 'boshqa'} sinfida darsi bor",
+                )
+
+
+def _check_slot_teacher(db: Session, school_id: int, teacher_user_id: int | None) -> None:
+    if teacher_user_id is None:
+        return
+    active = db.scalar(
+        select(SchoolMember.id).where(
+            SchoolMember.school_id == school_id, SchoolMember.user_id == teacher_user_id, SchoolMember.left_at.is_(None)
+        )
+    )
+    if not active:
+        raise HTTPException(status_code=422, detail="Bu o'qituvchi maktab xodimi emas")
+
+
+@app.get("/api/classes/{class_id}/schedule")
+def class_schedule(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    school_class, member = _school_class(db, user, class_id)
+    return {
+        "class_id": school_class.id,
+        "class_name": school_class.name,
+        "can_edit": _can_edit_schedule(school_class, member),
+        "slots": [_slot_view(db, slot, school_class.name) for slot in _active_slots(db, class_id=school_class.id)],
+    }
+
+
+@app.post("/api/classes/{class_id}/schedule")
+def add_lesson_slot(class_id: int, body: LessonSlotIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    school_class, member = _school_class(db, user, class_id)
+    if not _can_edit_schedule(school_class, member):
+        raise HTTPException(status_code=403, detail="Jadvalni rahbariyat yoki sinf kuratori tuzadi")
+    _check_slot_teacher(db, school_class.school_id, body.teacher_user_id)
+    _check_slot_conflicts(db, school_class, body)
+    slot = LessonSlot(
+        school_id=school_class.school_id,
+        class_id=school_class.id,
+        weekday=body.weekday,
+        start_time=body.start_time,
+        end_time=body.end_time,
+        subject=body.subject,
+        teacher_user_id=body.teacher_user_id,
+        created_by=user.id,
+    )
+    db.add(slot)
+    db.commit()
+    return class_schedule(class_id, user, db)
+
+
+def _editable_slot(db: Session, user: User, slot_id: int) -> tuple[LessonSlot, SchoolClass]:
+    slot = db.get(LessonSlot, slot_id)
+    if not slot or slot.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Dars topilmadi")
+    school_class, member = _school_class(db, user, slot.class_id)
+    if not _can_edit_schedule(school_class, member):
+        raise HTTPException(status_code=403, detail="Jadvalni rahbariyat yoki sinf kuratori tuzadi")
+    return slot, school_class
+
+
+@app.put("/api/schedule/{slot_id}")
+def update_lesson_slot(slot_id: int, body: LessonSlotIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    slot, school_class = _editable_slot(db, user, slot_id)
+    _check_slot_teacher(db, school_class.school_id, body.teacher_user_id)
+    _check_slot_conflicts(db, school_class, body, skip_id=slot.id)
+    slot.weekday, slot.start_time, slot.end_time = body.weekday, body.start_time, body.end_time
+    slot.subject, slot.teacher_user_id = body.subject, body.teacher_user_id
+    db.commit()
+    return class_schedule(school_class.id, user, db)
+
+
+@app.delete("/api/schedule/{slot_id}")
+def delete_lesson_slot(slot_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    slot, school_class = _editable_slot(db, user, slot_id)
+    slot.deleted_at = utcnow()
+    db.commit()
+    return class_schedule(school_class.id, user, db)
+
+
+@app.get("/api/schools/my-schedule")
+def my_week_schedule(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """O'qituvchining haftalik jadvali — o'zi o'tadigan darslar, kunlar bo'yicha."""
+    member = _require_school_member(db, user)
+    slots = _active_slots(db, school_id=member.school_id, teacher_user_id=user.id)
+    names = {item.id: item.name for item in db.scalars(select(SchoolClass).where(SchoolClass.school_id == member.school_id))}
+    return {"slots": [_slot_view(db, slot, names.get(slot.class_id, "")) for slot in slots]}
+
+
+def _today_lessons(db: Session, member: SchoolMember, user: User, classes: list[SchoolClass], local_now: datetime,
+                   today_attendance: list[Attendance]) -> list[dict]:
+    """Bugungi darslar: rahbariyat — butun maktab, qolganlar — o'zi o'tadigan va kuratorlik sinfi darslari."""
+
+    names = {item.id: item.name for item in classes}
+    slots = [slot for slot in _active_slots(db, school_id=member.school_id, weekday=local_now.weekday()) if slot.class_id in names]
+    if not _is_director(member):
+        curated = {item.id for item in classes if item.curator_user_id == user.id}
+        slots = [slot for slot in slots if slot.teacher_user_id == user.id or slot.class_id in curated]
+    now_text = local_now.strftime("%H:%M")
+    rows = []
+    for slot in slots:
+        taken = any(
+            attendance.class_id == slot.class_id
+            and (attendance.lesson_start == slot.start_time or (slot.subject and attendance.subject == slot.subject))
+            for attendance in today_attendance
+        )
+        state = "done" if slot.end_time <= now_text else "now" if slot.start_time <= now_text else "next"
+        rows.append({**_slot_view(db, slot, names[slot.class_id]), "state": state, "attendance_taken": taken,
+                     "mine": slot.teacher_user_id == user.id})
+    rows.sort(key=lambda row: (row["start_time"], row["class_name"]))
+    return rows
+
+
+# ---------- E'lonlar ----------
+
+def _announcement_view(db: Session, item: SchoolAnnouncement, member: SchoolMember, user: User) -> dict:
+    author = db.get(User, item.author_user_id)
+    school_class = db.get(SchoolClass, item.class_id) if item.class_id else None
+    return {
+        "id": item.id,
+        "title": item.title,
+        "body": item.body,
+        "class_id": item.class_id,
+        "class_name": school_class.name if school_class else None,
+        "author": author.full_name if author else "",
+        "created_at": item.created_at,
+        "staff_notified": item.staff_notified,
+        "can_delete": item.author_user_id == user.id or _is_director(member),
+    }
+
+
+def _announcement_text(db: Session, item: SchoolAnnouncement, for_parents: bool = False) -> str:
+    school = db.get(PrivateSchool, item.school_id)
+    school_class = db.get(SchoolClass, item.class_id) if item.class_id else None
+    author = db.get(User, item.author_user_id)
+    header = f"📢 «{school.name}»" + (f" · {school_class.name} sinfi" if school_class else "")
+    lines = [header, "", item.title]
+    if item.body:
+        lines += ["", item.body]
+    signature = f"«{school.name}» ma'muriyati" if for_parents else (author.full_name if author else "")
+    lines += ["", f"Hurmat bilan, {signature}" if for_parents else f"— {signature}"]
+    if for_parents:
+        lines.insert(1, "Hurmatli ota-onalar!")
+    return "\n".join(lines)
+
+
+@app.get("/api/schools/announcements")
+def list_announcements(limit: int = 30, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    member = _require_school_member(db, user)
+    items = db.scalars(
+        select(SchoolAnnouncement)
+        .where(SchoolAnnouncement.school_id == member.school_id, SchoolAnnouncement.deleted_at.is_(None))
+        .order_by(SchoolAnnouncement.id.desc())
+        .limit(max(1, min(limit, 100)))
+    ).all()
+    curated = db.scalars(
+        select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None),
+                                  SchoolClass.curator_user_id == user.id)
+    ).all()
+    return {
+        "items": [_announcement_view(db, item, member, user) for item in items],
+        # Butun maktabga — rahbariyat; sinfga — rahbariyat yoki o'sha sinf kuratori
+        "can_post_school": _is_director(member),
+        "post_classes": (
+            [{"id": item.id, "name": item.name} for item in db.scalars(
+                select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None))
+                .order_by(SchoolClass.name))]
+            if _is_director(member)
+            else [{"id": item.id, "name": item.name} for item in curated]
+        ),
+    }
+
+
+@app.post("/api/schools/announcements")
+def create_announcement(body: AnnouncementIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    member = _require_school_member(db, user)
+    school_class = None
+    if body.class_id is None:
+        if not _is_director(member):
+            raise HTTPException(status_code=403, detail="Butun maktabga e'lonni rahbariyat beradi")
+    else:
+        school_class, member = _school_class(db, user, body.class_id)
+        if not (_is_director(member) or school_class.curator_user_id == user.id):
+            raise HTTPException(status_code=403, detail="Sinfga e'lonni rahbariyat yoki sinf kuratori beradi")
+
+    item = SchoolAnnouncement(
+        school_id=member.school_id, class_id=body.class_id, author_user_id=user.id, title=body.title, body=body.body
+    )
+    db.add(item)
+    db.flush()
+
+    if body.notify_staff:
+        # Butun maktab — barcha xodimlarga; sinf — rahbariyat, kurator va o'sha sinfda dars o'tadiganlarga
+        members = [item_member for item_member in member.school.members if item_member.left_at is None]
+        if school_class:
+            teachers = {slot.teacher_user_id for slot in _active_slots(db, class_id=school_class.id)}
+            members = [m for m in members if _is_director(m) or m.user_id == school_class.curator_user_id or m.user_id in teachers]
+        text_message = _announcement_text(db, item)
+        sent = 0
+        for target in members:
+            if target.user_id == user.id or not target.user or not target.user.tg_id:
+                continue
+            _send_result_notice((target.user.tg_id, text_message))
+            sent += 1
+        item.staff_notified = sent
+
+    db.commit()
+    db.refresh(item)
+    logging.getLogger("backend").info("E'lon: id=%s school=%s class=%s staff=%s", item.id, item.school_id, item.class_id, item.staff_notified)
+    return _announcement_view(db, item, member, user)
+
+
+def _visible_announcement(db: Session, user: User, announcement_id: int) -> tuple[SchoolAnnouncement, SchoolMember]:
+    member = _require_school_member(db, user)
+    item = db.get(SchoolAnnouncement, announcement_id)
+    if not item or item.deleted_at is not None or item.school_id != member.school_id:
+        raise HTTPException(status_code=404, detail="E'lon topilmadi")
+    return item, member
+
+
+@app.get("/api/announcements/{announcement_id}/text")
+def announcement_text(announcement_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Ota-onalar guruhiga yuborish uchun matn."""
+    item, _ = _visible_announcement(db, user, announcement_id)
+    return {"text": _announcement_text(db, item, for_parents=True)}
+
+
+@app.delete("/api/announcements/{announcement_id}")
+def delete_announcement(announcement_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    item, member = _visible_announcement(db, user, announcement_id)
+    if not (item.author_user_id == user.id or _is_director(member)):
+        raise HTTPException(status_code=403, detail="E'lonni muallifi yoki rahbariyat o'chiradi")
+    item.deleted_at = utcnow()
+    db.commit()
+    return {"ok": True}
+
+
 def _attendance_context(db: Session, attendance: Attendance) -> dict:
     school_class = db.get(SchoolClass, attendance.class_id)
     school = db.get(PrivateSchool, school_class.school_id)
@@ -10238,7 +10677,7 @@ def _asset_version() -> str:
     """
 
     latest = 0.0
-    for path in (FRONTEND_DIR / "js" / "app.js", FRONTEND_DIR / "css" / "style.css", FRONTEND_DIR / "css" / "theme-pastel.css"):
+    for path in (FRONTEND_DIR / "js" / "app.js", FRONTEND_DIR / "js" / "icons.js", FRONTEND_DIR / "css" / "style.css", FRONTEND_DIR / "css" / "theme-pastel.css", FRONTEND_DIR / "css" / "theme-chittak.css"):
         if path.exists():
             latest = max(latest, path.stat().st_mtime)
     return format(int(latest), "x")
@@ -10354,7 +10793,7 @@ def serve_index():
 
     html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
     version = _asset_version()
-    for asset in ("/js/app.js", "/css/style.css", "/css/theme-pastel.css"):
+    for asset in ("/js/app.js", "/js/icons.js", "/css/style.css", "/css/theme-pastel.css", "/css/theme-chittak.css"):
         html = html.replace(f'"{asset}"', f'"{asset}?v={version}"')
 
     # Fanlar pasporti (backend/subjects.py) — ilova test shablonini va klaviaturani shundan oladi

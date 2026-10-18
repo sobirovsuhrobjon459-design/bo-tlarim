@@ -790,7 +790,83 @@ class TuitionPayment(Base):
     cancel_reason: Mapped[str] = mapped_column(String(300), default="")
 
 
+class LessonSlot(Base):
+    """
+    Dars jadvalidagi bitta dars: qaysi sinf, haftaning qaysi kuni, soat nechadan
+    nechagacha, qaysi fan va (ixtiyoriy) qaysi o'qituvchi. Jadvalni rahbariyat
+    yoki sinf kuratori tuzadi. O'chirilganda bazada qoladi (deleted_at).
+    """
+
+    __tablename__ = "lesson_slots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    class_id: Mapped[int] = mapped_column(ForeignKey("school_classes.id"), index=True)
+    weekday: Mapped[int] = mapped_column()  # 0 — dushanba ... 6 — yakshanba
+    start_time: Mapped[str] = mapped_column(String(5))  # "08:30"
+    end_time: Mapped[str] = mapped_column(String(5))
+    subject: Mapped[str] = mapped_column(String(100), default="")
+    teacher_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
+class SchoolAnnouncement(Base):
+    """
+    Maktab yoki sinf e'loni. Xodimlarga bot orqali yuborilishi mumkin; ota-onalarga
+    esa matn sifatida sinf guruhiga ulashiladi (ota-onalarning Telegram'i tizimda yo'q).
+    O'chirilganda bazada qoladi (deleted_at).
+    """
+
+    __tablename__ = "school_announcements"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    class_id: Mapped[int | None] = mapped_column(ForeignKey("school_classes.id"), index=True, default=None)  # bo'sh — butun maktab
+    author_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text, default="")
+    staff_notified: Mapped[int] = mapped_column(default=0)  # bot orqali nechta xodimga yuborildi
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
 # ========== 4) API so'rov sxemalari (Pydantic) ==========
+
+
+class LessonSlotIn(BaseModel):
+    """Jadvaldagi dars: kun (0 — dushanba), vaqt oralig'i, fan va o'qituvchi."""
+
+    weekday: int = Field(ge=0, le=6)
+    start_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    end_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    subject: str = Field(default="", max_length=100)
+    teacher_user_id: int | None = None
+
+    @model_validator(mode="after")
+    def check_times(self) -> "LessonSlotIn":
+        self.subject = " ".join(self.subject.split())
+        if self.end_time <= self.start_time:
+            raise ValueError("Dars tugash vaqti boshlanishidan keyin bo'lishi kerak")
+        return self
+
+
+class AnnouncementIn(BaseModel):
+    """E'lon: sarlavha, matn, kimga (bo'sh class_id — butun maktab), xodimlarga botda yuborilsinmi."""
+
+    title: str = Field(min_length=2, max_length=200)
+    body: str = Field(default="", max_length=3000)
+    class_id: int | None = None
+    notify_staff: bool = False
+
+    @model_validator(mode="after")
+    def normalize(self) -> "AnnouncementIn":
+        self.title = " ".join(self.title.split())
+        self.body = self.body.strip()
+        if len(self.title) < 2:
+            raise ValueError("E'lon sarlavhasini yozing")
+        return self
 
 
 class TeacherRegisterIn(BaseModel):

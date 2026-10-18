@@ -1,4 +1,4 @@
-// TestWay — Android ilova. Render'dagi Mini App'ni WebView ichida ochadi.
+// Chittak — Android ilova. Render'dagi Mini App'ni WebView ichida ochadi.
 //
 // Telegram ichida bo'lmagani uchun kirish bot orqali tasdiqlanadi (sayt o'zi
 // "Telegram orqali kirish" sahifasini ko'rsatadi). Ilova faqat:
@@ -17,8 +17,8 @@ import 'package:url_launcher/url_launcher.dart';
 const appUrl = 'https://bo-tlarim.onrender.com/';
 final appHost = Uri.parse(appUrl).host;
 
-const _navy = Color(0xFF1B2452);
-const _background = Color(0xFFF6F7FB);
+const _navy = Color(0xFF0B1F2A);
+const _background = Color(0xFFF3FAF5);
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,7 +31,7 @@ class TestWayApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'TestWay',
+      title: 'Chittak',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorSchemeSeed: _navy, scaffoldBackgroundColor: _background),
       home: const WebShell(),

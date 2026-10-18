@@ -18,7 +18,7 @@ const telegram = window.Telegram?.WebApp;
   shu telefonda saqlanadi (X-App-Session header'i bilan yuboriladi).
 */
 const IN_APP = /TestWayApp/i.test(navigator.userAgent);
-// TestWay ilovasining Play Market havolasi — ilova chiqqach shu yerga yoziladi (bo'sh bo'lsa — "tez orada")
+// Chittak ilovasining Play Market havolasi — ilova chiqqach shu yerga yoziladi (bo'sh bo'lsa — "tez orada")
 const APP_DOWNLOAD_URL = "";
 const APP_SESSION_KEY = "app-session";
 let appSession = "";
@@ -61,10 +61,10 @@ function applyTheme() {
   try {
     // Telegram'ning tepa paneli va fon rangi ham ilovaga mos (oq) bo'lsin
     if (telegram?.isVersionAtLeast?.("6.1")) {
-      telegram.setHeaderColor?.("#f2f2fa");
-      telegram.setBackgroundColor?.("#f2f2fa");
+      telegram.setHeaderColor?.("#f3faf5");
+      telegram.setBackgroundColor?.("#f3faf5");
     }
-    if (telegram?.isVersionAtLeast?.("7.10")) telegram.setBottomBarColor?.("#f2f2fa");
+    if (telegram?.isVersionAtLeast?.("7.10")) telegram.setBottomBarColor?.("#f3faf5");
   } catch (_) {
     /* eski Telegram versiyasi */
   }
@@ -855,15 +855,32 @@ function copyCodeChip(code) {
   return `<span class="copy-code" data-copy="${code}"><b>${code}</b>${COPY_ICON}</span>`;
 }
 
-// O'qituvchi bo'limining pastki menyusi: Testlar | Yaratish | Natijalar
-// Pastki menyu ikonkalari — chiziqli SVG (rangi matn rangidan olinadi)
-const NAV_SVG = (path) =>
-  `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+// Asosiy ekranlardagi ikonkalar — Phosphor duotone (icons.js); qisqa nom -> ikonka nomi
+const ICON_NAMES = {
+  school: "buildings",
+  user: "user",
+  users: "users-three",
+  userPlus: "user-plus",
+  clipboard: "clipboard-text",
+  chart: "chart-bar",
+  cash: "money",
+  wallet: "wallet",
+  file: "note-pencil",
+  plus: "plus",
+  layers: "stack",
+  star: "star",
+  calendar: "calendar-blank",
+  megaphone: "megaphone",
+  cap: "graduation-cap",
+  cake: "cake",
+};
+const svgIcon = (name) => phIcon(ICON_NAMES[name] || name);
 
+// O'qituvchi bo'limining pastki menyusi: Testlar | Yaratish | Natijalar
 const TEACHER_TABS = [
-  { id: "tests", label: "Testlar", icon: NAV_SVG('<rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h8M8 16h5"/>') },
-  { id: "create", label: "Yaratish", icon: NAV_SVG('<path d="M12 5v14M5 12h14"/>') },
-  { id: "results", label: "Natijalar", icon: NAV_SVG('<path d="M5 20V11M12 20V5M19 20v-6"/>') },
+  { id: "tests", label: "Testlar", icon: svgIcon("exam") },
+  { id: "create", label: "Yaratish", icon: svgIcon("plus") },
+  { id: "results", label: "Natijalar", icon: svgIcon("chart") },
 ];
 
 function navMarkup() {
@@ -1149,7 +1166,7 @@ document.addEventListener("click", (event) => {
 });
 
 function renderHome(userName, backendOk) {
-  const greeting = userName ? `Xush kelibsiz,<br>${escapeHtml(userName)}` : "Test Platformasiga<br>xush kelibsiz";
+  const greeting = userName ? `Xush kelibsiz,<br>${escapeHtml(userName)}` : "Chittakka<br>xush kelibsiz";
 
   // Hammasi joyida bo'lganda hech narsa ko'rsatilmaydi — faqat haqiqiy xatoda ogohlantirish chiqadi.
   const statusHtml = backendOk ? "" : `<p class="status">Backend bilan aloqa yo'q ❌</p>`;
@@ -1336,7 +1353,7 @@ function renderCreateClass() {
     <p class="subtitle">Sinf yaratgach, sozlamalardan (⚙️) unga kurator tayinlaysiz.</p>
     <label class="field-label" for="class-name-input">Sinf / guruh nomi</label>
     <input class="input" id="class-name-input" maxlength="100" placeholder="Masalan: 10/2, Iqtisod guruhi, Filologiya guruhi" />
-    <button class="btn" id="create-class-button" style="margin-top:14px">➕ Yaratish</button>
+    <button class="btn" id="create-class-button" style="margin-top:14px">+ Yaratish</button>
   `);
 
   document.querySelector('[data-action="back-profile"]').addEventListener("click", () => renderSchoolClasses(currentSchool, "all"));
@@ -1362,9 +1379,9 @@ function renderCreateClass() {
   profilida ham (keyinchalik natijalarda ham) avtomatik bo'ladi.
 */
 const CLASS_TABS = [
-  { id: "students", icon: "👨‍🎓", label: "O'quvchilar" },
-  { id: "attendance", icon: "📋", label: "Davomat" },
-  { id: "results", icon: "📊", label: "Natijalar" },
+  { id: "students", icon: svgIcon("users"), label: "O'quvchilar" },
+  { id: "attendance", icon: svgIcon("clipboard"), label: "Davomat" },
+  { id: "results", icon: svgIcon("chart"), label: "Natijalar" },
 ];
 
 let currentClass = null;
@@ -1479,8 +1496,8 @@ function wireClassTab(schoolClass, tab) {
 // Botda "Varaqni skanerlash" bosilganda: skaner faqat ilovada — yuklab olish taklifi
 function showScannerAppOffer() {
   const { sheet, close } = openSheet(`
-    <h3 style="margin:0 0 10px">📷 Skaner — TestWay ilovasida</h3>
-    <p class="subtitle" style="margin:0 0 12px">Varaqlarni skanerlash uchun TestWay ilovasini (Android) yuklab oling.
+    <h3 style="margin:0 0 10px">📷 Skaner — Chittak ilovasida</h3>
+    <p class="subtitle" style="margin:0 0 12px">Varaqlarni skanerlash uchun Chittak ilovasini (Android) yuklab oling.
       Ilova orqali skaner qila olasiz — testlar, o'quvchilar va natijalar bot bilan bir xil.</p>
     ${
       APP_DOWNLOAD_URL
@@ -1887,14 +1904,14 @@ function renderClassStudentsTab(schoolClass) {
          <p>Sinfda hali o'quvchi yo'q.</p>
          <p class="subtitle">${
            schoolClass.can_manage
-             ? "Tepadagi \"➕ Qo'shish\" bilan o'quvchilarni qo'shing — bittalab yoki Excel'dan bir yo'la. Ular davomatda va boshqa bo'limlarda o'zi chiqadi."
+             ? "Tepadagi \"+ Qo'shish\" bilan o'quvchilarni qo'shing — bittalab yoki Excel'dan bir yo'la. Ular davomatda va boshqa bo'limlarda o'zi chiqadi."
              : "O'quvchilarni sinf kuratori qo'shadi."
          }</p>
        </div>`;
 
   showPage(`
     <div data-class-tab="students">
-      ${classHeader(schoolClass, schoolClass.can_manage ? `<button type="button" class="share-pill" id="add-student-pill">➕ Qo'shish</button>` : "")}
+      ${classHeader(schoolClass, schoolClass.can_manage ? `<button type="button" class="share-pill" id="add-student-pill">+ Qo'shish</button>` : "")}
       <p class="subtitle" style="margin:0 0 10px">${schoolClass.students.length} ta o'quvchi · % — barcha darslar bo'yicha qatnashish (bugungi emas)</p>
       ${
         schoolClass.is_director
@@ -1927,7 +1944,7 @@ function openAddStudentSheet(schoolClass) {
   let addedCount = 0;
   // Oyna yopilganda (Tayyor yoki orqa fonga bosilsa) ro'yxat yangilanadi
   const { sheet, close } = openSheet(`
-    <h3 style="margin:0 0 8px">➕ O'quvchi qo'shish</h3>
+    <h3 style="margin:0 0 8px">+ O'quvchi qo'shish</h3>
     <div class="import-actions">
       <label class="btn btn-ghost import-file-label">
         📄 Excel'dan
@@ -1938,7 +1955,7 @@ function openAddStudentSheet(schoolClass) {
     <p class="subtitle" style="margin:8px 0 8px">yoki bittalab yozing — har biridan keyin maydon tozalanadi:</p>
     <label class="field-label" for="sheet-student-name">Ism-familiya</label>
     <input class="input" id="sheet-student-name" maxlength="200" placeholder="Masalan: Islom Karimov" enterkeyhint="next" />
-    <button class="btn" id="sheet-add-student" style="margin-top:10px">➕ Qo'shish</button>
+    <button class="btn" id="sheet-add-student" style="margin-top:10px">+ Qo'shish</button>
     <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Tayyor</button>
     <p class="subtitle" id="sheet-added" style="margin:8px 0 0"></p>
   `, {
@@ -2057,7 +2074,7 @@ function showImportPreview(schoolClass, preview, sourceLabel) {
     <ol class="import-list">${names.map((name) => `<li>${escapeHtml(name)}</li>`).join("")}</ol>
     ${
       names.length
-        ? `<button class="btn" id="import-confirm" style="margin-top:12px">➕ ${names.length} ta o'quvchini qo'shish</button>`
+        ? `<button class="btn" id="import-confirm" style="margin-top:12px">+ ${names.length} ta o'quvchini qo'shish</button>`
         : ""
     }
     <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
@@ -2157,7 +2174,7 @@ async function renderClassResultsTab(schoolClass) {
   showPage(`
     <div data-class-tab="results">
       ${classHeader(schoolClass)}
-      <button class="btn" id="add-class-test-button">➕ Test natijasini kiritish</button>
+      <button class="btn" id="add-class-test-button">+ Test natijasini kiritish</button>
       <div id="class-tests" style="margin-top:14px"><p class="subtitle">⏳ Yuklanmoqda...</p></div>
     </div>
   `);
@@ -2523,7 +2540,7 @@ function renderAttendanceForm(schoolClass, existing = null) {
     ${attendanceSubjectFieldHtml(existing ? existing.subject : "")}
     <div class="lesson-time">
       <label>Dars boshlandi<input type="time" class="input" id="lesson-start" value="${lesson.start}" required /></label>
-      <span class="lesson-time-dash">—</span>
+      <span class="slot-times-dash">—</span>
       <label>Dars tugadi<input type="time" class="input" id="lesson-end" value="${lesson.end}" required /></label>
     </div>
     <div id="att-counts-host">${attendanceCountsHtml(counts())}</div>
@@ -3483,8 +3500,8 @@ function memberAvatarHtml(member, size = 38) {
   (menyusiz) ekranlarda ochiladi.
 */
 const SCHOOL_TABS = [
-  { id: "school", icon: "🏫", label: "Maktab" },
-  { id: "profile", icon: "👤", label: "Profil" },
+  { id: "school", icon: svgIcon("school"), label: "Maktab" },
+  { id: "profile", icon: svgIcon("user"), label: "Profil" },
 ];
 
 // Oxirgi yuklangan maktab — tablar orasida darhol almashish uchun
@@ -3566,15 +3583,21 @@ function renderMySchool(school, { refresh = true } = {}) {
 
   showPage(`
     <div data-school-tab="school">
-      ${schoolTabHeader(school.name)}
-      <div class="card" style="cursor:default">
-        <div class="card-icon">🏫</div>
-        <div class="card-body">
-          <h3 style="margin:0">${escapeHtml(school.name)}</h3>
-          <p style="margin:4px 0 0">📍 ${escapeHtml(school.region)}, ${escapeHtml(school.district)}</p>
-          <p class="subtitle" style="margin:4px 0 0">👥 ${school.members.length} ta xodim</p>
+      ${schoolTabHeader("Maktab")}
+      <section class="hero-card school-hero">
+        <div class="hero-top">
+          <div class="school-hero-icon">${svgIcon("school")}</div>
+          <div class="hero-who">
+            <small class="hero-kicker">MAKTAB</small>
+            <div class="hero-hello">${escapeHtml(school.name)}</div>
+            <div class="hero-chips">
+              <span class="hero-chip is-sun">${schoolRoleLabel(school)}</span>
+              <span class="hero-chip">📍 ${escapeHtml(school.district)}</span>
+            </div>
+          </div>
         </div>
-      </div>
+        <div class="hero-stats" id="school-stats">${schoolStatsHtml(schoolOverviewCache)}</div>
+      </section>
       ${
         school.my_subjects.length || isOwner(school)
           ? ""
@@ -3599,13 +3622,24 @@ function renderMySchool(school, { refresh = true } = {}) {
              </div>`
       }
 
+      <p class="section-label" style="margin-top:22px">TEZKOR AMALLAR</p>
+      <div class="quick-actions" id="school-quick-actions">${schoolQuickActionsHtml(school, schoolOverviewCache)}</div>
+
+      <div id="school-attention">${schoolAttentionHtml(school, schoolOverviewCache)}</div>
+
       <p class="section-label" style="margin-top:22px">BO'LIMLAR</p>
       <div class="school-tiles">
-        ${schoolMenuItem("classes-mine", "⭐", "Mening sinflarim", '<i class="menu-count" data-count="mine">…</i>')}
-        ${schoolMenuItem("classes-all", "📚", "Barcha sinflar", '<i class="menu-count" data-count="all">…</i>')}
-        ${isLeader(school) ? schoolMenuItem("results", "📊", "Test natijalari", "Sinflar bo'yicha", "wide") : ""}
-        ${schoolMenuItem("teachers", "👥", "Xodimlar", `${school.members.length} ta xodim`, "wide")}
+        ${schoolMenuItem("classes-mine", svgIcon("star"), "Mening sinflarim", '<i class="menu-count" data-count="mine">…</i>')}
+        ${schoolMenuItem("classes-all", svgIcon("layers"), "Barcha sinflar", '<i class="menu-count" data-count="all">…</i>')}
+        <span id="school-schedule-tile" style="display:contents">${schoolScheduleTileHtml(schoolOverviewCache)}</span>
+        ${schoolMenuItem("announcements", svgIcon("megaphone"), "E'lonlar", "Maktab va sinflar")}
+        <span id="school-payments-tile" style="display:contents">${schoolPaymentsTileHtml(schoolOverviewCache)}</span>
+        ${isLeader(school) ? schoolMenuItem("results", svgIcon("chart"), "Test natijalari", "Sinflar bo'yicha", "wide") : ""}
+        ${schoolMenuItem("teachers", svgIcon("users"), "Xodimlar", `${school.members.length} ta xodim`, "wide")}
       </div>
+      <div id="school-announcements">${schoolAnnouncementsHtml(schoolOverviewCache)}</div>
+      <div id="school-chart">${schoolChartHtml(schoolOverviewCache)}</div>
+
 
     </div>
   `);
@@ -3613,20 +3647,1139 @@ function renderMySchool(school, { refresh = true } = {}) {
   wireSchoolTab("school");
   document.querySelector('[data-action="fill-subjects"]')?.addEventListener("click", guarded(() => renderSchoolProfileEdit(school)));
   document.querySelector('[data-action="fill-phone"]')?.addEventListener("click", guarded(() => renderSchoolProfileEdit(school)));
-  document.querySelectorAll("[data-school-menu]").forEach((item) => {
-    item.addEventListener(
+  // Bo'limlar, tezkor amallar va "diqqat" qatorlari — bitta umumiy tinglovchi (keyin qayta chizilsa ham ishlaydi)
+  document.querySelector('[data-school-tab="school"]').addEventListener(
+    "click",
+    guarded(async (event) => {
+      const item = event.target.closest("[data-school-menu]");
+      if (!item) return;
+      await openSchoolMenu(item.dataset.schoolMenu, item.dataset.classId);
+    })
+  );
+  fillClassCounts();
+  loadSchoolOverview();
+  if (refresh) refreshSchoolInBackground("school");
+}
+
+/* ---------- Maktab bosh sahifasi: holat, tezkor amallar, diqqat, grafik ---------- */
+
+// Oxirgi olingan holat — sahifaga qaytilganda darhol chiziladi, yangisi fonda so'raladi
+let schoolOverviewCache = null;
+
+async function openSchoolMenu(target, classId = null) {
+  if (target === "create-class") renderCreateClass();
+  else if (target === "results") await renderSchoolResults();
+  else if (target === "invite-teacher") await inviteTeacher();
+  else if (target === "payments") await openPaymentsEntry();
+  else if (target === "set-fee") openFeeSheet();
+  else if (target === "take-attendance") await pickClassThen("Davomat — sinfni tanlang", attendanceClassChoices(), startAttendanceFor);
+  else if (target === "add-results") await pickClassThen("Test natijasi — sinfni tanlang", attendanceClassChoices(), startClassTestFor);
+  else if (target === "accept-payment") await pickClassThen("To'lov — sinfni tanlang", paymentClassChoices(), (id) => renderClassPayments(id));
+  else if (target === "open-class") await renderClass(Number(classId));
+  else if (target === "class-payments") await renderClassPayments(Number(classId));
+  else if (target === "schedule") await renderSchedule("today");
+  else if (target === "announcements") await renderAnnouncements();
+  else if (target === "new-announcement") await openAnnouncementSheet(null, loadSchoolOverview);
+  else openSchoolTab(target);
+}
+
+async function loadSchoolOverview() {
+  try {
+    const overview = await api("/api/schools/overview");
+    schoolOverviewCache = overview;
+    const page = document.querySelector('[data-school-tab="school"]');
+    if (!page || !currentSchool) return;
+    const fill = (id, html) => {
+      const node = document.getElementById(id);
+      if (node) node.innerHTML = html;
+    };
+    fill("school-stats", schoolStatsHtml(overview));
+    fill("school-quick-actions", schoolQuickActionsHtml(currentSchool, overview));
+    fill("school-attention", schoolAttentionHtml(currentSchool, overview));
+    fill("school-announcements", schoolAnnouncementsHtml(overview));
+    fill("school-chart", schoolChartHtml(overview));
+    fill("school-payments-tile", schoolPaymentsTileHtml(overview));
+    fill("school-schedule-tile", schoolScheduleTileHtml(overview));
+  } catch (_) {
+    /* holat ko'rinmasa ham bo'limlar ishlaydi */
+  }
+}
+
+function schoolRoleLabel(school) {
+  if (school.my_role === "owner") return "Admin";
+  return { director: "Direktor", deputy: "Zam direktor" }[school.my_position] || "O'qituvchi";
+}
+
+function schoolStatsHtml(overview) {
+  const stats = overview?.stats;
+  const value = (number) => (stats ? number : "…");
+  const attendance = stats?.attendance_percent;
+  // To'lovni ko'radiganlarga — qarzdorlar, qolganlarga — bugungi darslar soni
+  const last =
+    stats && stats.debtors !== null && stats.debtors !== undefined
+      ? `<div class="hero-stat${stats.debtors ? " is-warn" : ""}"><b>${stats.debtors}</b><small>qarzdor</small></div>`
+      : `<div class="hero-stat"><b>${value(stats?.lessons_today ?? 0)}</b><small>dars bugun</small></div>`;
+  return `
+    <div class="hero-stat"><b>${value(stats?.students)}</b><small>o'quvchi</small></div>
+    <div class="hero-stat"><b>${value(stats?.classes)}</b><small>sinf</small></div>
+    <div class="hero-stat is-sun"><b>${stats ? (attendance === null ? "—" : `${attendance}%`) : "…"}</b><small>davomat</small></div>
+    ${last}`;
+}
+
+function schoolQuickActionsHtml(school, overview) {
+  const can = overview?.can || { payments: false, create_class: Boolean(school.can_create_classes), invite: isOwner(school) };
+  const actions = [
+    { target: "take-attendance", icon: svgIcon("clipboard"), label: "Davomat" },
+    can.payments ? { target: "accept-payment", icon: svgIcon("cash"), label: "To'lov" } : null,
+    { target: "add-results", icon: svgIcon("file"), label: "Natija" },
+    can.create_class
+      ? { target: "create-class", icon: svgIcon("plus"), label: "Sinf" }
+      : can.invite
+        ? { target: "invite-teacher", icon: svgIcon("userPlus"), label: "Taklif" }
+        : { target: "classes-all", icon: svgIcon("layers"), label: "Sinflar" },
+  ].filter(Boolean);
+  return actions
+    .map(
+      (action) => `
+        <button type="button" class="quick-action" data-school-menu="${action.target}">
+          <span class="quick-action-icon">${action.icon}</span>
+          <span>${action.label}</span>
+        </button>`
+    )
+    .join("");
+}
+
+function schoolAttentionHtml(school, overview) {
+  if (!overview) return "";
+  const items = [];
+  if (overview.needs_fee) {
+    items.push({ target: "set-fee", icon: svgIcon("wallet"), tone: "warn", title: "Oylik to'lov summasi belgilanmagan", note: "Belgilang — keyin to'lovlar va qarzdorlar hisoblanadi" });
+  }
+  const missing = overview.missing_attendance || [];
+  if (missing.length === 1) {
+    items.push({ target: "open-class", classId: missing[0].id, icon: svgIcon("clipboard"), tone: "warn", title: `Bugun ${escapeHtml(missing[0].name)} sinfida davomat olinmagan`, note: "Bosing — sinf ochiladi" });
+  } else if (missing.length > 1) {
+    const names = missing.slice(0, 4).map((item) => escapeHtml(item.name)).join(", ") + (missing.length > 4 ? "…" : "");
+    items.push({ target: "take-attendance", icon: svgIcon("clipboard"), tone: "warn", title: `Bugun ${missing.length} ta sinfda davomat olinmagan`, note: names });
+  }
+  const stats = overview.stats || {};
+  if (stats.debtors) {
+    items.push({
+      target: "payments",
+      icon: svgIcon("cash"),
+      tone: "danger",
+      title: `${stats.debtors} ta o'quvchi ${overview.month_label.split(" ")[0].toLowerCase()} uchun to'liq to'lamagan`,
+      note: `Jami qarz: ${formatNumber(stats.debt_sum)} so'm`,
+    });
+  }
+  if (overview.classes_without_curator) {
+    items.push({ target: "classes-all", icon: svgIcon("cap"), tone: "info", title: `${overview.classes_without_curator} ta sinfga kurator tayinlanmagan`, note: "Sinf sozlamalaridan kurator tanlang" });
+  }
+  const birthdays = overview.birthdays || [];
+  if (birthdays.length) {
+    const names = birthdays.slice(0, 3).map((item) => escapeHtml(item.name) + (item.class_name ? ` (${escapeHtml(item.class_name)})` : "")).join(", ");
+    items.push({
+      target: birthdays.length === 1 && birthdays[0].kind === "staff" ? "teachers" : "classes-all",
+      icon: svgIcon("cake"),
+      tone: "party",
+      title: birthdays.length === 1 ? "Bugun tug'ilgan kun!" : `Bugun ${birthdays.length} kishining tug'ilgan kuni`,
+      note: names + (birthdays.length > 3 ? "…" : "") + " — tabriklashni unutmang",
+    });
+  }
+  if (!items.length) {
+    return `
+      <div class="attention-ok">
+        <span>✅</span>
+        <span><b>Hammasi joyida</b><small>Bugun e'tibor talab qiladigan narsa yo'q</small></span>
+      </div>`;
+  }
+  return `
+    <p class="section-label" style="margin-top:22px">DIQQAT TALAB QILADI</p>
+    <div class="attention-list">
+      ${items
+        .map(
+          (item) => `
+            <button type="button" class="attention-item is-${item.tone || "info"}" data-school-menu="${item.target}"${
+              item.classId ? ` data-class-id="${item.classId}"` : ""
+            }>
+              <span class="attention-icon">${item.icon}</span>
+              <span class="attention-text"><b>${item.title}</b><small>${item.note}</small></span>
+              <span class="attention-arrow">›</span>
+            </button>`
+        )
+        .join("")}
+    </div>`;
+}
+
+// Oylar bo'yicha o'rtacha test natijasi — oddiy ustunli grafik (kutubxonasiz)
+function schoolChartHtml(overview) {
+  const rows = overview?.chart || [];
+  if (!rows.some((row) => row.average !== null)) return "";
+  const known = rows.filter((row) => row.average !== null);
+  const last = known[known.length - 1];
+  const previous = known[known.length - 2];
+  const trend = previous ? Math.round((last.average - previous.average) * 10) / 10 : null;
+  const trendHtml =
+    trend === null
+      ? ""
+      : `<span class="chart-trend ${trend >= 0 ? "is-up" : "is-down"}">${trend >= 0 ? "▲" : "▼"} ${Math.abs(trend)}%</span>`;
+  const bars = rows
+    .map((row) => {
+      const height = row.average === null ? 0 : Math.max(4, Math.round(row.average * 0.78)); // yozuvlarga joy qoladi
+      const isLast = row === last;
+      return `
+        <div class="chart-col${isLast ? " is-current" : ""}" title="${row.tests} ta test">
+          <span class="chart-value">${row.average === null ? "" : Math.round(row.average)}</span>
+          <span class="chart-bar" style="height:${height}%"></span>
+          <span class="chart-label">${row.label}</span>
+        </div>`;
+    })
+    .join("");
+  return `
+    <p class="section-label" style="margin-top:22px">TEST NATIJALARI</p>
+    <div class="panel school-chart">
+      <div class="school-chart-head">
+        <div><b>${Math.round(last.average)}%</b><small>o'rtacha natija · ${escapeHtml(last.label)}</small></div>
+        ${trendHtml}
+      </div>
+      <div class="chart-bars">${bars}</div>
+      <p class="subtitle" style="margin:8px 0 0;font-size:12px">${
+        overview.can?.results ? "Barcha sinflarning test natijalari, oylar bo'yicha" : "Siz kiritgan test natijalari, oylar bo'yicha"
+      }</p>
+    </div>`;
+}
+
+function schoolPaymentsTileHtml(overview) {
+  if (!overview?.can?.payments) return "";
+  const stats = overview.stats || {};
+  const note = overview.needs_fee
+    ? "Summa belgilanmagan"
+    : stats.debtors
+      ? `${stats.debtors} qarzdor · ${formatNumber(stats.debt_sum)} so'm`
+      : "Qarzdor yo'q";
+  return schoolMenuItem("payments", svgIcon("wallet"), "O'quvchi to'lovlari", note, "wide");
+}
+
+// Sinf tanlash oynasi — bitta sinf bo'lsa darhol o'tadi
+async function pickClassThen(title, choicesPromise, onPick) {
+  const choices = await choicesPromise;
+  if (!choices.length) {
+    showToast("Sizda hali sinf yo'q");
+    return;
+  }
+  if (choices.length === 1) {
+    await onPick(choices[0].id);
+    return;
+  }
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 12px">${escapeHtml(title)}</h3>
+    <div class="panel pick-list" style="max-height:55vh;overflow:auto">
+      ${choices
+        .map(
+          (item) => `
+            <button type="button" class="pick-item" data-pick-class="${item.id}">
+              <span class="pick-title">${item.star ? "⭐ " : ""}${escapeHtml(item.name)}${item.note ? `<small>${escapeHtml(item.note)}</small>` : ""}</span>
+              <span>›</span>
+            </button>`
+        )
+        .join("")}
+    </div>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:12px">Yopish</button>
+  `);
+  sheet.querySelectorAll("[data-pick-class]").forEach((button) => {
+    button.addEventListener(
       "click",
       guarded(async () => {
-        const target = item.dataset.schoolMenu;
-        if (target === "create-class") renderCreateClass();
-        else if (target === "results") await renderSchoolResults();
-        else if (target === "invite-teacher") await inviteTeacher();
-        else openSchoolTab(target);
+        close();
+        await onPick(Number(button.dataset.pickClass));
       })
     );
   });
-  fillClassCounts();
-  if (refresh) refreshSchoolInBackground("school");
+}
+
+// Davomat va natija uchun: maktabdagi barcha sinflar (o'zinikilar tepada)
+async function attendanceClassChoices() {
+  if (!myClassesCache) myClassesCache = await api("/api/classes");
+  return myClassesCache.map((item) => ({
+    id: item.id,
+    name: item.name,
+    star: item.is_curator,
+    note: item.students_count ? `${item.students_count} ta o'quvchi` : "O'quvchi yo'q",
+  }));
+}
+
+// To'lov uchun: faqat ruxsat bor sinflar (rahbariyat — hammasi, kurator — o'ziniki)
+async function paymentClassChoices() {
+  if (!schoolOverviewCache) schoolOverviewCache = await api("/api/schools/overview");
+  return schoolOverviewCache.payment_classes || [];
+}
+
+async function startAttendanceFor(classId) {
+  const schoolClass = await api(`/api/classes/${classId}`);
+  currentClass = schoolClass;
+  classDetailCache.set(schoolClass.id, schoolClass);
+  if (!schoolClass.students.length) {
+    showToast("Sinfda hali o'quvchi yo'q");
+    openClassTab(schoolClass, "students");
+    return;
+  }
+  renderAttendanceForm(schoolClass);
+}
+
+async function startClassTestFor(classId) {
+  const schoolClass = await api(`/api/classes/${classId}`);
+  currentClass = schoolClass;
+  classDetailCache.set(schoolClass.id, schoolClass);
+  if (!schoolClass.students.length) {
+    showToast("Sinfda hali o'quvchi yo'q");
+    openClassTab(schoolClass, "students");
+    return;
+  }
+  renderClassTestForm(schoolClass);
+}
+
+/* ---------- 💰 O'quvchi to'lovlari ---------- */
+
+const PAYMENT_STATUS = {
+  paid: { label: "To'lagan", tone: "good" },
+  partial: { label: "Qisman", tone: "mid" },
+  unpaid: { label: "To'lamagan", tone: "low" },
+  free: { label: "Bepul", tone: "none" },
+};
+const PAYMENT_METHOD_LABELS = { cash: "Naqd", card: "Karta", transfer: "O'tkazma" };
+
+function money(value) {
+  return `${formatNumber(value || 0)} so'm`;
+}
+
+function shiftMonth(month, delta) {
+  const [year, number] = month.split("-").map(Number);
+  const index = year * 12 + number - 1 + delta;
+  return `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, "0")}`;
+}
+
+// "💰 To'lovlar" bo'limi: rahbariyat — umumiy hisobot, kurator — o'z sinfi
+async function openPaymentsEntry() {
+  if (currentSchool?.can_set_fee) {
+    await renderPaymentsSummary();
+    return;
+  }
+  await pickClassThen("To'lovlar — sinfni tanlang", paymentClassChoices(), (id) => renderClassPayments(id));
+}
+
+function openFeeSheet(onSaved = null) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 6px">💰 Oylik to'lov summasi</h3>
+    <p class="subtitle" style="margin:0 0 12px">Barcha o'quvchilar uchun bitta summa. Chegirmani har bir o'quvchiga alohida berasiz.</p>
+    <label class="field-label" for="fee-input">Oyiga (so'm)</label>
+    <input class="input" id="fee-input" type="number" inputmode="numeric" min="0" step="10000" value="${currentSchool?.monthly_fee || ""}" placeholder="Masalan: 450000" />
+    <button class="btn" id="fee-save-button" style="margin-top:12px">💾 Saqlash</button>
+    <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
+  `);
+  sheet.querySelector("#fee-save-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const value = Number(sheet.querySelector("#fee-input").value);
+      if (!Number.isFinite(value) || value < 0) throw new Error("Summani to'g'ri kiriting");
+      const { school } = await api("/api/schools/fee", { method: "PUT", body: { monthly_fee: Math.round(value) } });
+      currentSchool = school;
+      schoolOverviewCache = null;
+      close();
+      showToast(`✅ Oylik to'lov: ${money(school.monthly_fee)}`);
+      if (onSaved) await onSaved();
+      else renderMySchool(school, { refresh: false });
+    })
+  );
+}
+
+function paymentTotalsHtml(totals, extra = "") {
+  const collected = totals.due ? Math.round((totals.paid / totals.due) * 100) : 0;
+  return `
+    <section class="hero-card payments-hero">
+      <div class="payments-hero-top">
+        <div><small>Tushgan</small><b>${money(totals.paid)}</b></div>
+        <span class="hero-chip is-sun">${collected}%</span>
+      </div>
+      <div class="payments-progress"><span style="width:${Math.min(collected, 100)}%"></span></div>
+      <div class="hero-stats payments-stats">
+        <div class="hero-stat"><b>${formatNumber(totals.due)}</b><small>kutilgan</small></div>
+        <div class="hero-stat is-warn"><b>${formatNumber(totals.remaining)}</b><small>qarz</small></div>
+        <div class="hero-stat"><b>${totals.debtors}</b><small>qarzdor</small></div>
+      </div>
+      ${extra}
+    </section>`;
+}
+
+function monthSwitchHtml(month, label) {
+  return `
+    <div class="month-switch">
+      <button type="button" class="icon-button" data-month="${shiftMonth(month, -1)}" aria-label="Oldingi oy">‹</button>
+      <b>${escapeHtml(label)}</b>
+      <button type="button" class="icon-button" data-month="${shiftMonth(month, 1)}" aria-label="Keyingi oy">›</button>
+    </div>`;
+}
+
+// Rahbariyat uchun: maktab bo'yicha oylik hisobot
+async function renderPaymentsSummary(month = null) {
+  const summary = await api(`/api/schools/payments/summary${month ? `?month=${month}` : ""}`);
+  const rows = summary.classes.length
+    ? summary.classes
+        .map(
+          (row) => `
+            <button type="button" class="student-card" data-class-payments="${row.id}">
+              <span class="student-avatar is-class">${escapeHtml(row.name.slice(0, 4))}</span>
+              <span class="student-info">
+                <b>${escapeHtml(row.name)}</b>
+                <small>${row.students} o'quvchi · tushgan ${formatNumber(row.paid)} / ${formatNumber(row.due)}</small>
+              </span>
+              ${
+                row.debtors
+                  ? `<span class="rate-badge low">${row.debtors} qarzdor</span>`
+                  : `<span class="rate-badge good">✓</span>`
+              }
+            </button>`
+        )
+        .join("")
+    : `<div class="empty-state"><div style="font-size:42px">📚</div><p>Maktabda hali sinf yo'q.</p></div>`;
+
+  showPage(`
+    <div data-school-tab="payments">
+      ${schoolSubHeader("O'quvchi to'lovlari")}
+      ${monthSwitchHtml(summary.month, summary.month_label)}
+      ${
+        summary.monthly_fee
+          ? paymentTotalsHtml(summary.totals)
+          : `<div class="card warning-card" data-action="set-fee"><div class="card-icon">💰</div><div class="card-body">
+               <h3 style="margin:0">Oylik to'lov summasi belgilanmagan</h3>
+               <p style="margin:4px 0 0">Avval summani belgilang — keyin qarzdorlar hisoblanadi.</p></div></div>`
+      }
+      <button type="button" class="btn btn-ghost" data-action="set-fee" style="margin:0 0 14px">⚙️ Oylik summa: ${
+        summary.monthly_fee ? money(summary.monthly_fee) : "belgilanmagan"
+      }</button>
+      <p class="section-label">SINFLAR BO'YICHA</p>
+      <div class="student-list">${rows}</div>
+    </div>
+  `);
+
+  wireSchoolSubPage();
+  document.querySelectorAll('[data-action="set-fee"]').forEach((button) =>
+    button.addEventListener("click", () => openFeeSheet(() => renderPaymentsSummary(summary.month)))
+  );
+  document.querySelectorAll("[data-month]").forEach((button) =>
+    button.addEventListener("click", guarded(() => renderPaymentsSummary(button.dataset.month)))
+  );
+  document.querySelectorAll("[data-class-payments]").forEach((button) =>
+    button.addEventListener("click", guarded(() => renderClassPayments(Number(button.dataset.classPayments), summary.month)))
+  );
+}
+
+// Sinf to'lovlari: oy bo'yicha holat, qarzdorlar tepada
+async function renderClassPayments(classId, month = null) {
+  const info = await api(`/api/classes/${classId}/payments${month ? `?month=${month}` : ""}`);
+  const rows = info.students.length
+    ? info.students
+        .map((row) => {
+          const status = PAYMENT_STATUS[row.status] || PAYMENT_STATUS.unpaid;
+          const note =
+            row.status === "paid"
+              ? `${money(row.paid)} to'langan`
+              : row.status === "free"
+                ? "To'lovdan ozod"
+                : `Qoldi: ${money(row.remaining)}${row.paid ? ` · to'langan ${formatNumber(row.paid)}` : ""}`;
+          return `
+            <button type="button" class="student-card" data-student-payments="${row.id}">
+              <span class="student-avatar">${initials(row.name)}</span>
+              <span class="student-info">
+                <b>${escapeHtml(row.name)}</b>
+                <small>${note}${row.discount ? ` · chegirma ${row.discount}%` : ""}</small>
+              </span>
+              <span class="rate-badge ${status.tone}">${status.label}</span>
+            </button>`;
+        })
+        .join("")
+    : `<div class="empty-state"><div style="font-size:42px">👨‍🎓</div><p>Sinfda hali o'quvchi yo'q.</p></div>`;
+
+  showPage(`
+    <div data-school-tab="class-payments">
+      ${schoolPageHeader(`To'lovlar — ${info.class_name}`, "back-payments")}
+      ${monthSwitchHtml(info.month, info.month_label)}
+      ${
+        info.monthly_fee
+          ? paymentTotalsHtml(
+              info.totals,
+              info.totals.debtors ? `<button type="button" class="btn btn-sun" id="copy-debtors-button">📋 Qarzdorlar ro'yxatini yuborish</button>` : ""
+            )
+          : `<div class="notice">Maktabning oylik to'lov summasi hali belgilanmagan — uni admin yoki direktor belgilaydi.</div>`
+      }
+      <p class="section-label">O'QUVCHILAR</p>
+      <div class="student-list">${rows}</div>
+    </div>
+  `);
+
+  hideSchoolNavs();
+  document.querySelector('[data-action="back-payments"]').addEventListener(
+    "click",
+    guarded(async () => {
+      if (currentSchool?.can_set_fee) await renderPaymentsSummary(info.month);
+      else renderMySchool(currentSchool);
+    })
+  );
+  document.querySelectorAll("[data-month]").forEach((button) =>
+    button.addEventListener("click", guarded(() => renderClassPayments(classId, button.dataset.month)))
+  );
+  document.getElementById("copy-debtors-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const { text } = await api(`/api/classes/${classId}/debtors?month=${info.month}`);
+      shareText(text, "📋 Qarzdorlar ro'yxati nusxalandi");
+    })
+  );
+  document.querySelectorAll("[data-student-payments]").forEach((button) =>
+    button.addEventListener("click", guarded(() => renderStudentPayments(classId, Number(button.dataset.studentPayments), info.month)))
+  );
+}
+
+// Matnni Telegram orqali ulashish (bo'lmasa — nusxalash)
+function shareText(text, copiedMessage) {
+  if (telegram?.openTelegramLink) {
+    openExternalLink(`https://t.me/share/url?url=${encodeURIComponent(" ")}&text=${encodeURIComponent(text)}`);
+  } else {
+    copyToClipboard(text, copiedMessage);
+  }
+}
+
+function hideSchoolNavs() {
+  document.querySelectorAll("#school-nav-host, #class-nav-host").forEach((host) => (host.hidden = true));
+}
+
+// O'quvchi to'lovlari: oylar, umumiy qarz, to'lov qabul qilish, cheklar
+async function renderStudentPayments(classId, studentId, backMonth = null) {
+  const info = await api(`/api/classes/${classId}/students/${studentId}/payments`);
+  const debtMonths = info.months.filter((row) => row.remaining > 0);
+
+  const monthsHtml = info.months
+    .map((row) => {
+      const status = PAYMENT_STATUS[row.status] || PAYMENT_STATUS.unpaid;
+      return `
+        <div class="pay-month">
+          <span><b>${escapeHtml(row.label)}</b><small>${
+            row.status === "paid" ? money(row.paid) : row.status === "free" ? "—" : `qoldi ${money(row.remaining)}`
+          }</small></span>
+          <span class="rate-badge ${status.tone}">${status.label}</span>
+        </div>`;
+    })
+    .join("");
+
+  const historyHtml = info.payments.length
+    ? info.payments
+        .map(
+          (payment) => `
+            <div class="pay-history${payment.cancelled ? " is-cancelled" : ""}">
+              <div class="pay-history-main">
+                <b>№ ${payment.receipt_no} · ${money(payment.amount)}</b>
+                <small>${escapeHtml(payment.month_label)} · ${escapeHtml(payment.method_label)} · ${escapeHtml(dateLabel(payment.paid_on))} · ${escapeHtml(payment.created_by)}</small>
+                ${payment.cancelled ? `<small class="danger-text">Bekor qilingan: ${escapeHtml(payment.cancel_reason)}</small>` : ""}
+              </div>
+              <div class="pay-history-actions">
+                <button type="button" class="share-pill" data-receipt="${payment.id}">🧾 Chek</button>
+                ${payment.cancelled ? "" : `<button type="button" class="share-pill" data-cancel-payment="${payment.id}">✖</button>`}
+              </div>
+            </div>`
+        )
+        .join("")
+    : `<p class="subtitle" style="margin:6px 0 0">Hali to'lov qilinmagan.</p>`;
+
+  showPage(`
+    <div data-school-tab="student-payments">
+      ${schoolPageHeader(info.student.name, "back-class-payments")}
+      <p class="subtitle" style="margin:-4px 0 12px">${escapeHtml(info.student.class_name)} sinfi · oyiga ${money(info.due)}${
+        info.discount ? ` (chegirma ${info.discount}%)` : ""
+      }</p>
+      <section class="hero-card payments-hero">
+        <div class="payments-hero-top">
+          <div><small>Umumiy qarz</small><b>${money(info.total_debt)}</b></div>
+          <span class="hero-chip ${info.total_debt ? "" : "is-sun"}">${info.total_debt ? `${debtMonths.length} oy` : "Qarz yo'q"}</span>
+        </div>
+        ${info.monthly_fee ? `<button type="button" class="btn btn-sun" id="accept-payment-button">💵 To'lov qabul qilish</button>` : ""}
+      </section>
+      <div class="two-buttons">
+        <button type="button" class="btn btn-ghost" id="discount-button">🏷 Chegirma: ${info.discount}%</button>
+        ${info.total_debt ? `<button type="button" class="btn btn-ghost" id="reminder-button">✉️ Eslatma</button>` : ""}
+      </div>
+      <p class="section-label" style="margin-top:18px">OYLAR</p>
+      <div class="panel pay-months">${monthsHtml}</div>
+      <p class="section-label" style="margin-top:18px">TO'LOVLAR TARIXI</p>
+      <div class="pay-history-list">${historyHtml}</div>
+    </div>
+  `);
+
+  hideSchoolNavs();
+  const reload = () => renderStudentPayments(classId, studentId, backMonth);
+  document.querySelector('[data-action="back-class-payments"]').addEventListener(
+    "click",
+    guarded(() => renderClassPayments(classId, backMonth))
+  );
+  document.getElementById("accept-payment-button")?.addEventListener("click", () => openPaymentSheet(classId, info, reload));
+  document.getElementById("discount-button").addEventListener("click", () => openDiscountSheet(classId, info, reload));
+  document.getElementById("reminder-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const { text } = await api(`/api/classes/${classId}/students/${studentId}/reminder`);
+      shareText(text, "📋 Eslatma matni nusxalandi — ota-onaga yuboring");
+    })
+  );
+  document.querySelectorAll("[data-receipt]").forEach((button) =>
+    button.addEventListener("click", guarded(() => sendReceipt(Number(button.dataset.receipt))))
+  );
+  document.querySelectorAll("[data-cancel-payment]").forEach((button) =>
+    button.addEventListener("click", () => openCancelPaymentSheet(Number(button.dataset.cancelPayment), reload))
+  );
+}
+
+async function sendReceipt(paymentId) {
+  if (sendsViaBot()) {
+    await api(`/api/payments/${paymentId}/send`, { method: "POST", body: {} });
+    showToast("✅ Chek bot chatiga yuborildi — u yerdan ota-onaga uzating");
+  } else {
+    await downloadFile(`/api/payments/${paymentId}/receipt`, `chek_${paymentId}.png`);
+  }
+}
+
+function openPaymentSheet(classId, info, onDone) {
+  // Eng eski qarzli oy tanlanadi; qarz bo'lmasa — keyingi oy uchun oldindan to'lov
+  const debts = info.months.filter((row) => row.remaining > 0).reverse();
+  const current = info.months[0]?.month || new Date().toISOString().slice(0, 7);
+  const options = debts.length
+    ? debts
+    : [1, 2, 3].map((delta) => ({ month: shiftMonth(current, delta), label: shiftMonth(current, delta), remaining: info.due }));
+  const today = new Date().toISOString().slice(0, 10);
+
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 12px">💵 To'lov — ${escapeHtml(info.student.name)}</h3>
+    <label class="field-label" for="pay-month">Qaysi oy uchun</label>
+    <select id="pay-month">
+      ${options.map((row) => `<option value="${row.month}" data-remaining="${row.remaining}">${escapeHtml(row.label)} — qoldi ${formatNumber(row.remaining)}</option>`).join("")}
+    </select>
+    <label class="field-label" for="pay-amount">Summa (so'm)</label>
+    <input class="input" id="pay-amount" type="number" inputmode="numeric" min="1" value="${options[0]?.remaining || ""}" />
+    <label class="field-label">To'lov usuli</label>
+    <div class="choice-toggle" id="pay-method">
+      ${Object.entries(PAYMENT_METHOD_LABELS)
+        .map(([id, label], index) => `<button type="button" data-method="${id}"${index === 0 ? ' class="active"' : ""}>${label}</button>`)
+        .join("")}
+    </div>
+    <label class="field-label" for="pay-date">Sana</label>
+    <input class="input" id="pay-date" type="date" value="${today}" max="${today}" />
+    <label class="field-label" for="pay-note">Izoh (ixtiyoriy)</label>
+    <input class="input" id="pay-note" maxlength="300" placeholder="Masalan: onasi olib keldi" />
+    <button class="btn" id="pay-save-button" style="margin-top:14px">✅ Qabul qilish</button>
+    <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
+  `);
+
+  let method = "cash";
+  sheet.querySelector("#pay-month").addEventListener("change", (event) => {
+    sheet.querySelector("#pay-amount").value = event.target.selectedOptions[0].dataset.remaining;
+  });
+  sheet.querySelector("#pay-method").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-method]");
+    if (!button) return;
+    method = button.dataset.method;
+    sheet.querySelectorAll("#pay-method [data-method]").forEach((item) => item.classList.toggle("active", item === button));
+  });
+  sheet.querySelector("#pay-save-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const amount = Math.round(Number(sheet.querySelector("#pay-amount").value));
+      if (!amount || amount <= 0) throw new Error("Summani kiriting");
+      const result = await api(`/api/classes/${classId}/students/${info.student.id}/payments`, {
+        method: "POST",
+        body: {
+          month: sheet.querySelector("#pay-month").value,
+          amount,
+          method,
+          paid_on: sheet.querySelector("#pay-date").value || today,
+          note: sheet.querySelector("#pay-note").value.trim(),
+        },
+      });
+      schoolOverviewCache = null;
+      close();
+      await onDone();
+      openPaymentDoneSheet(result.payment);
+    })
+  );
+}
+
+// To'lov qabul qilingandan keyin: chekni darhol ota-onaga yuborish taklifi
+function openPaymentDoneSheet(payment) {
+  const { sheet, close } = openSheet(`
+    <div style="text-align:center;padding:4px 0 8px">
+      <div style="font-size:46px">✅</div>
+      <h3 style="margin:6px 0 4px">${money(payment.amount)} qabul qilindi</h3>
+      <p class="subtitle" style="margin:0">Chek № ${payment.receipt_no} · ${escapeHtml(payment.month_label)} · ${escapeHtml(payment.method_label)}</p>
+    </div>
+    <button class="btn" id="done-receipt-button">🧾 Chekni ota-onaga yuborish</button>
+    <button class="btn btn-ghost" data-sheet-close>Yopish</button>
+  `);
+  sheet.querySelector("#done-receipt-button").addEventListener(
+    "click",
+    guarded(async () => {
+      await sendReceipt(payment.id);
+      close();
+    })
+  );
+}
+
+function openDiscountSheet(classId, info, onDone) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 6px">🏷 Chegirma — ${escapeHtml(info.student.name)}</h3>
+    <p class="subtitle" style="margin:0 0 12px">Oylik summa: ${money(info.monthly_fee)}. 100% — to'lovdan to'liq ozod.</p>
+    <div class="choice-toggle" id="discount-presets">
+      ${[0, 10, 20, 30, 50, 100].map((value) => `<button type="button" data-percent="${value}"${value === info.discount ? ' class="active"' : ""}>${value}%</button>`).join("")}
+    </div>
+    <label class="field-label" for="discount-input">Yoki o'zingiz kiriting (%)</label>
+    <input class="input" id="discount-input" type="number" min="0" max="100" value="${info.discount}" />
+    <button class="btn" id="discount-save-button" style="margin-top:12px">💾 Saqlash</button>
+    <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
+  `);
+  sheet.querySelector("#discount-presets").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-percent]");
+    if (!button) return;
+    sheet.querySelector("#discount-input").value = button.dataset.percent;
+    sheet.querySelectorAll("#discount-presets [data-percent]").forEach((item) => item.classList.toggle("active", item === button));
+  });
+  sheet.querySelector("#discount-save-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const percent = Math.round(Number(sheet.querySelector("#discount-input").value));
+      if (!(percent >= 0 && percent <= 100)) throw new Error("Chegirma 0 dan 100 gacha bo'ladi");
+      await api(`/api/classes/${classId}/students/${info.student.id}/discount`, { method: "PUT", body: { percent } });
+      schoolOverviewCache = null;
+      close();
+      showToast(`✅ Chegirma: ${percent}%`);
+      await onDone();
+    })
+  );
+}
+
+function openCancelPaymentSheet(paymentId, onDone) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 6px">✖ To'lovni bekor qilish</h3>
+    <p class="subtitle" style="margin:0 0 12px">To'lov o'chirilmaydi — sababi bilan tarixda qoladi.</p>
+    <label class="field-label" for="cancel-reason">Sababi</label>
+    <input class="input" id="cancel-reason" maxlength="300" placeholder="Masalan: summa xato kiritildi" />
+    <button class="btn btn-danger" id="cancel-save-button" style="margin-top:12px">Bekor qilish</button>
+    <button class="btn btn-ghost" data-sheet-close>Yopish</button>
+  `);
+  sheet.querySelector("#cancel-save-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const reason = sheet.querySelector("#cancel-reason").value.trim();
+      if (reason.length < 3) throw new Error("Sababini yozing");
+      await api(`/api/payments/${paymentId}/cancel`, { method: "POST", body: { reason } });
+      schoolOverviewCache = null;
+      close();
+      showToast("To'lov bekor qilindi");
+      await onDone();
+    })
+  );
+}
+
+/* ---------- 📅 Bugungi darslar va 📢 e'lonlar ---------- */
+
+const LESSON_STATE = {
+  now: { label: "Hozir", tone: "is-now" },
+  next: { label: "Keyin", tone: "is-next" },
+  done: { label: "Tugadi", tone: "is-done" },
+};
+
+function schoolScheduleTileHtml(overview) {
+  const count = overview?.stats?.lessons_today;
+  const note = overview ? (count ? `Bugun ${count} ta dars` : "Bugun dars yo'q") : "Bugun va haftalik";
+  return schoolMenuItem("schedule", svgIcon("calendar"), "Dars jadvali", note);
+}
+
+function todayLessonsHtml(overview) {
+  const lessons = overview.today_lessons || [];
+  if (!lessons.length) {
+    return `
+      <div class="panel today-empty" style="margin-top:16px">
+        <span>📅</span>
+        <span><b>Bugun ${escapeHtml((overview.weekday_label || "").toLowerCase())} — darslar yo'q</b><small>${
+          overview.can?.schedule ? "Jadval tuzilmagan bo'lsa, \"Sinflar\" bo'limida tuzing" : "Haftalik jadval — \"Mening\" bo'limida"
+        }</small></span>
+      </div>`;
+  }
+  const rows = lessons.map((lesson) => {
+    const state = LESSON_STATE[lesson.state] || LESSON_STATE.next;
+    // Dars boshlangan yoki tugagan, davomat olinmagan — shu yerdan olish mumkin
+    const action = lesson.attendance_taken
+      ? `<span class="lesson-done">✓ Davomat</span>`
+      : lesson.state !== "next"
+        ? `<button type="button" class="share-pill lesson-take" data-take-class="${lesson.class_id}">📋 Olish</button>`
+        : `<span class="lesson-state ${state.tone}">${state.label}</span>`;
+    return `
+      <div class="lesson-row ${state.tone}${lesson.mine ? " is-mine" : ""}">
+        <span class="lesson-time"><b>${lesson.start_time}</b><small>${lesson.end_time}</small></span>
+        <span class="lesson-info">
+          <b>${escapeHtml(lesson.subject || "Dars")} · ${escapeHtml(lesson.class_name)}</b>
+          <small>${lesson.teacher_name ? escapeHtml(lesson.teacher_name) : "O'qituvchi belgilanmagan"}${lesson.state === "now" ? " · hozir" : ""}</small>
+        </span>
+        ${action}
+      </div>`;
+  });
+  return `
+    <p class="section-label" style="margin-top:16px">${escapeHtml((overview.weekday_label || "").toUpperCase())} · ${lessons.length} TA DARS</p>
+    <div class="panel lesson-list">${rows.join("")}</div>`;
+}
+
+function schoolAnnouncementsHtml(overview) {
+  if (!overview) return "";
+  const items = overview.announcements || [];
+  if (!items.length && !overview.can?.announce) return "";
+  const cards = items
+    .map(
+      (item) => `
+        <button type="button" class="announce-card" data-school-menu="announcements">
+          <span class="announce-tag">${item.class_name ? escapeHtml(item.class_name) : "Maktab"}</span>
+          <b>${escapeHtml(item.title)}</b>
+          ${item.body ? `<small>${escapeHtml(item.body.length > 90 ? `${item.body.slice(0, 90)}…` : item.body)}</small>` : ""}
+          <em>${escapeHtml(item.author)} · ${escapeHtml(dayLabel(item.created_at))}</em>
+        </button>`
+    )
+    .join("");
+  return `
+    <div class="section-row" style="margin:22px 0 10px">
+      <p class="section-label" style="margin:0">E'LONLAR</p>
+      ${overview.can?.announce ? `<button type="button" class="share-pill" data-school-menu="new-announcement">+ E'lon</button>` : ""}
+    </div>
+    ${cards || `<p class="subtitle" style="margin:0">Hali e'lon yo'q. Ota-onalar majlisi, tadbir yoki o'zgarish haqida yozing.</p>`}
+    ${items.length ? `<button type="button" class="link-button" data-school-menu="announcements">Barcha e'lonlar ›</button>` : ""}`;
+}
+
+/* ---------- 📅 Sinf jadvali ---------- */
+
+const WEEKDAY_NAMES = ["Dushanba", "Seshanba", "Chorshanba", "Payshanba", "Juma", "Shanba", "Yakshanba"];
+const WEEKDAY_SHORT = ["Du", "Se", "Ch", "Pa", "Ju", "Sh", "Ya"];
+
+function weekScheduleHtml(slots, { showClass = false, editable = false } = {}) {
+  const today = (new Date().getDay() + 6) % 7; // JS: 0 — yakshanba; bizda 0 — dushanba
+  const days = WEEKDAY_NAMES.map((name, index) => ({ name, index, slots: slots.filter((slot) => slot.weekday === index) }));
+  return days
+    .filter((day) => day.slots.length || (editable && day.index < 6))
+    .map(
+      (day) => `
+        <p class="section-label" style="margin-top:16px">${day.name.toUpperCase()}${day.index === today ? " · BUGUN" : ""}</p>
+        <div class="panel lesson-list">
+          ${
+            day.slots.length
+              ? day.slots
+                  .map(
+                    (slot) => `
+                      <${editable ? `button type="button" data-edit-slot="${slot.id}"` : "div"} class="lesson-row">
+                        <span class="lesson-time"><b>${slot.start_time}</b><small>${slot.end_time}</small></span>
+                        <span class="lesson-info">
+                          <b>${escapeHtml(slot.subject || "Dars")}${showClass ? ` · ${escapeHtml(slot.class_name)}` : ""}</b>
+                          <small>${slot.teacher_name ? escapeHtml(slot.teacher_name) : "O'qituvchi belgilanmagan"}</small>
+                        </span>
+                        ${editable ? `<span class="attention-arrow">›</span>` : ""}
+                      </${editable ? "button" : "div"}>`
+                  )
+                  .join("")
+              : `<p class="subtitle" style="margin:10px 0">Dars yo'q</p>`
+          }
+          ${editable ? `<button type="button" class="lesson-add" data-add-slot="${day.index}">+ ${day.name}ga dars qo'shish</button>` : ""}
+        </div>`
+    )
+    .join("");
+}
+
+function openSlotSheet(schoolClass, slot, allSlots, onSaved) {
+  const editing = Boolean(slot?.id);
+  // Yangi dars — shu kundagi oxirgi darsdan 10 daqiqa keyin, 45 daqiqalik
+  const sameDay = allSlots.filter((item) => item.weekday === slot.weekday).sort((a, b) => a.end_time.localeCompare(b.end_time));
+  const toMinutes = (text) => Number(text.slice(0, 2)) * 60 + Number(text.slice(3, 5));
+  const toText = (total) => `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+  const start = slot.start_time || (sameDay.length ? toText(toMinutes(sameDay[sameDay.length - 1].end_time) + 10) : "08:30");
+  const end = slot.end_time || toText(toMinutes(start) + 45);
+  const teachers = currentSchool?.members || [];
+
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 12px">${editing ? "✏️ Darsni tahrirlash" : "+ Yangi dars"} — ${escapeHtml(schoolClass.name)}</h3>
+    <label class="field-label">Kun</label>
+    <div class="choice-toggle weekday-toggle" id="slot-weekday">
+      ${WEEKDAY_SHORT.map((name, index) => `<button type="button" data-weekday="${index}"${index === slot.weekday ? ' class="active"' : ""}>${name}</button>`).join("")}
+    </div>
+    <div class="slot-times">
+      <label>Boshlanadi<input type="time" class="input" id="slot-start" value="${start}" /></label>
+      <span class="slot-times-dash">—</span>
+      <label>Tugaydi<input type="time" class="input" id="slot-end" value="${end}" /></label>
+    </div>
+    <label class="field-label" for="slot-subject">Fan</label>
+    <input class="input" id="slot-subject" maxlength="100" list="slot-subjects" value="${escapeHtml(slot.subject || "")}" placeholder="Masalan: Matematika" />
+    <datalist id="slot-subjects">${schoolSubjectOptions().map((item) => `<option value="${escapeHtml(item)}"></option>`).join("")}</datalist>
+    <label class="field-label" for="slot-teacher">O'qituvchi</label>
+    <select id="slot-teacher">
+      <option value="">— Belgilanmagan —</option>
+      ${teachers
+        .map(
+          (member) =>
+            `<option value="${member.user_id}"${member.user_id === slot.teacher_user_id ? " selected" : ""}>${escapeHtml(member.name)}${
+              member.subjects?.length ? ` (${escapeHtml(member.subjects.join(", "))})` : ""
+            }</option>`
+        )
+        .join("")}
+    </select>
+    <button class="btn" id="slot-save-button" style="margin-top:14px">💾 Saqlash</button>
+    ${editing ? `<button class="btn btn-ghost danger-text" id="slot-delete-button">🗑 Darsni o'chirish</button>` : ""}
+    <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
+  `);
+
+  let weekday = slot.weekday;
+  sheet.querySelector("#slot-weekday").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-weekday]");
+    if (!button) return;
+    weekday = Number(button.dataset.weekday);
+    sheet.querySelectorAll("#slot-weekday [data-weekday]").forEach((item) => item.classList.toggle("active", item === button));
+  });
+  // Fan tanlansa — shu fanni o'tadigan o'qituvchi avtomatik tanlanadi (bitta bo'lsa)
+  sheet.querySelector("#slot-subject").addEventListener("change", (event) => {
+    const select = sheet.querySelector("#slot-teacher");
+    if (select.value) return;
+    const matches = teachers.filter((member) => (member.subjects || []).includes(event.target.value.trim()));
+    if (matches.length === 1) select.value = String(matches[0].user_id);
+  });
+  sheet.querySelector("#slot-save-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const body = {
+        weekday,
+        start_time: sheet.querySelector("#slot-start").value,
+        end_time: sheet.querySelector("#slot-end").value,
+        subject: sheet.querySelector("#slot-subject").value.trim(),
+        teacher_user_id: Number(sheet.querySelector("#slot-teacher").value) || null,
+      };
+      if (!body.start_time || !body.end_time) throw new Error("Dars vaqtini kiriting");
+      await api(editing ? `/api/schedule/${slot.id}` : `/api/classes/${schoolClass.id}/schedule`, {
+        method: editing ? "PUT" : "POST",
+        body,
+      });
+      schoolOverviewCache = null;
+      close();
+      showToast(editing ? "✅ Dars yangilandi" : "✅ Dars qo'shildi");
+      await onSaved();
+    })
+  );
+  sheet.querySelector("#slot-delete-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      if (!(await askConfirm("Bu darsni jadvaldan o'chirasizmi?"))) return;
+      await api(`/api/schedule/${slot.id}`, { method: "DELETE" });
+      schoolOverviewCache = null;
+      close();
+      showToast("Dars o'chirildi");
+      await onSaved();
+    })
+  );
+}
+
+/* ---------- 📅 Dars jadvali — bitta bo'lim: bugun, mening haftam, sinflar ---------- */
+
+const SCHEDULE_VIEWS = [
+  { id: "today", label: "Bugun" },
+  { id: "mine", label: "Mening" },
+  { id: "classes", label: "Sinflar" },
+];
+let scheduleView = "today";
+let scheduleClassId = null;
+
+async function renderSchedule(view = scheduleView, classId = scheduleClassId) {
+  scheduleView = view;
+  let body = "";
+  let wire = () => {};
+
+  if (view === "today") {
+    const overview = await api("/api/schools/overview");
+    schoolOverviewCache = overview;
+    body = todayLessonsHtml(overview);
+  } else if (view === "mine") {
+    const { slots } = await api("/api/schools/my-schedule");
+    body = slots.length
+      ? `<p class="subtitle" style="margin:16px 0 0">Haftasiga ${slots.length} ta dars o'tasiz.</p>${weekScheduleHtml(slots, { showClass: true })}`
+      : `<div class="empty-state"><div style="font-size:42px">📅</div><p>Jadvalda sizga dars biriktirilmagan.</p>
+           <p class="subtitle">Rahbariyat yoki kurator sinf jadvalini tuzganda sizni o'qituvchi sifatida tanlaydi.</p></div>`;
+  } else {
+    const classes = await attendanceClassChoices();
+    if (!classes.length) {
+      body = `<div class="empty-state"><div style="font-size:42px">🏫</div><p>Maktabda hali sinf yo'q.</p></div>`;
+    } else {
+      const current = classes.find((item) => item.id === classId) || classes.find((item) => item.star) || classes[0];
+      scheduleClassId = current.id;
+      const schedule = await api(`/api/classes/${current.id}/schedule`);
+      const schoolClass = { id: current.id, name: current.name };
+      body = `
+        <div class="class-chips">
+          ${classes
+            .map(
+              (item) =>
+                `<button type="button" class="class-chip${item.id === current.id ? " active" : ""}" data-schedule-class="${item.id}">${
+                  item.star ? "⭐ " : ""
+                }${escapeHtml(item.name)}</button>`
+            )
+            .join("")}
+        </div>
+        ${
+          !schedule.slots.length && !schedule.can_edit
+            ? `<div class="empty-state"><div style="font-size:42px">📅</div><p>${escapeHtml(current.name)} jadvali hali tuzilmagan.</p>
+                 <p class="subtitle">Uni rahbariyat yoki sinf kuratori tuzadi.</p></div>`
+            : `<p class="subtitle" style="margin:12px 0 0">${
+                schedule.can_edit
+                  ? "Darsni bosing — tahrirlash yoki o'chirish. Bir vaqtda sinfda ikki dars, o'qituvchida ikki sinf bo'lmaydi."
+                  : `${escapeHtml(current.name)} — haftalik jadval.`
+              }</p>`
+        }
+        ${weekScheduleHtml(schedule.slots, { editable: schedule.can_edit })}`;
+      wire = () => {
+        const reload = () => renderSchedule("classes", current.id);
+        document.querySelectorAll("[data-add-slot]").forEach((button) =>
+          button.addEventListener("click", () => openSlotSheet(schoolClass, { weekday: Number(button.dataset.addSlot) }, schedule.slots, reload))
+        );
+        document.querySelectorAll("[data-edit-slot]").forEach((button) =>
+          button.addEventListener("click", () => {
+            const slot = schedule.slots.find((item) => item.id === Number(button.dataset.editSlot));
+            openSlotSheet(schoolClass, slot, schedule.slots, reload);
+          })
+        );
+      };
+    }
+  }
+
+  showPage(`
+    <div data-school-tab="schedule">
+      ${schoolSubHeader("Dars jadvali")}
+      <div class="tabs">
+        ${SCHEDULE_VIEWS.map((item) => `<button class="tab${item.id === view ? " active" : ""}" data-schedule-view="${item.id}">${item.label}</button>`).join("")}
+      </div>
+      ${body}
+    </div>
+  `);
+  wireSchoolSubPage();
+  document.querySelector('[data-school-tab="schedule"]').addEventListener(
+    "click",
+    guarded(async (event) => {
+      const tab = event.target.closest("[data-schedule-view]");
+      if (tab && tab.dataset.scheduleView !== view) return renderSchedule(tab.dataset.scheduleView);
+      const chip = event.target.closest("[data-schedule-class]");
+      if (chip) return renderSchedule("classes", Number(chip.dataset.scheduleClass));
+      const take = event.target.closest("[data-take-class]");
+      if (take) return startAttendanceFor(Number(take.dataset.takeClass));
+    })
+  );
+  wire();
+}
+
+/* ---------- 📢 E'lonlar ---------- */
+
+async function renderAnnouncements() {
+  const data = await api("/api/schools/announcements");
+  const canPost = data.can_post_school || data.post_classes.length;
+  const cards = data.items.length
+    ? data.items
+        .map(
+          (item) => `
+            <div class="announce-card is-full">
+              <span class="announce-tag">${item.class_name ? `${escapeHtml(item.class_name)} sinfi` : "Butun maktab"}</span>
+              <b>${escapeHtml(item.title)}</b>
+              ${item.body ? `<p>${escapeHtml(item.body).replace(/\n/g, "<br>")}</p>` : ""}
+              <em>${escapeHtml(item.author)} · ${escapeHtml(formatDateTime(item.created_at))}${
+                item.staff_notified ? ` · 📨 ${item.staff_notified} xodimga yuborilgan` : ""
+              }</em>
+              <div class="announce-actions">
+                <button type="button" class="share-pill" data-share-announcement="${item.id}">👪 Ota-onalarga</button>
+                ${item.can_delete ? `<button type="button" class="share-pill" data-delete-announcement="${item.id}">🗑</button>` : ""}
+              </div>
+            </div>`
+        )
+        .join("")
+    : `<div class="empty-state"><div style="font-size:42px">📢</div><p>Hali e'lon yo'q.</p>
+         <p class="subtitle">${canPost ? "Ota-onalar majlisi, tadbir yoki jadval o'zgarishi haqida yozing." : "E'lonlarni rahbariyat va sinf kuratorlari beradi."}</p></div>`;
+
+  showPage(`
+    <div data-school-tab="announcements">
+      ${schoolSubHeader("E'lonlar")}
+      ${canPost ? `<button class="btn" id="new-announcement-button" style="margin:0 0 14px">+ Yangi e'lon</button>` : ""}
+      <div class="announce-list">${cards}</div>
+    </div>
+  `);
+  wireSchoolSubPage();
+  document.getElementById("new-announcement-button")?.addEventListener("click", () => openAnnouncementSheet(data, renderAnnouncements));
+  document.querySelectorAll("[data-share-announcement]").forEach((button) =>
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        const { text } = await api(`/api/announcements/${button.dataset.shareAnnouncement}/text`);
+        shareText(text, "📋 E'lon matni nusxalandi — ota-onalar guruhiga yuboring");
+      })
+    )
+  );
+  document.querySelectorAll("[data-delete-announcement]").forEach((button) =>
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        if (!(await askConfirm("E'lonni o'chirasizmi?"))) return;
+        await api(`/api/announcements/${button.dataset.deleteAnnouncement}`, { method: "DELETE" });
+        schoolOverviewCache = null;
+        showToast("E'lon o'chirildi");
+        await renderAnnouncements();
+      })
+    )
+  );
+}
+
+async function openAnnouncementSheet(data = null, onDone = null) {
+  const info = data || (await api("/api/schools/announcements"));
+  const targets = [
+    ...(info.can_post_school ? [{ id: "", name: "🏫 Butun maktab" }] : []),
+    ...info.post_classes.map((item) => ({ id: String(item.id), name: `${item.name} sinfi` })),
+  ];
+  if (!targets.length) {
+    showToast("E'lonni rahbariyat va sinf kuratorlari beradi");
+    return;
+  }
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 12px">📢 Yangi e'lon</h3>
+    <label class="field-label" for="ann-target">Kimga</label>
+    <select id="ann-target">${targets.map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}</select>
+    <label class="field-label" for="ann-title">Sarlavha <span class="required-mark">*</span></label>
+    <input class="input" id="ann-title" maxlength="200" placeholder="Masalan: Ota-onalar majlisi shanba kuni" />
+    <label class="field-label" for="ann-body">Matn</label>
+    <textarea class="input" id="ann-body" rows="4" maxlength="3000" placeholder="Qachon, qayerda, nima olib kelish kerak…"></textarea>
+    <label class="check-row"><input type="checkbox" id="ann-staff" checked /> <span>Xodimlarga bot orqali yuborilsin</span></label>
+    <p class="subtitle" style="margin:4px 0 0;font-size:12.5px">Ota-onalarga — saqlangandan keyin "👪 Ota-onalarga" tugmasi bilan sinf guruhiga yuborasiz.</p>
+    <button class="btn" id="ann-save-button" style="margin-top:14px">📢 E'lon qilish</button>
+    <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
+  `);
+  sheet.querySelector("#ann-save-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const title = sheet.querySelector("#ann-title").value.trim();
+      if (title.length < 2) throw new Error("E'lon sarlavhasini yozing");
+      const target = sheet.querySelector("#ann-target").value;
+      const item = await api("/api/schools/announcements", {
+        method: "POST",
+        body: {
+          title,
+          body: sheet.querySelector("#ann-body").value.trim(),
+          class_id: target ? Number(target) : null,
+          notify_staff: sheet.querySelector("#ann-staff").checked,
+        },
+      });
+      schoolOverviewCache = null;
+      close();
+      showToast(item.staff_notified ? `✅ E'lon qilindi · ${item.staff_notified} xodimga yuborildi` : "✅ E'lon qilindi");
+      if (onDone) await onDone();
+      else await renderAnnouncements();
+    })
+  );
 }
 
 // Maktab ekranidagi alohida kartochka (yonma-yon turadi)
@@ -3890,7 +5043,7 @@ function renderSchoolClasses(school, scope = "mine") {
       ${schoolSubHeader(mine ? "Mening sinflarim" : "Barcha sinflar")}
       ${
         !mine && school.can_create_classes
-          ? `<button class="btn" id="create-class-button" style="margin:0 0 12px">➕ Sinf yaratish</button>`
+          ? `<button class="btn" id="create-class-button" style="margin:0 0 12px">+ Sinf yaratish</button>`
           : ""
       }
       <p class="subtitle" style="margin:0">${
@@ -3911,7 +5064,7 @@ function renderSchoolClasses(school, scope = "mine") {
 /* ---------- O'qituvchini shaxsiy havola bilan qo'shish ---------- */
 
 /*
-  Admin "➕ O'qituvchi qo'shish"ni bosadi → Telegram'da chat (o'qituvchi)
+  Admin "+ O'qituvchi qo'shish"ni bosadi → Telegram'da chat (o'qituvchi)
   tanlanadi → unga bir martalik shaxsiy havola boradi. O'qituvchi havolani
   bosganda KODSIZ qo'shilish sahifasi ochiladi.
 */
@@ -4452,7 +5605,7 @@ async function renderAdminDashboard() {
         <input class="input" id="promo-new-limit" type="number" min="1" placeholder="Jami necha marta (bo'sh — cheksiz)" />
         <label class="field-label" for="promo-new-expires">Amal qilish muddati (ixtiyoriy)</label>
         <input class="input" id="promo-new-expires" type="date" />
-        <button class="btn" id="promo-create-button" style="margin-top:10px">➕ Promo kod yaratish</button>
+        <button class="btn" id="promo-create-button" style="margin-top:10px">+ Promo kod yaratish</button>
         <p class="subtitle" style="margin:8px 0 0">🔒 Kod bazada yashirin saqlanadi — uni o'zingiz eslab qoling.</p>
       </div>
     </div>
@@ -4655,6 +5808,7 @@ function drawStudentHome(me, attempts) {
   showPage(`
     ${pageHeader("Testlar")}
     <section class="hero-card">
+      <div class="hero-brand"><img src="/img/chittak-icon.png" alt="">Chittak</div>
       <div class="hero-top">
         ${heroAvatarHtml(me)}
         <div class="hero-who">
@@ -5591,7 +6745,7 @@ function launchConfetti() {
   if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
   const layer = document.createElement("div");
   layer.className = "confetti-layer";
-  const colors = ["#6366f1", "#22d3ee", "#22c55e", "#f59e0b", "#ef4444", "#a855f7"];
+  const colors = ["#00c853", "#a8f063", "#0b1f2a", "#f59e0b", "#ef4444", "#00a844"];
   layer.innerHTML = Array.from({ length: 28 }, (_, index) => {
     const left = Math.round(Math.random() * 100);
     const delay = (Math.random() * 0.5).toFixed(2);
@@ -5677,7 +6831,7 @@ function referralCardHtml(referral) {
 }
 
 function shareReferral(referral) {
-  const text = "📚 Test platformasi: test yarating, natijalarni avtomatik oling. Havola orqali kiring 👇";
+  const text = "📚 Chittak: test yarating, natijalarni avtomatik oling. Havola orqali kiring 👇";
   openExternalLink(`https://t.me/share/url?url=${encodeURIComponent(referral.link)}&text=${encodeURIComponent(text)}`);
 }
 
@@ -5723,6 +6877,7 @@ function drawTeacherDashboard(me, stats, tests) {
       <button class="btn btn-ghost" type="button" id="exit-teacher-button" style="width:auto;padding:8px 14px;margin:0">Chiqish</button>
     </div>
     <section class="hero-card">
+      <div class="hero-brand"><img src="/img/chittak-icon.png" alt="">Chittak</div>
       <div class="hero-top">
         ${heroAvatarHtml(me)}
         <div class="hero-who">
@@ -5755,7 +6910,7 @@ function drawTeacherDashboard(me, stats, tests) {
         }</p>
         <div class="contact-actions">
           <button class="btn ${stats.pending_payments ? "" : "btn-ghost"}" id="test-payments-button">🧾 Cheklar${stats.pending_payments ? ` (${stats.pending_payments})` : ""}</button>
-          <button class="btn btn-ghost" id="card-settings-button">${stats.card ? "✏️ Karta" : "➕ Karta qo'shish"}</button>
+          <button class="btn btn-ghost" id="card-settings-button">${stats.card ? "✏️ Karta" : "+ Karta qo'shish"}</button>
         </div>
         ${
           stats.balance > 0
@@ -6727,7 +7882,7 @@ function renderNewTestForm(testType, draft = {}) {
     priceCardSummary.innerHTML = newTestHasCard
       ? `💳 Pul shu kartaga tushadi: <b>${escapeHtml(card.card_number.replace(/(\d{4})(?=\d)/g, "$1 "))}</b>`
       : `⚠️ Karta raqamingizni kiriting — o'quvchilar pulni unga o'tkazadi`;
-    priceCardButton.textContent = newTestHasCard ? "✏️ Karta" : "➕ Karta kiritish";
+    priceCardButton.textContent = newTestHasCard ? "✏️ Karta" : "+ Karta kiritish";
     priceCardButton.classList.toggle("btn-ghost", newTestHasCard);
   };
   refreshPriceCard();
@@ -7112,7 +8267,7 @@ async function saveNewTest() {
   }
   if (isPaid) checkPrice(price);
   if (isPaid && !newTestHasCard) {
-    throw new Error("Pullik test uchun avval karta raqamingizni kiriting (narx ostidagi «➕ Karta kiritish»)");
+    throw new Error("Pullik test uchun avval karta raqamingizni kiriting (narx ostidagi «+ Karta kiritish»)");
   }
 
   const body = {
@@ -8630,7 +9785,7 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     // Nega ochilmadi — o'qituvchi nima qilishini bilsin (keyingi safar yana urinib ko'riladi)
     const reason =
       error?.name === "NotAllowedError" || error?.name === "SecurityError"
-        ? "Kameraga ruxsat yo'q. Telefon sozlamalari → Ilovalar → TestWay → Ruxsatlar → Kamera → «Ruxsat berish». " +
+        ? "Kameraga ruxsat yo'q. Telefon sozlamalari → Ilovalar → Chittak → Ruxsatlar → Kamera → «Ruxsat berish». " +
           "Ilova eski bo'lsa (1.0), yangi versiyasini o'rnating."
         : error?.name === "NotReadableError" || error?.name === "AbortError"
           ? "Kamera boshqa ilovada band. Uni yopib, qayta urinib ko'ring."
@@ -9221,7 +10376,7 @@ async function renderVariantsPage(testId, test) {
           </div>`
       )
       .join("")}
-    ${nextName ? `<button class="btn" id="add-variant-button">➕ ${nextName} variant qo'shish</button>` : ""}
+    ${nextName ? `<button class="btn" id="add-variant-button">+ ${nextName} variant qo'shish</button>` : ""}
   `);
 
   document.querySelector('[data-action="back-variants"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
@@ -10745,8 +11900,8 @@ function renderAppLogin(errorText = "") {
   clearInterval(appLoginPoll);
   showPage(`
     <div style="text-align:center;padding-top:40px">
-      <div class="result-number">📱</div>
-      <h1 style="margin:8px 0">TestWay</h1>
+      <img src="/img/chittak-icon.png" alt="" style="width:88px;height:88px;border-radius:24px;display:block;margin:0 auto">
+      <h1 style="margin:12px 0 8px">Chittak</h1>
       <p class="subtitle">Telegram akkauntingiz bilan kiring — testlar, natijalar va kreditlar Telegram'dagi bilan bir xil bo'ladi.</p>
     </div>
     <button class="btn" id="app-login-button" style="margin-top:24px">✈️ Telegram orqali kirish</button>

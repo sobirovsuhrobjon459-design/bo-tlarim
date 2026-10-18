@@ -1,0 +1,1160 @@
+/*
+  Chittak brendi — theme-pastel.css dan KEYIN yuklanadi va faqat ranglar,
+  shrift va bir nechta shakllarni almashtiradi (joylashuv o'sha qoladi).
+
+  Uslub qo'llanmasi:
+    Asosiy (to'q)      #0B1F2A   — hero blok, matn
+    Yordamchi (yashil) #00C853   — tugmalar, "+" tugma
+    Aksent (laym)      #A8F063   — yorliqlar, ajratilgan raqamlar
+    Fon                #EAF7EE   — och kartalar, ikonka foni
+    Sahifa foni        #F3FAF5
+    Chegara            #DDEFE2
+    Ikkilamchi matn    #4F6670
+  Shrift: Plus Jakarta Sans (500–800). Radius: 14 · 18 · 24 · 32 px.
+  Tugma: #00C853 ustida #0B1F2A matn.
+*/
+
+:root {
+  --color-bg: #f3faf5;
+  --color-surface: #ffffff;
+  --color-primary: #00a844;
+  --color-primary-dark: #0a7d3a;
+  --color-accent: #a8f063;
+  --color-text: #0b1f2a;
+  --color-text-muted: #4f6670;
+  --color-border: #ddefe2;
+
+  --ink: #0b1f2a;
+  --ink-text: #ffffff;
+  --sun: #a8f063;
+  --sun-deep: #00c853;
+  --green: #00c853;
+  --green-deep: #00a844;
+  --peach: #cff5da;
+  --peach-strong: #a8e8bc;
+  --lilac: #eaf7ee;
+  --lilac-strong: #cfe6d6;
+  --mint: #cff5da;
+  --sky: #e3f1f2;
+  --tile-text: #0b1f2a;
+  --grid-line: rgba(10, 125, 58, 0.05);
+  --glow-1: rgba(0, 200, 83, 0.14);
+  --glow-2: rgba(168, 240, 99, 0.24);
+
+  --btn-bg: #00c853;
+  --btn-fg: #0b1f2a;
+
+  --shadow-sm: 0 6px 18px rgba(11, 31, 42, 0.05);
+  --shadow-md: 0 10px 28px rgba(11, 31, 42, 0.12);
+  --radius-sm: 14px;
+  --radius-md: 18px;
+  --radius-lg: 24px;
+
+  --font-main: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Shriftda 900 yo'q — eng qalini 800 */
+h1,
+h2,
+.hero-hello,
+.stat-tile .stat-value,
+.hero-stat b,
+.card-title-row {
+  font-weight: 800;
+}
+
+::selection {
+  background: rgba(168, 240, 99, 0.55);
+}
+
+/* ---------- Tugmalar ---------- */
+
+.btn {
+  border-radius: 18px;
+  box-shadow: 0 10px 22px -14px rgba(0, 168, 68, 0.6);
+}
+
+.btn-ghost {
+  border-radius: 14px;
+  border-color: #cfe6d6;
+  box-shadow: none;
+}
+
+.btn-sun {
+  background: var(--green);
+  color: var(--ink);
+}
+
+.input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--green-deep);
+  box-shadow: 0 0 0 4px rgba(0, 200, 83, 0.16);
+}
+
+/* ---------- Kartalar va ikonkalar ---------- */
+
+.card-icon {
+  border-radius: 14px;
+  background: var(--lilac);
+  color: var(--green-deep);
+}
+
+.role-card:nth-of-type(3n + 2) .card-icon {
+  background: var(--mint);
+  color: var(--color-primary-dark);
+}
+
+.role-card:nth-of-type(3n) .card-icon {
+  background: #eefad9;
+  color: var(--color-primary-dark);
+}
+
+.stats-grid .stat-tile:nth-child(4n + 1) { background: #eefad9 }
+
+/* ---------- Pastki menyu ---------- */
+
+.bottom-nav {
+  border-radius: 28px;
+  box-shadow:
+    0 10px 28px rgba(11, 31, 42, 0.12),
+    0 24px 0 14px var(--color-bg);
+}
+
+.nav-item.active .nav-icon {
+  background: var(--mint);
+}
+
+.nav-item[data-nav="create"] .nav-icon,
+.nav-item[data-nav="create"].active .nav-icon {
+  color: var(--ink);
+  background: var(--green);
+  box-shadow:
+    0 8px 18px rgba(0, 200, 83, 0.4),
+    0 0 0 5px var(--color-surface);
+}
+
+/* ---------- Asosiy blok (hero) ---------- */
+
+.hero-card {
+  border-radius: 32px;
+  box-shadow: 0 22px 40px -22px rgba(11, 31, 42, 0.75);
+}
+
+.hero-card::before {
+  right: -70px;
+  top: -90px;
+  width: 240px;
+  height: 240px;
+  background: radial-gradient(circle, rgba(0, 200, 83, 0.38), rgba(0, 200, 83, 0) 70%);
+}
+
+/* Hero tepasidagi brend qatori: logo + "Chittak" */
+.hero-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+  color: #ffffff;
+}
+
+.hero-brand img {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: block;
+}
+
+.hero-avatar {
+  color: var(--ink);
+  background: var(--sun);
+  border: 3px solid var(--green);
+}
+
+.hero-avatar.has-photo {
+  background: var(--lilac);
+}
+
+.hero-chip {
+  color: #d6e6dc;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.hero-chip.is-sun {
+  background: var(--sun);
+  color: var(--ink);
+}
+
+.hero-edit {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--sun);
+}
+
+.hero-stat {
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.hero-stat small {
+  color: #b7cbbf;
+}
+
+.hero-stat.is-sun {
+  background: rgba(168, 240, 99, 0.14);
+  box-shadow: inset 0 0 0 1px var(--sun);
+}
+
+.hero-stat.is-sun small {
+  color: #d6e6dc;
+}
+
+.hero-code-row .copy-code {
+  color: var(--ink);
+  background: var(--sun);
+}
+
+.hero-card .test-blocked {
+  color: var(--sun);
+}
+
+/* ---------- Boshqa ---------- */
+
+.sheet-option.selected {
+  box-shadow: 0 6px 14px -8px rgba(0, 168, 68, 0.8);
+}
+
+.scan-option.selected {
+  background: var(--green-deep);
+  border-color: var(--green-deep);
+}
+
+.student-number,
+.variant-letter {
+  background: var(--sun);
+  color: var(--ink);
+}
+
+.live-scan {
+  background: var(--ink);
+}
+
+/* ========== Maktab bosh sahifasi ========== */
+
+.school-hero .hero-top {
+  align-items: flex-start;
+}
+
+.school-hero-icon {
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  font-size: 26px;
+  border-radius: 16px;
+  background: rgba(168, 240, 99, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(168, 240, 99, 0.35);
+}
+
+.hero-kicker {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+  color: #b7cbbf;
+}
+
+.hero-stat.is-warn b {
+  color: #ffb4a8;
+}
+
+/* Tezkor amallar — 4 ta kvadrat tugma */
+.quick-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.quick-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 4px 12px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.quick-action:active {
+  transform: scale(0.94);
+}
+
+.quick-action-icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  font-size: 21px;
+  border-radius: 14px;
+  background: var(--lilac);
+}
+
+/* Diqqat talab qiladi */
+.attention-list {
+  display: grid;
+  gap: 10px;
+}
+
+.attention-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px 10px 14px;
+  font-family: inherit;
+  text-align: left;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--green);
+  border-radius: 18px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.attention-item.is-warn { border-left-color: #f2b705; }
+.attention-item.is-danger { border-left-color: #e5484d; }
+.attention-item.is-info { border-left-color: #7d97a3; }
+.attention-item.is-party { border-left-color: var(--sun); }
+.attention-item:active { transform: scale(0.98); }
+
+.attention-icon {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  font-size: 19px;
+  border-radius: 12px;
+  background: var(--lilac);
+}
+
+.attention-item.is-warn .attention-icon { background: #fff4cc; }
+.attention-item.is-danger .attention-icon { background: #ffe4e1; }
+.attention-item.is-info .attention-icon { background: #e6eef1; }
+.attention-item.is-party .attention-icon { background: #f1fbe0; }
+
+.attention-text,
+.attention-ok > span:last-child {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.attention-text b,
+.attention-ok b {
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.attention-text small,
+.attention-ok small {
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+}
+
+.attention-arrow {
+  font-size: 20px;
+  color: var(--color-text-muted);
+}
+
+.attention-ok {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 14px;
+  font-size: 22px;
+  background: var(--lilac);
+  border: 1px solid var(--lilac-strong);
+  border-radius: 18px;
+}
+
+/* Test natijalari grafigi */
+.school-chart {
+  padding: 16px 16px 14px;
+}
+
+.school-chart-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.school-chart-head b {
+  display: block;
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.school-chart-head small {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.chart-trend {
+  padding: 5px 10px;
+  font-size: 12.5px;
+  font-weight: 800;
+  border-radius: 999px;
+}
+
+.chart-trend.is-up { color: var(--color-primary-dark); background: var(--mint); }
+.chart-trend.is-down { color: #b42318; background: #ffe4e1; }
+
+.chart-bars {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  height: 150px;
+  align-items: end;
+}
+
+.chart-col {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+}
+
+.chart-bar {
+  width: 100%;
+  max-width: 34px;
+  border-radius: 10px 10px 6px 6px;
+  background: var(--lilac-strong);
+}
+
+.chart-col.is-current .chart-bar {
+  background: linear-gradient(180deg, var(--sun), var(--green));
+}
+
+.chart-value {
+  font-size: 11.5px;
+  font-weight: 800;
+  color: var(--color-text-muted);
+}
+
+.chart-col.is-current .chart-value { color: var(--color-text); }
+
+.chart-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+}
+
+/* ========== O'quvchi to'lovlari ========== */
+
+.month-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 6px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+}
+
+.month-switch b {
+  font-size: 15px;
+}
+
+.month-switch .icon-button {
+  width: 38px;
+  height: 38px;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.payments-hero-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.payments-hero-top small {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: #b7cbbf;
+}
+
+.payments-hero-top b {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+}
+
+.payments-progress {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.payments-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--green), var(--sun));
+}
+
+.payments-stats {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.payments-stats .hero-stat b {
+  font-size: 17px;
+}
+
+.two-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.two-buttons .btn {
+  margin: 0;
+}
+
+.pay-months {
+  padding: 4px 14px;
+}
+
+.pay-month {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.pay-month:last-child { border-bottom: 0; }
+
+.pay-month > span:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.pay-month small,
+.pay-history small {
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+}
+
+.pay-history-list {
+  display: grid;
+  gap: 10px;
+}
+
+.pay-history {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+}
+
+.pay-history.is-cancelled {
+  opacity: 0.6;
+}
+
+.pay-history.is-cancelled b {
+  text-decoration: line-through;
+}
+
+.pay-history-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.pay-history-actions {
+  display: flex;
+  gap: 6px;
+}
+
+@media (max-width: 360px) {
+  .quick-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.student-avatar.is-class {
+  font-size: 12.5px;
+  letter-spacing: -0.2px;
+  color: var(--ink);
+  background: var(--sun);
+}
+
+/* ---------- Bugungi darslar / jadval ---------- */
+
+.section-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.link-button {
+  border: 0;
+  background: none;
+  padding: 6px 0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--green-deep);
+  cursor: pointer;
+}
+
+.lesson-list {
+  padding: 6px 14px;
+}
+
+.lesson-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 0;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+.lesson-row:last-of-type {
+  border-bottom: 0;
+}
+
+button.lesson-row {
+  cursor: pointer;
+}
+
+.lesson-time {
+  display: grid;
+  min-width: 46px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lesson-time b {
+  font-size: 15px;
+}
+
+.lesson-time small,
+.lesson-info small {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.lesson-info {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.lesson-info b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lesson-row.is-now {
+  margin: 0 -14px;
+  padding: 10px 14px;
+  width: calc(100% + 28px);
+  background: var(--lilac);
+  box-shadow: inset 4px 0 0 var(--green);
+}
+
+.lesson-row.is-done .lesson-info b,
+.lesson-row.is-done .lesson-time b {
+  color: var(--color-text-muted);
+}
+
+.lesson-row.is-mine .lesson-info b::after {
+  content: " ★";
+  color: var(--green-deep);
+}
+
+.lesson-state {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--lilac);
+  color: var(--ink);
+}
+
+.lesson-done {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--green-deep);
+  white-space: nowrap;
+}
+
+.lesson-take {
+  white-space: nowrap;
+}
+
+.lesson-add {
+  display: block;
+  width: 100%;
+  margin: 4px 0 6px;
+  padding: 10px;
+  border: 1.5px dashed var(--color-border);
+  border-radius: 14px;
+  background: none;
+  font: inherit;
+  font-weight: 700;
+  font-size: 13.5px;
+  color: var(--green-deep);
+  cursor: pointer;
+}
+
+.today-empty {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+}
+
+.today-empty > span:first-child {
+  font-size: 26px;
+}
+
+.today-empty small {
+  display: block;
+  margin-top: 3px;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+}
+
+.weekday-toggle {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.weekday-toggle button {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.slot-times {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.slot-times label {
+  flex: 1;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.slot-times-dash {
+  padding-bottom: 14px;
+  color: var(--color-text-muted);
+}
+
+#slot-teacher,
+#ann-target {
+  width: 100%;
+}
+
+/* ---------- E'lonlar ---------- */
+
+.announce-card {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+  background: var(--color-surface);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  box-shadow: inset 4px 0 0 var(--sun);
+}
+
+button.announce-card {
+  cursor: pointer;
+}
+
+.announce-card small,
+.announce-card p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.announce-card em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.announce-tag {
+  justify-self: start;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--lilac);
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  color: var(--green-deep);
+}
+
+.announce-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  font-weight: 600;
+}
+
+.check-row input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--green);
+}
+
+/* ---------- Jadval: sinf tanlash chiplari ---------- */
+
+.class-chips {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: none;
+}
+
+.class-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.class-chip {
+  flex: none;
+  padding: 8px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.class-chip.active {
+  border-color: var(--green);
+  background: var(--green);
+  color: var(--btn-fg);
+}
+
+/* ---------- Bo'limlar — ixcham guruhlangan ro'yxat ---------- */
+
+.school-tiles {
+  display: block;
+  padding: 2px 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 24px;
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.school-tiles .school-tile,
+.school-tiles .school-tile.is-wide {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14px;
+  width: 100%;
+  min-height: 0;
+  padding: 11px 16px;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.school-tiles > .school-tile:first-child {
+  border-top: 0;
+}
+
+.school-tiles .school-tile:active {
+  transform: none;
+  background: var(--lilac);
+}
+
+.school-tiles .school-tile::after {
+  content: "›";
+  font-size: 22px;
+  line-height: 1;
+  color: var(--color-text-muted);
+}
+
+.school-tiles .school-tile-icon {
+  width: 40px;
+  height: 40px;
+  margin: 0;
+  flex-shrink: 0;
+  font-size: 20px;
+  border-radius: 12px;
+  background: var(--lilac);
+}
+
+.school-tiles .school-tile-text {
+  flex: 1;
+  min-width: 0;
+  gap: 1px;
+}
+
+.school-tiles .school-tile b {
+  font-size: 15px;
+}
+
+
+/* ========== Sayt uslubi (chittak landing): ingichka chegara, soyasiz kartalar ========== */
+
+h1,
+h2 {
+  letter-spacing: -0.025em;
+}
+
+.section-label {
+  color: var(--green-deep);
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+}
+
+/* Kartalar — soya yo'q, faqat ingichka chegara */
+.card,
+.panel,
+.quick-action,
+.attention-item,
+.attention-ok,
+.school-tiles,
+.announce-card,
+.member-line,
+.class-row,
+.student-card,
+.result-line {
+  box-shadow: none;
+}
+
+.card,
+.panel {
+  border-radius: 20px;
+}
+
+.hero-card {
+  box-shadow: none;
+}
+
+/* Tugmalar — saytdagidek to'rtburchakroq, soyasiz */
+.btn {
+  border-radius: 12px;
+  box-shadow: none;
+  font-weight: 700;
+}
+
+.btn-ghost {
+  border-radius: 12px;
+}
+
+.bottom-nav {
+  border: 1px solid var(--color-border);
+  box-shadow:
+    0 8px 24px rgba(11, 31, 42, 0.08),
+    0 24px 0 14px var(--color-bg);
+}
+
+/* Ikonkalar (Phosphor duotone): och yashil kvadrat ichida yashil chiziq + laym fon */
+.quick-action-icon,
+.school-tiles .school-tile-icon,
+.attention-icon,
+.school-hero-icon {
+  color: var(--green-deep);
+}
+
+.quick-action-icon svg,
+.school-tile-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.attention-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.school-hero-icon {
+  color: var(--sun);
+}
+
+.school-hero-icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+.quick-action-icon,
+.school-tiles .school-tile-icon {
+  background: var(--lilac);
+}
+
+.attention-item.is-warn .attention-icon { color: #a77a00; }
+.attention-item.is-danger .attention-icon { color: #d93d42; }
+.attention-item.is-info .attention-icon { color: #4f6670; }
+.attention-item.is-party .attention-icon { color: var(--green-deep); }
+
+/* Rangli (gradient) kartalar — saytdagidek oq, ingichka chegarali */
+.tone-peach,
+.tone-lilac {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+}
+
+.tone-peach p,
+.tone-lilac p {
+  color: var(--color-text-muted);
+  opacity: 1;
+}
+
+.tone-peach .card-title-icon,
+.tone-lilac .card-title-icon {
+  background: var(--lilac);
+}
+
+/* ========== Phosphor ikonkalari (icons.js) ========== */
+
+.ph {
+  display: inline-block;
+  width: 1.2em;
+  height: 1.2em;
+  vertical-align: -0.22em;
+  flex-shrink: 0;
+}
+
+.ph .ph-duo {
+  opacity: 0.22;
+}
+
+/* Kvadrat ichidagi ikonkalar: yashil chiziq, laym "soya" qatlami */
+.card-icon .ph .ph-duo,
+.card-title-icon .ph .ph-duo,
+.quick-action-icon .ph .ph-duo,
+.school-tile-icon .ph .ph-duo,
+.attention-icon .ph .ph-duo,
+.nav-item.active .nav-icon .ph .ph-duo,
+.empty-state .ph .ph-duo {
+  fill: var(--sun);
+  opacity: 0.9;
+}
+
+.card-icon,
+.card-title-icon {
+  color: var(--green-deep);
+}
+
+.nav-icon .ph {
+  width: 25px;
+  height: 25px;
+  vertical-align: 0;
+}
+
+.nav-item.active .nav-icon {
+  color: var(--green-deep);
+}
+
+.nav-item[data-nav="create"] .nav-icon .ph {
+  width: 28px;
+  height: 28px;
+}
+
+.nav-item[data-nav="create"] .nav-icon .ph .ph-duo {
+  opacity: 0;
+}
+
+.empty-state .ph {
+  color: var(--green-deep);
+  width: 1.25em;
+  height: 1.25em;
+}
+
+/* Ma'noli ranglar: bor / yo'q / sababli / kechikdi / ogohlantirish / yulduz */
+.ph-ok { color: #00a844; }
+.ph-bad { color: #e5484d; }
+.ph-warn { color: #e0a100; }
+.ph-late { color: #f07a1a; }
+.ph-star { color: #f2b705; }
+.ph-ok .ph-duo,
+.ph-bad .ph-duo,
+.ph-warn .ph-duo,
+.ph-late .ph-duo,
+.ph-star .ph-duo {
+  fill: currentColor !important;
+  opacity: 0.25 !important;
+}
+
+/* Yashil tugma ichida ikonka tugma matni rangida */
+.btn .ph,
+.share-pill .ph {
+  margin-right: 2px;
+}
+
+.class-chip.active .ph-star {
+  color: var(--ink);
+}
