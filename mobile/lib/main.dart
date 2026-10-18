@@ -8,6 +8,8 @@
 //  - internet yo'q bo'lsa, qayta urinish oynasini ko'rsatadi;
 //  - jonli skaner uchun kameraga ruxsat beradi (sayt so'raganda).
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -52,6 +54,25 @@ class _WebShellState extends State<WebShell> {
   bool _offline = false;
   // Sayt birinchi marta ko'ringuncha brend ochilish ekrani turadi (oq ekran miltillamaydi)
   bool _firstPaint = false;
+  // Ochilish ekrani har kirishda kamida 3 soniya ko'rinadi
+  bool _splashTimeUp = false;
+  Timer? _splashTimer;
+
+  bool get _splashDone => _firstPaint && _splashTimeUp;
+
+  @override
+  void initState() {
+    super.initState();
+    _splashTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _splashTimeUp = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _splashTimer?.cancel();
+    super.dispose();
+  }
 
   Future<void> _openExternal(WebUri uri) async {
     try {
@@ -85,7 +106,7 @@ class _WebShellState extends State<WebShell> {
       },
       child: Scaffold(
         // Ochilish ekrani paytida tepa (status bar) ham to'q bo'lsin
-        backgroundColor: _firstPaint ? _background : _navy,
+        backgroundColor: _splashDone ? _background : _navy,
         body: SafeArea(
           child: Stack(
             children: [
@@ -144,11 +165,11 @@ class _WebShellState extends State<WebShell> {
                   if (request.isForMainFrame ?? true) setState(() => _offline = true);
                 },
               ),
-              if (_progress < 1 && _firstPaint) LinearProgressIndicator(value: _progress, minHeight: 3, color: _navy),
+              if (_progress < 1 && _splashDone) LinearProgressIndicator(value: _progress, minHeight: 3, color: _navy),
               IgnorePointer(
-                ignoring: _firstPaint,
+                ignoring: _splashDone || _offline,
                 child: AnimatedOpacity(
-                  opacity: _firstPaint || _offline ? 0 : 1,
+                  opacity: _splashDone || _offline ? 0 : 1,
                   duration: const Duration(milliseconds: 350),
                   child: const _SplashView(),
                 ),
