@@ -4341,6 +4341,14 @@ def test_web_saytga_google_orqali_kirish():
         main.httpx.get, main.GOOGLE_CLIENT_ID = original_get, original_id
 
 
+def test_maxfiylik_siyosati_sahifasi():
+    """Google OAuth "Branding" uchun ochiq havola: kirishsiz ochiladi, Google ma'lumotlari tilga olinadi."""
+
+    for path in ("/maxfiylik", "/privacy"):
+        page = client.get(path)
+        assert page.status_code == 200 and "Maxfiylik siyosati" in page.text and "Google" in page.text, path
+
+
 def _sheet_photo(test_id: int, marks: dict[int, str], skew: bool = True, code_of: int | None = None) -> str:
     """
     Varaq "surati": chop etiladigan PDF'ning o'zi rasmga aylantiriladi (ixcham titulda — A4 dagi

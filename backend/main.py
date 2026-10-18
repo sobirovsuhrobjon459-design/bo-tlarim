@@ -10911,13 +10911,80 @@ def oferta_page():
     return HTMLResponse(_oferta_html())
 
 
+def _privacy_html() -> str:
+    contacts = "".join(
+        f"<li>{label}: {html_escape(text)}</li>"
+        for label, text in (("E-mail", LEGAL_EMAIL), ("Telefon", LEGAL_PHONE), ("Telegram", LEGAL_BOT))
+        if text
+    ) or "<li>Telegram bot ichidagi «Murojaat uchun» bo'limi orqali</li>"
+    owner = f"<p>Xizmat egasi: {html_escape(LEGAL_NAME)}.</p>" if LEGAL_NAME else ""
+    return f"""<!doctype html>
+<html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maxfiylik siyosati — Chittak</title>
+<style>
+  :root {{ color-scheme: light; --ink: #0b1f2a; --muted: #4f6670; --bg: #f3faf5 }}
+  body {{ margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif }}
+  main {{ max-width: 760px; margin: 0 auto; padding: 28px 18px 60px; background: #fff; min-height: 100vh; box-sizing: border-box }}
+  h1 {{ font-size: 26px; line-height: 1.25; margin: 0 0 6px }}
+  h2 {{ font-size: 18px; margin: 28px 0 8px }}
+  p, li {{ margin: 0 0 8px }}
+  .muted {{ color: var(--muted); font-size: 14px }}
+</style></head><body><main>
+<h1>Maxfiylik siyosati</h1>
+<p class="muted">Chittak — onlayn test va ta'lim muassasalari platformasi (Telegram bot, Mini App, Android ilova va web sayt).</p>
+{owner}
+
+<h2>1. Qanday ma'lumotlar saqlanadi</h2>
+<ul>
+  <li>Telegram akkaunti: ID, ism, username va profil rasmi havolasi.</li>
+  <li>Web saytga Google orqali kirilganda: Google akkaunt identifikatori va e-mail manzili (parol olinmaydi va saqlanmaydi).</li>
+  <li>Test natijalari, javoblar va xizmat ichida kiritilgan ma'lumotlar (o'quvchilar ro'yxati, davomat, to'lovlar).</li>
+  <li>Foydalanuvchi o'zi kiritgan profil ma'lumotlari (masalan, telefon raqami).</li>
+</ul>
+
+<h2>2. Ma'lumotlar nima uchun ishlatiladi</h2>
+<ul>
+  <li>Akkauntga kirish va uni Telegram, ilova hamda web saytda bir xil saqlash uchun.</li>
+  <li>Testlarni o'tkazish, natijalarni hisoblash va o'qituvchiga ko'rsatish uchun.</li>
+  <li>Natijalar, hisobotlar va bildirishnomalarni Telegram bot orqali yuborish uchun.</li>
+</ul>
+
+<h2>3. Ma'lumotlar kimga beriladi</h2>
+<p>Ma'lumotlar sotilmaydi va reklama uchun ishlatilmaydi. Ular faqat xizmatni ko'rsatish uchun zarur hollarda beriladi:
+to'lov tizimlari (Payme, Click) to'lovni amalga oshirish uchun, hamda qonunchilikda nazarda tutilgan hollarda.</p>
+
+<h2>4. Google ma'lumotlari</h2>
+<p>Google orqali kirishda faqat asosiy profil ma'lumotlari (identifikator va e-mail) olinadi. Ular faqat sizni tanish va
+Google akkauntingizni Telegram akkauntingizga bog'lash uchun ishlatiladi, uchinchi shaxslarga berilmaydi.</p>
+
+<h2>5. Saqlash va himoya</h2>
+<p>Ma'lumotlar himoyalangan serverda saqlanadi. Kirish seanslarining o'zi emas, faqat ularning shifrlangan izi saqlanadi.
+Brauzerda faqat kirish seansi tokeni saqlanadi; reklama yoki kuzatuv cookie'lari ishlatilmaydi.</p>
+
+<h2>6. Ma'lumotlarni o'chirish</h2>
+<p>Akkauntingiz va unga tegishli ma'lumotlarni o'chirishni so'rash mumkin — quyidagi aloqa orqali murojaat qiling.
+To'lovlar bo'yicha yozuvlar qonunchilik talab qilgan muddat davomida saqlanishi mumkin.</p>
+
+<h2>7. Aloqa</h2>
+<ul>{contacts}</ul>
+</main></body></html>"""
+
+
+@app.get("/maxfiylik", include_in_schema=False)
+@app.get("/privacy", include_in_schema=False)
+def privacy_page():
+    """Maxfiylik siyosati — Google OAuth (Branding) uchun ham havola."""
+    return HTMLResponse(_privacy_html())
+
+
 @app.get("/", include_in_schema=False)
 def serve_index():
     """Bosh sahifa: har safar yangi tekshiriladi va fayl havolalari versiyalanadi."""
 
     html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
     version = _asset_version()
-    for asset in ("/js/app.js", "/js/icons.js", "/css/style.css", "/css/theme-pastel.css", "/css/theme-chittak.css"):
+    for asset in ("/js/app.js", "/js/icons.js", "/css/style.css", "/css/theme-pastel.css", "/css/theme-chittak.css",
+                  "/css/theme-web.css"):
         html = html.replace(f'"{asset}"', f'"{asset}?v={version}"')
 
     # Fanlar pasporti (backend/subjects.py) — ilova test shablonini va klaviaturani shundan oladi
