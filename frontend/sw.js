@@ -9,8 +9,8 @@
   akkaunt bo'lsa, bir-birining ma'lumotini ko'rmaydi). Faqat GET va faqat JSON.
 */
 
-const CACHE = "testway-v3";
-const SHELL = ["/", "/css/style.css", "/css/theme-pastel.css", "/css/theme-chittak.css", "/js/icons.js", "/js/app.js"];
+const CACHE = "testway-v4";
+const SHELL = ["/", "/css/style.css", "/css/theme-pastel.css", "/css/theme-chittak.css", "/css/theme-web.css", "/js/icons.js", "/js/app.js"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

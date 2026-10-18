@@ -18,6 +18,15 @@ const telegram = window.Telegram?.WebApp;
   shu telefonda saqlanadi (X-App-Session header'i bilan yuboriladi).
 */
 const IN_APP = /TestWayApp/i.test(navigator.userAgent);
+/*
+  Web sayt (oddiy brauzer): Telegram ham, ilova ham emas — Google bilan kiriladi
+  (Google akkaunt bot orqali bir marta Telegram akkauntga bog'lanadi). Lokal sinovda
+  (localhost) avvalgidek X-Dev-User ishlaydi.
+*/
+const ON_WEB = !IN_APP && !telegram?.initData && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+// Seans bilan kiriladi (Telegram initData yo'q): ilova yoki web sayt
+const NEEDS_LOGIN = (IN_APP || ON_WEB) && !telegram?.initData;
+if (ON_WEB) document.documentElement.classList.add("web-mode");
 // Chittak ilovasining Play Market havolasi — ilova chiqqach shu yerga yoziladi (bo'sh bo'lsa — "tez orada")
 const APP_DOWNLOAD_URL = "";
 const APP_SESSION_KEY = "app-session";
@@ -201,7 +210,7 @@ async function api(path, { method = "GET", body, keepalive = false } = {}) {
     // Holat kodi xatoga biriktiriladi: chaqiruvchi ayrim xatolarni
     // (masalan "obuna bo'lmagansiz") alohida ko'rsatishi uchun kerak.
     // Ilovada seans tugagan (chiqilgan yoki bekor qilingan) — qaytadan kirish
-    if (response.status === 401 && IN_APP && appSession && !telegram?.initData) {
+    if (response.status === 401 && NEEDS_LOGIN && appSession) {
       setAppSession("");
       renderAppLogin();
     }
@@ -1182,7 +1191,7 @@ function renderHome(userName, backendOk) {
     ${statusHtml}
     ${supportCardHtml(undefined, { bottom: true })}
     ${
-      IN_APP && appSession
+      NEEDS_LOGIN && appSession
         ? `<p class="subtitle" style="text-align:center;margin:16px 0 0">👤 Kirgan akkaunt: <b>${escapeHtml(userName || "—")}</b>${homeSnapshot?.tg_id ? ` · ID ${homeSnapshot.tg_id}` : ""}</p>
            <button class="btn btn-ghost" id="app-logout-button" style="margin-top:8px">🚪 Akkauntdan chiqish</button>`
         : ""
@@ -1190,6 +1199,7 @@ function renderHome(userName, backendOk) {
   `);
 
   document.getElementById("app-logout-button")?.addEventListener("click", guarded(appLogout));
+  renderWebSidebar("home", userName);
 
   document.querySelector('[data-action="school-folder"]').addEventListener("click", renderSchoolFolder);
   document.querySelector('[data-action="tests"]').addEventListener("click", renderTestFolder);
@@ -5417,7 +5427,7 @@ async function loadHome() {
     isAdmin = false;
     isTeacher = false;
     // Ilovada seans tugagan bo'lsa — kirish sahifasi allaqachon chiqqan
-    if (IN_APP && !telegram?.initData && !appSession) return;
+    if (NEEDS_LOGIN && !appSession) return;
     renderHome(null, false);
   }
 }
@@ -11898,6 +11908,10 @@ let appLoginPoll = null;
 
 function renderAppLogin(errorText = "") {
   clearInterval(appLoginPoll);
+  if (ON_WEB) {
+    renderWebLogin(errorText);
+    return;
+  }
   showPage(`
     <div style="text-align:center;padding-top:40px">
       <img src="/img/chittak-icon.png" alt="" style="width:88px;height:88px;border-radius:24px;display:block;margin:0 auto">
@@ -11966,6 +11980,177 @@ async function appLogout() {
   renderAppLogin();
 }
 
+/* ---------- Web sayt: Google orqali kirish va chap menyu ---------- */
+
+const WEB_LOGO = `<img src="/img/chittak-icon.png" alt="">`;
+
+function loadGoogleScript() {
+  if (window.google?.accounts?.id) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Google yuklanmadi — internetni tekshirib, sahifani yangilang"));
+    document.head.appendChild(script);
+  });
+}
+
+function renderWebLogin(errorText = "") {
+  document.getElementById("web-sidebar")?.remove();
+  document.documentElement.classList.remove("web-signed-in");
+  showPage(
+    `
+    <div class="web-login">
+      <div class="web-login-brand">
+        <div class="web-logo">${WEB_LOGO}</div>
+        <h1>Chittak</h1>
+        <p>Ta'limda tezlik. Natijada aniqlik.</p>
+      </div>
+      <div class="web-login-card" id="web-login-card">
+        <h2>Kirish</h2>
+        <p class="subtitle">Google akkauntingiz bilan kiring — testlar, natijalar va kreditlar Telegram botdagi bilan bir xil bo'ladi.</p>
+        <div id="google-button" class="google-button"></div>
+        <p class="web-login-status" id="web-login-status">${escapeHtml(errorText)}</p>
+      </div>
+    </div>
+  `,
+    { exitRoot: true }
+  );
+
+  const status = document.getElementById("web-login-status");
+  Promise.all([api("/api/web-config"), loadGoogleScript()])
+    .then(([config]) => {
+      if (!config.google_client_id) {
+        status.textContent = "Google orqali kirish hali sozlanmagan.";
+        return;
+      }
+      window.google.accounts.id.initialize({
+        client_id: config.google_client_id,
+        callback: (response) => guarded(() => finishGoogleLogin(response.credential))(),
+      });
+      const button = document.getElementById("google-button");
+      if (!button) return;
+      window.google.accounts.id.renderButton(button, {
+        theme: "outline",
+        size: "large",
+        shape: "pill",
+        text: "signin_with",
+        locale: "uz",
+        width: Math.min(320, button.clientWidth || 320),
+      });
+    })
+    .catch((error) => {
+      status.textContent = error.message;
+    });
+}
+
+async function finishGoogleLogin(credential) {
+  const status = document.getElementById("web-login-status");
+  if (status) status.textContent = "⏳ Tekshirilmoqda…";
+  let result;
+  try {
+    result = await api("/api/google-login", { method: "POST", body: { credential } });
+  } catch (error) {
+    if (status) status.textContent = error.message;
+    return;
+  }
+  if (result.status === "ok") {
+    setAppSession(result.session);
+    startApp();
+    return;
+  }
+
+  // Birinchi kirish: Google akkaunt Telegram akkauntga bot orqali bir marta bog'lanadi
+  const botName = result.link.split("/").pop().split("?")[0];
+  document.getElementById("web-login-card").innerHTML = `
+    <h2>Telegram'ni bog'lang</h2>
+    <p class="subtitle">📧 <b>${escapeHtml(result.email || "Google akkaunt")}</b> — birinchi marta kiryapsiz.
+      Bir marta Telegram akkauntingizga bog'lang, keyingi safar faqat Google bilan kirasiz.</p>
+    <div class="web-steps">
+      <p><b>1.</b> Pastdagi tugma bilan <b>@${escapeHtml(botName)}</b> botini oching.</p>
+      <p><b>2.</b> Botdagi <b>«✅ Tasdiqlash»</b> tugmasini bosing.</p>
+      <p><b>3.</b> Shu sahifaga qayting — kirish o'zi bo'ladi.</p>
+    </div>
+    <a class="btn" href="${escapeHtml(result.link)}" target="_blank" rel="noopener" style="text-decoration:none">✈️ @${escapeHtml(botName)} ni ochish</a>
+    <p class="web-login-status">⏳ Tasdiqlash kutilmoqda…</p>
+    <button class="btn btn-ghost" id="web-login-cancel" type="button">← Boshqa akkaunt bilan kirish</button>
+  `;
+  document.getElementById("web-login-cancel").addEventListener("click", () => renderWebLogin());
+
+  const deadline = Date.now() + result.expires_in * 1000;
+  clearInterval(appLoginPoll);
+  appLoginPoll = setInterval(async () => {
+    if (Date.now() > deadline) {
+      renderWebLogin("Vaqt tugadi — qaytadan urinib ko'ring.");
+      return;
+    }
+    try {
+      const polled = await api(`/api/app-login/${encodeURIComponent(result.token)}`);
+      if (polled.status !== "ok") return;
+      clearInterval(appLoginPoll);
+      setAppSession(polled.session);
+      startApp();
+      showToast("✅ Google akkaunt Telegram'ga bog'landi");
+    } catch (error) {
+      if (error.status === 410) renderWebLogin(error.message);
+    }
+  }, 2000);
+}
+
+const WEB_NAV_ICONS = {
+  home: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/></svg>`,
+  logout: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h4v16h-4"/><path d="M10 8l-4 4 4 4M6 12h10"/></svg>`,
+};
+
+// Kompyuterda chap tomonda turadigan menyu (telefonda yashirin — u yerda sahifaning o'z tugmalari bor)
+function renderWebSidebar(active, userName) {
+  if (!ON_WEB || !appSession) return;
+  document.documentElement.classList.add("web-signed-in");
+  let sidebar = document.getElementById("web-sidebar");
+  if (!sidebar) {
+    sidebar = document.createElement("aside");
+    sidebar.id = "web-sidebar";
+    sidebar.className = "web-sidebar";
+    document.body.appendChild(sidebar);
+    sidebar.addEventListener(
+      "click",
+      guarded(async (event) => {
+        const item = event.target.closest("[data-web-nav]");
+        if (!item) return;
+        const target = item.dataset.webNav;
+        if (target === "logout") {
+          await appLogout();
+          return;
+        }
+        if (!(await confirmLeave())) return;
+        sidebar.querySelectorAll("[data-web-nav]").forEach((el) => el.classList.toggle("active", el === item));
+        if (target === "home") await loadHome();
+        else if (target === "school-folder") renderSchoolFolder();
+        else if (target === "tests") renderTestFolder();
+        else if (target === "admin") await renderAdminDashboard();
+      })
+    );
+  }
+  const item = (key, icon, label) =>
+    `<button type="button" class="web-nav-item${key === active ? " active" : ""}" data-web-nav="${key}">
+      <span class="web-nav-icon">${icon}</span><span>${label}</span></button>`;
+  const name = userName || homeSnapshot?.full_name || "";
+  sidebar.innerHTML = `
+    <div class="web-brand"><span class="web-logo">${WEB_LOGO}</span><span>Chittak</span></div>
+    <nav class="web-nav">
+      ${item("home", WEB_NAV_ICONS.home, "Bosh sahifa")}
+      ${item("school-folder", ROLE_ICONS.school, "Ta'lim muassasalari")}
+      ${item("tests", ROLE_ICONS.folder, "Test markazi")}
+      ${isAdmin ? item("admin", ROLE_ICONS.admin, "Admin") : ""}
+    </nav>
+    <div class="web-account">
+      ${name ? `<p class="web-account-name">👤 ${escapeHtml(name)}</p>` : ""}
+      ${item("logout", WEB_NAV_ICONS.logout, "Chiqish")}
+    </div>
+  `;
+}
+
 // Android'ning "orqaga" tugmasi (ilova shu funksiyani chaqiradi):
 // true — ilova ichida orqaga qaytildi, false — ilovadan chiqish mumkin.
 window.appBack = () => {
@@ -11986,7 +12171,7 @@ function startApp() {
   // Internetsiz ham ochilishi uchun (qarang: /sw.js); ishlamasa — oddiy rejim
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
   setTimeout(() => processScanQueue(), 3000);
-  if (IN_APP && !telegram?.initData && !appSession) {
+  if (NEEDS_LOGIN && !appSession) {
     renderAppLogin();
     return;
   }

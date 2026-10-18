@@ -4287,6 +4287,60 @@ def test_android_ilovaga_bot_orqali_kirish():
     assert client.get(f"/api/app-login/{old}").status_code == 410
 
 
+def test_web_saytga_google_orqali_kirish():
+    """Google akkaunt bot orqali bir marta Telegram akkauntga bog'lanadi, keyin faqat Google bilan kiriladi."""
+
+    import httpx
+
+    reset_database()
+    tokens = {
+        "yaxshi": {"aud": "web-id", "iss": "https://accounts.google.com", "sub": "g-1", "email": "ali@gmail.com",
+                   "email_verified": "true"},
+        "begona": {"aud": "boshqa-sayt", "iss": "accounts.google.com", "sub": "g-1", "email_verified": "true"},
+    }
+
+    def fake_get(url, params=None, **kwargs):
+        info = tokens.get((params or {}).get("id_token"))
+        return httpx.Response(200 if info else 400, json=info or {"error": "invalid_token"})
+
+    original_get, original_id = main.httpx.get, main.GOOGLE_CLIENT_ID
+    main.httpx.get, main.GOOGLE_CLIENT_ID = fake_get, "web-id"
+    try:
+        assert client.get("/api/web-config").json() == {"google_client_id": "web-id"}
+        assert client.post("/api/google-login", json={"credential": "soxta"}).status_code == 401
+        assert client.post("/api/google-login", json={"credential": "begona"}).status_code == 401  # boshqa sayt uchun
+
+        first = client.post("/api/google-login", json={"credential": "yaxshi"}).json()
+        assert first["status"] == "link" and first["email"] == "ali@gmail.com", first
+        assert first["link"] == f"https://t.me/test_platform_bot?start=login_{first['token']}", first
+        with SessionLocal() as session:
+            assert main.app_login_google_email(session, first["token"]) == "ali@gmail.com"
+            assert main.confirm_app_login(session, first["token"], 4343, "Ali Valiyev", "ali")[0] is True
+        granted = client.get(f"/api/app-login/{first['token']}").json()
+        assert granted["status"] == "ok", granted
+        assert client.get("/api/me", headers={"X-App-Session": granted["session"]}).json()["tg_id"] == 4343
+
+        # Ikkinchi safar — bot kerak emas, darhol seans
+        again = client.post("/api/google-login", json={"credential": "yaxshi"}).json()
+        assert again["status"] == "ok", again
+        assert client.get("/api/me", headers={"X-App-Session": again["session"]}).json()["tg_id"] == 4343
+
+        # Shu Google akkaunt boshqa Telegram'ga bog'lanmaydi
+        with SessionLocal() as session:
+            session.query(main.User).filter(main.User.tg_id == 4343).update({"google_sub": None})
+            session.commit()
+        retry = client.post("/api/google-login", json={"credential": "yaxshi"}).json()
+        with SessionLocal() as session:
+            session.query(main.User).filter(main.User.tg_id == 4343).update({"google_sub": "g-1"})
+            session.commit()
+            assert main.confirm_app_login(session, retry["token"], 5454, "Boshqa", None)[0] is False
+
+        main.GOOGLE_CLIENT_ID = ""
+        assert client.post("/api/google-login", json={"credential": "yaxshi"}).status_code == 503
+    finally:
+        main.httpx.get, main.GOOGLE_CLIENT_ID = original_get, original_id
+
+
 def _sheet_photo(test_id: int, marks: dict[int, str], skew: bool = True, code_of: int | None = None) -> str:
     """
     Varaq "surati": chop etiladigan PDF'ning o'zi rasmga aylantiriladi (ixcham titulda — A4 dagi
@@ -4526,6 +4580,32 @@ def test_titul_savollar_soniga_moslashadi():
     assert sizes[10][:2] == (376, 470) and sizes[120][:2] == (595, 841), sizes
     assert sizes[10][2] > sizes[120][2], sizes  # kam savolda doiracha kattaroq
     assert sizes[10][3] < sizes[45][3] < sizes[120][3], sizes  # kvadratlar faqat ishlatilgan bloklarda
+
+
+def test_qisman_korinmagan_varaq_rad_etiladi():
+    """Galereyadan surat: titulning bir qismi kadrdan chiqib ketgan — javob xato o'qilmasin, qayta so'ralsin."""
+
+    import cv2
+    import numpy as np
+
+    reset_database()
+    register_teacher()
+    questions = [{"number": n, "question_type": "single", "option_count": 4, "correct": "ABCD"[n % 4]}
+                 for n in range(1, 61)]
+    test_id = create_test(enrollment_type="closed", key_questions=questions)["id"]
+    photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "1", "id3": "3", 1: "B"})
+    image = cv2.imdecode(np.frombuffer(base64.b64decode(photo), np.uint8), cv2.IMREAD_COLOR)
+    height, width = image.shape[:2]
+    # 15° burilgan, kadr kengaytirilmagan — varaq burchaklari kadrdan chiqib ketadi
+    turned = cv2.warpAffine(image, cv2.getRotationMatrix2D((width / 2, height / 2), 15, 1.0), (width, height),
+                            borderValue=(90, 70, 60))
+    cut = base64.b64encode(cv2.imencode(".jpg", turned)[1].tobytes()).decode()
+    url = f"/api/teacher/tests/{test_id}/scan"
+    refused = client.post(url, json={"image_base64": cut}, headers=as_user(555))
+    # Burchaklar topilmaydi yoki imtihon kodi o'qilmaydi — har ikkalasida javob qaytmaydi
+    assert refused.status_code == 422 and "answers" not in refused.json(), refused.text
+    whole = client.post(url, json={"image_base64": photo}, headers=as_user(555))
+    assert whole.status_code == 200 and whole.json()["answers"] == {"1": "B"}, whole.text
 
 
 def test_javoblar_kaliti_royxat_korinishida():

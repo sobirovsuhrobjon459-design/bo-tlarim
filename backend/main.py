@@ -70,6 +70,7 @@ from .database import (
     ADMIN_CARD_NUMBER,
     ADMIN_ID,
     BOT_TOKEN,
+    GOOGLE_CLIENT_ID,
     PAYME_MERCHANT_ID,
     PAYME_SECRET_KEY,
     PAYME_TEST_MODE,
@@ -196,7 +197,9 @@ def _add_missing_columns() -> None:
             "offline_name": "VARCHAR(200)", "saved_answers": "TEXT", "sheet_number": "INTEGER", "variant": "VARCHAR(2)",
             "class_student_id": "INTEGER",
         },
-        "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)"},
+        "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)", "google_sub": "VARCHAR(64)",
+                  "google_email": "VARCHAR(200)"},
+        "app_logins": {"google_sub": "VARCHAR(64)", "google_email": "VARCHAR(200)"},
         "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)"},
         "school_classes": {"curator_user_id": "INTEGER", "code_start": "INTEGER", "code_end": "INTEGER"},
         "private_schools": {"monthly_fee": "INTEGER DEFAULT 0"},
@@ -245,6 +248,9 @@ def _add_missing_columns() -> None:
                     backfill = COLUMN_BACKFILLS.get((table_name, column_name))
                     if backfill:
                         connection.execute(text(backfill))
+        if "users" in existing_tables:
+            # Bitta Google akkaunt faqat bitta Telegram akkauntga bog'lanadi (yangi bazada create_all o'zi yaratadi)
+            connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_sub ON users (google_sub)"))
 
 
 _add_missing_columns()
@@ -4154,12 +4160,85 @@ def confirm_app_login(db: Session, token: str, tg_id: int, full_name: str, usern
 
     login = db.scalar(select(AppLogin).where(AppLogin.token == token))
     if not login or login.confirmed_at or _app_login_expired(login):
-        return False, "❗️ Bu kirish so'rovi eskirgan. Ilovada «Telegram orqali kirish»ni qaytadan bosing."
+        return False, "❗️ Bu kirish so'rovi eskirgan. Saytda yoki ilovada «Kirish»ni qaytadan bosing."
     remember_bot_user(db, tg_id, full_name, username)
     user = db.scalar(select(User).where(User.tg_id == tg_id))
+    if login.google_sub:
+        owner = db.scalar(select(User).where(User.google_sub == login.google_sub))
+        if owner and owner.id != user.id:
+            return False, "❗️ Bu Google akkaunt boshqa Telegram akkauntga bog'langan."
+        # Bog'langan Google akkaunt almashtiriladi — keyingi safar saytga faqat Google bilan kiriladi
+        user.google_sub, user.google_email = login.google_sub, login.google_email
     login.user_id, login.confirmed_at = user.id, utcnow()
     db.commit()
+    if login.google_sub:
+        return True, f"✅ Tasdiqlandi! {login.google_email or 'Google akkaunt'} endi shu Telegram akkauntga bog'landi — saytga qayting."
     return True, "✅ Tasdiqlandi! Ilovaga qayting — kirish avtomatik bo'ladi."
+
+
+def app_login_google_email(db: Session, token: str) -> str | None:
+    """Bot: so'rov web saytdan (Google bilan) kelganmi — shu holda Google email'i."""
+
+    return db.scalar(select(AppLogin.google_email).where(AppLogin.token == token, AppLogin.google_sub.is_not(None)))
+
+
+# ---------- Web saytga Google orqali kirish ----------
+# 1) Sayt Google tugmasidan ID token (credential) oladi va POST /api/google-login ga yuboradi.
+# 2) Google akkaunt Telegram akkauntga bog'langan bo'lsa — darhol seans beriladi.
+# 3) Bog'lanmagan bo'lsa — bot orqali bir marta tasdiqlanadi (ilovadagi kabi), keyin bog'lanib qoladi.
+GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
+
+
+@app.get("/api/web-config")
+def web_config():
+    return {"google_client_id": GOOGLE_CLIENT_ID}
+
+
+def _verify_google_credential(credential: str) -> dict:
+    """Google ID token'ini Google'ning o'zida tekshiradi (imzo va muddat) va shu sayt uchun berilganini ko'radi."""
+
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=503, detail="Google orqali kirish hali sozlanmagan")
+    try:
+        response = httpx.get("https://oauth2.googleapis.com/tokeninfo", params={"id_token": credential}, timeout=10)
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="Google javob bermayapti — birozdan keyin urinib ko'ring")
+    info = response.json() if response.status_code == 200 else {}
+    if (
+        info.get("aud") != GOOGLE_CLIENT_ID
+        or info.get("iss") not in GOOGLE_ISSUERS
+        or not info.get("sub")
+        or str(info.get("email_verified")).lower() != "true"
+    ):
+        raise HTTPException(status_code=401, detail="Google kirishi tasdiqlanmadi — qaytadan urinib ko'ring")
+    return info
+
+
+@app.post("/api/google-login")
+def google_login(body: dict, db: Session = Depends(get_db)):
+    credential = body.get("credential")
+    if not isinstance(credential, str) or not credential:
+        raise HTTPException(status_code=422, detail="Google ma'lumoti kelmadi")
+    info = _verify_google_credential(credential)
+    sub, email = str(info["sub"])[:64], str(info.get("email") or "")[:200] or None
+
+    user = db.scalar(select(User).where(User.google_sub == sub))
+    if user:
+        if email and user.google_email != email:
+            user.google_email = email
+        session_token = secrets.token_urlsafe(32)
+        db.add(AppSession(token_hash=app_session_hash(session_token), user_id=user.id))
+        db.commit()
+        return {"status": "ok", "session": session_token}
+
+    username = _bot_username()
+    if not username:
+        raise HTTPException(status_code=503, detail="Bot hozir javob bermayapti — birozdan keyin urinib ko'ring")
+    token = secrets.token_urlsafe(16)
+    db.add(AppLogin(token=token, google_sub=sub, google_email=email))
+    db.commit()
+    return {"status": "link", "token": token, "email": email, "link": f"https://t.me/{username}?start=login_{token}",
+            "expires_in": int(APP_LOGIN_TTL.total_seconds())}
 
 
 def _referral_view(db: Session, teacher: Teacher) -> dict:
@@ -5149,6 +5228,28 @@ def save_student_answers(
     return _store_offline_answers(db, test, teacher, attempt, body.answers)
 
 
+def _same_saved_answers(db: Session, attempt: Attempt, answers: dict[str, str]) -> bool:
+    """Shu javoblar bu o'quvchiga allaqachon saqlanganmi (qayta yuborilgan so'rovni tanish uchun)."""
+
+    def normal(value: str | None) -> str:
+        return ",".join(sorted(part for part in (value or "").upper().replace(" ", "").split(",") if part))
+
+    stored = {
+        str(ref): normal(chosen)
+        for ref, chosen in db.execute(
+            select(StudentAnswer.question_ref, StudentAnswer.chosen).where(StudentAnswer.attempt_id == attempt.id)
+        ).all()
+        if normal(chosen)
+    }
+    return stored == {str(ref): normal(value) for ref, value in answers.items() if normal(value)}
+
+
+def _saved_result(test: Test, attempt: Attempt) -> dict:
+    """Saqlangan natija — _store_offline_answers javobi bilan bir xil ko'rinishda."""
+    return {"name": attempt.offline_name, "correct": attempt.correct, "wrong": attempt.wrong,
+            "total": _question_count(test), "percent": attempt.percent}
+
+
 def _store_offline_answers(db: Session, test: Test, teacher: Teacher, attempt: Attempt, answers: dict[str, str]) -> dict:
     """O'qituvchi kiritgan (yoki skanerlangan) javoblarni tekshirib saqlaydi."""
 
@@ -5472,6 +5573,13 @@ def scan_sheet(
                 result = old_result
     except ScanError as error:
         raise HTTPException(status_code=422, detail=str(error))
+    if result["sheet_code"] is None and any(b["kind"] == "code" and b["page"] == body.page for b in bubbles):
+        # Imtihon kodi kataklari bor, lekin o'qilmadi — varaq to'liq yoki to'g'ri ko'rinmagan (masalan bir qismi
+        # kadrdan chiqib ketgan). Bunday suratdan javob o'qilsa, ular xato bo'lishi mumkin — qayta suratga olinadi
+        raise HTTPException(
+            status_code=422,
+            detail="Varaq to'liq ko'rinmadi — titulning 4 ta burchagi kadrda bo'lsin, tekis va yorug' joyda qayta suratga oling",
+        )
     return _scan_response(db, teacher, test, result, body.page, variants, page_count)
 
 
@@ -5680,14 +5788,27 @@ def save_scanned_sheet(
 ):
     test = _paper_test(db, teacher, test_id)
     _check_variant(db, test, body.variant)
+    # Varaqdagi ID bo'yicha o'quvchi (telefondagi ro'yxat eskirgan bo'lsa ham — masalan o'quvchi keyin qo'shilgan):
+    # ism yozilgan bo'lsa ham, shu ID li o'quvchi bor ekan, natija unga yoziladi — ikkinchi nusxa yaratilmaydi
+    by_number = None
+    if not body.attempt_id and body.sheet_number:
+        _ensure_sheet_numbers(db, test)
+        by_number = _attempt_by_sheet_number(db, teacher, test, body.sheet_number)
     if body.attempt_id:
         attempt = _get_offline_attempt(db, test, body.attempt_id)
+    elif by_number:
+        attempt = by_number
+        if body.name.strip() and attempt.status == "done":
+            # Telefonda "ro'yxatda yo'q" deb ism yozilgan, lekin bu ID ning natijasi allaqachon bor
+            if _same_saved_answers(db, attempt, body.answers):
+                return _saved_result(test, attempt)
+            raise HTTPException(
+                status_code=409,
+                detail=f"ID {body.sheet_number} — «{attempt.offline_name}» natijasi allaqachon bor; "
+                       "ro'yxatdan tahrirlang yoki «Boshqa o'quvchi» ni tanlang",
+            )
     elif body.sheet_number and not body.name.strip():
-        # Telefonda o'qilgan varaq: o'quvchi ID bo'yicha shu yerda topiladi (internetsiz tekshirilgan bo'lsa ham)
-        _ensure_sheet_numbers(db, test)
-        attempt = _attempt_by_sheet_number(db, teacher, test, body.sheet_number)
-        if not attempt:
-            raise HTTPException(status_code=422, detail=f"ID {body.sheet_number} ro'yxatda yo'q — ismini yozing")
+        raise HTTPException(status_code=422, detail=f"ID {body.sheet_number} ro'yxatda yo'q — ismini yozing")
     else:
         name = " ".join(body.name.split())
         if len(name) < 2:
@@ -5701,6 +5822,9 @@ def save_scanned_sheet(
             )
         ).first()
         if same_name and same_name.status == "done":
+            if _same_saved_answers(db, same_name, body.answers):
+                # Navbatdan qayta yuborilgan (birinchi so'rov saqlangan, javobi kelmay qolgan) — xato emas
+                return _saved_result(test, same_name)
             raise HTTPException(
                 status_code=409,
                 detail=f"«{name}» natijasi allaqachon kiritilgan — boshqa ism yozing yoki ro'yxatdan tahrirlang",

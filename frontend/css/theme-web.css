@@ -1,0 +1,244 @@
+/*
+  Web sayt dizayni (oddiy brauzer, Google bilan kirish) — faqat html.web-mode da ishlaydi,
+  Telegram Mini App va Android ilova ko'rinishiga ta'sir qilmaydi.
+
+  Uslub (Chittak): to'q yashil chap menyu, och fonda oq kartalar, yashil urg'ular;
+  kirish sahifasi — to'q yashil fon, logotip va oq karta.
+*/
+
+/* Ranglar va shrift — theme-chittak.css dan; bu yerda faqat chap menyu va kirish sahifasi */
+html.web-mode {
+  --web-sidebar-width: 248px;
+  --web-deep: #0b2f26;
+  --web-deep-2: #0f3d31;
+}
+
+/* ---------- Logotip ---------- */
+
+.web-logo {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+}
+
+.web-logo img {
+  width: 100%;
+  height: 100%;
+  border-radius: 28%;
+}
+
+/* ---------- Kirish sahifasi ---------- */
+
+html.web-mode:not(.web-signed-in) body {
+  background: radial-gradient(circle at 20% 0%, #146b4f, var(--web-deep) 55%) fixed;
+}
+
+.web-login {
+  min-height: calc(100vh - 80px);
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 28px;
+  padding: 24px 0;
+}
+
+.web-login-brand {
+  text-align: center;
+  color: #ffffff;
+}
+
+.web-login-brand .web-logo {
+  width: 84px;
+  height: 84px;
+}
+
+.web-login-brand h1 {
+  margin: 10px 0 6px;
+  font-size: 40px;
+  color: #ffffff;
+}
+
+.web-login-brand p {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.4;
+  color: #a8f063;
+}
+
+.web-login-card {
+  width: 100%;
+  max-width: 400px;
+  box-sizing: border-box;
+  padding: 26px 22px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.55);
+  display: grid;
+  gap: 14px;
+}
+
+.web-login-card h2 {
+  margin: 0;
+}
+
+.web-login-card .subtitle {
+  margin: 0;
+}
+
+.google-button {
+  display: flex;
+  justify-content: center;
+  min-height: 44px;
+}
+
+.web-login-status {
+  margin: 0;
+  min-height: 1em;
+  text-align: center;
+  font-weight: 700;
+  color: var(--color-text-muted);
+}
+
+.web-steps {
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--lilac);
+}
+
+.web-steps p {
+  margin: 0;
+}
+
+.web-steps p + p {
+  margin-top: 8px;
+}
+
+/* ---------- Chap menyu (faqat kompyuterda) ---------- */
+
+.web-sidebar {
+  display: none;
+}
+
+@media (min-width: 960px) {
+  html.web-signed-in .web-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    width: var(--web-sidebar-width);
+    box-sizing: border-box;
+    padding: 22px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    background: linear-gradient(180deg, var(--web-deep-2), var(--web-deep));
+    color: #d6eadf;
+  }
+
+  .web-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 10px;
+    font-size: 22px;
+    font-weight: 800;
+    color: #ffffff;
+  }
+
+  .web-nav {
+    display: grid;
+    gap: 4px;
+  }
+
+  .web-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 11px 12px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 15px;
+    font-weight: 700;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .web-nav-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: #ffffff;
+  }
+
+  .web-nav-item.active {
+    background: rgba(0, 200, 83, 0.16);
+    color: #a8f063;
+  }
+
+  .web-nav-icon {
+    display: inline-flex;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+  }
+
+  .web-nav-icon svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  .web-account {
+    margin-top: auto;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .web-account-name {
+    margin: 0 0 6px;
+    padding: 0 12px;
+    font-size: 14px;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Sahifa, pastki menyu va xabarlar — menyudan o'ngdagi joyning o'rtasida */
+  html.web-signed-in body {
+    padding-left: var(--web-sidebar-width);
+  }
+
+  html.web-signed-in #app {
+    max-width: 760px;
+    padding-top: 36px;
+  }
+
+  html.web-signed-in .bottom-nav,
+  html.web-signed-in .toast,
+  html.web-signed-in .support-row-bottom {
+    left: var(--web-sidebar-width);
+  }
+
+  /* Chiqish tugmasi chap menyuda bor — sahifadagisi kompyuterda ko'rsatilmaydi */
+  html.web-signed-in #app-logout-button,
+  html.web-signed-in .page > p:has(+ #app-logout-button) {
+    display: none;
+  }
+
+  /* Kompyuterda bosh sahifadagi bo'lim kartalari ikki ustunda */
+  html.web-signed-in .page:has(> .role-card) {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 16px;
+    align-items: start;
+  }
+
+  html.web-signed-in .page:has(> .role-card) > :not(.role-card) {
+    grid-column: 1 / -1;
+  }
+}

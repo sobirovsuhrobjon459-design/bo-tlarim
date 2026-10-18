@@ -432,6 +432,28 @@ async def _ask_app_login(message: Message, token: str) -> None:
     ]])
     user = message.from_user
     account = html.escape(user.full_name or "—") + (f" (@{html.escape(user.username)})" if user.username else "")
+    from backend.database import SessionLocal
+    from backend.main import app_login_google_email
+
+    def google_email() -> str | None:
+        with SessionLocal() as session:
+            return app_login_google_email(session, token)
+
+    email = await asyncio.to_thread(google_email)
+    if email:
+        # Web sayt: Google akkaunt shu Telegram akkauntga bir marta bog'lanadi
+        await message.answer(
+            "🌐 <b>TestWay saytiga Google orqali kirish</b>\n\n"
+            f"📧 Google: <b>{html.escape(email)}</b>\n"
+            f"👤 Telegram: <b>{account}</b>\n🆔 ID: <code>{user.id}</code>\n\n"
+            "Tasdiqlasangiz, shu Google akkaunt SHU Telegram akkauntga bog'lanadi — keyingi safar saytga "
+            "faqat Google bilan kirasiz, testlar, natijalar va kreditlar bir xil bo'ladi.\n\n"
+            "⚠️ Faqat HOZIR o'zingiz saytda Google bilan kirgan bo'lsangiz tasdiqlang. "
+            "Bu havolani sizga boshqa odam yuborgan bo'lsa — bosmang.",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+        return
     await message.answer(
         "📱 <b>Chittak ilovasiga kirish</b>\n\n"
         f"👤 Akkaunt: <b>{account}</b>\n🆔 ID: <code>{user.id}</code>\n\n"

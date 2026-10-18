@@ -32,6 +32,8 @@ def utcnow() -> datetime:
 
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+# Web saytga Google orqali kirish (Google Cloud Console → OAuth Client ID, "Web application")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
 
 # MUHIM: Render'ning bepul tarifida fayl tizimi vaqtinchalik — har deploydan
 # keyin (va xizmat uyqudan uyg'onganda) fayllar o'chib ketadi. Ya'ni SQLite
@@ -125,6 +127,9 @@ class User(Base):
     username: Mapped[str | None] = mapped_column(String(64), default=None)
     # Telegram profil rasmi (Mini App ochilganda avtomatik olinadi)
     photo_url: Mapped[str | None] = mapped_column(String(500), default=None)
+    # Web saytga Google orqali kirish: Google akkaunt bot orqali bir marta shu Telegram akkauntga bog'lanadi
+    google_sub: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, default=None)
+    google_email: Mapped[str | None] = mapped_column(String(200), default=None)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
@@ -716,6 +721,9 @@ class AppLogin(Base):
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
     confirmed_at: Mapped[datetime | None] = mapped_column(default=None)
     consumed_at: Mapped[datetime | None] = mapped_column(default=None)
+    # Web saytdan Google bilan kirilgan: tasdiqlanganda shu Google akkaunt Telegram akkauntga bog'lanadi
+    google_sub: Mapped[str | None] = mapped_column(String(64), default=None)
+    google_email: Mapped[str | None] = mapped_column(String(200), default=None)
 
 
 class AppSession(Base):
