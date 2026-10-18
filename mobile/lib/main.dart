@@ -50,6 +50,8 @@ class _WebShellState extends State<WebShell> {
   InAppWebViewController? _controller;
   double _progress = 0;
   bool _offline = false;
+  // Sayt birinchi marta ko'ringuncha brend ochilish ekrani turadi (oq ekran miltillamaydi)
+  bool _firstPaint = false;
 
   Future<void> _openExternal(WebUri uri) async {
     try {
@@ -82,6 +84,8 @@ class _WebShellState extends State<WebShell> {
         if (!didPop) _handleBack();
       },
       child: Scaffold(
+        // Ochilish ekrani paytida tepa (status bar) ham to'q bo'lsin
+        backgroundColor: _firstPaint ? _background : _navy,
         body: SafeArea(
           child: Stack(
             children: [
@@ -128,13 +132,27 @@ class _WebShellState extends State<WebShell> {
                 },
                 onProgressChanged: (controller, progress) => setState(() => _progress = progress / 100),
                 // Sahifa ko'rinishi bilan chiziq yo'qoladi — tashqi skript/shrift sekin yuklansa ham qolib ketmaydi
-                onPageCommitVisible: (controller, url) => setState(() => _progress = 1),
-                onLoadStop: (controller, url) => setState(() => _progress = 1),
+                onPageCommitVisible: (controller, url) => setState(() {
+                  _progress = 1;
+                  _firstPaint = true;
+                }),
+                onLoadStop: (controller, url) => setState(() {
+                  _progress = 1;
+                  _firstPaint = true;
+                }),
                 onReceivedError: (controller, request, error) {
                   if (request.isForMainFrame ?? true) setState(() => _offline = true);
                 },
               ),
-              if (_progress < 1) LinearProgressIndicator(value: _progress, minHeight: 3, color: _navy),
+              if (_progress < 1 && _firstPaint) LinearProgressIndicator(value: _progress, minHeight: 3, color: _navy),
+              IgnorePointer(
+                ignoring: _firstPaint,
+                child: AnimatedOpacity(
+                  opacity: _firstPaint || _offline ? 0 : 1,
+                  duration: const Duration(milliseconds: 350),
+                  child: const _SplashView(),
+                ),
+              ),
               if (_offline) _OfflineView(onRetry: _retry),
             ],
           ),
@@ -175,6 +193,42 @@ class _OfflineView extends StatelessWidget {
             onPressed: onRetry,
             style: FilledButton.styleFrom(backgroundColor: _navy, minimumSize: const Size(200, 48)),
             child: const Text('Qayta urinish'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+// Ochilish ekrani: Android'ning o'z splash'i bilan bir xil (to'q fon + ikonka) va ostida brend yozuvi
+class _SplashView extends StatelessWidget {
+  const _SplashView();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: _navy,
+      alignment: Alignment.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(32),
+            child: Image.asset('assets/splash_logo.png', width: 144, height: 144),
+          ),
+          const SizedBox(height: 22),
+          const Text(
+            'Chittak',
+            style: TextStyle(color: Colors.white, fontSize: 34, fontWeight: FontWeight.w800, letterSpacing: -1),
+          ),
+          const SizedBox(height: 6),
+          const Text.rich(
+            TextSpan(
+              text: "Ta'limda tezlik. ",
+              style: TextStyle(color: Color(0xFFB7CBBF), fontSize: 15, fontWeight: FontWeight.w700),
+              children: [TextSpan(text: 'Natijada aniqlik.', style: TextStyle(color: Color(0xFF00C853)))],
+            ),
           ),
         ],
       ),

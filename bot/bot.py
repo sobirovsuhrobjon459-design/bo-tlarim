@@ -714,6 +714,35 @@ async def _setup_menu_button() -> None:
     except Exception:
         logger.warning("Buyruqlar ro'yxatini sozlab bo'lmadi", exc_info=True)
 
+    await _setup_profile()
+
+
+# Bot profili (brend): nom, bo'sh chatdagi tavsif va profil/ulashishdagi qisqa tavsif.
+# Avatar Bot API orqali o'rnatilmaydi — uni @BotFather'da /setuserpic bilan qo'yiladi.
+BOT_NAME = "Chittak"
+BOT_SHORT_DESCRIPTION = "Ta'limda tezlik. Natijada aniqlik. Maktab CRM, titul testlarini skanerlash va natijalar tahlili."
+BOT_DESCRIPTION = (
+    "Chittak — maktablar, o'quv markazlari va repetitorlar uchun platforma.\n\n"
+    "• Testlarni yarating va titul varaqlarini telefon kamerasi bilan tekshiring\n"
+    "• Natijalar, Rasch modeli va mandat hisobotlari\n"
+    "• Maktab CRM: sinflar, davomat, dars jadvali, to'lovlar\n\n"
+    "Boshlash uchun pastdagi «Start» tugmasini bosing."
+)
+
+
+async def _setup_profile() -> None:
+    """Nom va tavsiflarni faqat farq qilsa yangilaydi — Telegram bu so'rovlarni cheklaydi."""
+
+    try:
+        if (await bot.get_my_name()).name != BOT_NAME:
+            await bot.set_my_name(name=BOT_NAME)
+        if (await bot.get_my_short_description()).short_description != BOT_SHORT_DESCRIPTION:
+            await bot.set_my_short_description(short_description=BOT_SHORT_DESCRIPTION)
+        if (await bot.get_my_description()).description != BOT_DESCRIPTION:
+            await bot.set_my_description(description=BOT_DESCRIPTION)
+    except Exception:
+        logger.warning("Bot profilini (nom/tavsif) sozlab bo'lmadi", exc_info=True)
+
 
 # Aloqa uzilib qolsa, bot qayta ulanishga urinadi. Har xatodan keyin kutish
 # vaqti oshib boradi, 5 daqiqadan oshmaydi — shunda Telegram API'ni ham

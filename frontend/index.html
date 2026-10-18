@@ -8,6 +8,32 @@
   <link rel="icon" type="image/png" href="/img/favicon.png" />
   <link rel="apple-touch-icon" href="/img/chittak-icon.png" />
 
+  <!-- Havola Telegram va boshqa joylarda ulashilganda chiqadigan ko'rinish -->
+  <meta name="description" content="Maktablar, o'quv markazlari va repetitorlar uchun platforma: testlar, titul skaneri, natijalar tahlili va maktab CRM." />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Chittak" />
+  <meta property="og:title" content="Chittak — Ta'limda tezlik. Natijada aniqlik." />
+  <meta property="og:description" content="Maktablar, o'quv markazlari va repetitorlar uchun: testlar, titul skaneri, natijalar tahlili va maktab CRM — bitta joyda." />
+  <meta property="og:image" content="/img/og-image.jpg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <!-- Ochilish ekrani: sahifa skriptlari yuklanguncha ko'rinadi, ilova birinchi sahifani chizganda o'zi almashadi -->
+  <style>
+    .boot-splash{position:fixed;inset:0;z-index:5;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+      background:#0B1F2A radial-gradient(circle at 85% 8%,rgba(0,200,83,.32),rgba(0,200,83,0) 46%);color:#fff;
+      font-family:"Plus Jakarta Sans",-apple-system,"Segoe UI",Roboto,sans-serif;text-align:center}
+    .boot-splash img{width:104px;height:104px;border-radius:26px;box-shadow:0 18px 40px rgba(0,0,0,.4);animation:boot-pop .6s cubic-bezier(.34,1.56,.64,1) both}
+    .boot-splash b{font-size:34px;font-weight:800;letter-spacing:-.04em}
+    .boot-splash small{margin-top:-10px;font-size:15px;font-weight:700;color:#B7CBBF}
+    .boot-splash small em{font-style:normal;color:#00C853}
+    .boot-splash i{width:120px;height:4px;margin-top:10px;border-radius:4px;background:rgba(255,255,255,.12);overflow:hidden;position:relative}
+    .boot-splash i::after{content:"";position:absolute;inset:0;width:40%;border-radius:4px;background:#00C853;animation:boot-bar 1.1s ease-in-out infinite}
+    @keyframes boot-pop{from{transform:scale(.7);opacity:0}to{transform:none;opacity:1}}
+    @keyframes boot-bar{from{transform:translateX(-100%)}to{transform:translateX(250%)}}
+  </style>
+
   <!--
     Telegram Mini App skripti faqat Telegram ichida kerak. Ilovada (TestWayApp) yuklanmaydi:
     telegram.org sekin yoki to'silgan tarmoqda sahifa yuklanishi tugamay, tepadagi chiziq qolib ketardi.
@@ -35,7 +61,14 @@
   <link rel="stylesheet" href="/css/theme-web.css" />
 </head>
 <body>
-  <div id="app"></div>
+  <div id="app">
+    <div class="boot-splash" aria-label="Chittak yuklanmoqda">
+      <img src="/img/chittak-icon.png" alt="" />
+      <b>Chittak</b>
+      <small>Ta'limda tezlik. <em>Natijada aniqlik.</em></small>
+      <i></i>
+    </div>
+  </div>
 
   <script src="/js/icons.js"></script>
   <script src="/js/app.js"></script>

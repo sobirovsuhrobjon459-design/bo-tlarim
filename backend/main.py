@@ -10978,10 +10978,15 @@ def privacy_page():
 
 
 @app.get("/", include_in_schema=False)
-def serve_index():
+def serve_index(request: Request):
     """Bosh sahifa: har safar yangi tekshiriladi va fayl havolalari versiyalanadi."""
 
     html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+    # Havola ulashilganda chiqadigan rasm (og:image) — Telegram to'liq manzil talab qiladi.
+    # Render HTTPS'ni proksi orqali beradi, shuning uchun sxema X-Forwarded-Proto'dan olinadi.
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+    origin = f"{scheme}://{request.url.netloc}"
+    html = html.replace('content="/img/og-image.jpg"', f'content="{origin}/img/og-image.jpg"')
     version = _asset_version()
     for asset in ("/js/app.js", "/js/icons.js", "/css/style.css", "/css/theme-pastel.css", "/css/theme-chittak.css",
                   "/css/theme-web.css"):
