@@ -4287,66 +4287,12 @@ def test_android_ilovaga_bot_orqali_kirish():
     assert client.get(f"/api/app-login/{old}").status_code == 410
 
 
-def test_web_saytga_google_orqali_kirish():
-    """Google akkaunt bot orqali bir marta Telegram akkauntga bog'lanadi, keyin faqat Google bilan kiriladi."""
-
-    import httpx
-
-    reset_database()
-    tokens = {
-        "yaxshi": {"aud": "web-id", "iss": "https://accounts.google.com", "sub": "g-1", "email": "ali@gmail.com",
-                   "email_verified": "true"},
-        "begona": {"aud": "boshqa-sayt", "iss": "accounts.google.com", "sub": "g-1", "email_verified": "true"},
-    }
-
-    def fake_get(url, params=None, **kwargs):
-        info = tokens.get((params or {}).get("id_token"))
-        return httpx.Response(200 if info else 400, json=info or {"error": "invalid_token"})
-
-    original_get, original_id = main.httpx.get, main.GOOGLE_CLIENT_ID
-    main.httpx.get, main.GOOGLE_CLIENT_ID = fake_get, "web-id"
-    try:
-        assert client.get("/api/web-config").json() == {"google_client_id": "web-id"}
-        assert client.post("/api/google-login", json={"credential": "soxta"}).status_code == 401
-        assert client.post("/api/google-login", json={"credential": "begona"}).status_code == 401  # boshqa sayt uchun
-
-        first = client.post("/api/google-login", json={"credential": "yaxshi"}).json()
-        assert first["status"] == "link" and first["email"] == "ali@gmail.com", first
-        assert first["link"] == f"https://t.me/test_platform_bot?start=login_{first['token']}", first
-        with SessionLocal() as session:
-            assert main.app_login_google_email(session, first["token"]) == "ali@gmail.com"
-            assert main.confirm_app_login(session, first["token"], 4343, "Ali Valiyev", "ali")[0] is True
-        granted = client.get(f"/api/app-login/{first['token']}").json()
-        assert granted["status"] == "ok", granted
-        assert client.get("/api/me", headers={"X-App-Session": granted["session"]}).json()["tg_id"] == 4343
-
-        # Ikkinchi safar — bot kerak emas, darhol seans
-        again = client.post("/api/google-login", json={"credential": "yaxshi"}).json()
-        assert again["status"] == "ok", again
-        assert client.get("/api/me", headers={"X-App-Session": again["session"]}).json()["tg_id"] == 4343
-
-        # Shu Google akkaunt boshqa Telegram'ga bog'lanmaydi
-        with SessionLocal() as session:
-            session.query(main.User).filter(main.User.tg_id == 4343).update({"google_sub": None})
-            session.commit()
-        retry = client.post("/api/google-login", json={"credential": "yaxshi"}).json()
-        with SessionLocal() as session:
-            session.query(main.User).filter(main.User.tg_id == 4343).update({"google_sub": "g-1"})
-            session.commit()
-            assert main.confirm_app_login(session, retry["token"], 5454, "Boshqa", None)[0] is False
-
-        main.GOOGLE_CLIENT_ID = ""
-        assert client.post("/api/google-login", json={"credential": "yaxshi"}).status_code == 503
-    finally:
-        main.httpx.get, main.GOOGLE_CLIENT_ID = original_get, original_id
-
-
 def test_maxfiylik_siyosati_sahifasi():
-    """Google OAuth "Branding" uchun ochiq havola: kirishsiz ochiladi, Google ma'lumotlari tilga olinadi."""
+    """Ochiq havola: kirishsiz ochiladi."""
 
     for path in ("/maxfiylik", "/privacy"):
         page = client.get(path)
-        assert page.status_code == 200 and "Maxfiylik siyosati" in page.text and "Google" in page.text, path
+        assert page.status_code == 200 and "Maxfiylik siyosati" in page.text, path
 
 
 def _sheet_photo(test_id: int, marks: dict[int, str], skew: bool = True, code_of: int | None = None) -> str:

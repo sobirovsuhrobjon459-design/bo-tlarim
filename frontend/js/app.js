@@ -19,9 +19,8 @@ const telegram = window.Telegram?.WebApp;
 */
 const IN_APP = /TestWayApp/i.test(navigator.userAgent);
 /*
-  Web sayt (oddiy brauzer): Telegram ham, ilova ham emas — Google bilan kiriladi
-  (Google akkaunt bot orqali bir marta Telegram akkauntga bog'lanadi). Lokal sinovda
-  (localhost) avvalgidek X-Dev-User ishlaydi.
+  Web sayt (oddiy brauzer): Telegram ham, ilova ham emas — ilovadagi kabi bot orqali
+  kiriladi (botda "Tasdiqlash"). Lokal sinovda (localhost) avvalgidek X-Dev-User ishlaydi.
 */
 const ON_WEB = !IN_APP && !telegram?.initData && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
 // Seans bilan kiriladi (Telegram initData yo'q): ilova yoki web sayt
@@ -11991,23 +11990,12 @@ async function appLogout() {
   renderAppLogin();
 }
 
-/* ---------- Web sayt: Google orqali kirish va chap menyu ---------- */
+/* ---------- Web sayt: Telegram bot orqali kirish va chap menyu ---------- */
 
 const WEB_LOGO = `<img src="/img/chittak-icon.png" alt="">`;
 
-function loadGoogleScript() {
-  if (window.google?.accounts?.id) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("Google yuklanmadi — internetni tekshirib, sahifani yangilang"));
-    document.head.appendChild(script);
-  });
-}
-
 function renderWebLogin(errorText = "") {
+  clearInterval(appLoginPoll);
   document.getElementById("web-sidebar")?.remove();
   document.documentElement.classList.remove("web-signed-in");
   showPage(
@@ -12020,72 +12008,42 @@ function renderWebLogin(errorText = "") {
       </div>
       <div class="web-login-card" id="web-login-card">
         <h2>Kirish</h2>
-        <p class="subtitle">Google akkauntingiz bilan kiring — testlar, natijalar va kreditlar Telegram botdagi bilan bir xil bo'ladi.</p>
-        <div id="google-button" class="google-button"></div>
+        <p class="subtitle">Telegram akkauntingiz bilan kiring — testlar, natijalar va kreditlar botdagi bilan bir xil bo'ladi.</p>
+        <button class="btn" id="web-login-button" type="button">✈️ Telegram orqali kirish</button>
         <p class="web-login-status" id="web-login-status">${escapeHtml(errorText)}</p>
       </div>
     </div>
   `,
     { exitRoot: true }
   );
-
-  const status = document.getElementById("web-login-status");
-  Promise.all([api("/api/web-config"), loadGoogleScript()])
-    .then(([config]) => {
-      if (!config.google_client_id) {
-        status.textContent = "Google orqali kirish hali sozlanmagan.";
-        return;
-      }
-      window.google.accounts.id.initialize({
-        client_id: config.google_client_id,
-        callback: (response) => guarded(() => finishGoogleLogin(response.credential))(),
-      });
-      const button = document.getElementById("google-button");
-      if (!button) return;
-      window.google.accounts.id.renderButton(button, {
-        theme: "outline",
-        size: "large",
-        shape: "pill",
-        text: "signin_with",
-        locale: "uz",
-        width: Math.min(320, button.clientWidth || 320),
-      });
-    })
-    .catch((error) => {
-      status.textContent = error.message;
-    });
+  document.getElementById("web-login-button").addEventListener("click", guarded(startWebLogin));
 }
 
-async function finishGoogleLogin(credential) {
-  const status = document.getElementById("web-login-status");
-  if (status) status.textContent = "⏳ Tekshirilmoqda…";
+async function startWebLogin() {
+  // Bot oynasi bosish paytining o'zida ochiladi (so'rovdan keyin ochilsa, brauzer uni to'sib qo'yadi)
+  const botWindow = window.open("", "_blank");
   let result;
   try {
-    result = await api("/api/google-login", { method: "POST", body: { credential } });
+    result = await api("/api/app-login", { method: "POST", body: {} });
   } catch (error) {
-    if (status) status.textContent = error.message;
+    botWindow?.close();
+    document.getElementById("web-login-status").textContent = error.message;
     return;
   }
-  if (result.status === "ok") {
-    setAppSession(result.session);
-    startApp();
-    return;
-  }
+  if (botWindow) botWindow.location.href = result.link;
 
-  // Birinchi kirish: Google akkaunt Telegram akkauntga bot orqali bir marta bog'lanadi
   const botName = result.link.split("/").pop().split("?")[0];
   document.getElementById("web-login-card").innerHTML = `
-    <h2>Telegram'ni bog'lang</h2>
-    <p class="subtitle">📧 <b>${escapeHtml(result.email || "Google akkaunt")}</b> — birinchi marta kiryapsiz.
-      Bir marta Telegram akkauntingizga bog'lang, keyingi safar faqat Google bilan kirasiz.</p>
+    <h2>Botda tasdiqlang</h2>
     <div class="web-steps">
-      <p><b>1.</b> Pastdagi tugma bilan <b>@${escapeHtml(botName)}</b> botini oching.</p>
+      <p><b>1.</b> Telegram'da <b>@${escapeHtml(botName)}</b> boti ochiladi (ochilmasa — pastdagi tugma).</p>
       <p><b>2.</b> Botdagi <b>«✅ Tasdiqlash»</b> tugmasini bosing.</p>
       <p><b>3.</b> Shu sahifaga qayting — kirish o'zi bo'ladi.</p>
     </div>
+    <p class="subtitle">👤 Telegram'da <b>hozir ochiq turgan akkaunt</b> bilan kirasiz.</p>
     <a class="btn" href="${escapeHtml(result.link)}" target="_blank" rel="noopener" style="text-decoration:none">✈️ @${escapeHtml(botName)} ni ochish</a>
     <p class="web-login-status">⏳ Tasdiqlash kutilmoqda…</p>
-    <button class="btn btn-ghost" id="web-login-cancel" type="button">← Boshqa akkaunt bilan kirish</button>
+    <button class="btn btn-ghost" id="web-login-cancel" type="button">← Orqaga</button>
   `;
   document.getElementById("web-login-cancel").addEventListener("click", () => renderWebLogin());
 
@@ -12102,7 +12060,9 @@ async function finishGoogleLogin(credential) {
       clearInterval(appLoginPoll);
       setAppSession(polled.session);
       startApp();
-      showToast("✅ Google akkaunt Telegram'ga bog'landi");
+      api("/api/me")
+        .then((me) => showToast(`✅ Kirdingiz: ${me.full_name || "foydalanuvchi"}`))
+        .catch(() => {});
     } catch (error) {
       if (error.status === 410) renderWebLogin(error.message);
     }

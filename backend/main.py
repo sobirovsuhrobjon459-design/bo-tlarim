@@ -70,7 +70,6 @@ from .database import (
     ADMIN_CARD_NUMBER,
     ADMIN_ID,
     BOT_TOKEN,
-    GOOGLE_CLIENT_ID,
     PAYME_MERCHANT_ID,
     PAYME_SECRET_KEY,
     PAYME_TEST_MODE,
@@ -197,9 +196,7 @@ def _add_missing_columns() -> None:
             "offline_name": "VARCHAR(200)", "saved_answers": "TEXT", "sheet_number": "INTEGER", "variant": "VARCHAR(2)",
             "class_student_id": "INTEGER",
         },
-        "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)", "google_sub": "VARCHAR(64)",
-                  "google_email": "VARCHAR(200)"},
-        "app_logins": {"google_sub": "VARCHAR(64)", "google_email": "VARCHAR(200)"},
+        "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)"},
         "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)"},
         "school_classes": {"curator_user_id": "INTEGER", "code_start": "INTEGER", "code_end": "INTEGER"},
         "private_schools": {"monthly_fee": "INTEGER DEFAULT 0"},
@@ -248,9 +245,6 @@ def _add_missing_columns() -> None:
                     backfill = COLUMN_BACKFILLS.get((table_name, column_name))
                     if backfill:
                         connection.execute(text(backfill))
-        if "users" in existing_tables:
-            # Bitta Google akkaunt faqat bitta Telegram akkauntga bog'lanadi (yangi bazada create_all o'zi yaratadi)
-            connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_sub ON users (google_sub)"))
 
 
 _add_missing_columns()
@@ -4163,82 +4157,9 @@ def confirm_app_login(db: Session, token: str, tg_id: int, full_name: str, usern
         return False, "❗️ Bu kirish so'rovi eskirgan. Saytda yoki ilovada «Kirish»ni qaytadan bosing."
     remember_bot_user(db, tg_id, full_name, username)
     user = db.scalar(select(User).where(User.tg_id == tg_id))
-    if login.google_sub:
-        owner = db.scalar(select(User).where(User.google_sub == login.google_sub))
-        if owner and owner.id != user.id:
-            return False, "❗️ Bu Google akkaunt boshqa Telegram akkauntga bog'langan."
-        # Bog'langan Google akkaunt almashtiriladi — keyingi safar saytga faqat Google bilan kiriladi
-        user.google_sub, user.google_email = login.google_sub, login.google_email
     login.user_id, login.confirmed_at = user.id, utcnow()
     db.commit()
-    if login.google_sub:
-        return True, f"✅ Tasdiqlandi! {login.google_email or 'Google akkaunt'} endi shu Telegram akkauntga bog'landi — saytga qayting."
-    return True, "✅ Tasdiqlandi! Ilovaga qayting — kirish avtomatik bo'ladi."
-
-
-def app_login_google_email(db: Session, token: str) -> str | None:
-    """Bot: so'rov web saytdan (Google bilan) kelganmi — shu holda Google email'i."""
-
-    return db.scalar(select(AppLogin.google_email).where(AppLogin.token == token, AppLogin.google_sub.is_not(None)))
-
-
-# ---------- Web saytga Google orqali kirish ----------
-# 1) Sayt Google tugmasidan ID token (credential) oladi va POST /api/google-login ga yuboradi.
-# 2) Google akkaunt Telegram akkauntga bog'langan bo'lsa — darhol seans beriladi.
-# 3) Bog'lanmagan bo'lsa — bot orqali bir marta tasdiqlanadi (ilovadagi kabi), keyin bog'lanib qoladi.
-GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
-
-
-@app.get("/api/web-config")
-def web_config():
-    return {"google_client_id": GOOGLE_CLIENT_ID}
-
-
-def _verify_google_credential(credential: str) -> dict:
-    """Google ID token'ini Google'ning o'zida tekshiradi (imzo va muddat) va shu sayt uchun berilganini ko'radi."""
-
-    if not GOOGLE_CLIENT_ID:
-        raise HTTPException(status_code=503, detail="Google orqali kirish hali sozlanmagan")
-    try:
-        response = httpx.get("https://oauth2.googleapis.com/tokeninfo", params={"id_token": credential}, timeout=10)
-    except httpx.HTTPError:
-        raise HTTPException(status_code=503, detail="Google javob bermayapti — birozdan keyin urinib ko'ring")
-    info = response.json() if response.status_code == 200 else {}
-    if (
-        info.get("aud") != GOOGLE_CLIENT_ID
-        or info.get("iss") not in GOOGLE_ISSUERS
-        or not info.get("sub")
-        or str(info.get("email_verified")).lower() != "true"
-    ):
-        raise HTTPException(status_code=401, detail="Google kirishi tasdiqlanmadi — qaytadan urinib ko'ring")
-    return info
-
-
-@app.post("/api/google-login")
-def google_login(body: dict, db: Session = Depends(get_db)):
-    credential = body.get("credential")
-    if not isinstance(credential, str) or not credential:
-        raise HTTPException(status_code=422, detail="Google ma'lumoti kelmadi")
-    info = _verify_google_credential(credential)
-    sub, email = str(info["sub"])[:64], str(info.get("email") or "")[:200] or None
-
-    user = db.scalar(select(User).where(User.google_sub == sub))
-    if user:
-        if email and user.google_email != email:
-            user.google_email = email
-        session_token = secrets.token_urlsafe(32)
-        db.add(AppSession(token_hash=app_session_hash(session_token), user_id=user.id))
-        db.commit()
-        return {"status": "ok", "session": session_token}
-
-    username = _bot_username()
-    if not username:
-        raise HTTPException(status_code=503, detail="Bot hozir javob bermayapti — birozdan keyin urinib ko'ring")
-    token = secrets.token_urlsafe(16)
-    db.add(AppLogin(token=token, google_sub=sub, google_email=email))
-    db.commit()
-    return {"status": "link", "token": token, "email": email, "link": f"https://t.me/{username}?start=login_{token}",
-            "expires_in": int(APP_LOGIN_TTL.total_seconds())}
+    return True, "✅ Tasdiqlandi! Ilovaga yoki saytga qayting — kirish avtomatik bo'ladi."
 
 
 def _referral_view(db: Session, teacher: Teacher) -> dict:
@@ -10937,7 +10858,6 @@ def _privacy_html() -> str:
 <h2>1. Qanday ma'lumotlar saqlanadi</h2>
 <ul>
   <li>Telegram akkaunti: ID, ism, username va profil rasmi havolasi.</li>
-  <li>Web saytga Google orqali kirilganda: Google akkaunt identifikatori va e-mail manzili (parol olinmaydi va saqlanmaydi).</li>
   <li>Test natijalari, javoblar va xizmat ichida kiritilgan ma'lumotlar (o'quvchilar ro'yxati, davomat, to'lovlar).</li>
   <li>Foydalanuvchi o'zi kiritgan profil ma'lumotlari (masalan, telefon raqami).</li>
 </ul>
@@ -10953,19 +10873,15 @@ def _privacy_html() -> str:
 <p>Ma'lumotlar sotilmaydi va reklama uchun ishlatilmaydi. Ular faqat xizmatni ko'rsatish uchun zarur hollarda beriladi:
 to'lov tizimlari (Payme, Click) to'lovni amalga oshirish uchun, hamda qonunchilikda nazarda tutilgan hollarda.</p>
 
-<h2>4. Google ma'lumotlari</h2>
-<p>Google orqali kirishda faqat asosiy profil ma'lumotlari (identifikator va e-mail) olinadi. Ular faqat sizni tanish va
-Google akkauntingizni Telegram akkauntingizga bog'lash uchun ishlatiladi, uchinchi shaxslarga berilmaydi.</p>
-
-<h2>5. Saqlash va himoya</h2>
+<h2>4. Saqlash va himoya</h2>
 <p>Ma'lumotlar himoyalangan serverda saqlanadi. Kirish seanslarining o'zi emas, faqat ularning shifrlangan izi saqlanadi.
 Brauzerda faqat kirish seansi tokeni saqlanadi; reklama yoki kuzatuv cookie'lari ishlatilmaydi.</p>
 
-<h2>6. Ma'lumotlarni o'chirish</h2>
+<h2>5. Ma'lumotlarni o'chirish</h2>
 <p>Akkauntingiz va unga tegishli ma'lumotlarni o'chirishni so'rash mumkin — quyidagi aloqa orqali murojaat qiling.
 To'lovlar bo'yicha yozuvlar qonunchilik talab qilgan muddat davomida saqlanishi mumkin.</p>
 
-<h2>7. Aloqa</h2>
+<h2>6. Aloqa</h2>
 <ul>{contacts}</ul>
 </main></body></html>"""
 
@@ -10973,7 +10889,7 @@ To'lovlar bo'yicha yozuvlar qonunchilik talab qilgan muddat davomida saqlanishi 
 @app.get("/maxfiylik", include_in_schema=False)
 @app.get("/privacy", include_in_schema=False)
 def privacy_page():
-    """Maxfiylik siyosati — Google OAuth (Branding) uchun ham havola."""
+    """Maxfiylik siyosati — kirishsiz ochiladigan ommaviy sahifa."""
     return HTMLResponse(_privacy_html())
 
 

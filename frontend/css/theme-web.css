@@ -1,5 +1,5 @@
 /*
-  Web sayt dizayni (oddiy brauzer, Google bilan kirish) — faqat html.web-mode da ishlaydi,
+  Web sayt dizayni (oddiy brauzer, Telegram bot orqali kirish) — faqat html.web-mode da ishlaydi,
   Telegram Mini App va Android ilova ko'rinishiga ta'sir qilmaydi.
 
   Uslub (Chittak): to'q yashil chap menyu, och fonda oq kartalar, yashil urg'ular;
@@ -84,12 +84,6 @@ html.web-mode:not(.web-signed-in) body {
 
 .web-login-card .subtitle {
   margin: 0;
-}
-
-.google-button {
-  display: flex;
-  justify-content: center;
-  min-height: 44px;
 }
 
 .web-login-status {
