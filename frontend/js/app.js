@@ -403,6 +403,14 @@ function animatePageEntrance(page) {
   });
 }
 
+// Har sahifa sarlavhasining o'ng tomonida Chittak logosi turadi (sarlavha o'zi qo'ymagan bo'lsa).
+// Hero ichida logo bor sahifalarga (o'qituvchi/o'quvchi bosh sahifasi) qo'shilmaydi — ikki marta chiqmasin.
+function addPageBrand(page) {
+  const header = page?.querySelector(".page-header");
+  if (!header || header.querySelector(".page-brand") || page.querySelector(".hero-brand")) return;
+  header.insertAdjacentHTML("beforeend", `<span class="page-brand is-compact"><img src="/img/chittak-icon.png" alt="Chittak"></span>`);
+}
+
 function showPage(html, { exitRoot = false } = {}) {
   stopLiveScan(); // jonli skaner kamerasi boshqa sahifada yonib qolmasin
   // Menyu avval yashiriladi — kerak bo'lsa, sahifa o'zi qaytadan ko'rsatadi.
@@ -414,6 +422,7 @@ function showPage(html, { exitRoot = false } = {}) {
   // Ochiq matematik klaviatura yangi sahifa ustida qolib ketmasin
   if (activeMathField || window.mathVirtualKeyboard?.visible) closeMathKeyboard();
   appElement.innerHTML = `<div class="page">${html}</div>`;
+  addPageBrand(appElement.firstElementChild);
   animatePageEntrance(appElement.firstElementChild);
   window.scrollTo(0, 0);
   exitRootPage = exitRoot;
@@ -3579,11 +3588,13 @@ async function refreshSchoolInBackground(tab) {
   }
 }
 
-function schoolTabHeader(title) {
+// Maktab bo'limi sarlavhasi: chapda "orqaga", o'ngda Chittak belgisi (logo doim ko'rinib turadi)
+function schoolTabHeader(title = "") {
   return `
     <div class="page-header">
       <button class="back-button" type="button" data-action="back-folder" style="margin:0">←</button>
-      <h2 style="margin:0;flex:1">${escapeHtml(title)}</h2>
+      ${title ? `<h2 style="margin:0;flex:1">${escapeHtml(title)}</h2>` : `<span style="flex:1"></span>`}
+      <span class="page-brand">Chittak<img src="/img/chittak-icon.png" alt=""></span>
     </div>`;
 }
 
@@ -3599,7 +3610,7 @@ function renderMySchool(school, { refresh = true } = {}) {
 
   showPage(`
     <div data-school-tab="school">
-      ${schoolTabHeader("Maktab")}
+      ${schoolTabHeader()}
       <section class="hero-card school-hero">
         <div class="hero-top">
           <div class="school-hero-icon">${svgIcon("school")}</div>
