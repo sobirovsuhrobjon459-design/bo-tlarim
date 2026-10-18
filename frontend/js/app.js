@@ -815,6 +815,13 @@ function openExternalLink(url) {
     return;
   }
 
+  // Web saytda Telegram skripti bor, lekin Telegram yo'q: uning openTelegramLink'i saytning
+  // o'zini t.me ga almashtirib yuboradi — havola yangi oynada ochiladi, sayt joyida qoladi
+  if (ON_WEB) {
+    window.open(url, "_blank", "noopener");
+    return;
+  }
+
   const isTelegramLink = /^https?:\/\/t\.me\//.test(url);
 
   if (isTelegramLink && telegram?.openTelegramLink) {
@@ -3127,7 +3134,7 @@ function phoneFieldHtml(value = "", { birthDate = "", passport = "" } = {}) {
     <div class="phone-field">
       <input class="input" id="profile-phone" type="tel" inputmode="tel" placeholder="+998 90 123 45 67"
              value="${escapeHtml(value ? formatPhone(value) : "+998 ")}" />
-      ${telegram?.requestContact ? `<button type="button" class="share-pill" id="phone-from-telegram">📱 Telegram'dan</button>` : ""}
+      ${telegram?.initData && telegram?.requestContact ? `<button type="button" class="share-pill" id="phone-from-telegram">📱 Telegram'dan</button>` : ""}
     </div>
 
     <label class="field-label" for="profile-birth-date">Tug'ilgan sanangiz <span class="required-mark">*</span></label>
@@ -6008,6 +6015,10 @@ function renderTestCodeSearch() {
     "click",
     guarded(async () => {
       const code = document.getElementById("test-code-input").value.trim();
+      if (!code) {
+        showToast("Test kodini kiriting");
+        return;
+      }
       const test = await api(`/api/tests/${encodeURIComponent(code)}`);
       renderTestFound(test);
     })
