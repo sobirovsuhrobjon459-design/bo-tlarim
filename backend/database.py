@@ -35,7 +35,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 # Web saytga Google orqali kirish (Google Cloud Console → "Chittak" loyihasi → Clients → "Chittak web").
 # Client ID maxfiy emas (brauzerda baribir ko'rinadi) — shuning uchun standart qiymat shu yerda
 GOOGLE_CLIENT_ID = (
-    os.getenv("GOOGLE_CLIENT_ID") or "799269028618-d0htp5mn41mmas9fdottphj2joi6tf6s.apps.googleusercontent.com"
+    os.getenv("GOOGLE_CLIENT_ID") or "799269028618-lq1dvnu88k3gt8159j0osv67gltnm5nq.apps.googleusercontent.com"
 ).strip()
 
 # MUHIM: Render'ning bepul tarifida fayl tizimi vaqtinchalik — har deploydan
