@@ -9805,12 +9805,14 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     // Nega ochilmadi — o'qituvchi nima qilishini bilsin (keyingi safar yana urinib ko'riladi)
     const reason =
       error?.name === "NotAllowedError" || error?.name === "SecurityError"
-        ? "Kameraga ruxsat yo'q. Telefon sozlamalari → Ilovalar → Chittak → Ruxsatlar → Kamera → «Ruxsat berish». " +
-          "Ilova eski bo'lsa (1.0), yangi versiyasini o'rnating."
+        ? ON_WEB
+          ? "Brauzer kameraga ruxsat bermadi. Manzil satri chetidagi 🔒 belgisini bosing → Kamera → «Ruxsat berish», so'ng sahifani yangilang."
+          : "Kameraga ruxsat yo'q. Telefon sozlamalari → Ilovalar → Chittak → Ruxsatlar → Kamera → «Ruxsat berish». " +
+            "Ilova eski bo'lsa (1.0), yangi versiyasini o'rnating."
         : error?.name === "NotReadableError" || error?.name === "AbortError"
           ? "Kamera boshqa ilovada band. Uni yopib, qayta urinib ko'ring."
           : error?.name === "NotFoundError" || error?.name === "OverconstrainedError"
-            ? "Orqa kamera topilmadi."
+            ? ON_WEB ? "Kamera topilmadi." : "Orqa kamera topilmadi."
             : "Bu yerda jonli skaner ishlamaydi.";
     status.textContent = `⚠️ ${reason} Hozircha «Galereyadan / oddiy surat» bilan davom etishingiz mumkin.`;
     return;
@@ -10894,10 +10896,10 @@ async function renderTestDetail(testId) {
     )
   );
 
-  // Skaner faqat Android ilovada (APK); Telegram botida — ilovani yuklab olish taklifi
+  // Skaner Android ilovada (APK) va web saytda (brauzer kamerasi yoki surat); Telegram botida — ilovani yuklab olish taklifi
   document
     .getElementById("scan-sheet-button")
-    ?.addEventListener("click", guarded(() => (IN_APP ? scanSheetPage(testId, test) : showScannerAppOffer())));
+    ?.addEventListener("click", guarded(() => (IN_APP || ON_WEB ? scanSheetPage(testId, test) : showScannerAppOffer())));
   document.getElementById("attach-classes-button-open")?.addEventListener("click", guarded(() => renderAttachClasses(testId)));
   document.getElementById("variants-button")?.addEventListener("click", guarded(() => renderVariantsPage(testId, test)));
   queueAll().then((items) => {
