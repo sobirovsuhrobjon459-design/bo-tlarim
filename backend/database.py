@@ -32,8 +32,11 @@ def utcnow() -> datetime:
 
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-# Web saytga Google orqali kirish (Google Cloud Console → OAuth Client ID, "Web application")
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+# Web saytga Google orqali kirish (Google Cloud Console → "Chittak" loyihasi → Clients → "Chittak web").
+# Client ID maxfiy emas (brauzerda baribir ko'rinadi) — shuning uchun standart qiymat shu yerda
+GOOGLE_CLIENT_ID = (
+    os.getenv("GOOGLE_CLIENT_ID") or "799269028618-d0htp5mn41mmas9fdottphj2joi6tf6s.apps.googleusercontent.com"
+).strip()
 
 # MUHIM: Render'ning bepul tarifida fayl tizimi vaqtinchalik — har deploydan
 # keyin (va xizmat uyqudan uyg'onganda) fayllar o'chib ketadi. Ya'ni SQLite
