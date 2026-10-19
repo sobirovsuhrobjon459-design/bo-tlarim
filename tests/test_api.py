@@ -4653,6 +4653,8 @@ def test_qisman_korinmagan_varaq_rad_etiladi():
 def test_javoblar_kaliti_royxat_korinishida():
     """O'qituvchi kaliti titul emas — "1 — B" ro'yxati (yozma javob matn bo'lib)."""
 
+    import re
+
     import fitz
 
     reset_database()
@@ -4663,7 +4665,10 @@ def test_javoblar_kaliti_royxat_korinishida():
     text = fitz.open(stream=key.content, filetype="pdf")[0].get_text()
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     assert "JAVOBLAR KALITI" in lines[0]
-    assert ["1 — B", "2 — C", "3 — A, C", "4 — 2sqrt(3)"] == lines[-4:], lines
+    answers = [line for line in lines if re.match(r"^\d+ — ", line)]
+    assert ["1 — B", "2 — C", "3 — A, C", "4 — 2sqrt(3)"] == answers, lines
+    # Chittak brendi: sarlavhada nom va hujjat turi, pastda sahifa raqami
+    assert "Chittak" in lines and "Javoblar kaliti" in lines and "1 / 1" in lines, lines
 
 
 def test_telefon_internetsiz_tekshirgan_varaq_id_boyicha_saqlanadi():

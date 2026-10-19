@@ -1464,6 +1464,9 @@ class _BrandCanvas(pdf_canvas.Canvas):
         self.restoreState()
 
     def save(self):
+        # Oddiy canvas bilan chizilganda (kalit, ID ro'yxati) oxirgi sahifa showPage'siz qoladi — u ham kirsin
+        if self._code:
+            self.showPage()
         total = len(self._saved_pages)
         for state in self._saved_pages:
             self.__dict__.update(state)
@@ -2711,6 +2714,34 @@ def _draw_evalbee_card(sheet, test: Test, plan: dict, page: int, with_answers: b
                   "x": x, "y": center, "r": radius, "block": corners})
 
 
+def _draw_sheet_brand(sheet, card_bottom: float) -> None:
+    """
+    Titul ostida (kartochkadan tashqarida) Chittak belgisi: logo, nom va shior. Skaner faqat burchak va
+    chet belgilari orasini o'qiydi; belgi pastki belgilardan ~60 pt pastda, kichik va o'qilmaydigan joyda.
+    Kartochka butun sahifani egallasa (joy yo'q) — chizilmaydi.
+    """
+
+    y = card_bottom - 28
+    if y < 30:
+        return
+    name_width = stringWidth("Chittak", REPORT_FONT_BOLD, 10)
+    slogan = f"·  {REPORT_SLOGAN}"
+    total = 16 + 6 + name_width + 6 + stringWidth(slogan, REPORT_FONT, 8)
+    x = (A4[0] - total) / 2
+    sheet.saveState()
+    try:
+        sheet.drawImage(str(FRONTEND_DIR / "img" / "chittak-icon.png"), x, y - 4, 16, 16, mask="auto")
+    except Exception:
+        pass
+    sheet.setFillColor(REPORT_BLUE)
+    sheet.setFont(REPORT_FONT_BOLD, 10)
+    sheet.drawString(x + 22, y, "Chittak")
+    sheet.setFillColor(REPORT_MUTED)
+    sheet.setFont(REPORT_FONT, 8)
+    sheet.drawString(x + 28 + name_width, y + 1, slogan)
+    sheet.restoreState()
+
+
 def _draw_compact_sheets(sheet, test: Test, with_answers: bool, bubbles: list | None, students: list | None,
                          variants: list[str] | None, key_override: dict | None, key_variant: str | None) -> None:
     """Ixcham titullar: bitta A4 ga sig'ganicha (ostma-ost, orasida qirqish chizig'i)."""
@@ -2736,6 +2767,8 @@ def _draw_compact_sheets(sheet, test: Test, with_answers: bool, bubbles: list | 
             draw_card(sheet, test, plan, page, with_answers, student,
                       bubbles if index == 0 else None, variants, key_variant)
             sheet.restoreState()
+            if per_sheet == 1:
+                _draw_sheet_brand(sheet, offset)
             if slot:
                 # Qirqish chizig'i — titullar orasida
                 sheet.saveState()
@@ -2783,7 +2816,7 @@ def generate_answer_sheet_pdf(test: Test, with_answers: bool = False, bubbles: l
 
 
 KEY_ROW = 17          # kalit ro'yxatida qatorlar orasi
-KEY_ROWS = 40         # bitta ustunda
+KEY_ROWS = 36         # bitta ustunda (tepada brend sarlavhasiga joy qoladi)
 KEY_COLUMNS = 4       # bitta sahifada ko'pi bilan
 
 
@@ -2794,7 +2827,8 @@ def generate_answer_key_pdf(test: Test, key_override: dict | None = None, key_va
     """
 
     buffer = io.BytesIO()
-    sheet = pdf_canvas.Canvas(buffer, pagesize=A4)
+    kind = "Javoblar kaliti" + (f" — {key_variant} variant" if key_variant else "")
+    sheet = _brand_canvas(test.title, kind)(buffer, pagesize=A4)  # Chittak sarlavhasi, imzo va "1 / 2"
     width, height = A4
     margin = 50
     items = _answer_sheet_items(test, key_override)
@@ -2803,13 +2837,13 @@ def generate_answer_key_pdf(test: Test, key_override: dict | None = None, key_va
     for page_index, page_items in enumerate(pages):
         if page_index:
             sheet.showPage()
-        y = height - margin
+        y = height - REPORT_HEADER_HEIGHT - 26
         sheet.setFont(REPORT_FONT_BOLD, 15)
+        sheet.setFillColor(REPORT_BLUE)
         title = "JAVOBLAR KALITI" + (f" — {key_variant} variant" if key_variant else "")
         sheet.drawString(margin, y, title)
         sheet.setFont(REPORT_FONT, 10)
         sheet.setFillColor(REPORT_MUTED)
-        sheet.drawRightString(width - margin, y, f"{page_index + 1} / {len(pages)}" if len(pages) > 1 else "")
         y -= 17
         sheet.drawString(margin, y, f"{test.title[:70]}  ·  Kod {test.code}  ·  {test.subject}  ·  {len(items)} ta savol")
         sheet.setFillColor(colors.black)
@@ -2846,7 +2880,7 @@ def generate_student_id_list_pdf(test: Test, students: list[tuple]) -> bytes:
     """
 
     buffer = io.BytesIO()
-    sheet = pdf_canvas.Canvas(buffer, pagesize=A4)
+    sheet = _brand_canvas(test.title, "O'quvchilar ID ro'yxati")(buffer, pagesize=A4)
     width, height = A4
     margin, row_height = 50, 22
     with_variant = len({variant for _, _, variant in students}) > 1
@@ -2854,7 +2888,7 @@ def generate_student_id_list_pdf(test: Test, students: list[tuple]) -> bytes:
     number_x, name_x, id_x, variant_x = margin, margin + 34, width - margin - (150 if with_variant else 80), width - margin - 70
 
     def header(first: bool) -> float:
-        y = height - margin
+        y = height - REPORT_HEADER_HEIGHT - 26
         if first:
             sheet.setFont(REPORT_FONT_BOLD, 15)
             sheet.drawString(margin, y, test.title[:70])
@@ -2876,7 +2910,7 @@ def generate_student_id_list_pdf(test: Test, students: list[tuple]) -> bytes:
 
     y = header(True)
     for index, (number, name, variant) in enumerate(students, start=1):
-        if y < margin:
+        if y < 60:  # pastda Chittak imzosi turadi
             sheet.showPage()
             y = header(False)
         sheet.setFont(REPORT_FONT, 11)
