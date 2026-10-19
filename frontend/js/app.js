@@ -12017,7 +12017,7 @@ function renderWebLogin(errorText = "") {
       <div class="web-login-brand">
         <div class="web-logo">${WEB_LOGO}</div>
         <h1>Chittak</h1>
-        <p>Ta'limda tezlik. Natijada aniqlik.</p>
+        <p>Ilg'or ta'lim, tezkor natija</p>
       </div>
       <div class="web-login-card" id="web-login-card">
         <h2>Kirish</h2>

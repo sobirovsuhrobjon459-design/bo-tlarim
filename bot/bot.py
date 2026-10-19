@@ -698,7 +698,7 @@ async def _setup_menu_button() -> None:
 # Bot profili (brend): nom, bo'sh chatdagi tavsif va profil/ulashishdagi qisqa tavsif.
 # Avatar Bot API orqali o'rnatilmaydi — uni @BotFather'da /setuserpic bilan qo'yiladi.
 BOT_NAME = "Chittak"
-BOT_SHORT_DESCRIPTION = "Ta'limda tezlik. Natijada aniqlik. Maktab CRM, titul testlarini skanerlash va natijalar tahlili."
+BOT_SHORT_DESCRIPTION = "Ilg'or ta'lim, tezkor natija. Maktab CRM, titul testlarini skanerlash va natijalar tahlili."
 BOT_DESCRIPTION = (
     "Chittak — maktablar, o'quv markazlari va repetitorlar uchun platforma.\n\n"
     "• Testlarni yarating va titul varaqlarini telefon kamerasi bilan tekshiring\n"

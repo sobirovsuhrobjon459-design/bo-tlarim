@@ -342,7 +342,7 @@ class _SplashViewState extends State<_SplashView> with TickerProviderStateMixin 
                 rise(
                   slogan,
                   const Text(
-                    "Ta'limda tezlik.\nNatijada aniqlik.",
+                    "Ilg'or ta'lim,\ntezkor natija",
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Color(0xFF3EDC7E), fontSize: 19, fontWeight: FontWeight.w700, height: 1.3),
                   ),
