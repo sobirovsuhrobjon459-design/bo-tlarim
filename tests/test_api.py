@@ -4465,6 +4465,18 @@ def test_dars_jadvali_avtomatik_tuziladi():
     assert sum(item["hours"] for item in tight["unplaced"]) == 10 - 3, tight["unplaced"]
     assert all("Bobur" in item["reason"] for item in tight["unplaced"]), tight["unplaced"]
 
+    # Har o'qituvchiga bot orqali o'z jadvali ketadi (faqat rahbariyat yuboradi)
+    assert client.post("/api/schools/timetable/notify", headers=as_user(713)).status_code == 403
+    sent, restore = _capture_result_notices()
+    try:
+        result = client.post("/api/schools/timetable/notify", headers=as_user(711)).json()
+    finally:
+        restore()
+    assert result["sent"] == 3 and result["teachers"] == ["Bobur Aliyev", "Dilnoza Aliyev", "Jamshid Aliyev"], result
+    to_bobur = [text for chat, text in sent if chat == 712]
+    assert len(to_bobur) == 1 and "Bobur Aliyev" in to_bobur[0] and "Jami: haftasiga 10 soat" in to_bobur[0], to_bobur
+    assert "5-A · Matematika" in to_bobur[0] and "Ona tili" not in to_bobur[0]
+
 
 def test_maxfiylik_siyosati_sahifasi():
     """Ochiq havola: kirishsiz ochiladi."""

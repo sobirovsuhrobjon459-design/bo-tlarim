@@ -8825,18 +8825,18 @@ def class_test_image(context: dict) -> bytes:
     panel_left, panel_right = 1215, width - 50
     bar_left, bar_right = panel_left + 30, panel_right - 25
 
-    image = Image.new("RGBA", (width, height), "#f6f9fb")
+    image = Image.new("RGBA", (width, height), "#F3FAF5")
     draw = ImageDraw.Draw(image)
 
     # Sarlavha va test haqida ma'lumot
-    draw.text((width // 2, 92), fit(context["title"], title_font, width - 120), font=title_font, fill="#12324f", anchor="mm")
+    draw.text((width // 2, 92), fit(context["title"], title_font, width - 120), font=title_font, fill="#0B1F2A", anchor="mm")
     meta = "  ·  ".join(part for part in (context["school_name"], context["class_name"], context["subject"] or "Fan", context["date"]) if part)
-    draw.text((width // 2, 170), fit(meta, meta_font, width - 120), font=meta_font, fill="#5b6b7a", anchor="mm")
+    draw.text((width // 2, 170), fit(meta, meta_font, width - 120), font=meta_font, fill="#4F6670", anchor="mm")
     summary = (f"Qatnashdi: {context['participants']} / {context['total']}   ·   O'rtacha: "
                f"{_fmt_number(context['average_percent'] or 0)}%   ·   Maks. {_fmt_number(context['max_score'])} ball")
-    draw.text((width // 2, 214), summary, font=meta_bold, fill="#1d3b53", anchor="mm")
+    draw.text((width // 2, 214), summary, font=meta_bold, fill="#0B1F2A", anchor="mm")
     draw.text((width // 2, 252), fit(f"O'qituvchi: {context['teacher_name']}", small_font, width - 120),
-              font=small_font, fill="#7b8a97", anchor="mm")
+              font=small_font, fill="#4F6670", anchor="mm")
 
     # Ustunlar sarlavhasi: chapda ingichka chiziq, o'ngda egri bo'lib ko'tariladigan to'q ko'k-yashil tasma
     band_height, line = 84, 9
@@ -8850,13 +8850,13 @@ def class_test_image(context: dict) -> bytes:
     points += [(width, head_top), (width, band_bottom), (40, band_bottom)]
     band_mask = Image.new("L", (width, height), 0)
     ImageDraw.Draw(band_mask).polygon(points, fill=255)
-    band = Image.new("RGBA", (width, height), "#1d4e6b")
-    band.paste(gradient((width - 600, height), "#1d4e6b", "#2a8f9c"), (600, 0))
+    band = Image.new("RGBA", (width, height), "#0B1F2A")
+    band.paste(gradient((width - 600, height), "#0B1F2A", "#00A844"), (600, 0))
     image.paste(band, (0, 0), band_mask)
     draw = ImageDraw.Draw(image)
     head_y = head_top + 38
-    draw.text((120, head_y), "No.", font=head_font, fill="#1d3b53", anchor="mm")
-    draw.text((name_x + 160, head_y), "Ism", font=head_font, fill="#1d3b53", anchor="mm")
+    draw.text((120, head_y), "No.", font=head_font, fill="#0B1F2A", anchor="mm")
+    draw.text((name_x + 160, head_y), "Ism", font=head_font, fill="#0B1F2A", anchor="mm")
     draw.text((percent_x, head_y + 4), "Natija (%)", font=head_font, fill="#ffffff", anchor="mm")
     draw.text(((panel_left + panel_right) // 2, head_y + 4), "Grafik", font=head_font, fill="#ffffff", anchor="mm")
 
@@ -8872,11 +8872,11 @@ def class_test_image(context: dict) -> bytes:
     for index in range(len(rows)):
         top = table_top + index * (row_height + gap)
         draw.rounded_rectangle([40, top, width - 40, top + row_height], radius=16,
-                               fill="#ffffff" if index % 2 == 0 else "#f1f5f9")
+                               fill="#ffffff" if index % 2 == 0 else "#F3FAF5")
     # Grafik ustunining umumiy och foni
     if rows:
         draw.rounded_rectangle([panel_left, table_top - 6, panel_right, table_top + len(rows) * (row_height + gap) - gap + 6],
-                               radius=18, fill="#e4edf3")
+                               radius=18, fill="#EAF7EE")
 
     # A+ … B — yashil, C+ va C — sariq, NC — qizil
     green, gold = ("#0e9f6e", "#34d399"), ("#c48a0a", "#f2c94c")
@@ -8889,21 +8889,21 @@ def class_test_image(context: dict) -> bytes:
 
         # O'rin doirachasi: birinchi uchtasi to'q, qolganlari och
         podium = bool(rank) and rank <= 3
-        draw.ellipse([92, middle - 28, 148, middle + 28], fill="#1d5a74" if podium else "#dde7ee")
+        draw.ellipse([92, middle - 28, 148, middle + 28], fill="#00A844" if podium else "#EAF7EE")
         draw.text((120, middle), str(rank) if rank else "—", font=rank_font,
-                  fill="#ffffff" if podium else "#1d3b53", anchor="mm")
+                  fill="#ffffff" if podium else "#0B1F2A", anchor="mm")
 
         # Avatar: oddiy odam belgisi
         cx = 195
-        draw.ellipse([cx - 28, middle - 28, cx + 28, middle + 28], fill="#e3eaf0")
-        person = "#b4c2ce" if absent else "#7f97ac"
+        draw.ellipse([cx - 28, middle - 28, cx + 28, middle + 28], fill="#EAF7EE")
+        person = "#b4c2ce" if absent else "#7D97A3"
         draw.ellipse([cx - 10, middle - 19, cx + 10, middle + 1], fill=person)
         draw.chord([cx - 20, middle + 5, cx + 20, middle + 37], 180, 360, fill=person)
 
         draw.text((name_x, middle), fit(row["name"], name_font, percent_x - 110 - name_x), font=name_font,
                   fill="#9aa6b2" if absent else "#111c2b", anchor="lm")
 
-        draw.rounded_rectangle([bar_left, middle - 15, bar_right, middle + 15], radius=15, fill="#d3dfe8")
+        draw.rounded_rectangle([bar_left, middle - 15, bar_right, middle + 15], radius=15, fill="#DDEFE2")
         if absent:
             draw.text((percent_x, middle), "kelmadi", font=small_font, fill="#9aa6b2", anchor="mm")
             continue
@@ -8920,7 +8920,7 @@ def class_test_image(context: dict) -> bytes:
 
     buffer = io.BytesIO()
     image.convert("RGB").save(buffer, format="PNG", optimize=True)
-    return buffer.getvalue()
+    return _brand_png(buffer.getvalue(), context["school_name"], f"{context['class_name']} · test natijalari")
 
 
 @app.get("/api/class-tests/{test_id}/file")
@@ -10116,6 +10116,48 @@ def auto_timetable(body: AutoTimetableIn, user: User = Depends(get_current_user)
     }
 
 
+def _teacher_week_text(school_name: str, teacher_name: str, slots: list[LessonSlot], class_names: dict[int, str]) -> str:
+    """O'qituvchiga botda yuboriladigan haftalik jadval (oddiy matn)."""
+
+    lines = [f"📅 {teacher_name}, sizning haftalik dars jadvalingiz", f"🏫 {school_name}", ""]
+    by_day: dict[int, list[LessonSlot]] = {}
+    for slot in slots:
+        by_day.setdefault(slot.weekday, []).append(slot)
+    for day in sorted(by_day):
+        lines.append(f"{WEEKDAYS[day]}:")
+        for slot in sorted(by_day[day], key=lambda item: item.start_time):
+            number = f"{slot.period}-dars, " if slot.period else ""
+            lines.append(f"  • {number}{slot.start_time}–{slot.end_time} — {class_names.get(slot.class_id, '')} · {slot.subject or 'dars'}")
+        lines.append("")
+    lines.append(f"Jami: haftasiga {len(slots)} soat. Jadval ilovada: Maktab → Dars jadvali → Mening.")
+    return "\n".join(lines)
+
+
+@app.post("/api/schools/timetable/notify")
+def notify_timetable(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Har bir o'qituvchiga bot orqali o'zining haftalik jadvalini yuboradi (faqat rahbariyat)."""
+
+    member = _require_school_member(db, user)
+    _require_director(member)
+    school = db.get(PrivateSchool, member.school_id)
+    classes = db.scalars(
+        select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None))
+    ).all()
+    class_names = {item.id: item.name for item in classes}
+    slots = [slot for slot in _active_slots(db, school_id=member.school_id) if slot.class_id in class_names and slot.teacher_user_id]
+    by_teacher: dict[int, list[LessonSlot]] = {}
+    for slot in slots:
+        by_teacher.setdefault(slot.teacher_user_id, []).append(slot)
+    sent = []
+    for teacher_id, own in by_teacher.items():
+        target = _active_school_member(db, member.school_id, teacher_id)
+        if not target or not target.user or not target.user.tg_id:
+            continue
+        _send_result_notice_in_background((target.user.tg_id, _teacher_week_text(school.name, target.user.full_name, own, class_names)))
+        sent.append(target.user.full_name)
+    return {"sent": len(sent), "teachers": sorted(sent)}
+
+
 @app.put("/api/schools/members/{user_id}/workload")
 def set_member_workload(user_id: int, body: WorkloadIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """O'qituvchi yuklamasi: haftalik soat me'yori, ish kunlari va ish vaqti."""
@@ -10385,6 +10427,55 @@ def attendance_pdf(context: dict) -> bytes:
     return buffer.getvalue()
 
 
+def _brand_png(image_bytes: bytes, org_text: str, kind_text: str) -> bytes:
+    """
+    Ota-onalarga yuboriladigan rasmga Chittak ramkasi: tepada logo, "Chittak", o'ngda maktab va
+    hisobot turi, yashil chiziq; pastda shior. Fon rangi ichki rasmnikidek (chok ko'rinmaydi).
+    """
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    inner = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    width = inner.width
+    scale = width / 1080
+    header, footer = round(118 * scale), round(76 * scale)
+    background = inner.getpixel((min(4, width - 1), min(inner.height - 1, 40)))
+    canvas = Image.new("RGB", (width, header + inner.height + footer), background)
+    canvas.paste(inner, (0, header))
+    draw = ImageDraw.Draw(canvas)
+
+    def font(name: str, size: float):
+        try:
+            return ImageFont.truetype(str(FONTS_DIR / name), round(size * scale))
+        except OSError:
+            return ImageFont.load_default()
+
+    side = round(40 * scale)
+    logo_size = round(62 * scale)
+    try:
+        logo = Image.open(FRONTEND_DIR / "img" / "chittak-icon.png").convert("RGBA").resize((logo_size, logo_size), Image.LANCZOS)
+        canvas.paste(logo, (side, round(26 * scale)), logo)
+    except OSError:
+        pass  # logo bo'lmasa ham rasm chiqaveradi
+    draw.text((side + logo_size + round(16 * scale), round(57 * scale)), "Chittak", font=font("DejaVuSans-Bold.ttf", 36),
+              fill="#0B1F2A", anchor="lm")
+    right = width - side
+    org = org_text or ""
+    org_font = font("DejaVuSans-Bold.ttf", 22)
+    while org and draw.textlength(org, font=org_font) > width * 0.5:
+        org = org[:-2].rstrip() + "…"
+    draw.text((right, round(44 * scale)), org, font=org_font, fill="#0B1F2A", anchor="rm")
+    draw.text((right, round(74 * scale)), kind_text, font=font("DejaVuSans.ttf", 19), fill="#4F6670", anchor="rm")
+    line_y = round(104 * scale)
+    draw.rectangle([side, line_y, right, line_y + max(2, round(4 * scale))], fill="#00C853")
+    draw.text((side, header + inner.height + footer // 2), f"Chittak — {REPORT_SLOGAN}", font=font("DejaVuSans.ttf", 19),
+              fill="#4F6670", anchor="lm")
+
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()
+
+
 def attendance_image(context: dict) -> bytes:
     """Ota-onalar guruhiga — rasm (PNG) ko'rinishi."""
 
@@ -10403,10 +10494,9 @@ def attendance_image(context: dict) -> bytes:
 
     image = Image.new("RGB", (width, height), "#ffffff")
     draw = ImageDraw.Draw(image)
-    draw.rectangle([0, 0, width, 12], fill="#1f4e79")
-    draw.text((50, 40), f"{context['class_name']} — {context['lesson']}", font=title_font, fill="#1f4e79")
-    draw.text((50, 110), f"{context['school_name']}  ·  davomat", font=text_font, fill="#374151")
-    draw.text((50, 152), f"O'qituvchi: {context['teacher_name']}", font=text_font, fill="#374151")
+    draw.text((50, 40), f"{context['class_name']} — {context['lesson']}", font=title_font, fill="#0B1F2A")
+    draw.text((50, 110), f"{context['school_name']}  ·  davomat", font=text_font, fill="#4F6670")
+    draw.text((50, 152), f"O'qituvchi: {context['teacher_name']}", font=text_font, fill="#4F6670")
     times = f"Dars: {context['when']}" + (f"   Tahrir: {context['updated_at']}" if context["updated_at"] else "")
     draw.text((50, 194), times, font=text_font, fill="#6b7280")
 
@@ -10418,14 +10508,14 @@ def attendance_image(context: dict) -> bytes:
         x += draw.textlength(text, font=bold_font) + 40
 
     y = top
-    draw.rectangle([40, y, width - 40, y + row_height], fill="#1f4e79")
+    draw.rectangle([40, y, width - 40, y + row_height], fill="#00A844")
     draw.text((60, y + 14), "№", font=bold_font, fill="#ffffff")
     draw.text((140, y + 14), "F.I.Sh.", font=bold_font, fill="#ffffff")
     draw.text((width - 300, y + 14), "Holat", font=bold_font, fill="#ffffff")
     for index, (name, status) in enumerate(marks, start=1):
         y += row_height
         if index % 2 == 0:
-            draw.rectangle([40, y, width - 40, y + row_height], fill="#f0f3f7")
+            draw.rectangle([40, y, width - 40, y + row_height], fill="#F3FAF5")
         draw.text((60, y + 14), str(index), font=text_font, fill="#111827")
         draw.text((140, y + 14), name[:38], font=text_font, fill="#111827")
         draw.text((width - 300, y + 14), ATTENDANCE_LABELS.get(status, ("?", ""))[0], font=bold_font,
@@ -10433,7 +10523,7 @@ def attendance_image(context: dict) -> bytes:
 
     buffer = io.BytesIO()
     image.save(buffer, format="PNG", optimize=True)
-    return buffer.getvalue()
+    return _brand_png(buffer.getvalue(), context["school_name"], f"{context['class_name']} · davomat")
 
 
 def _send_photo_to_telegram(chat_id: int, file_name: str, image_bytes: bytes, caption: str = "") -> None:

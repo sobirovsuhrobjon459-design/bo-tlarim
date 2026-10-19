@@ -1609,3 +1609,19 @@ button.tt-cell {
   background: var(--mint);
   color: var(--green-deep);
 }
+
+/* Dars jadvali: bo'lim tugmalari ekranga sig'adi; maslahat — yashil ma'lumot (qizil xato emas) */
+.class-chips.tt-sections {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
+.notice.is-info {
+  background: var(--lilac);
+  border-color: var(--color-border);
+  color: var(--green-deep);
+}
+
+.tt-notify-button {
+  margin: 8px 0 4px;
+}

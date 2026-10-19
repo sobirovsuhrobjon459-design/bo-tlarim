@@ -4676,7 +4676,7 @@ async function renderSchedule(view = scheduleView, classId = scheduleClassId) {
             ? ""
             : `${
                 isLeader(currentSchool)
-                  ? `<div class="notice" style="margin:12px 0 0">Sinfga smena tanlansa, jadval qo'ng'iroq setkasi ko'rinishida tuziladi: «Reja» → «Setka».</div>`
+                  ? `<div class="notice is-info" style="margin:12px 0 0">💡 Sinfga smena tanlansa, jadval qo'ng'iroq setkasi ko'rinishida tuziladi: «Reja» → «Setka».</div>`
                   : ""
               }${weekScheduleHtml(schedule.slots, { editable: schedule.can_edit })}`
         }`;
@@ -4951,7 +4951,7 @@ function shiftPeriodsHtml(shift) {
 
 function timetablePlanHtml(data) {
   const chips = `
-    <div class="class-chips">
+    <div class="class-chips tt-sections">
       ${TIMETABLE_SECTIONS.map(
         (item) => `<button type="button" class="class-chip${item.id === timetableSection ? " active" : ""}" data-tt-section="${item.id}">${item.label}</button>`
       ).join("")}
@@ -5006,7 +5006,9 @@ function timetablePlanHtml(data) {
                    <span class="lesson-info"><b>${escapeHtml(item.name)}</b><small>${
                      item.plan.length ? escapeHtml(item.plan.map((row) => `${row.subject} ${row.hours}`).join(" · ")) : "Reja kiritilmagan"
                    }</small></span>
-                   <span class="lesson-state">${item.placed_hours}/${item.planned_hours} soat</span>
+                   <span class="lesson-state${item.planned_hours && item.placed_hours >= item.planned_hours ? " is-ok" : ""}">${
+                     item.planned_hours ? `jadvalda ${item.placed_hours}/${item.planned_hours}` : `jadvalda ${item.placed_hours} · reja yo'q`
+                   }</span>
                    <span class="attention-arrow">›</span>
                  </button>`
              )
@@ -5015,7 +5017,7 @@ function timetablePlanHtml(data) {
       : `<div class="empty-state"><div style="font-size:42px">🏫</div><p>Maktabda hali sinf yo'q.</p></div>`;
   } else if (timetableSection === "teachers") {
     body = `
-      <p class="subtitle" style="margin:12px 0 0">Rejada — o'quv rejada biriktirilgan soatlar; me'yor — haftalik stavka. O'qituvchini bosing.</p>
+      <p class="subtitle" style="margin:12px 0 0">Har o'qituvchiga o'quv rejada biriktirilgan soat / haftalik me'yori (stavka). O'qituvchini bosing.</p>
       <div class="panel lesson-list" style="margin-top:10px">
         ${data.teachers
           .map((item) => {
@@ -5026,7 +5028,9 @@ function timetablePlanHtml(data) {
                 <span class="lesson-info"><b>${escapeHtml(item.name)}</b><small>${
                   item.subjects.length ? escapeHtml(item.subjects.join(", ")) : "Fan belgilanmagan"
                 } · ${weekdaysText(item.work_days)}${time}</small></span>
-                <span class="lesson-state${over ? " is-warn" : ""}">${item.assigned_hours}/${item.weekly_hours ?? "—"} soat</span>
+                <span class="lesson-state${over ? " is-warn" : ""}">${
+                  item.weekly_hours != null ? `${item.assigned_hours}/${item.weekly_hours} soat` : `${item.assigned_hours} soat · me'yor yo'q`
+                }</span>
                 <span class="attention-arrow">›</span>
               </button>`;
           })
@@ -5063,7 +5067,12 @@ function timetablePlanHtml(data) {
             : "Avval sinflarga smena tanlang va o'quv rejani kiriting — keyin jadval o'zi tuziladi."
         }</small></span>
         <button type="button" class="btn tt-auto-button" id="auto-timetable-button"${ready ? "" : " disabled"}>Tuzish</button>
-      </div>`
+      </div>
+      ${
+        data.classes.some((item) => item.placed_hours)
+          ? `<button type="button" class="btn btn-ghost tt-notify-button" id="notify-timetable-button">📨 Jadvalni o'qituvchilarga yuborish</button>`
+          : ""
+      }`
     : "";
   return auto + chips + body;
 }
@@ -5078,6 +5087,14 @@ function wireTimetablePlan(data) {
   );
   document.getElementById("add-shift-button")?.addEventListener("click", () => openShiftSheet(null, reload));
   document.getElementById("auto-timetable-button")?.addEventListener("click", () => openAutoTimetableSheet(data, reload));
+  document.getElementById("notify-timetable-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      if (!(await askConfirm("Har bir o'qituvchiga bot orqali uning haftalik dars jadvali yuborilsinmi?"))) return;
+      const result = await api("/api/schools/timetable/notify", { method: "POST" });
+      showToast(result.sent ? `📨 ${result.sent} ta o'qituvchiga jadval yuborildi` : "Jadvalida darsi bor o'qituvchi topilmadi");
+    })
+  );
   document.querySelectorAll("[data-edit-shift]").forEach((button) =>
     button.addEventListener("click", () => openShiftSheet(data.shifts.find((item) => item.id === Number(button.dataset.editShift)), reload))
   );
@@ -5177,7 +5194,7 @@ function openAutoTimetableSheet(data, onDone) {
       const applied = await api("/api/schools/timetable/auto", { method: "POST", body: { mode, class_ids: classIds, apply: true } });
       schoolOverviewCache = null;
       close();
-      showToast(`✅ Jadval tuzildi: ${applied.lessons.length} ta dars qo'yildi`);
+      showToast(`✅ Jadval tuzildi: ${applied.lessons.length} ta dars qo'yildi. Endi uni o'qituvchilarga yuborishingiz mumkin.`);
       await onDone();
     })
   );
