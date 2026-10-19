@@ -62,7 +62,7 @@ flutter:
 
   # Ochilish ekranidagi logo (sayt yuklanguncha ko'rinadi)
   assets:
-    - assets/splash_logo.png
+    - assets/splash_bird.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:

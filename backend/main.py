@@ -1143,10 +1143,14 @@ try:
 except Exception:
     logging.getLogger("backend").warning("PDF shrifti topilmadi — Helvetica ishlatiladi", exc_info=True)
 
-REPORT_BLUE = colors.HexColor("#1f4e79")
-REPORT_TILE_BG = colors.HexColor("#f0f3f7")
-REPORT_MUTED = colors.HexColor("#6b7280")
-REPORT_GRID = colors.HexColor("#e5e7eb")
+# Hisobot ranglari — Chittak brendi (nomi tarixiy: REPORT_BLUE endi to'q siyoh rang)
+REPORT_BLUE = colors.HexColor("#0B1F2A")
+REPORT_GREEN = colors.HexColor("#00C853")
+REPORT_TABLE_HEAD = colors.HexColor("#00A844")
+REPORT_TILE_BG = colors.HexColor("#F3FAF5")
+REPORT_MUTED = colors.HexColor("#4F6670")
+REPORT_GRID = colors.HexColor("#DDEFE2")
+REPORT_SLOGAN = "Ilg'or ta'lim, tezkor natija"
 SHARE_BANDS = [
     (70, colors.HexColor("#1e7b34"), "70% va yuqori"),
     (40, colors.HexColor("#2e75b6"), "40–70%"),
@@ -1189,7 +1193,7 @@ def _section_heading(text: str, styles: dict) -> list:
     return [
         Spacer(1, 10),
         Paragraph(xml_escape(text), styles["section"]),
-        HRFlowable(width="100%", thickness=1.4, color=REPORT_BLUE, spaceBefore=3, spaceAfter=10),
+        HRFlowable(width="100%", thickness=1.4, color=REPORT_GREEN, spaceBefore=3, spaceAfter=10),
     ]
 
 
@@ -1332,7 +1336,7 @@ def _results_table(rows: list[dict], styles: dict, width: float, uses_rasch: boo
     column_widths = [0.08, 0.38, 0.11, 0.08, 0.11, 0.12, 0.12] if uses_rasch else [0.09, 0.44, 0.12, 0.09, 0.12, 0.14]
     table = Table(data, colWidths=[width * part for part in column_widths], repeatRows=1)
     commands = [
-        ("BACKGROUND", (0, 0), (-1, 0), REPORT_BLUE),
+        ("BACKGROUND", (0, 0), (-1, 0), REPORT_TABLE_HEAD),
         ("LINEBELOW", (0, 0), (-1, -1), 0.4, REPORT_GRID),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("TOPPADDING", (0, 0), (-1, -1), 4),
@@ -1373,7 +1377,7 @@ def _section_results_table(rows: list[dict], styles: dict, width: float, uses_ra
     widths = [0.07, name_share, *([other] * (len(section_names) + 2))]
     table = Table(data, colWidths=[width * share for share in widths], repeatRows=1)
     commands = [
-        ("BACKGROUND", (0, 0), (-1, 0), REPORT_BLUE),
+        ("BACKGROUND", (0, 0), (-1, 0), REPORT_TABLE_HEAD),
         ("GRID", (0, 0), (-1, -1), 0.4, REPORT_GRID),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("ALIGN", (2, 0), (-1, -1), "CENTER"),
@@ -1393,10 +1397,18 @@ RASCH_GRADE_ORDER = ["A+", "A", "B+", "B", "C+", "C", "NC"]
 SCHOOL_GRADE_ORDER = ["5", "4", "3", "2"]
 
 
-class _NumberedCanvas(pdf_canvas.Canvas):
-    """Har sahifa pastida "1 / 35" — jami sahifalar soni oxirida ma'lum bo'ladi."""
+REPORT_HEADER_HEIGHT = 64  # tepadagi sarlavha (logo + yashil chiziq) egallagan joy (pt)
 
-    footer_text = ""
+
+class _BrandCanvas(pdf_canvas.Canvas):
+    """
+    Chittak hisobot sahifasi (oq, ixcham — printerda kam bo'yoq): tepada chapda logo va "Chittak",
+    o'ngda tashkilot va hisobot turi, ostida yashil chiziq; pastda shior va "1 / 3".
+    Jami sahifalar soni oxirida ma'lum bo'ladi.
+    """
+
+    org_text = ""   # o'ng tepada, 1-qator (maktab yoki test nomi)
+    kind_text = ""  # o'ng tepada, 2-qator (masalan "Davomat hisoboti")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1406,18 +1418,59 @@ class _NumberedCanvas(pdf_canvas.Canvas):
         self._saved_pages.append(dict(self.__dict__))
         self._startPage()
 
+    def _draw_header(self) -> None:
+        width, height = A4
+        left, right = 40, width - 40
+        top = height - 30
+        self.saveState()
+        try:
+            self.drawImage(str(FRONTEND_DIR / "img" / "chittak-icon.png"), left, top - 26, 26, 26, mask="auto")
+        except Exception:
+            pass  # logo fayli bo'lmasa ham hisobot chiqaveradi
+        self.setFillColor(REPORT_BLUE)
+        self.setFont(REPORT_FONT_BOLD, 14)
+        self.drawString(left + 33, top - 18, "Chittak")
+        self.setFillColor(REPORT_MUTED)
+        self.setFont(REPORT_FONT, 8)
+        if self.org_text:
+            org = self.org_text
+            while stringWidth(org, REPORT_FONT, 8) > 320 and len(org) > 4:
+                org = org[:-2].rstrip() + "…"
+            self.drawRightString(right, top - 11, org)
+        if self.kind_text:
+            self.drawRightString(right, top - 22, self.kind_text)
+        self.setStrokeColor(REPORT_GREEN)
+        self.setLineWidth(1.6)
+        self.line(left, top - 34, right, top - 34)
+        self.restoreState()
+
+    def _draw_footer(self, total: int) -> None:
+        left, right = 40, A4[0] - 40
+        self.saveState()
+        self.setFillColor(REPORT_MUTED)
+        self.setFont(REPORT_FONT, 7.5)
+        self.drawString(left, 22, f"Chittak — {REPORT_SLOGAN}")
+        self.drawRightString(right, 22, f"{self._pageNumber} / {total}")
+        self.restoreState()
+
     def save(self):
         total = len(self._saved_pages)
         for state in self._saved_pages:
             self.__dict__.update(state)
-            self.setFont(REPORT_FONT_ITALIC, 8)
-            self.setFillColor(REPORT_MUTED)
-            self.setStrokeColor(REPORT_GRID)
-            self.line(36, 30, A4[0] - 36, 30)
-            self.drawString(36, 18, self.footer_text)
-            self.drawRightString(A4[0] - 36, 18, f"{self._pageNumber} / {total}")
+            self._draw_header()
+            self._draw_footer(total)
             super().showPage()
         super().save()
+
+
+def _brand_canvas(org_text: str, kind_text: str) -> type:
+    return type("BrandCanvas", (_BrandCanvas,), {"org_text": org_text or "", "kind_text": kind_text or ""})
+
+
+def _brand_document(buffer, title: str, side_margin: int = 40) -> SimpleDocTemplate:
+    """Brend sahifasi uchun hujjat: tepada tasmaga, pastda imzoga joy qoldiriladi."""
+    return SimpleDocTemplate(buffer, pagesize=A4, leftMargin=side_margin, rightMargin=side_margin,
+                             topMargin=REPORT_HEADER_HEIGHT + 14, bottomMargin=48, title=title)
 
 
 def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool, section_names: list[str]) -> Table:
@@ -1456,7 +1509,7 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
     widths = [0.07, name_share, *([other] * (len(middle) + 2))]
     table = Table(data, colWidths=[width * share for share in widths], repeatRows=1)
     commands = [
-        ("BACKGROUND", (0, 0), (-1, 0), REPORT_BLUE),
+        ("BACKGROUND", (0, 0), (-1, 0), REPORT_TABLE_HEAD),
         ("GRID", (0, 0), (-1, -1), 0.4, REPORT_GRID),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("TOPPADDING", (0, 0), (-1, -1), 4),
@@ -1483,7 +1536,7 @@ def _report_banner(test: Test, width: float, uses_rasch: bool) -> list:
     title_style = ParagraphStyle("banner_title", fontName=REPORT_FONT_BOLD, fontSize=17, leading=21,
                                  textColor=colors.white, alignment=1)
     subtitle_style = ParagraphStyle("banner_sub", fontName=REPORT_FONT_ITALIC, fontSize=8.5, leading=11,
-                                    textColor=colors.HexColor("#dbe4ef"), alignment=1)
+                                    textColor=colors.HexColor("#B7CBBF"), alignment=1)
     subtitle = ("Milliy sertifikat formatida · barcha ishtirokchilar" if uses_rasch
                 else "To'g'ri javoblar bo'yicha · barcha ishtirokchilar")
     banner = Table(
@@ -1509,8 +1562,7 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes
     section_names = report["section_names"]
     rows = report["rows"]
     buffer = io.BytesIO()
-    document = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=30, bottomMargin=44,
-                                 title=f"{test.title} — natijalar")
+    document = _brand_document(buffer, f"{test.title} — natijalar", side_margin=36)
     width = document.width
     big_heading = ParagraphStyle("big_heading", fontName=REPORT_FONT_BOLD, fontSize=20, leading=24, textColor=REPORT_BLUE)
 
@@ -1563,8 +1615,7 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes
     )
     elements += [Spacer(1, 10), Paragraph(xml_escape(f"{footnote} O'qituvchi: {teacher.user.full_name}."), styles["meta"])]
 
-    canvas_class = type("ReportCanvas", (_NumberedCanvas,), {"footer_text": f"Barcha ishtirokchilar · {test.title}"})
-    document.build(elements, canvasmaker=canvas_class)
+    document.build(elements, canvasmaker=_brand_canvas(test.title, "Test natijalari"))
     return buffer.getvalue()
 
 
@@ -8652,8 +8703,7 @@ def class_test_pdf(context: dict) -> bytes:
 
     styles = _report_styles()
     buffer = io.BytesIO()
-    document = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=40, rightMargin=40, topMargin=36, bottomMargin=36,
-                                 title=f"{context['title']} — {context['class_name']}")
+    document = _brand_document(buffer, f"{context['title']} — {context['class_name']}")
     width = document.width
     meta = (f"{context['school_name']}  ·  {context['class_name']}  ·  {context['subject'] or 'Fan'}  ·  "
             f"{context['date']}  ·  Maks. {_fmt_number(context['max_score'])} ball")
@@ -8673,7 +8723,7 @@ def class_test_pdf(context: dict) -> bytes:
             Paragraph("kelmadi" if absent else f"<font color='{GRADE_COLORS[grade]}'><b>{grade}</b></font>", styles["cell"]),
         ])
     table = Table(data, colWidths=[width * 0.08, width * 0.52, width * 0.12, width * 0.14, width * 0.14], repeatRows=1)
-    commands = [("BACKGROUND", (0, 0), (-1, 0), REPORT_BLUE), ("LINEBELOW", (0, 0), (-1, -1), 0.4, REPORT_GRID),
+    commands = [("BACKGROUND", (0, 0), (-1, 0), REPORT_TABLE_HEAD), ("LINEBELOW", (0, 0), (-1, -1), 0.4, REPORT_GRID),
                 ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]
     for index in range(2, len(data), 2):
         commands.append(("BACKGROUND", (0, index), (-1, index), REPORT_TILE_BG))
@@ -8688,7 +8738,7 @@ def class_test_pdf(context: dict) -> bytes:
         table,
         Spacer(1, 8),
         Paragraph(CLASS_GRADE_NOTE, styles["meta"]),
-    ])
+    ], canvasmaker=_brand_canvas(context["school_name"], f"{context['class_name']} · test natijalari"))
     return buffer.getvalue()
 
 
@@ -9785,8 +9835,7 @@ def attendance_pdf(context: dict) -> bytes:
 
     styles = _report_styles()
     buffer = io.BytesIO()
-    document = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=40, rightMargin=40, topMargin=36, bottomMargin=36,
-                                 title=f"Davomat — {context['class_name']}")
+    document = _brand_document(buffer, f"Davomat — {context['class_name']}")
     width = document.width
 
     meta = f"🏫 {context['school_name']}  ·  {context['lesson']}  ·  O'qituvchi: {context['teacher_name']}"
@@ -9804,7 +9853,7 @@ def attendance_pdf(context: dict) -> bytes:
             Paragraph(f"<font color='{color}'><b>{xml_escape(label)}</b></font>", styles["cell"]),
         ])
     table = Table(data, colWidths=[width * 0.08, width * 0.64, width * 0.28], repeatRows=1)
-    commands = [("BACKGROUND", (0, 0), (-1, 0), REPORT_BLUE), ("LINEBELOW", (0, 0), (-1, -1), 0.4, REPORT_GRID),
+    commands = [("BACKGROUND", (0, 0), (-1, 0), REPORT_TABLE_HEAD), ("LINEBELOW", (0, 0), (-1, -1), 0.4, REPORT_GRID),
                 ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]
     for row in range(2, len(data), 2):
         commands.append(("BACKGROUND", (0, row), (-1, row), REPORT_TILE_BG))
@@ -9818,7 +9867,7 @@ def attendance_pdf(context: dict) -> bytes:
         Paragraph(xml_escape(summary), styles["cell_bold"]),
         Spacer(1, 10),
         table,
-    ])
+    ], canvasmaker=_brand_canvas(context["school_name"], "Davomat hisoboti"))
     return buffer.getvalue()
 
 

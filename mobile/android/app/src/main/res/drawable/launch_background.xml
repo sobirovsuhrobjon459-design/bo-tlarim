@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Chittak ochilish ekrani: to'q brend foni va o'rtada ilova ikonkasi (Flutter o'z ekranini chizguncha) -->
+<!-- Chittak ochilish ekrani: to'q yashil fon va o'rtada Chittak qushi (Flutter o'z ekranini chizguncha) -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
-        <color android:color="#0B1F2A" />
+        <color android:color="#033331" />
     </item>
     <item>
         <bitmap

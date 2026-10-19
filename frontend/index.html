@@ -21,18 +21,32 @@
 
   <!-- Ochilish ekrani: har kirishda kamida 3 soniya ko'rinadi, keyin ilova tayyor bo'lgach so'nib yo'qoladi -->
   <style>
-    .boot-splash{position:fixed;inset:0;z-index:10000;transition:opacity .4s ease;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
-      background:#0B1F2A radial-gradient(circle at 85% 8%,rgba(0,200,83,.32),rgba(0,200,83,0) 46%);color:#fff;
-      font-family:"Plus Jakarta Sans",-apple-system,"Segoe UI",Roboto,sans-serif;text-align:center}
-    .boot-splash img{width:104px;height:104px;border-radius:26px;box-shadow:0 18px 40px rgba(0,0,0,.4);animation:boot-pop .6s cubic-bezier(.34,1.56,.64,1) both}
-    .boot-splash b{font-size:34px;font-weight:800;letter-spacing:-.04em}
-    .boot-splash small{margin-top:-10px;font-size:15px;font-weight:700;color:#B7CBBF}
-    .boot-splash small em{font-style:normal;color:#00C853}
-    .boot-splash i{width:120px;height:4px;margin-top:10px;border-radius:4px;background:rgba(255,255,255,.12);overflow:hidden;position:relative}
-    .boot-splash i::after{content:"";position:absolute;inset:0;width:40%;border-radius:4px;background:#00C853;animation:boot-bar 1.1s ease-in-out infinite}
+    /* Brend ochilish ekrani: to'q yashil fon, qush, "Chittak", shior va burchakdagi yashil to'lqinlar */
+    .boot-splash{position:fixed;inset:0;z-index:10000;overflow:hidden;transition:opacity .45s ease;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#fff;
+      background:radial-gradient(110% 70% at 50% 52%,#0A4537 0%,#05362D 50%,#032B27 100%);
+      font-family:"Plus Jakarta Sans",-apple-system,"Segoe UI",Roboto,sans-serif}
+    /* O'ng yuqori burchakdan tushayotgan yashil nur */
+    .boot-splash::before{content:"";position:absolute;right:-36vmax;top:-36vmax;width:85vmax;height:85vmax;border-radius:50%;
+      background:radial-gradient(circle,rgba(0,200,83,.58) 0%,rgba(0,200,83,.22) 34%,rgba(0,200,83,0) 66%);
+      animation:boot-glow 1.4s ease-out both, boot-breathe 3.2s ease-in-out 1.4s infinite;pointer-events:none}
+    .boot-splash > *{position:relative}
+    .boot-splash .bird{width:min(46vw,190px);height:auto;margin-bottom:6px;filter:drop-shadow(0 18px 26px rgba(0,0,0,.35));
+      animation:boot-drop .9s cubic-bezier(.34,1.56,.64,1) both, boot-float 2.6s ease-in-out .9s infinite}
+    .boot-splash b{font-size:clamp(38px,11vw,52px);font-weight:800;letter-spacing:-.045em;line-height:1.05;
+      animation:boot-rise .6s cubic-bezier(.22,1,.36,1) .35s both}
+    .boot-splash small{margin-top:10px;font-size:clamp(16px,4.6vw,20px);font-weight:700;line-height:1.3;color:#3EDC7E;
+      animation:boot-rise .6s cubic-bezier(.22,1,.36,1) .55s both}
+    .boot-splash .waves{position:absolute!important;right:0;bottom:0;width:min(78vw,420px);height:auto;
+      animation:boot-wave 1s cubic-bezier(.22,1,.36,1) .2s both}
     .boot-splash.is-hidden{opacity:0;pointer-events:none}
-    @keyframes boot-pop{from{transform:scale(.7);opacity:0}to{transform:none;opacity:1}}
-    @keyframes boot-bar{from{transform:translateX(-100%)}to{transform:translateX(250%)}}
+    @keyframes boot-glow{from{opacity:0;transform:translate(8%,-8%) scale(.85)}to{opacity:1;transform:none}}
+    @keyframes boot-breathe{0%,100%{opacity:1}50%{opacity:.72}}
+    @keyframes boot-drop{from{transform:translateY(-38px) scale(.82);opacity:0}to{transform:none;opacity:1}}
+    @keyframes boot-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+    @keyframes boot-rise{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
+    @keyframes boot-wave{from{transform:translate(18%,22%);opacity:0}to{transform:none;opacity:1}}
+    @media (prefers-reduced-motion: reduce){.boot-splash *{animation:none!important}}
   </style>
 
   <!--
@@ -63,10 +77,17 @@
 </head>
 <body>
   <div class="boot-splash" id="boot-splash" aria-label="Chittak yuklanmoqda">
-    <img src="/img/chittak-icon.png" alt="" />
+    <img class="bird" src="/img/splash-bird.png" alt="" />
     <b>Chittak</b>
-    <small>Ta'limda tezlik. <em>Natijada aniqlik.</em></small>
-    <i></i>
+    <small>Ta'limda tezlik.<br />Natijada aniqlik.</small>
+    <svg class="waves" viewBox="0 0 420 260" aria-hidden="true">
+      <defs>
+        <linearGradient id="boot-w1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0E6B45" /><stop offset="1" stop-color="#0A5A3B" /></linearGradient>
+        <linearGradient id="boot-w2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2FB862" /><stop offset="1" stop-color="#00A844" /></linearGradient>
+      </defs>
+      <path fill="url(#boot-w1)" d="M420 40C330 70 250 120 190 190C160 225 120 250 70 260H420Z" />
+      <path fill="url(#boot-w2)" d="M420 120C350 140 290 180 250 230C240 243 228 253 214 260H420Z" />
+    </svg>
   </div>
   <script>
     // Kamida 3 soniya (sahifa ochila boshlagandan) va ilova birinchi sahifani chizgach yopiladi.

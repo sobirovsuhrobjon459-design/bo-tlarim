@@ -106,7 +106,7 @@ class _WebShellState extends State<WebShell> {
       },
       child: Scaffold(
         // Ochilish ekrani paytida tepa (status bar) ham to'q bo'lsin
-        backgroundColor: _splashDone ? _background : _navy,
+        backgroundColor: _splashDone ? _background : _splashBg,
         body: SafeArea(
           child: Stack(
             children: [
@@ -222,37 +222,166 @@ class _OfflineView extends StatelessWidget {
 }
 
 
-// Ochilish ekrani: Android'ning o'z splash'i bilan bir xil (to'q fon + ikonka) va ostida brend yozuvi
-class _SplashView extends StatelessWidget {
+// Ochilish ekrani — Mini App'dagi bilan bir xil: to'q yashil fon, qush, "Chittak", shior va
+// burchakdagi yashil to'lqinlar. Qush sakrab tushadi, yozuvlar ko'tariladi, to'lqinlar suzib kiradi.
+const _splashBg = Color(0xFF033331);
+
+class _SplashView extends StatefulWidget {
   const _SplashView();
 
   @override
+  State<_SplashView> createState() => _SplashViewState();
+}
+
+class _SplashViewState extends State<_SplashView> with TickerProviderStateMixin {
+  late final AnimationController _intro = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))
+    ..forward();
+  late final AnimationController _float = AnimationController(vsync: this, duration: const Duration(milliseconds: 1300))
+    ..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _intro.dispose();
+    _float.dispose();
+    super.dispose();
+  }
+
+  // Bosqich: [start, end] oralig'ida 0→1 (umumiy 1,2 soniyalik kirish ichida)
+  Animation<double> _step(double start, double end, Curve curve) =>
+      CurvedAnimation(parent: _intro, curve: Interval(start, end, curve: curve));
+
+  @override
   Widget build(BuildContext context) {
+    final bird = _step(0.0, 0.75, Curves.elasticOut);
+    final birdFade = _step(0.0, 0.3, Curves.easeOut);
+    final title = _step(0.3, 0.8, Curves.easeOutCubic);
+    final slogan = _step(0.45, 0.95, Curves.easeOutCubic);
+    final waves = _step(0.15, 1.0, Curves.easeOutCubic);
+    final glow = _step(0.0, 1.0, Curves.easeOut);
+    final size = MediaQuery.of(context).size;
+    final width = size.width;
+    final glowSize = size.longestSide * 0.85;
+
+    Widget rise(Animation<double> a, Widget child) => AnimatedBuilder(
+          animation: a,
+          builder: (context, _) => Opacity(
+            opacity: a.value.clamp(0.0, 1.0),
+            child: Transform.translate(offset: Offset(0, 14 * (1 - a.value)), child: child),
+          ),
+        );
+
     return Container(
-      color: _navy,
-      alignment: Alignment.center,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      decoration: const BoxDecoration(
+        gradient: RadialGradient(
+          center: Alignment(0, 0.05),
+          radius: 1.1,
+          colors: [Color(0xFF0A4537), Color(0xFF05362D), Color(0xFF032B27)],
+          stops: [0, 0.45, 1],
+        ),
+      ),
+      child: Stack(
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(32),
-            child: Image.asset('assets/splash_logo.png', width: 144, height: 144),
+          // O'ng yuqori burchakdan tushayotgan yashil nur: kirishda yonadi, keyin sekin "nafas oladi"
+          Positioned(
+            right: -glowSize * 0.42,
+            top: -glowSize * 0.42,
+            child: AnimatedBuilder(
+              animation: Listenable.merge([glow, _float]),
+              builder: (context, _) => Opacity(
+                opacity: glow.value * (1 - 0.28 * _float.value),
+                child: Container(
+                  width: glowSize,
+                  height: glowSize,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [Color(0x9400C853), Color(0x3800C853), Color(0x0000C853)],
+                      stops: [0, 0.34, 0.66],
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
-          const SizedBox(height: 22),
-          const Text(
-            'Chittak',
-            style: TextStyle(color: Colors.white, fontSize: 34, fontWeight: FontWeight.w800, letterSpacing: -1),
+          Positioned(
+            right: 0,
+            bottom: 0,
+            child: AnimatedBuilder(
+              animation: waves,
+              builder: (_, child) => Opacity(
+                opacity: waves.value,
+                child: Transform.translate(offset: Offset(60 * (1 - waves.value), 50 * (1 - waves.value)), child: child),
+              ),
+              child: CustomPaint(size: Size(width * 0.78, width * 0.78 * 260 / 420), painter: _WavesPainter()),
+            ),
           ),
-          const SizedBox(height: 6),
-          const Text.rich(
-            TextSpan(
-              text: "Ta'limda tezlik. ",
-              style: TextStyle(color: Color(0xFFB7CBBF), fontSize: 15, fontWeight: FontWeight.w700),
-              children: [TextSpan(text: 'Natijada aniqlik.', style: TextStyle(color: Color(0xFF00C853)))],
+          Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedBuilder(
+                  animation: Listenable.merge([bird, _float]),
+                  builder: (_, child) => Opacity(
+                    opacity: birdFade.value,
+                    child: Transform.translate(
+                      offset: Offset(0, -38 * (1 - bird.value) - 6 * _float.value),
+                      child: Transform.scale(scale: 0.82 + 0.18 * bird.value, child: child),
+                    ),
+                  ),
+                  child: Image.asset('assets/splash_bird.png', width: 180),
+                ),
+                const SizedBox(height: 8),
+                rise(
+                  title,
+                  const Text(
+                    'Chittak',
+                    style: TextStyle(color: Colors.white, fontSize: 46, fontWeight: FontWeight.w800, letterSpacing: -2),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                rise(
+                  slogan,
+                  const Text(
+                    "Ta'limda tezlik.\nNatijada aniqlik.",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Color(0xFF3EDC7E), fontSize: 19, fontWeight: FontWeight.w700, height: 1.3),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
       ),
     );
   }
+}
+
+// O'ng pastdagi ikki qavatli yashil to'lqin (Mini App'dagi SVG bilan bir xil shakl, 420x260 o'lchamda chizilgan)
+class _WavesPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.scale(size.width / 420, size.height / 260);
+    final back = Path()
+      ..moveTo(420, 40)
+      ..cubicTo(330, 70, 250, 120, 190, 190)
+      ..cubicTo(160, 225, 120, 250, 70, 260)
+      ..lineTo(420, 260)
+      ..close();
+    final front = Path()
+      ..moveTo(420, 120)
+      ..cubicTo(350, 140, 290, 180, 250, 230)
+      ..cubicTo(240, 243, 228, 253, 214, 260)
+      ..lineTo(420, 260)
+      ..close();
+    canvas.drawPath(back, Paint()..color = const Color(0xFF0C6340));
+    canvas.drawPath(
+      front,
+      Paint()
+        ..shader = const LinearGradient(colors: [Color(0xFF2FB862), Color(0xFF00A844)])
+            .createShader(const Rect.fromLTWH(214, 120, 206, 140)),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
