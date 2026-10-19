@@ -1633,3 +1633,49 @@ button.tt-cell {
   letter-spacing: 0.04em;
   caret-color: var(--green-deep);
 }
+
+/* O'qituvchi ish kunlari: har kun — o'z vaqti */
+.wd-list {
+  padding: 4px 12px;
+}
+
+.wd-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.wd-row:last-child {
+  border-bottom: 0;
+}
+
+.wd-row .input {
+  margin: 0;
+  padding: 9px 6px;
+}
+
+.wd-day {
+  height: 40px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  font: inherit;
+  font-weight: 800;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.wd-row.is-on .wd-day {
+  border-color: var(--green);
+  background: var(--green);
+  color: var(--btn-fg);
+}
+
+.wd-off {
+  grid-column: 2 / -1;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}

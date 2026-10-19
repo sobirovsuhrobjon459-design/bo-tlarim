@@ -49,6 +49,7 @@ class TeacherInput:
     work_days: set[int] | None = None  # None — cheklanmagan
     work_start: str | None = None
     work_end: str | None = None
+    day_hours: dict[int, tuple[str, str]] = field(default_factory=dict)  # kunning o'z vaqti (umumiydan ustun)
 
 
 def _overlaps(a_start: str, a_end: str, b_start: str, b_end: str) -> bool:
@@ -99,7 +100,8 @@ def build_timetable(
         teacher = teachers[teacher_id]
         if teacher.work_days and weekday not in teacher.work_days:
             return False
-        if teacher.work_start and teacher.work_end and (period.start < teacher.work_start or period.end > teacher.work_end):
+        start, end = teacher.day_hours.get(weekday, (teacher.work_start, teacher.work_end))
+        if start and end and (period.start < start or period.end > end):
             return False
         return True
 

@@ -4471,6 +4471,28 @@ def test_dars_jadvali_avtomatik_tuziladi():
     assert sum(item["hours"] for item in tight["unplaced"]) == 10 - 3, tight["unplaced"]
     assert all("Bobur" in item["reason"] for item in tight["unplaced"]), tight["unplaced"]
 
+    # Har kunga alohida ish vaqti: Bobur Du 08:00–09:40 (1–2-dars), Se 09:50–11:30 (3–4-dars), Ch kun bo'yi
+    saved = client.put(f"/api/schools/members/{bobur}/workload", json={
+        "work_days": [0, 1, 2], "day_hours": {"0": {"start": "08:00", "end": "09:40"}, "1": {"start": "09:50", "end": "11:30"}},
+    }, headers=as_user(711))
+    assert saved.status_code == 200, saved.text
+    teacher = next(item for item in saved.json()["teachers"] if item["user_id"] == bobur)
+    assert teacher["day_hours"] == {"0": {"start": "08:00", "end": "09:40"}, "1": {"start": "09:50", "end": "11:30"}}, teacher
+    bad = client.put(f"/api/schools/members/{bobur}/workload", json={
+        "work_days": [0], "day_hours": {"3": {"start": "08:00", "end": "09:00"}}}, headers=as_user(711))
+    assert bad.status_code == 422  # ish kuni bo'lmagan kunga vaqt
+    per_day = client.post(url, json={"mode": "replace", "apply": True}, headers=as_user(711)).json()
+    for lesson in per_day["lessons"]:
+        if lesson["teacher_user_id"] == bobur:
+            assert lesson["weekday"] in (0, 1, 2), lesson
+            assert lesson["weekday"] != 0 or lesson["period"] in (1, 2), lesson
+            assert lesson["weekday"] != 1 or lesson["period"] in (3, 4), lesson
+    # Qo'lda qo'yishda ham kunning o'z vaqti tekshiriladi
+    clash = client.post(f"/api/classes/{c['id']}/schedule", json={"weekday": 1, "start_time": "08:00", "end_time": "08:45",
+                                                                    "subject": "Matematika", "teacher_user_id": bobur},
+                        headers=as_user(711))
+    assert clash.status_code == 409 and "seshanba kungi ish vaqti 09:50–11:30" in clash.json()["detail"], clash.text
+
     # Har o'qituvchiga bot orqali o'z jadvali ketadi (faqat rahbariyat yuboradi)
     assert client.post("/api/schools/timetable/notify", headers=as_user(713)).status_code == 403
     sent, restore = _capture_result_notices()
@@ -4480,7 +4502,7 @@ def test_dars_jadvali_avtomatik_tuziladi():
         restore()
     assert result["sent"] == 3 and result["teachers"] == ["Bobur Aliyev", "Dilnoza Aliyev", "Jamshid Aliyev"], result
     to_bobur = [text for chat, text in sent if chat == 712]
-    assert len(to_bobur) == 1 and "Bobur Aliyev" in to_bobur[0] and "Jami: haftasiga 10 soat" in to_bobur[0], to_bobur
+    assert len(to_bobur) == 1 and "Bobur Aliyev" in to_bobur[0] and "Jami: haftasiga 8 soat" in to_bobur[0], to_bobur
     assert "5-A · Matematika" in to_bobur[0] and "Ona tili" not in to_bobur[0]
 
 

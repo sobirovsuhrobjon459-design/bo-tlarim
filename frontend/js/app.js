@@ -5022,7 +5022,8 @@ function timetablePlanHtml(data) {
         ${data.teachers
           .map((item) => {
             const over = item.weekly_hours != null && item.assigned_hours > item.weekly_hours;
-            const time = item.work_start ? ` · ${item.work_start}–${item.work_end}` : "";
+            const perDay = Object.keys(item.day_hours || {}).length;
+            const time = perDay ? " · har kuni o'z vaqti" : item.work_start ? ` · ${item.work_start}–${item.work_end}` : "";
             return `
               <button type="button" class="lesson-row" data-edit-workload="${item.user_id}">
                 <span class="lesson-info"><b>${escapeHtml(item.name)}</b><small>${
@@ -5486,36 +5487,86 @@ function openClassPlanSheet(data, schoolClass, onSaved) {
 }
 
 function openWorkloadSheet(teacher, onSaved) {
-  const days = [...teacher.work_days];
+  // Har kun: ishlaydimi va soat nechadan nechagacha. Eski (umumiy) vaqt har kunga ko'chiriladi.
+  const dayHours = teacher.day_hours || {};
+  const rows = WEEKDAY_NAMES.map((name, day) => {
+    const own = dayHours[day];
+    const on = teacher.work_days.length ? teacher.work_days.includes(day) : false;
+    return {
+      day,
+      on,
+      start: own?.start || (on ? teacher.work_start || "" : ""),
+      end: own?.end || (on ? teacher.work_end || "" : ""),
+    };
+  });
   const { sheet, close } = openSheet(`
     <h3 style="margin:0 0 4px">👩‍🏫 ${escapeHtml(teacher.name)}</h3>
     <p class="subtitle" style="margin:0 0 12px">${teacher.subjects.length ? escapeHtml(teacher.subjects.join(", ")) : "Fan belgilanmagan"} ·
       rejada ${teacher.assigned_hours} soat, jadvalda ${teacher.placed_hours} soat</p>
     <label class="field-label" for="work-hours">Haftalik soat me'yori (stavka)</label>
     <input class="input" id="work-hours" type="number" inputmode="numeric" min="0" max="60" value="${teacher.weekly_hours ?? ""}" placeholder="Masalan: 18" />
-    <label class="field-label">Ish kunlari</label>
-    ${weekdayPickerHtml("work-days", days)}
-    <div class="slot-times">
-      <label>Ish boshlanadi<input type="text" class="input time-input" inputmode="numeric" maxlength="5" placeholder="08:00" autocomplete="off" id="work-start" value="${teacher.work_start || ""}" /></label>
-      <span class="slot-times-dash">—</span>
-      <label>Tugaydi<input type="text" class="input time-input" inputmode="numeric" maxlength="5" placeholder="08:00" autocomplete="off" id="work-end" value="${teacher.work_end || ""}" /></label>
-    </div>
-    <p class="subtitle" style="margin:8px 0 0;font-size:12.5px">Bo'sh qoldirilsa — cheklanmaydi. Ish kuni va vaqtidan tashqariga dars qo'yib bo'lmaydi.</p>
+    <label class="field-label">Ish kunlari va vaqti</label>
+    <div class="panel wd-list" id="work-days"></div>
+    <button type="button" class="lesson-add" id="work-copy">⇩ Birinchi kun vaqtini hamma kunlarga</button>
+    <p class="subtitle" style="margin:8px 0 0;font-size:12.5px">Kunni bosib yoqing/o'chiring. Vaqt bo'sh qolsa — o'sha kun to'liq. Hech bir kun tanlanmasa — cheklanmagan (istalgan kun va vaqt).</p>
     <button class="btn" id="work-save-button" style="margin-top:14px">💾 Saqlash</button>
     <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
   `);
-  wireWeekdayPicker(sheet.querySelector("#work-days"), days);
+  const list = sheet.querySelector("#work-days");
+  const timeInput = (row, key) =>
+    `<input type="text" class="input time-input" inputmode="numeric" maxlength="5" placeholder="${key === "start" ? "08:00" : "14:00"}" autocomplete="off" data-day="${row.day}" data-key="${key}" value="${row[key]}"${row.on ? "" : " disabled"} />`;
+  const draw = () => {
+    list.innerHTML = rows
+      .map(
+        (row) => `
+          <div class="wd-row${row.on ? " is-on" : ""}">
+            <button type="button" class="wd-day" data-toggle-day="${row.day}" aria-pressed="${row.on}">${WEEKDAY_SHORT[row.day]}</button>
+            ${row.on ? `${timeInput(row, "start")}<span>—</span>${timeInput(row, "end")}` : `<span class="wd-off">dam olish kuni</span>`}
+          </div>`
+      )
+      .join("");
+  };
+  draw();
+  list.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-toggle-day]");
+    if (!button) return;
+    const row = rows[Number(button.dataset.toggleDay)];
+    row.on = !row.on;
+    draw();
+  });
+  list.addEventListener("change", (event) => {
+    const input = event.target.closest("[data-day]");
+    if (input) rows[Number(input.dataset.day)][input.dataset.key] = input.value;
+  });
+  sheet.querySelector("#work-copy").addEventListener("click", () => {
+    const first = rows.find((row) => row.on && row.start && row.end);
+    if (!first) {
+      showToast("Avval bitta ish kuniga vaqt kiriting");
+      return;
+    }
+    rows.filter((row) => row.on).forEach((row) => Object.assign(row, { start: first.start, end: first.end }));
+    draw();
+    showToast(`Hamma ish kunlariga ${first.start}–${first.end} qo'yildi`);
+  });
   sheet.querySelector("#work-save-button").addEventListener(
     "click",
     guarded(async () => {
       const hours = sheet.querySelector("#work-hours").value.trim();
+      const active = rows.filter((row) => row.on);
+      const day_hours = {};
+      for (const row of active) {
+        if (Boolean(row.start) !== Boolean(row.end)) throw new Error(`${WEEKDAY_NAMES[row.day]}: boshlanish va tugash vaqtini birga kiriting`);
+        if (row.start && row.end <= row.start) throw new Error(`${WEEKDAY_NAMES[row.day]}: ish tugash vaqti boshlanishidan keyin bo'lishi kerak`);
+        if (row.start) day_hours[row.day] = { start: row.start, end: row.end };
+      }
       await api(`/api/schools/members/${teacher.user_id}/workload`, {
         method: "PUT",
         body: {
           weekly_hours: hours === "" ? null : Number(hours),
-          work_days: days,
-          work_start: sheet.querySelector("#work-start").value || null,
-          work_end: sheet.querySelector("#work-end").value || null,
+          work_days: active.map((row) => row.day),
+          work_start: null,
+          work_end: null,
+          day_hours,
         },
       });
       close();

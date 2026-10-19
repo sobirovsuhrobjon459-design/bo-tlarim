@@ -214,6 +214,7 @@ def _add_missing_columns() -> None:
         "school_members": {
             "position": "VARCHAR(20)", "phone": "VARCHAR(20)", "birth_date": "DATE", "passport": "VARCHAR(20)",
             "weekly_hours": "INTEGER", "work_days": "TEXT", "work_start": "VARCHAR(5)", "work_end": "VARCHAR(5)",
+            "work_hours": "TEXT",
         },
         "lesson_slots": {"period": "INTEGER"},
         "attendances": {
@@ -9747,12 +9748,29 @@ def _active_school_member(db: Session, school_id: int, user_id: int) -> SchoolMe
     )
 
 
+def _day_hours(member: SchoolMember) -> dict[int, tuple[str, str]]:
+    """Har kunning o'z ish vaqti: {0: ("08:00", "12:00"), ...}."""
+
+    try:
+        raw = json.loads(member.work_hours) if member.work_hours else {}
+    except ValueError:
+        return {}
+    return {int(day): (hours[0], hours[1]) for day, hours in raw.items() if isinstance(hours, list) and len(hours) == 2}
+
+
+def _work_window(member: SchoolMember, weekday: int) -> tuple[str | None, str | None]:
+    """Shu kundagi ish vaqti: kunning o'zi, bo'lmasa umumiy vaqt, u ham bo'lmasa — cheklanmagan."""
+
+    return _day_hours(member).get(weekday, (member.work_start, member.work_end))
+
+
 def _workload_view(member: SchoolMember) -> dict:
     return {
         "weekly_hours": member.weekly_hours,
         "work_days": _json_list(member.work_days) if member.work_days else [],
         "work_start": member.work_start,
         "work_end": member.work_end,
+        "day_hours": {str(day): {"start": start, "end": end} for day, (start, end) in sorted(_day_hours(member).items())},
     }
 
 
@@ -9787,10 +9805,12 @@ def _check_teacher_hours(db: Session, school_id: int, body: LessonSlotIn) -> Non
         raise HTTPException(
             status_code=409, detail=f"{name} {WEEKDAYS[body.weekday].lower()} kuni ishlamaydi (ish kunlari: {listed})"
         )
-    if member.work_start and member.work_end and (body.start_time < member.work_start or body.end_time > member.work_end):
+    start, end = _work_window(member, body.weekday)
+    if start and end and (body.start_time < start or body.end_time > end):
         raise HTTPException(
             status_code=409,
-            detail=f"{name}ning ish vaqti {member.work_start}–{member.work_end}, bu dars esa {body.start_time}–{body.end_time}",
+            detail=f"{name}ning {WEEKDAYS[body.weekday].lower()} kungi ish vaqti {start}–{end}, "
+            f"bu dars esa {body.start_time}–{body.end_time}",
         )
 
 
@@ -10077,6 +10097,7 @@ def auto_timetable(body: AutoTimetableIn, user: User = Depends(get_current_user)
             work_days=set(_json_list(item.work_days)) if item.work_days else None,
             work_start=item.work_start,
             work_end=item.work_end,
+            day_hours=_day_hours(item),
         )
         for item in members
     }
@@ -10181,6 +10202,10 @@ def set_member_workload(user_id: int, body: WorkloadIn, user: User = Depends(get
     target.weekly_hours = body.weekly_hours
     target.work_days = json.dumps(body.work_days) if body.work_days else None
     target.work_start, target.work_end = body.work_start, body.work_end
+    target.work_hours = (
+        json.dumps({str(day): [hours.start, hours.end] for day, hours in sorted(body.day_hours.items())})
+        if body.day_hours else None
+    )
     db.commit()
     return school_timetable(user, db)
 

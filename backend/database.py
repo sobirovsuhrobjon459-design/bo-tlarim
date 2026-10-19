@@ -531,6 +531,8 @@ class SchoolMember(Base):
     work_days: Mapped[str | None] = mapped_column(Text, default=None)
     work_start: Mapped[str | None] = mapped_column(String(5), default=None)
     work_end: Mapped[str | None] = mapped_column(String(5), default=None)
+    # Har kunning o'z ish vaqti (JSON {"0": ["08:00", "12:00"], ...}); kunda yo'q bo'lsa — work_start/work_end
+    work_hours: Mapped[str | None] = mapped_column(Text, default=None)
     joined_at: Mapped[datetime] = mapped_column(default=utcnow)
     left_at: Mapped[datetime | None] = mapped_column(default=None)
 
@@ -896,6 +898,9 @@ class LessonSlotIn(BaseModel):
         return self
 
 
+WEEKDAY_NAMES = ["Dushanba", "Seshanba", "Chorshanba", "Payshanba", "Juma", "Shanba", "Yakshanba"]
+
+
 def _clean_weekdays(days: list[int]) -> list[int]:
     if any(day < 0 or day > 6 for day in days):
         raise ValueError("Hafta kuni noto'g'ri")
@@ -963,13 +968,23 @@ class ClassPlanIn(BaseModel):
         return self
 
 
+class DayHoursIn(BaseModel):
+    start: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    end: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
 class WorkloadIn(BaseModel):
-    """O'qituvchi yuklamasi: haftalik soat me'yori, ish kunlari va ish vaqti (bo'sh — cheklanmagan)."""
+    """
+    O'qituvchi yuklamasi: haftalik soat me'yori, ish kunlari va ish vaqti (bo'sh — cheklanmagan).
+    day_hours — har kunning o'z vaqti ({0: {"start": "08:00", "end": "12:00"}, ...}); kunda bo'lmasa —
+    umumiy work_start/work_end, u ham bo'lmasa — kun bo'yi.
+    """
 
     weekly_hours: int | None = Field(default=None, ge=0, le=60)
     work_days: list[int] = Field(default_factory=list, max_length=7)
     work_start: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     work_end: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    day_hours: dict[int, DayHoursIn] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def check(self) -> "WorkloadIn":
@@ -978,6 +993,12 @@ class WorkloadIn(BaseModel):
             raise ValueError("Ish vaqtining boshlanishi va tugashini birga kiriting")
         if self.work_start and self.work_end <= self.work_start:
             raise ValueError("Ish tugash vaqti boshlanishidan keyin bo'lishi kerak")
+        _clean_weekdays(list(self.day_hours))
+        for day, hours in self.day_hours.items():
+            if hours.end <= hours.start:
+                raise ValueError(f"{WEEKDAY_NAMES[day]}: ish tugash vaqti boshlanishidan keyin bo'lishi kerak")
+            if self.work_days and day not in self.work_days:
+                raise ValueError(f"{WEEKDAY_NAMES[day]} ish kunlari ro'yxatida yo'q")
         return self
 
 
