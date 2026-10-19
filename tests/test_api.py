@@ -4375,6 +4375,97 @@ def test_dars_jadvali_setka_oquv_reja_va_yuklama():
     assert client.put(f"/api/schools/members/{dilnoza}/workload", json={"weekly_hours": 10}, headers=as_user(703)).status_code == 403
 
 
+def test_dars_jadvali_avtomatik_tuziladi():
+    """Reja + setka + o'qituvchi ish vaqti bo'yicha jadval o'zi tuziladi: to'qnashuvsiz, teshiksiz, rejadagi soat aniq."""
+
+    reset_database()
+    _set_name(711, "Aziza", "Karimova")
+    school = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                               "name": "Avto maktab", "subjects": []}, headers=as_user(711)).json()["school"]
+    for tg_id, first, subject in ((712, "Bobur", "Matematika"), (713, "Dilnoza", "Ona tili"), (714, "Jamshid", "Ingliz tili")):
+        _set_name(tg_id, first, "Aliyev")
+        joined = client.post("/api/schools/join", json={"phone": "901234567", "code": current_code(school), "subjects": [subject]},
+                             headers=as_user(tg_id))
+        assert joined.status_code == 200, joined.text
+    users = {member["name"]: member["user_id"] for member in
+             client.get("/api/schools/me", headers=as_user(711)).json()["school"]["members"]}
+    bobur, dilnoza, jamshid = users["Bobur Aliyev"], users["Dilnoza Aliyev"], users["Jamshid Aliyev"]
+    a = client.post("/api/classes", json={"name": "5-A"}, headers=as_user(711)).json()
+    b = client.post("/api/classes", json={"name": "5-B"}, headers=as_user(711)).json()
+    c = client.post("/api/classes", json={"name": "5-C"}, headers=as_user(711)).json()  # smenasiz
+
+    shift = client.post("/api/schools/shifts", json={"name": "1-smena", "weekdays": [0, 1, 2, 3, 4], "periods": [
+        {"start": "08:00", "end": "08:45"}, {"start": "08:55", "end": "09:40"},
+        {"start": "09:50", "end": "10:35"}, {"start": "10:45", "end": "11:30"}]}, headers=as_user(711)).json()["shifts"][0]
+    for school_class in (a, b):
+        client.put(f"/api/classes/{school_class['id']}/shift", json={"shift_id": shift["id"]}, headers=as_user(711))
+    plan_items = [{"subject": "Matematika", "hours": 5, "teacher_user_id": bobur},
+                  {"subject": "Ona tili", "hours": 4, "teacher_user_id": dilnoza},
+                  {"subject": "Ingliz tili", "hours": 3, "teacher_user_id": jamshid}]
+    for school_class in (a, b, c):
+        assert client.put(f"/api/classes/{school_class['id']}/plan", json={"items": plan_items},
+                          headers=as_user(711)).status_code == 200
+    # Bobur faqat Du–Pa, 08:00–10:40 (har kuni birinchi 3 dars) ishlaydi
+    client.put(f"/api/schools/members/{bobur}/workload", json={"work_days": [0, 1, 2, 3], "work_start": "08:00", "work_end": "10:40"},
+               headers=as_user(711))
+    # Qo'lda qo'yilgan dars "to'ldirish" rejimida joyida qoladi
+    manual = client.post(f"/api/classes/{a['id']}/schedule", json={"weekday": 0, "period": 1, "start_time": "00:00",
+                                                                    "end_time": "00:01", "subject": "Matematika",
+                                                                    "teacher_user_id": bobur}, headers=as_user(711))
+    assert manual.status_code == 200, manual.text
+
+    url = "/api/schools/timetable/auto"
+    assert client.post(url, json={}, headers=as_user(713)).status_code == 403  # oddiy o'qituvchi tuza olmaydi
+
+    preview = client.post(url, json={"mode": "fill"}, headers=as_user(711)).json()
+    assert preview["applied"] is False and preview["unplaced"] == [] and preview["gaps"] == 0, preview
+    assert [item["class_name"] for item in preview["skipped"]] == ["5-C"] and "smena" in preview["skipped"][0]["reason"]
+    assert len(preview["lessons"]) == 11 + 12  # 5-A da 1 tasi qo'lda qo'yilgan
+    assert len(client.get(f"/api/classes/{b['id']}/schedule", headers=as_user(711)).json()["slots"]) == 0  # ko'rish — yozmaydi
+
+    applied = client.post(url, json={"mode": "fill", "apply": True}, headers=as_user(711)).json()
+    assert applied["lessons"] == preview["lessons"]  # natija har safar bir xil
+
+    def check(class_ids):
+        teacher_times = set()
+        for class_id in class_ids:
+            slots = client.get(f"/api/classes/{class_id}/schedule", headers=as_user(711)).json()["slots"]
+            assert len({(slot["weekday"], slot["period"]) for slot in slots}) == len(slots) == 12  # sinf to'qnashuvi yo'q
+            counts = {}
+            for slot in slots:
+                counts[slot["subject"]] = counts.get(slot["subject"], 0) + 1
+                key = (slot["teacher_user_id"], slot["weekday"], slot["start_time"])
+                assert key not in teacher_times, slot  # o'qituvchi bir vaqtda ikki sinfda emas
+                teacher_times.add(key)
+                if slot["teacher_user_id"] == bobur:
+                    assert slot["weekday"] in (0, 1, 2, 3) and slot["end_time"] <= "10:40", slot
+            assert counts == {"Matematika": 5, "Ona tili": 4, "Ingliz tili": 3}, counts
+            by_day = {}
+            for slot in slots:
+                by_day.setdefault(slot["weekday"], []).append(slot["period"])
+            for periods in by_day.values():  # teshik yo'q: darslar ketma-ket
+                assert sorted(periods) == list(range(min(periods), min(periods) + len(periods))), by_day
+        return teacher_times
+
+    check([a["id"], b["id"]])
+    slots_a = client.get(f"/api/classes/{a['id']}/schedule", headers=as_user(711)).json()["slots"]
+    assert any(slot["id"] == manual.json()["slots"][0]["id"] for slot in slots_a)  # qo'lda qo'yilgani qoldi
+
+    # Hammasi joylashgan — yana "to'ldirish" hech narsa qo'shmaydi; "qaytadan" esa yangidan tuzadi
+    again = client.post(url, json={"mode": "fill"}, headers=as_user(711)).json()
+    assert again["lessons"] == [] and again["unplaced"] == []
+    rebuilt = client.post(url, json={"mode": "replace", "class_ids": [a["id"]], "apply": True}, headers=as_user(711)).json()
+    assert rebuilt["removed"] == 12 and len(rebuilt["lessons"]) == 12 and rebuilt["unplaced"] == [], rebuilt
+    check([a["id"], b["id"]])
+
+    # Imkonsiz holat — sababi bilan aytiladi: Bobur 1 kun ishlasa, 10 soat sig'maydi
+    client.put(f"/api/schools/members/{bobur}/workload", json={"work_days": [0], "work_start": "08:00", "work_end": "10:40"},
+               headers=as_user(711))
+    tight = client.post(url, json={"mode": "replace"}, headers=as_user(711)).json()
+    assert sum(item["hours"] for item in tight["unplaced"]) == 10 - 3, tight["unplaced"]
+    assert all("Bobur" in item["reason"] for item in tight["unplaced"]), tight["unplaced"]
+
+
 def test_maxfiylik_siyosati_sahifasi():
     """Ochiq havola: kirishsiz ochiladi."""
 

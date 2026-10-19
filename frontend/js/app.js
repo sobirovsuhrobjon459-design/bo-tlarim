@@ -5052,7 +5052,20 @@ function timetablePlanHtml(data) {
       : `<div class="empty-state"><div style="font-size:42px">📚</div><p>Hali fanlar yo'q.</p>
            <p class="subtitle">O'qituvchilar fanlari va sinflarning o'quv rejasi kiritilgach, shu yerda jamlanadi.</p></div>`;
   }
-  return chips + body;
+  const ready = data.classes.filter((item) => item.shift_id && item.plan.length).length;
+  const auto = data.can_manage
+    ? `
+      <div class="panel tt-auto">
+        <span class="tt-auto-icon">✨</span>
+        <span class="tt-auto-text"><b>Jadvalni avtomatik tuzish</b><small>${
+          ready
+            ? `O'quv reja, setka va o'qituvchilar ish vaqtiga qarab ${ready} ta sinf jadvali o'zi tuziladi.`
+            : "Avval sinflarga smena tanlang va o'quv rejani kiriting — keyin jadval o'zi tuziladi."
+        }</small></span>
+        <button type="button" class="btn tt-auto-button" id="auto-timetable-button"${ready ? "" : " disabled"}>Tuzish</button>
+      </div>`
+    : "";
+  return auto + chips + body;
 }
 
 function wireTimetablePlan(data) {
@@ -5064,6 +5077,7 @@ function wireTimetablePlan(data) {
     })
   );
   document.getElementById("add-shift-button")?.addEventListener("click", () => openShiftSheet(null, reload));
+  document.getElementById("auto-timetable-button")?.addEventListener("click", () => openAutoTimetableSheet(data, reload));
   document.querySelectorAll("[data-edit-shift]").forEach((button) =>
     button.addEventListener("click", () => openShiftSheet(data.shifts.find((item) => item.id === Number(button.dataset.editShift)), reload))
   );
@@ -5091,6 +5105,117 @@ function wireTimetablePlan(data) {
       openWorkloadSheet(data.teachers.find((item) => item.user_id === Number(button.dataset.editWorkload)), reload)
     )
   );
+}
+
+// ✨ Jadvalni avtomatik tuzish: rejim va sinflar → "Tuzib ko'rish" (bazaga yozilmaydi) → "Jadvalga qo'yish"
+function openAutoTimetableSheet(data, onDone) {
+  const ready = data.classes.filter((item) => item.shift_id && item.plan.length);
+  const notReady = data.classes.filter((item) => !(item.shift_id && item.plan.length));
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 4px">✨ Jadvalni avtomatik tuzish</h3>
+    <p class="subtitle" style="margin:0 0 12px">Sinf va o'qituvchi to'qnashmaydi, o'qituvchi ish kuni va vaqti hisobga olinadi, bir fan bir kunga ikki marta tushmaydi, kunda bo'sh dars qolmaydi.</p>
+    <label class="field-label">Qanday tuzilsin?</label>
+    <div class="tt-mode" id="auto-mode">
+      <button type="button" class="tt-mode-option active" data-mode="fill"><b>Bo'sh joylarni to'ldirish</b><small>Jadvaldagi darslar joyida qoladi, faqat rejadagi qolgan soatlar qo'yiladi</small></button>
+      <button type="button" class="tt-mode-option" data-mode="replace"><b>Qaytadan tuzish</b><small>Tanlangan sinflar jadvali o'chirilib, yangidan tuziladi</small></button>
+    </div>
+    <label class="field-label" style="margin-top:14px">Sinflar</label>
+    <div class="panel tt-auto-classes">
+      ${ready
+        .map(
+          (item) => `<label class="check-row"><input type="checkbox" data-auto-class="${item.id}" checked />
+            <span><b>${escapeHtml(item.name)}</b> <small>· rejada ${item.planned_hours} soat, jadvalda ${item.placed_hours}</small></span></label>`
+        )
+        .join("")}
+      ${notReady
+        .map(
+          (item) => `<div class="check-row is-off"><input type="checkbox" disabled />
+            <span><b>${escapeHtml(item.name)}</b> <small>· ${item.shift_id ? "o'quv reja kiritilmagan" : "smena tanlanmagan"}</small></span></div>`
+        )
+        .join("")}
+    </div>
+    <div id="auto-result"></div>
+    <button class="btn" id="auto-preview-button" style="margin-top:14px">Tuzib ko'rish</button>
+    <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
+  `);
+
+  let mode = "fill";
+  let preview = null;
+  const result = sheet.querySelector("#auto-result");
+  const actionButton = sheet.querySelector("#auto-preview-button");
+  const chosen = () => [...sheet.querySelectorAll("[data-auto-class]:checked")].map((input) => Number(input.dataset.autoClass));
+  const resetPreview = () => {
+    preview = null;
+    result.innerHTML = "";
+    actionButton.textContent = "Tuzib ko'rish";
+  };
+  sheet.querySelector("#auto-mode").addEventListener("click", (event) => {
+    const option = event.target.closest("[data-mode]");
+    if (!option) return;
+    mode = option.dataset.mode;
+    sheet.querySelectorAll("[data-mode]").forEach((item) => item.classList.toggle("active", item === option));
+    resetPreview();
+  });
+  sheet.querySelectorAll("[data-auto-class]").forEach((input) => input.addEventListener("change", resetPreview));
+
+  actionButton.addEventListener(
+    "click",
+    guarded(async () => {
+      const classIds = chosen();
+      if (!classIds.length) throw new Error("Kamida bitta sinfni tanlang");
+      if (!preview) {
+        preview = await api("/api/schools/timetable/auto", { method: "POST", body: { mode, class_ids: classIds, apply: false } });
+        result.innerHTML = autoTimetableResultHtml(preview);
+        actionButton.textContent = preview.lessons.length ? `✅ Jadvalga qo'yish (${preview.lessons.length} ta dars)` : "Yopish";
+        result.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        return;
+      }
+      if (!preview.lessons.length) {
+        close();
+        return;
+      }
+      const applied = await api("/api/schools/timetable/auto", { method: "POST", body: { mode, class_ids: classIds, apply: true } });
+      schoolOverviewCache = null;
+      close();
+      showToast(`✅ Jadval tuzildi: ${applied.lessons.length} ta dars qo'yildi`);
+      await onDone();
+    })
+  );
+}
+
+function autoTimetableResultHtml(data) {
+  const rows = data.classes
+    .map((item) => {
+      const total = item.kept + item.new;
+      const ok = !item.missing;
+      return `<div class="lesson-row">
+        <span class="lesson-info"><b>${escapeHtml(item.class_name)}</b><small>${
+          item.kept ? `${item.kept} ta dars qoladi · ` : ""
+        }${item.new} ta yangi dars</small></span>
+        <span class="lesson-state ${ok ? "is-ok" : "is-warn"}">${total}/${item.planned} soat</span>
+      </div>`;
+    })
+    .join("");
+  const unplaced = data.unplaced
+    .map((item) => `<li><b>${escapeHtml(item.class_name)} · ${escapeHtml(item.subject)}</b> — ${item.hours} soat joylashmadi: ${escapeHtml(item.reason)}</li>`)
+    .join("");
+  const skipped = data.skipped
+    .map((item) => `<li><b>${escapeHtml(item.class_name)}</b> — ${escapeHtml(item.reason)}</li>`)
+    .join("");
+  const placedAll = !data.unplaced.length;
+  return `
+    <p class="section-label" style="margin-top:16px">NATIJA</p>
+    <div class="tt-auto-summary ${placedAll ? "is-ok" : "is-warn"}">
+      ${
+        placedAll
+          ? `✅ Hamma soatlar joylashdi${data.gaps ? ` (kunlarda ${data.gaps} ta bo'sh dars bor)` : ", kunlarda bo'sh dars yo'q"}.`
+          : `⚠️ ${data.unplaced.reduce((sum, item) => sum + item.hours, 0)} soat joylashmadi — sababi pastda. Qolganini jadvalga qo'yish mumkin.`
+      }
+      ${data.mode === "replace" && data.removed ? `<br><small>Tanlangan sinflardagi ${data.removed} ta mavjud dars o'chiriladi.</small>` : ""}
+    </div>
+    <div class="panel lesson-list" style="margin-top:10px">${rows}</div>
+    ${unplaced ? `<ul class="tt-auto-notes">${unplaced}</ul>` : ""}
+    ${skipped ? `<p class="subtitle" style="margin:10px 0 4px">Tuzilmaydigan sinflar:</p><ul class="tt-auto-notes">${skipped}</ul>` : ""}`;
 }
 
 function weekdayPickerHtml(id, selected) {

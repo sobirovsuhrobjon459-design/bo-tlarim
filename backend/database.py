@@ -981,6 +981,17 @@ class WorkloadIn(BaseModel):
         return self
 
 
+class AutoTimetableIn(BaseModel):
+    """
+    Jadvalni avtomatik tuzish: fill — mavjud darslar qoladi, faqat rejadagi qolgan soatlar qo'yiladi;
+    replace — tanlangan sinflar jadvali qaytadan tuziladi. apply=False — faqat ko'rsatadi (bazaga yozmaydi).
+    """
+
+    mode: str = Field(default="fill", pattern="^(fill|replace)$")
+    class_ids: list[int] | None = Field(default=None, max_length=300)  # bo'sh — smenasi va rejasi bor hamma sinflar
+    apply: bool = False
+
+
 class AnnouncementIn(BaseModel):
     """E'lon: sarlavha, matn, kimga (bo'sh class_id — butun maktab), xodimlarga botda yuborilsinmi."""
 

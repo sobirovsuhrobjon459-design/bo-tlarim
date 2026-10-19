@@ -1473,3 +1473,139 @@ button.tt-cell {
 .tt-hours {
   text-align: center;
 }
+
+/* ---------- Dars jadvali: avtomatik tuzish ---------- */
+
+.tt-auto {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0 4px;
+  padding: 14px;
+  background: linear-gradient(135deg, var(--lilac), var(--color-surface));
+}
+
+.tt-auto-icon {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: var(--color-surface);
+  color: var(--green-deep);
+  font-size: 22px;
+}
+
+.tt-auto-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.tt-auto-text small {
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+.tt-auto-button {
+  width: auto;
+  margin: 0;
+  padding: 10px 18px;
+  flex-shrink: 0;
+}
+
+.tt-auto-button:disabled {
+  opacity: 0.45;
+}
+
+.tt-mode {
+  display: grid;
+  gap: 8px;
+}
+
+.tt-mode-option {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface);
+  font: inherit;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.tt-mode-option small {
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+}
+
+.tt-mode-option.active {
+  border-color: var(--green);
+  background: var(--lilac);
+}
+
+.tt-auto-classes {
+  padding: 4px 14px;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+.tt-auto-classes .check-row {
+  margin: 0;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tt-auto-classes .check-row:last-child {
+  border-bottom: 0;
+}
+
+.tt-auto-classes .check-row small {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.tt-auto-classes .check-row.is-off {
+  opacity: 0.55;
+}
+
+.tt-auto-summary {
+  padding: 12px 14px;
+  border-radius: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.tt-auto-summary.is-ok {
+  background: var(--lilac);
+  color: var(--green-deep);
+}
+
+.tt-auto-summary.is-warn {
+  background: #fff4cc;
+  color: #7a5a00;
+}
+
+.tt-auto-summary small {
+  font-weight: 500;
+}
+
+.tt-auto-notes {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.lesson-state.is-ok {
+  background: var(--mint);
+  color: var(--green-deep);
+}

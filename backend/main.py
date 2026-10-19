@@ -56,6 +56,7 @@ from sqlalchemy import String, case, cast, delete, distinct, func, inspect, or_,
 from sqlalchemy.orm import Session, selectinload
 
 from .rasch import grade_for, rasch_scores
+from .timetable import ClassInput, Period, TeacherInput, build_timetable
 from .subjects import default_sections, frontend_config, subject_keyboard
 from .regions import REGIONS, is_valid_location
 from .student_import import names_from_rows, parse_student_file, rows_from_text
@@ -126,6 +127,7 @@ from .database import (
     ClassShiftIn,
     ClassPlanIn,
     WorkloadIn,
+    AutoTimetableIn,
     SchoolAnnouncement,
     AnnouncementIn,
     SchoolMember,
@@ -9999,6 +10001,119 @@ def set_class_plan(class_id: int, body: ClassPlanIn, user: User = Depends(get_cu
         plan.deleted_at = utcnow()
     db.commit()
     return school_timetable(user, db)
+
+
+@app.post("/api/schools/timetable/auto")
+def auto_timetable(body: AutoTimetableIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Jadvalni o'quv reja, smena setkasi va o'qituvchilar ish vaqti bo'yicha avtomatik tuzadi.
+    apply=False — natija faqat ko'rsatiladi; apply=True — saqlanadi (natija har safar bir xil chiqadi).
+    """
+
+    member = _require_school_member(db, user)
+    _require_director(member)
+    school_id = member.school_id
+    classes = db.scalars(
+        select(SchoolClass).where(SchoolClass.school_id == school_id, SchoolClass.deleted_at.is_(None)).order_by(SchoolClass.name)
+    ).all()
+    wanted = set(body.class_ids) if body.class_ids else None
+    plans = _active_plans(db, school_id=school_id)
+    plan_by_class: dict[int, list[ClassSubjectPlan]] = {}
+    for plan in plans:
+        plan_by_class.setdefault(plan.class_id, []).append(plan)
+
+    targets, skipped = [], []
+    for school_class in classes:
+        if wanted is not None and school_class.id not in wanted:
+            continue
+        shift = _class_shift(db, school_class)
+        if not plan_by_class.get(school_class.id):
+            skipped.append({"class_id": school_class.id, "class_name": school_class.name, "reason": "o'quv reja kiritilmagan"})
+        elif not shift:
+            skipped.append({"class_id": school_class.id, "class_name": school_class.name, "reason": "smena (qo'ng'iroq setkasi) tanlanmagan"})
+        else:
+            targets.append((school_class, shift))
+    target_ids = {school_class.id for school_class, _ in targets}
+
+    all_slots = _active_slots(db, school_id=school_id)
+    removed = [slot for slot in all_slots if body.mode == "replace" and slot.class_id in target_ids]
+    removed_ids = {slot.id for slot in removed}
+
+    inputs = []
+    for school_class, shift in targets:
+        kept = [
+            {"weekday": slot.weekday, "period": slot.period, "start": slot.start_time, "end": slot.end_time,
+             "subject": slot.subject, "teacher_user_id": slot.teacher_user_id}
+            for slot in all_slots if slot.class_id == school_class.id and slot.id not in removed_ids
+        ]
+        inputs.append(ClassInput(
+            id=school_class.id,
+            name=school_class.name,
+            weekdays=_json_list(shift.weekdays),
+            periods=[Period(item["start"], item["end"]) for item in _json_list(shift.periods)],
+            plan=[{"subject": plan.subject, "hours": plan.hours, "teacher_user_id": plan.teacher_user_id}
+                  for plan in plan_by_class[school_class.id]],
+            kept=kept,
+        ))
+    outside_busy = [
+        {"teacher_user_id": slot.teacher_user_id, "weekday": slot.weekday, "start": slot.start_time, "end": slot.end_time}
+        for slot in all_slots if slot.class_id not in target_ids and slot.teacher_user_id
+    ]
+    members = db.scalars(select(SchoolMember).where(SchoolMember.school_id == school_id, SchoolMember.left_at.is_(None))).all()
+    teachers = {
+        item.user_id: TeacherInput(
+            name=item.user.full_name if item.user else "O'qituvchi",
+            work_days=set(_json_list(item.work_days)) if item.work_days else None,
+            work_start=item.work_start,
+            work_end=item.work_end,
+        )
+        for item in members
+    }
+    result = build_timetable(inputs, teachers, outside_busy, seed=school_id)
+
+    names = {item.user_id: teachers[item.user_id].name for item in members}
+    class_names = {school_class.id: school_class.name for school_class, _ in targets}
+    per_class = []
+    for school_class, _ in targets:
+        planned = sum(plan.hours for plan in plan_by_class[school_class.id])
+        new = sum(1 for lesson in result["lessons"] if lesson["class_id"] == school_class.id)
+        kept = sum(1 for slot in all_slots if slot.class_id == school_class.id and slot.id not in removed_ids)
+        missing = sum(item["hours"] for item in result["unplaced"] if item["class_id"] == school_class.id)
+        per_class.append({"class_id": school_class.id, "class_name": school_class.name, "planned": planned,
+                          "kept": kept, "new": new, "missing": missing})
+
+    if body.apply:
+        now = utcnow()
+        for slot in removed:
+            slot.deleted_at = now
+        for lesson in result["lessons"]:
+            db.add(LessonSlot(
+                school_id=school_id,
+                class_id=lesson["class_id"],
+                weekday=lesson["weekday"],
+                start_time=lesson["start_time"],
+                end_time=lesson["end_time"],
+                subject=lesson["subject"],
+                teacher_user_id=lesson["teacher_user_id"],
+                period=lesson["period"],
+                created_by=user.id,
+            ))
+        db.commit()
+
+    return {
+        "applied": body.apply,
+        "mode": body.mode,
+        "classes": per_class,
+        "skipped": skipped,
+        "removed": len(removed),
+        "lessons": [
+            {**lesson, "class_name": class_names[lesson["class_id"]], "weekday_label": WEEKDAYS[lesson["weekday"]],
+             "teacher_name": names.get(lesson["teacher_user_id"], "") if lesson["teacher_user_id"] else ""}
+            for lesson in result["lessons"]
+        ],
+        "unplaced": result["unplaced"],
+        "gaps": result["gaps"],
+    }
 
 
 @app.put("/api/schools/members/{user_id}/workload")
