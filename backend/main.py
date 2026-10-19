@@ -9921,8 +9921,10 @@ def create_shift(body: ShiftIn, user: User = Depends(get_current_user), db: Sess
 
 
 @app.put("/api/schools/shifts/{shift_id}")
-def update_shift(shift_id: int, body: ShiftIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Setka o'zgarsa — shu smenadagi sinflarning darslari yangi vaqtga o'zi ko'chadi."""
+def update_shift(shift_id: int, body: ShiftIn, drop_outside: bool = False, user: User = Depends(get_current_user),
+                 db: Session = Depends(get_db)):
+    """Setka o'zgarsa — shu smenadagi sinflarning darslari yangi vaqtga o'zi ko'chadi.
+    drop_outside=true — yangi setkada yo'q kun yoki darsga tushgan darslar jadvaldan olib tashlanadi."""
 
     member = _require_school_member(db, user)
     _require_director(member)
@@ -9934,9 +9936,18 @@ def update_shift(shift_id: int, body: ShiftIn, user: User = Depends(get_current_
         select(SchoolClass.id).where(SchoolClass.shift_id == shift.id, SchoolClass.deleted_at.is_(None))
     ).all()
     slots = [slot for class_id in class_ids for slot in _active_slots(db, class_id=class_id)]
+    removed = 0
+    if drop_outside:
+        periods, weekdays = _json_list(shift.periods), _json_list(shift.weekdays)
+        now = utcnow()
+        for slot in slots:
+            if slot.period is not None and (slot.period > len(periods) or slot.weekday not in weekdays):
+                slot.deleted_at = now
+                removed += 1
+        slots = [slot for slot in slots if slot.deleted_at is None]
     _retime_slots(db, member.school_id, slots, shift)
     db.commit()
-    return school_timetable(user, db)
+    return {**school_timetable(user, db), "removed_lessons": removed}
 
 
 @app.delete("/api/schools/shifts/{shift_id}")

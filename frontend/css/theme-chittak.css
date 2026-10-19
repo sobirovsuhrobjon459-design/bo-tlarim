@@ -1625,3 +1625,11 @@ button.tt-cell {
 .tt-notify-button {
   margin: 8px 0 4px;
 }
+
+/* 24 soatlik vaqt maydoni: raqamlar tekis, kursor ko'rinadi */
+.time-input {
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  letter-spacing: 0.04em;
+  caret-color: var(--green-deep);
+}

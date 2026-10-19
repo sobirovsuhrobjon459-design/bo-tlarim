@@ -2564,9 +2564,9 @@ function renderAttendanceForm(schoolClass, existing = null) {
     ${timesHtml}
     ${attendanceSubjectFieldHtml(existing ? existing.subject : "")}
     <div class="lesson-time">
-      <label>Dars boshlandi<input type="time" class="input" id="lesson-start" value="${lesson.start}" required /></label>
+      <label>Dars boshlandi<input type="text" class="input time-input" inputmode="numeric" maxlength="5" placeholder="08:00" autocomplete="off" id="lesson-start" value="${lesson.start}" required /></label>
       <span class="slot-times-dash">—</span>
-      <label>Dars tugadi<input type="time" class="input" id="lesson-end" value="${lesson.end}" required /></label>
+      <label>Dars tugadi<input type="text" class="input time-input" inputmode="numeric" maxlength="5" placeholder="08:00" autocomplete="off" id="lesson-end" value="${lesson.end}" required /></label>
     </div>
     <div id="att-counts-host">${attendanceCountsHtml(counts())}</div>
     <p class="subtitle" style="margin:4px 0 8px">O'quvchini bosing: Bor → Yo'q → Sababli → Kechikdi</p>
@@ -4537,9 +4537,9 @@ function openSlotSheet(schoolClass, slot, allSlots, onSaved) {
       ${WEEKDAY_SHORT.map((name, index) => `<button type="button" data-weekday="${index}"${index === slot.weekday ? ' class="active"' : ""}>${name}</button>`).join("")}
     </div>
     <div class="slot-times">
-      <label>Boshlanadi<input type="time" class="input" id="slot-start" value="${start}" /></label>
+      <label>Boshlanadi<input type="text" class="input time-input" inputmode="numeric" maxlength="5" placeholder="08:00" autocomplete="off" id="slot-start" value="${start}" /></label>
       <span class="slot-times-dash">—</span>
-      <label>Tugaydi<input type="time" class="input" id="slot-end" value="${end}" /></label>
+      <label>Tugaydi<input type="text" class="input time-input" inputmode="numeric" maxlength="5" placeholder="08:00" autocomplete="off" id="slot-end" value="${end}" /></label>
     </div>
     <label class="field-label" for="slot-subject">Fan</label>
     <input class="input" id="slot-subject" maxlength="100" list="slot-subjects" value="${escapeHtml(slot.subject || "")}" placeholder="Masalan: Matematika" />
@@ -5235,6 +5235,53 @@ function autoTimetableResultHtml(data) {
     ${skipped ? `<p class="subtitle" style="margin:10px 0 4px">Tuzilmaydigan sinflar:</p><ul class="tt-auto-notes">${skipped}</ul>` : ""}`;
 }
 
+// 24 soatlik vaqt maydoni (.time-input): "0830" yoki "8:30" → "08:30". Brauzerning AM/PM maydoni o'rniga.
+function normalizeTime(text) {
+  const digits = String(text || "").replace(/\D/g, "");
+  if (!digits) return "";
+  let hours, minutes;
+  if (/^\d{1,2}:\d{1,2}$/.test(String(text).trim())) {
+    [hours, minutes] = String(text).trim().split(":").map(Number);
+  } else if (digits.length <= 2) {
+    hours = Number(digits);
+    minutes = 0;
+  } else {
+    hours = Number(digits.slice(0, digits.length - 2));
+    minutes = Number(digits.slice(-2));
+  }
+  if (hours > 23 || minutes > 59) return null;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+document.addEventListener("focusin", (event) => {
+  if (event.target.classList?.contains("time-input")) event.target.dataset.prev = event.target.value;
+});
+document.addEventListener("input", (event) => {
+  const input = event.target;
+  if (!input.classList?.contains("time-input")) return;
+  // Yozish paytida: faqat raqam, 2 ta raqamdan keyin ":" o'zi qo'yiladi
+  const digits = input.value.replace(/\D/g, "").slice(0, 4);
+  const typedColon = input.value.includes(":") && digits.length <= 2;
+  input.value = digits.length > 2 ? `${digits.slice(0, 2)}:${digits.slice(2)}` : digits + (typedColon ? ":" : "");
+});
+// "change" dan OLDIN (capture) — sahifa ishlov beruvchilari to'g'ri "08:30" qiymatini oladi
+document.addEventListener(
+  "change",
+  (event) => {
+    const input = event.target;
+    if (!input.classList?.contains("time-input")) return;
+    const value = normalizeTime(input.value);
+    if (value === null) {
+      showToast("Vaqt noto'g'ri: soat 00–23, daqiqa 00–59 (masalan 08:30)");
+      input.value = input.dataset.prev || "";
+      return;
+    }
+    input.value = value;
+    input.dataset.prev = value;
+  },
+  true
+);
+
 function weekdayPickerHtml(id, selected) {
   return `<div class="choice-toggle weekday-toggle" id="${id}">
     ${WEEKDAY_SHORT.map((name, index) => `<button type="button" data-weekday="${index}"${selected.includes(index) ? ' class="active"' : ""}>${name}</button>`).join("")}
@@ -5281,9 +5328,9 @@ function openShiftSheet(shift, onSaved) {
         return `${index ? `<p class="tt-gap${gap < 0 ? " is-bad" : ""}">${gap < 0 ? "⚠️ Oldingi darsga ustma-ust" : gap ? `☕ Tanaffus ${gap} daqiqa` : "Tanaffussiz"}</p>` : ""}
           <div class="tt-period-row">
             <b>${index + 1}</b>
-            <input type="time" class="input" data-period="${index}" data-key="start" value="${period.start}" />
+            <input type="text" class="input time-input" inputmode="numeric" maxlength="5" placeholder="08:00" autocomplete="off" data-period="${index}" data-key="start" value="${period.start}" />
             <span>—</span>
-            <input type="time" class="input" data-period="${index}" data-key="end" value="${period.end}" />
+            <input type="text" class="input time-input" inputmode="numeric" maxlength="5" placeholder="08:00" autocomplete="off" data-period="${index}" data-key="end" value="${period.end}" />
             <button type="button" class="tt-remove" data-remove-period="${index}" aria-label="${index + 1}-darsni olib tashlash"${
               periods.length === 1 ? " disabled" : ""
             }>✕</button>
@@ -5322,13 +5369,27 @@ function openShiftSheet(shift, onSaved) {
       const name = sheet.querySelector("#shift-name").value.trim();
       if (!name) throw new Error("Smena nomini yozing");
       if (!days.length) throw new Error("Kamida bitta ish kunini tanlang");
-      await api(shift ? `/api/schools/shifts/${shift.id}` : "/api/schools/shifts", {
-        method: shift ? "PUT" : "POST",
-        body: { name, weekdays: days, periods },
-      });
+      if (periods.some((period) => !period.start || !period.end)) throw new Error("Har bir dars vaqtini to'liq kiriting (masalan 08:00)");
+      const body = { name, weekdays: days, periods };
+      let result;
+      try {
+        result = await api(shift ? `/api/schools/shifts/${shift.id}` : "/api/schools/shifts", { method: shift ? "PUT" : "POST", body });
+      } catch (error) {
+        // Yangi setkada yo'q kun yoki darsga tushgan darslar bor — rozilik bilan olib tashlaymiz
+        if (!shift || !/setkasida bu kun yoki dars yo'q/.test(error.message)) throw error;
+        const agreed = await askConfirm(
+          `${error.message.split(" — ")[0]} va boshqalar yangi setkaga sig'maydi.\n\nSetkada yo'q kun va darslardagi darslar jadvaldan olib tashlansinmi?`
+        );
+        if (!agreed) return;
+        result = await api(`/api/schools/shifts/${shift.id}?drop_outside=true`, { method: "PUT", body });
+      }
       schoolOverviewCache = null;
       close();
-      showToast(shift ? "✅ Smena yangilandi" : "✅ Smena qo'shildi");
+      showToast(
+        shift
+          ? `✅ Smena yangilandi${result?.removed_lessons ? ` · ${result.removed_lessons} ta dars jadvaldan olib tashlandi` : ""}`
+          : "✅ Smena qo'shildi"
+      );
       await onSaved();
     })
   );
@@ -5435,9 +5496,9 @@ function openWorkloadSheet(teacher, onSaved) {
     <label class="field-label">Ish kunlari</label>
     ${weekdayPickerHtml("work-days", days)}
     <div class="slot-times">
-      <label>Ish boshlanadi<input type="time" class="input" id="work-start" value="${teacher.work_start || ""}" /></label>
+      <label>Ish boshlanadi<input type="text" class="input time-input" inputmode="numeric" maxlength="5" placeholder="08:00" autocomplete="off" id="work-start" value="${teacher.work_start || ""}" /></label>
       <span class="slot-times-dash">—</span>
-      <label>Tugaydi<input type="time" class="input" id="work-end" value="${teacher.work_end || ""}" /></label>
+      <label>Tugaydi<input type="text" class="input time-input" inputmode="numeric" maxlength="5" placeholder="08:00" autocomplete="off" id="work-end" value="${teacher.work_end || ""}" /></label>
     </div>
     <p class="subtitle" style="margin:8px 0 0;font-size:12.5px">Bo'sh qoldirilsa — cheklanmaydi. Ish kuni va vaqtidan tashqariga dars qo'yib bo'lmaydi.</p>
     <button class="btn" id="work-save-button" style="margin-top:14px">💾 Saqlash</button>

@@ -4367,6 +4367,12 @@ def test_dars_jadvali_setka_oquv_reja_va_yuklama():
     fewer = {**moved, "periods": moved["periods"][:1]}
     assert client.put(f"/api/schools/shifts/{shift_id}", json=fewer, headers=as_user(701)).status_code == 409
     assert client.delete(f"/api/schools/shifts/{shift_id}", headers=as_user(701)).status_code == 409
+    # ...rozilik bilan (drop_outside) — setkaga sig'magan darslar olib tashlanadi, qolgani ko'chadi
+    before = len(client.get(f"/api/classes/{a['id']}/schedule", headers=as_user(701)).json()["slots"])
+    dropped = client.put(f"/api/schools/shifts/{shift_id}?drop_outside=true", json=fewer, headers=as_user(701))
+    assert dropped.status_code == 200 and dropped.json()["removed_lessons"] >= 1, dropped.text
+    after = client.get(f"/api/classes/{a['id']}/schedule", headers=as_user(701)).json()["slots"]
+    assert len(after) < before and all(slot["period"] == 1 for slot in after), after
 
     # Oddiy o'qituvchi rejani ko'radi, lekin yuklamalarni ko'rmaydi va o'zgartira olmaydi
     seen = client.get("/api/schools/timetable", headers=as_user(703)).json()
