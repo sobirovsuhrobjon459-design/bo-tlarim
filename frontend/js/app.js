@@ -4488,11 +4488,11 @@ function schoolAnnouncementsHtml(overview) {
 const WEEKDAY_NAMES = ["Dushanba", "Seshanba", "Chorshanba", "Payshanba", "Juma", "Shanba", "Yakshanba"];
 const WEEKDAY_SHORT = ["Du", "Se", "Ch", "Pa", "Ju", "Sh", "Ya"];
 
-function weekScheduleHtml(slots, { showClass = false, editable = false } = {}) {
+function weekScheduleHtml(slots, { showClass = false, editable = false, addable = editable } = {}) {
   const today = (new Date().getDay() + 6) % 7; // JS: 0 — yakshanba; bizda 0 — dushanba
   const days = WEEKDAY_NAMES.map((name, index) => ({ name, index, slots: slots.filter((slot) => slot.weekday === index) }));
   return days
-    .filter((day) => day.slots.length || (editable && day.index < 6))
+    .filter((day) => day.slots.length || (addable && day.index < 6))
     .map(
       (day) => `
         <p class="section-label" style="margin-top:16px">${day.name.toUpperCase()}${day.index === today ? " · BUGUN" : ""}</p>
@@ -4514,7 +4514,7 @@ function weekScheduleHtml(slots, { showClass = false, editable = false } = {}) {
                   .join("")
               : `<p class="subtitle" style="margin:10px 0">Dars yo'q</p>`
           }
-          ${editable ? `<button type="button" class="lesson-add" data-add-slot="${day.index}">+ ${day.name}ga dars qo'shish</button>` : ""}
+          ${addable ? `<button type="button" class="lesson-add" data-add-slot="${day.index}">+ ${day.name}ga dars qo'shish</button>` : ""}
         </div>`
     )
     .join("");
@@ -4624,7 +4624,11 @@ async function renderSchedule(view = scheduleView, classId = scheduleClassId) {
   let body = "";
   let wire = () => {};
 
-  if (view === "today") {
+  if (view === "plan") {
+    const data = await api("/api/schools/timetable");
+    body = timetablePlanHtml(data);
+    wire = () => wireTimetablePlan(data);
+  } else if (view === "today") {
     const overview = await api("/api/schools/overview");
     schoolOverviewCache = overview;
     body = todayLessonsHtml(overview);
@@ -4643,6 +4647,7 @@ async function renderSchedule(view = scheduleView, classId = scheduleClassId) {
       scheduleClassId = current.id;
       const schedule = await api(`/api/classes/${current.id}/schedule`);
       const schoolClass = { id: current.id, name: current.name };
+      const grid = schedule.shift ? classGridParts(schedule) : null;
       body = `
         <div class="class-chips">
           ${classes
@@ -4655,7 +4660,9 @@ async function renderSchedule(view = scheduleView, classId = scheduleClassId) {
             .join("")}
         </div>
         ${
-          !schedule.slots.length && !schedule.can_edit
+          grid
+            ? grid.html
+            : !schedule.slots.length && !schedule.can_edit
             ? `<div class="empty-state"><div style="font-size:42px">📅</div><p>${escapeHtml(current.name)} jadvali hali tuzilmagan.</p>
                  <p class="subtitle">Uni rahbariyat yoki sinf kuratori tuzadi.</p></div>`
             : `<p class="subtitle" style="margin:12px 0 0">${
@@ -4664,9 +4671,18 @@ async function renderSchedule(view = scheduleView, classId = scheduleClassId) {
                   : `${escapeHtml(current.name)} — haftalik jadval.`
               }</p>`
         }
-        ${weekScheduleHtml(schedule.slots, { editable: schedule.can_edit })}`;
+        ${
+          grid
+            ? ""
+            : `${
+                isLeader(currentSchool)
+                  ? `<div class="notice" style="margin:12px 0 0">Sinfga smena tanlansa, jadval qo'ng'iroq setkasi ko'rinishida tuziladi: «Reja» → «Setka».</div>`
+                  : ""
+              }${weekScheduleHtml(schedule.slots, { editable: schedule.can_edit })}`
+        }`;
       wire = () => {
         const reload = () => renderSchedule("classes", current.id);
+        if (grid) wireClassGrid(schoolClass, schedule, reload);
         document.querySelectorAll("[data-add-slot]").forEach((button) =>
           button.addEventListener("click", () => openSlotSheet(schoolClass, { weekday: Number(button.dataset.addSlot) }, schedule.slots, reload))
         );
@@ -4684,7 +4700,9 @@ async function renderSchedule(view = scheduleView, classId = scheduleClassId) {
     <div data-school-tab="schedule">
       ${schoolSubHeader("Dars jadvali")}
       <div class="tabs">
-        ${SCHEDULE_VIEWS.map((item) => `<button class="tab${item.id === view ? " active" : ""}" data-schedule-view="${item.id}">${item.label}</button>`).join("")}
+        ${[...SCHEDULE_VIEWS, ...(isLeader(currentSchool) ? [{ id: "plan", label: "Reja" }] : [])]
+          .map((item) => `<button class="tab${item.id === view ? " active" : ""}" data-schedule-view="${item.id}">${item.label}</button>`)
+          .join("")}
       </div>
       ${body}
     </div>
@@ -4702,6 +4720,606 @@ async function renderSchedule(view = scheduleView, classId = scheduleClassId) {
     })
   );
   wire();
+}
+
+/* ---------- 📅 Jadval setkasi: smenalar, o'quv reja, o'qituvchi yuklamasi ----------
+   Rahbariyat «Reja» tabida smenalarni (1-dars 08:00–08:45, ...), sinflarning o'quv rejasini
+   (fan — haftasiga necha soat — kim o'tadi) va o'qituvchilar yuklamasini kiritadi. Sinf jadvali
+   setka ko'rinishida: katakni bosib rejadagi fan qo'yiladi, qolgan soatlar ko'rinib turadi. */
+
+const timeToMinutes = (text) => Number(text.slice(0, 2)) * 60 + Number(text.slice(3, 5));
+const minutesToTime = (total) => `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+
+// Setkadagi katak darsi: dars raqami bo'yicha (eski, raqamsiz darslar — boshlanish vaqti bo'yicha)
+function gridSlotAt(slots, weekday, number, period) {
+  return slots.find(
+    (slot) => slot.weekday === weekday && (slot.period === number || (slot.period == null && slot.start_time === period.start))
+  );
+}
+
+function classGridParts(schedule) {
+  const { shift, slots } = schedule;
+  const editable = schedule.can_edit;
+  const today = (new Date().getDay() + 6) % 7;
+  const placed = new Set();
+  const rows = shift.periods
+    .map((period, index) => {
+      const number = index + 1;
+      const gap = index ? timeToMinutes(period.start) - timeToMinutes(shift.periods[index - 1].end) : 0;
+      const breakRow = gap > 0 ? `<tr class="tt-break"><td colspan="${shift.weekdays.length + 1}">Tanaffus · ${gap} daqiqa</td></tr>` : "";
+      const cells = shift.weekdays
+        .map((day) => {
+          const slot = gridSlotAt(slots, day, number, period);
+          if (slot) {
+            placed.add(slot.id);
+            const tag = editable ? `button type="button" data-tt-slot="${slot.id}"` : "div";
+            return `<td><${tag} class="tt-cell is-filled"><b>${escapeHtml(slot.subject || "Dars")}</b><small>${escapeHtml(
+              slot.teacher_name || "—"
+            )}</small></${editable ? "button" : "div"}></td>`;
+          }
+          return `<td>${
+            editable
+              ? `<button type="button" class="tt-cell is-empty" data-tt-add="${day}:${number}" aria-label="${WEEKDAY_NAMES[day]}, ${number}-dars">+</button>`
+              : `<div class="tt-cell"></div>`
+          }</td>`;
+        })
+        .join("");
+      return `${breakRow}<tr><th class="tt-period"><b>${number}</b><small>${period.start}<br>${period.end}</small></th>${cells}</tr>`;
+    })
+    .join("");
+  const offGrid = slots.filter((slot) => !placed.has(slot.id));
+  const html = `
+    <p class="subtitle" style="margin:12px 0 0">${escapeHtml(shift.name)}${
+      editable ? " · bo'sh katakni bosing — rejadagi fan qo'yiladi; darsni bosing — almashtirish yoki olib tashlash." : ""
+    }</p>
+    <div class="tt-scroll">
+      <table class="tt-grid">
+        <thead><tr><th></th>${shift.weekdays
+          .map((day) => `<th${day === today ? ' class="is-today"' : ""}>${WEEKDAY_SHORT[day]}</th>`)
+          .join("")}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    ${planProgressHtml(schedule.plan)}
+    ${
+      offGrid.length
+        ? `<p class="section-label" style="margin-top:16px">SETKADAN TASHQARI DARSLAR</p>${weekScheduleHtml(offGrid, { editable, addable: false })}`
+        : ""
+    }`;
+  return { html };
+}
+
+function planProgressHtml(plan) {
+  if (!plan.length) return "";
+  const total = plan.reduce((sum, row) => sum + row.hours, 0);
+  const done = plan.reduce((sum, row) => sum + Math.min(row.placed, row.hours), 0);
+  return `
+    <p class="section-label" style="margin-top:16px">O'QUV REJA · ${done}/${total} SOAT JADVALDA</p>
+    <div class="tt-plan">
+      ${plan
+        .map((row) => {
+          const state = row.placed === row.hours ? " is-done" : row.placed > row.hours ? " is-over" : "";
+          return `<span class="tt-plan-chip${state}"><b>${escapeHtml(row.subject)}</b> ${row.placed}/${row.hours}</span>`;
+        })
+        .join("")}
+    </div>`;
+}
+
+function wireClassGrid(schoolClass, schedule, reload) {
+  document.querySelectorAll("[data-tt-add]").forEach((button) =>
+    button.addEventListener("click", () => {
+      const [weekday, number] = button.dataset.ttAdd.split(":").map(Number);
+      openGridSlotSheet(schoolClass, schedule, weekday, number, null, reload);
+    })
+  );
+  document.querySelectorAll("[data-tt-slot]").forEach((button) =>
+    button.addEventListener("click", () => {
+      const slot = schedule.slots.find((item) => item.id === Number(button.dataset.ttSlot));
+      const number = slot.period || schedule.shift.periods.findIndex((period) => period.start === slot.start_time) + 1;
+      openGridSlotSheet(schoolClass, schedule, slot.weekday, number, slot, reload);
+    })
+  );
+}
+
+function teacherOptionsHtml(teachers, selectedId, subject = "") {
+  // Shu fanni o'tadiganlar — ro'yxat boshida, ★ bilan
+  const key = subject.trim().toLowerCase();
+  const teaches = (member) => key && (member.subjects || []).some((item) => item.toLowerCase() === key);
+  const sorted = [...teachers].sort((a, b) => Number(teaches(b)) - Number(teaches(a)));
+  return `<option value="">— O'qituvchi belgilanmagan —</option>${sorted
+    .map(
+      (member) =>
+        `<option value="${member.user_id}"${member.user_id === selectedId ? " selected" : ""}>${teaches(member) ? "★ " : ""}${escapeHtml(
+          member.name
+        )}${member.subjects?.length ? ` (${escapeHtml(member.subjects.join(", "))})` : ""}</option>`
+    )
+    .join("")}`;
+}
+
+function openGridSlotSheet(schoolClass, schedule, weekday, number, slot, onSaved) {
+  const period = schedule.shift.periods[number - 1];
+  const editing = Boolean(slot);
+  const teachers = currentSchool?.members || [];
+  const plan = schedule.plan;
+  const current = (slot?.subject || "").toLowerCase();
+
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 4px">${WEEKDAY_NAMES[weekday]} · ${number}-dars</h3>
+    <p class="subtitle" style="margin:0 0 12px">${escapeHtml(schoolClass.name)} · ${period.start}–${period.end}</p>
+    ${
+      plan.length
+        ? `<label class="field-label">O'quv rejadan</label>
+           <div class="tt-pick">
+             ${plan
+               .map((row, index) => {
+                 const left = row.hours - row.placed;
+                 const note = left > 0 ? `${left} soat qoldi` : left === 0 ? "✅ to'liq" : `${-left} soat ortiqcha`;
+                 return `<button type="button" class="tt-pick-item${row.subject.toLowerCase() === current ? " active" : ""}${
+                   left <= 0 ? " is-full" : ""
+                 }" data-plan-index="${index}"><b>${escapeHtml(row.subject)}</b><small>${note}${
+                   row.teacher_name ? ` · ${escapeHtml(row.teacher_name)}` : ""
+                 }</small></button>`;
+               })
+               .join("")}
+           </div>`
+        : `<div class="notice" style="margin:0 0 10px">Sinfning o'quv rejasi hali kiritilmagan — fanni qo'lda yozing.</div>`
+    }
+    <label class="field-label" for="grid-subject">Fan</label>
+    <input class="input" id="grid-subject" maxlength="100" list="grid-subjects" value="${escapeHtml(slot?.subject || "")}" placeholder="Masalan: Matematika" />
+    <datalist id="grid-subjects">${schoolSubjectOptions().map((item) => `<option value="${escapeHtml(item)}"></option>`).join("")}</datalist>
+    <label class="field-label" for="grid-teacher">O'qituvchi</label>
+    <select id="grid-teacher" class="tt-select">${teacherOptionsHtml(teachers, slot?.teacher_user_id ?? null, slot?.subject || "")}</select>
+    <button class="btn" id="grid-save-button" style="margin-top:14px">💾 Saqlash</button>
+    ${editing ? `<button class="btn btn-ghost danger-text" id="grid-delete-button">🗑 Darsni olib tashlash</button>` : ""}
+    <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
+  `);
+
+  const subjectInput = sheet.querySelector("#grid-subject");
+  const teacherSelect = sheet.querySelector("#grid-teacher");
+  sheet.querySelector(".tt-pick")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-plan-index]");
+    if (!button) return;
+    const row = plan[Number(button.dataset.planIndex)];
+    subjectInput.value = row.subject;
+    teacherSelect.innerHTML = teacherOptionsHtml(teachers, row.teacher_user_id, row.subject);
+    sheet.querySelectorAll("[data-plan-index]").forEach((item) => item.classList.toggle("active", item === button));
+  });
+  subjectInput.addEventListener("change", () => {
+    const selected = Number(teacherSelect.value) || null;
+    teacherSelect.innerHTML = teacherOptionsHtml(teachers, selected, subjectInput.value);
+  });
+  sheet.querySelector("#grid-save-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const subject = subjectInput.value.trim();
+      if (!subject) throw new Error("Fanni tanlang yoki yozing");
+      const body = {
+        weekday,
+        period: number,
+        start_time: period.start,
+        end_time: period.end,
+        subject,
+        teacher_user_id: Number(teacherSelect.value) || null,
+      };
+      await api(editing ? `/api/schedule/${slot.id}` : `/api/classes/${schoolClass.id}/schedule`, {
+        method: editing ? "PUT" : "POST",
+        body,
+      });
+      schoolOverviewCache = null;
+      close();
+      showToast(editing ? "✅ Dars yangilandi" : "✅ Dars qo'yildi");
+      await onSaved();
+    })
+  );
+  sheet.querySelector("#grid-delete-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      if (!(await askConfirm("Bu darsni jadvaldan olib tashlaysizmi?"))) return;
+      await api(`/api/schedule/${slot.id}`, { method: "DELETE" });
+      schoolOverviewCache = null;
+      close();
+      showToast("Dars olib tashlandi");
+      await onSaved();
+    })
+  );
+}
+
+/* --- «Reja» tabi (rahbariyat): Setka · O'quv reja · O'qituvchilar · Fanlar --- */
+
+const TIMETABLE_SECTIONS = [
+  { id: "grid", label: "Setka" },
+  { id: "plan", label: "O'quv reja" },
+  { id: "teachers", label: "O'qituvchilar" },
+  { id: "subjects", label: "Fanlar" },
+];
+let timetableSection = "grid";
+
+function weekdaysText(days) {
+  return days.length ? days.map((day) => WEEKDAY_SHORT[day]).join(", ") : "har kuni";
+}
+
+function shiftPeriodsHtml(shift) {
+  return shift.periods
+    .map((period, index) => {
+      const gap = index ? timeToMinutes(period.start) - timeToMinutes(shift.periods[index - 1].end) : 0;
+      return `${gap > 0 ? `<span class="tt-break-chip">☕ ${gap} daq</span>` : ""}<span class="tt-period-chip"><b>${index + 1}</b> ${
+        period.start
+      }–${period.end}</span>`;
+    })
+    .join("");
+}
+
+function timetablePlanHtml(data) {
+  const chips = `
+    <div class="class-chips">
+      ${TIMETABLE_SECTIONS.map(
+        (item) => `<button type="button" class="class-chip${item.id === timetableSection ? " active" : ""}" data-tt-section="${item.id}">${item.label}</button>`
+      ).join("")}
+    </div>`;
+  let body = "";
+
+  if (timetableSection === "grid") {
+    body = `
+      <p class="subtitle" style="margin:12px 0 0">Har smena — ish kunlari va darslar vaqti. Tanaffus darslar orasidagi bo'sh vaqtdan hisoblanadi.</p>
+      ${data.shifts
+        .map(
+          (shift) => `
+            <div class="panel tt-shift">
+              <div class="tt-shift-head">
+                <span><b>${escapeHtml(shift.name)}</b><small>${weekdaysText(shift.weekdays)} · ${shift.periods.length} ta dars</small></span>
+                <button type="button" class="share-pill" data-edit-shift="${shift.id}">✏️ Tahrirlash</button>
+              </div>
+              <div class="tt-shift-periods">${shiftPeriodsHtml(shift)}</div>
+            </div>`
+        )
+        .join("")}
+      <button class="btn btn-ghost" id="add-shift-button" style="margin-top:12px">+ Smena qo'shish</button>
+      ${
+        data.shifts.length && data.classes.length
+          ? `<p class="section-label" style="margin-top:18px">SINFLAR SMENASI</p>
+             <div class="panel lesson-list">
+               ${data.classes
+                 .map(
+                   (item) => `
+                     <div class="lesson-row">
+                       <span class="lesson-info"><b>${escapeHtml(item.name)}</b></span>
+                       <select class="tt-select tt-select-small" data-class-shift="${item.id}">
+                         <option value="">— Smenasiz —</option>
+                         ${data.shifts
+                           .map((shift) => `<option value="${shift.id}"${shift.id === item.shift_id ? " selected" : ""}>${escapeHtml(shift.name)}</option>`)
+                           .join("")}
+                       </select>
+                     </div>`
+                 )
+                 .join("")}
+             </div>`
+          : ""
+      }`;
+  } else if (timetableSection === "plan") {
+    body = data.classes.length
+      ? `<p class="subtitle" style="margin:12px 0 0">Har sinf uchun: qaysi fan haftasiga necha soat va kim o'tadi. Sinfni bosing.</p>
+         <div class="panel lesson-list" style="margin-top:10px">
+           ${data.classes
+             .map(
+               (item) => `
+                 <button type="button" class="lesson-row" data-edit-plan="${item.id}">
+                   <span class="lesson-info"><b>${escapeHtml(item.name)}</b><small>${
+                     item.plan.length ? escapeHtml(item.plan.map((row) => `${row.subject} ${row.hours}`).join(" · ")) : "Reja kiritilmagan"
+                   }</small></span>
+                   <span class="lesson-state">${item.placed_hours}/${item.planned_hours} soat</span>
+                   <span class="attention-arrow">›</span>
+                 </button>`
+             )
+             .join("")}
+         </div>`
+      : `<div class="empty-state"><div style="font-size:42px">🏫</div><p>Maktabda hali sinf yo'q.</p></div>`;
+  } else if (timetableSection === "teachers") {
+    body = `
+      <p class="subtitle" style="margin:12px 0 0">Rejada — o'quv rejada biriktirilgan soatlar; me'yor — haftalik stavka. O'qituvchini bosing.</p>
+      <div class="panel lesson-list" style="margin-top:10px">
+        ${data.teachers
+          .map((item) => {
+            const over = item.weekly_hours != null && item.assigned_hours > item.weekly_hours;
+            const time = item.work_start ? ` · ${item.work_start}–${item.work_end}` : "";
+            return `
+              <button type="button" class="lesson-row" data-edit-workload="${item.user_id}">
+                <span class="lesson-info"><b>${escapeHtml(item.name)}</b><small>${
+                  item.subjects.length ? escapeHtml(item.subjects.join(", ")) : "Fan belgilanmagan"
+                } · ${weekdaysText(item.work_days)}${time}</small></span>
+                <span class="lesson-state${over ? " is-warn" : ""}">${item.assigned_hours}/${item.weekly_hours ?? "—"} soat</span>
+                <span class="attention-arrow">›</span>
+              </button>`;
+          })
+          .join("")}
+      </div>`;
+  } else {
+    const needed = data.subjects.reduce((sum, row) => sum + row.needed_hours, 0);
+    body = data.subjects.length
+      ? `<p class="subtitle" style="margin:12px 0 0">Jami ${data.subjects.length} ta fan, rejada haftasiga ${needed} soat.</p>
+         <div class="panel lesson-list" style="margin-top:10px">
+           ${data.subjects
+             .map(
+               (row) => `
+                 <div class="lesson-row">
+                   <span class="lesson-info"><b>${escapeHtml(row.subject)}</b><small>${
+                     row.teachers.length ? `${row.teachers.length} ta o'qituvchi: ${escapeHtml(row.teachers.join(", "))}` : "⚠️ O'qituvchi yo'q"
+                   }${row.unassigned_hours ? ` · ⚠️ ${row.unassigned_hours} soatga o'qituvchi biriktirilmagan` : ""}</small></span>
+                   <span class="lesson-state">${row.needed_hours} soat</span>
+                 </div>`
+             )
+             .join("")}
+         </div>`
+      : `<div class="empty-state"><div style="font-size:42px">📚</div><p>Hali fanlar yo'q.</p>
+           <p class="subtitle">O'qituvchilar fanlari va sinflarning o'quv rejasi kiritilgach, shu yerda jamlanadi.</p></div>`;
+  }
+  return chips + body;
+}
+
+function wireTimetablePlan(data) {
+  const reload = () => renderSchedule("plan");
+  document.querySelectorAll("[data-tt-section]").forEach((button) =>
+    button.addEventListener("click", () => {
+      timetableSection = button.dataset.ttSection;
+      reload();
+    })
+  );
+  document.getElementById("add-shift-button")?.addEventListener("click", () => openShiftSheet(null, reload));
+  document.querySelectorAll("[data-edit-shift]").forEach((button) =>
+    button.addEventListener("click", () => openShiftSheet(data.shifts.find((item) => item.id === Number(button.dataset.editShift)), reload))
+  );
+  document.querySelectorAll("[data-class-shift]").forEach((select) =>
+    select.addEventListener("change", async () => {
+      try {
+        await api(`/api/classes/${select.dataset.classShift}/shift`, {
+          method: "PUT",
+          body: { shift_id: Number(select.value) || null },
+        });
+        showToast("✅ Sinf smenasi saqlandi");
+      } catch (error) {
+        showToast(error.message);
+      }
+      await reload();
+    })
+  );
+  document.querySelectorAll("[data-edit-plan]").forEach((button) =>
+    button.addEventListener("click", () =>
+      openClassPlanSheet(data, data.classes.find((item) => item.id === Number(button.dataset.editPlan)), reload)
+    )
+  );
+  document.querySelectorAll("[data-edit-workload]").forEach((button) =>
+    button.addEventListener("click", () =>
+      openWorkloadSheet(data.teachers.find((item) => item.user_id === Number(button.dataset.editWorkload)), reload)
+    )
+  );
+}
+
+function weekdayPickerHtml(id, selected) {
+  return `<div class="choice-toggle weekday-toggle" id="${id}">
+    ${WEEKDAY_SHORT.map((name, index) => `<button type="button" data-weekday="${index}"${selected.includes(index) ? ' class="active"' : ""}>${name}</button>`).join("")}
+  </div>`;
+}
+
+// Bir nechta kun tanlanadi (har bosishda yoqiladi/o'chadi)
+function wireWeekdayPicker(container, days) {
+  container.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-weekday]");
+    if (!button) return;
+    const day = Number(button.dataset.weekday);
+    const at = days.indexOf(day);
+    if (at >= 0) days.splice(at, 1);
+    else days.push(day);
+    button.classList.toggle("active", at < 0);
+  });
+}
+
+function openShiftSheet(shift, onSaved) {
+  const periods = shift ? shift.periods.map((period) => ({ ...period })) : [{ start: "08:00", end: "08:45" }];
+  const days = shift ? [...shift.weekdays] : [0, 1, 2, 3, 4, 5];
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 12px">${shift ? "✏️ Smenani tahrirlash" : "+ Yangi smena"}</h3>
+    <label class="field-label" for="shift-name">Nomi</label>
+    <input class="input" id="shift-name" maxlength="60" value="${escapeHtml(shift?.name || "")}" placeholder="Masalan: 1-smena" />
+    <label class="field-label">Ish kunlari</label>
+    ${weekdayPickerHtml("shift-days", days)}
+    <label class="field-label" style="margin-top:12px">Darslar vaqti</label>
+    <div id="shift-periods"></div>
+    <button type="button" class="lesson-add" id="shift-add-period">+ Dars qo'shish</button>
+    ${shift ? `<p class="subtitle" style="margin:6px 0 0;font-size:12.5px">Vaqt o'zgarsa — shu smenadagi sinflarning darslari yangi vaqtga o'zi ko'chadi.</p>` : ""}
+    <button class="btn" id="shift-save-button" style="margin-top:14px">💾 Saqlash</button>
+    ${shift ? `<button class="btn btn-ghost danger-text" id="shift-delete-button">🗑 Smenani o'chirish</button>` : ""}
+    <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
+  `);
+  wireWeekdayPicker(sheet.querySelector("#shift-days"), days);
+
+  const list = sheet.querySelector("#shift-periods");
+  const draw = () => {
+    list.innerHTML = periods
+      .map((period, index) => {
+        const gap = index ? timeToMinutes(period.start) - timeToMinutes(periods[index - 1].end) : 0;
+        return `${index ? `<p class="tt-gap${gap < 0 ? " is-bad" : ""}">${gap < 0 ? "⚠️ Oldingi darsga ustma-ust" : gap ? `☕ Tanaffus ${gap} daqiqa` : "Tanaffussiz"}</p>` : ""}
+          <div class="tt-period-row">
+            <b>${index + 1}</b>
+            <input type="time" class="input" data-period="${index}" data-key="start" value="${period.start}" />
+            <span>—</span>
+            <input type="time" class="input" data-period="${index}" data-key="end" value="${period.end}" />
+            <button type="button" class="tt-remove" data-remove-period="${index}" aria-label="${index + 1}-darsni olib tashlash"${
+              periods.length === 1 ? " disabled" : ""
+            }>✕</button>
+          </div>`;
+      })
+      .join("");
+  };
+  draw();
+  list.addEventListener("change", (event) => {
+    const input = event.target.closest("[data-period]");
+    if (!input || !input.value) return;
+    periods[Number(input.dataset.period)][input.dataset.key] = input.value;
+    draw();
+  });
+  list.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-period]");
+    if (!button || periods.length === 1) return;
+    periods.splice(Number(button.dataset.removePeriod), 1);
+    draw();
+  });
+  sheet.querySelector("#shift-add-period").addEventListener("click", () => {
+    if (periods.length >= 12) {
+      showToast("Ko'pi bilan 12 ta dars");
+      return;
+    }
+    // Keyingi dars — oldingisidan 10 daqiqa tanaffus bilan, xuddi shuncha davom etadi
+    const last = periods[periods.length - 1];
+    const length = timeToMinutes(last.end) - timeToMinutes(last.start);
+    const start = timeToMinutes(last.end) + 10;
+    periods.push({ start: minutesToTime(start), end: minutesToTime(start + length) });
+    draw();
+  });
+  sheet.querySelector("#shift-save-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const name = sheet.querySelector("#shift-name").value.trim();
+      if (!name) throw new Error("Smena nomini yozing");
+      if (!days.length) throw new Error("Kamida bitta ish kunini tanlang");
+      await api(shift ? `/api/schools/shifts/${shift.id}` : "/api/schools/shifts", {
+        method: shift ? "PUT" : "POST",
+        body: { name, weekdays: days, periods },
+      });
+      schoolOverviewCache = null;
+      close();
+      showToast(shift ? "✅ Smena yangilandi" : "✅ Smena qo'shildi");
+      await onSaved();
+    })
+  );
+  sheet.querySelector("#shift-delete-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      if (!(await askConfirm(`«${shift.name}» smenasini o'chirasizmi?`))) return;
+      await api(`/api/schools/shifts/${shift.id}`, { method: "DELETE" });
+      close();
+      showToast("Smena o'chirildi");
+      await onSaved();
+    })
+  );
+}
+
+function openClassPlanSheet(data, schoolClass, onSaved) {
+  const rows = schoolClass.plan.map((row) => ({ subject: row.subject, hours: row.hours, teacher_user_id: row.teacher_user_id }));
+  if (!rows.length) rows.push({ subject: "", hours: 1, teacher_user_id: null });
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 4px">📚 ${escapeHtml(schoolClass.name)} — o'quv reja</h3>
+    <p class="subtitle" style="margin:0 0 12px">Fan · haftasiga necha soat · kim o'tadi</p>
+    <div id="plan-rows"></div>
+    <datalist id="plan-subjects">${schoolSubjectOptions().map((item) => `<option value="${escapeHtml(item)}"></option>`).join("")}</datalist>
+    <button type="button" class="lesson-add" id="plan-add-row">+ Fan qo'shish</button>
+    <p class="subtitle" id="plan-total" style="margin:8px 0 0"></p>
+    <button class="btn" id="plan-save-button" style="margin-top:14px">💾 Saqlash</button>
+    <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
+  `);
+  const list = sheet.querySelector("#plan-rows");
+  const total = () => {
+    sheet.querySelector("#plan-total").textContent = `Jami: haftasiga ${rows.reduce((sum, row) => sum + (Number(row.hours) || 0), 0)} soat`;
+  };
+  const draw = () => {
+    list.innerHTML = rows
+      .map(
+        (row, index) => `
+          <div class="tt-plan-row">
+            <input class="input" data-row="${index}" data-key="subject" list="plan-subjects" maxlength="100" placeholder="Fan" value="${escapeHtml(row.subject)}" />
+            <input class="input tt-hours" type="number" inputmode="numeric" min="1" max="20" data-row="${index}" data-key="hours" value="${row.hours}" aria-label="Haftalik soat" />
+            <button type="button" class="tt-remove" data-remove-row="${index}" aria-label="Fanni olib tashlash">✕</button>
+            <select class="tt-select" data-row="${index}" data-key="teacher_user_id">${teacherOptionsHtml(data.teachers, row.teacher_user_id, row.subject)}</select>
+          </div>`
+      )
+      .join("");
+    total();
+  };
+  draw();
+  list.addEventListener("input", (event) => {
+    const input = event.target.closest("[data-row]");
+    if (!input) return;
+    const row = rows[Number(input.dataset.row)];
+    if (input.dataset.key === "hours") row.hours = Number(input.value) || 0;
+    else if (input.dataset.key === "teacher_user_id") row.teacher_user_id = Number(input.value) || null;
+    else row.subject = input.value;
+    total();
+  });
+  list.addEventListener("change", (event) => {
+    const input = event.target.closest('[data-key="subject"]');
+    if (!input) return;
+    const row = rows[Number(input.dataset.row)];
+    // Fan yozilganda — o'sha fanni o'tadigan yagona o'qituvchi o'zi tanlanadi
+    if (!row.teacher_user_id) {
+      const key = row.subject.trim().toLowerCase();
+      const matches = data.teachers.filter((member) => member.subjects.some((item) => item.toLowerCase() === key));
+      if (matches.length === 1) row.teacher_user_id = matches[0].user_id;
+    }
+    draw();
+  });
+  list.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-row]");
+    if (!button) return;
+    rows.splice(Number(button.dataset.removeRow), 1);
+    draw();
+  });
+  sheet.querySelector("#plan-add-row").addEventListener("click", () => {
+    rows.push({ subject: "", hours: 1, teacher_user_id: null });
+    draw();
+    list.querySelector(`[data-row="${rows.length - 1}"][data-key="subject"]`)?.focus();
+  });
+  sheet.querySelector("#plan-save-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const items = rows
+        .filter((row) => row.subject.trim())
+        .map((row) => ({ subject: row.subject.trim(), hours: row.hours, teacher_user_id: row.teacher_user_id }));
+      const bad = items.find((row) => !(row.hours >= 1 && row.hours <= 20));
+      if (bad) throw new Error(`«${bad.subject}» uchun haftalik soat 1 dan 20 gacha bo'lsin`);
+      await api(`/api/classes/${schoolClass.id}/plan`, { method: "PUT", body: { items } });
+      close();
+      showToast("✅ O'quv reja saqlandi");
+      await onSaved();
+    })
+  );
+}
+
+function openWorkloadSheet(teacher, onSaved) {
+  const days = [...teacher.work_days];
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 4px">👩‍🏫 ${escapeHtml(teacher.name)}</h3>
+    <p class="subtitle" style="margin:0 0 12px">${teacher.subjects.length ? escapeHtml(teacher.subjects.join(", ")) : "Fan belgilanmagan"} ·
+      rejada ${teacher.assigned_hours} soat, jadvalda ${teacher.placed_hours} soat</p>
+    <label class="field-label" for="work-hours">Haftalik soat me'yori (stavka)</label>
+    <input class="input" id="work-hours" type="number" inputmode="numeric" min="0" max="60" value="${teacher.weekly_hours ?? ""}" placeholder="Masalan: 18" />
+    <label class="field-label">Ish kunlari</label>
+    ${weekdayPickerHtml("work-days", days)}
+    <div class="slot-times">
+      <label>Ish boshlanadi<input type="time" class="input" id="work-start" value="${teacher.work_start || ""}" /></label>
+      <span class="slot-times-dash">—</span>
+      <label>Tugaydi<input type="time" class="input" id="work-end" value="${teacher.work_end || ""}" /></label>
+    </div>
+    <p class="subtitle" style="margin:8px 0 0;font-size:12.5px">Bo'sh qoldirilsa — cheklanmaydi. Ish kuni va vaqtidan tashqariga dars qo'yib bo'lmaydi.</p>
+    <button class="btn" id="work-save-button" style="margin-top:14px">💾 Saqlash</button>
+    <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
+  `);
+  wireWeekdayPicker(sheet.querySelector("#work-days"), days);
+  sheet.querySelector("#work-save-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const hours = sheet.querySelector("#work-hours").value.trim();
+      await api(`/api/schools/members/${teacher.user_id}/workload`, {
+        method: "PUT",
+        body: {
+          weekly_hours: hours === "" ? null : Number(hours),
+          work_days: days,
+          work_start: sheet.querySelector("#work-start").value || null,
+          work_end: sheet.querySelector("#work-end").value || null,
+        },
+      });
+      close();
+      showToast("✅ Yuklama saqlandi");
+      await onSaved();
+    })
+  );
 }
 
 /* ---------- 📢 E'lonlar ---------- */

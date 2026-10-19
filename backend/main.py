@@ -120,6 +120,12 @@ from .database import (
     SchoolCreateIn,
     LessonSlot,
     LessonSlotIn,
+    ScheduleShift,
+    ClassSubjectPlan,
+    ShiftIn,
+    ClassShiftIn,
+    ClassPlanIn,
+    WorkloadIn,
     SchoolAnnouncement,
     AnnouncementIn,
     SchoolMember,
@@ -198,12 +204,16 @@ def _add_missing_columns() -> None:
         },
         "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)"},
         "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)"},
-        "school_classes": {"curator_user_id": "INTEGER", "code_start": "INTEGER", "code_end": "INTEGER"},
+        "school_classes": {"curator_user_id": "INTEGER", "code_start": "INTEGER", "code_end": "INTEGER", "shift_id": "INTEGER"},
         "private_schools": {"monthly_fee": "INTEGER DEFAULT 0"},
         "class_students": {"discount_percent": "INTEGER DEFAULT 0", "student_code": "INTEGER"},
         "class_tests": {"source_test_id": "INTEGER"},
         "promo_codes": {"per_teacher_limit": "INTEGER DEFAULT 3"},
-        "school_members": {"position": "VARCHAR(20)", "phone": "VARCHAR(20)", "birth_date": "DATE", "passport": "VARCHAR(20)"},
+        "school_members": {
+            "position": "VARCHAR(20)", "phone": "VARCHAR(20)", "birth_date": "DATE", "passport": "VARCHAR(20)",
+            "weekly_hours": "INTEGER", "work_days": "TEXT", "work_start": "VARCHAR(5)", "work_end": "VARCHAR(5)",
+        },
+        "lesson_slots": {"period": "INTEGER"},
         "attendances": {
             "lesson_start": "VARCHAR(5)",
             "lesson_end": "VARCHAR(5)",
@@ -9502,6 +9512,7 @@ def _slot_view(db: Session, slot: LessonSlot, class_name: str | None = None) -> 
         "subject": slot.subject,
         "teacher_user_id": slot.teacher_user_id,
         "teacher_name": teacher.full_name if teacher else "",
+        "period": slot.period,
     }
 
 
@@ -9550,11 +9561,15 @@ def _check_slot_teacher(db: Session, school_id: int, teacher_user_id: int | None
 @app.get("/api/classes/{class_id}/schedule")
 def class_schedule(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     school_class, member = _school_class(db, user, class_id)
+    slots = _active_slots(db, class_id=school_class.id)
+    shift = _class_shift(db, school_class)
     return {
         "class_id": school_class.id,
         "class_name": school_class.name,
         "can_edit": _can_edit_schedule(school_class, member),
-        "slots": [_slot_view(db, slot, school_class.name) for slot in _active_slots(db, class_id=school_class.id)],
+        "slots": [_slot_view(db, slot, school_class.name) for slot in slots],
+        "shift": _shift_view(shift) if shift else None,
+        "plan": _plan_rows(db, school_class, slots),
     }
 
 
@@ -9563,7 +9578,9 @@ def add_lesson_slot(class_id: int, body: LessonSlotIn, user: User = Depends(get_
     school_class, member = _school_class(db, user, class_id)
     if not _can_edit_schedule(school_class, member):
         raise HTTPException(status_code=403, detail="Jadvalni rahbariyat yoki sinf kuratori tuzadi")
+    _apply_shift_period(db, school_class, body)
     _check_slot_teacher(db, school_class.school_id, body.teacher_user_id)
+    _check_teacher_hours(db, school_class.school_id, body)
     _check_slot_conflicts(db, school_class, body)
     slot = LessonSlot(
         school_id=school_class.school_id,
@@ -9573,6 +9590,7 @@ def add_lesson_slot(class_id: int, body: LessonSlotIn, user: User = Depends(get_
         end_time=body.end_time,
         subject=body.subject,
         teacher_user_id=body.teacher_user_id,
+        period=body.period,
         created_by=user.id,
     )
     db.add(slot)
@@ -9593,10 +9611,12 @@ def _editable_slot(db: Session, user: User, slot_id: int) -> tuple[LessonSlot, S
 @app.put("/api/schedule/{slot_id}")
 def update_lesson_slot(slot_id: int, body: LessonSlotIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     slot, school_class = _editable_slot(db, user, slot_id)
+    _apply_shift_period(db, school_class, body)
     _check_slot_teacher(db, school_class.school_id, body.teacher_user_id)
+    _check_teacher_hours(db, school_class.school_id, body)
     _check_slot_conflicts(db, school_class, body, skip_id=slot.id)
     slot.weekday, slot.start_time, slot.end_time = body.weekday, body.start_time, body.end_time
-    slot.subject, slot.teacher_user_id = body.subject, body.teacher_user_id
+    slot.subject, slot.teacher_user_id, slot.period = body.subject, body.teacher_user_id, body.period
     db.commit()
     return class_schedule(school_class.id, user, db)
 
@@ -9616,6 +9636,351 @@ def my_week_schedule(user: User = Depends(get_current_user), db: Session = Depen
     slots = _active_slots(db, school_id=member.school_id, teacher_user_id=user.id)
     names = {item.id: item.name for item in db.scalars(select(SchoolClass).where(SchoolClass.school_id == member.school_id))}
     return {"slots": [_slot_view(db, slot, names.get(slot.class_id, "")) for slot in slots]}
+
+
+# ---------- Dars jadvali: smenalar (qo'ng'iroq setkasi), o'quv reja, o'qituvchi yuklamasi ----------
+# Rahbariyat smenalarni (1-dars 08:00–08:45, ...), har sinfning o'quv rejasini (fan — haftasiga necha soat —
+# kim o'tadi) va o'qituvchilarning yuklamasini (haftalik soat, ish kunlari, ish vaqti) kiritadi. Darslar
+# sinf jadvalidagi setka kataklariga qo'yiladi: vaqt setkadan olinadi, to'qnashuv va ish vaqti tekshiriladi.
+
+
+def _json_list(value: str | None) -> list:
+    try:
+        parsed = json.loads(value or "[]")
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _shift_view(shift: ScheduleShift) -> dict:
+    return {"id": shift.id, "name": shift.name, "weekdays": _json_list(shift.weekdays), "periods": _json_list(shift.periods)}
+
+
+def _active_shifts(db: Session, school_id: int) -> list[ScheduleShift]:
+    return db.scalars(
+        select(ScheduleShift)
+        .where(ScheduleShift.school_id == school_id, ScheduleShift.deleted_at.is_(None))
+        .order_by(ScheduleShift.id)
+    ).all()
+
+
+def _school_shift(db: Session, member: SchoolMember, shift_id: int) -> ScheduleShift:
+    shift = db.get(ScheduleShift, shift_id)
+    if not shift or shift.deleted_at is not None or shift.school_id != member.school_id:
+        raise HTTPException(status_code=404, detail="Smena topilmadi")
+    return shift
+
+
+def _class_shift(db: Session, school_class: SchoolClass) -> ScheduleShift | None:
+    shift = db.get(ScheduleShift, school_class.shift_id) if school_class.shift_id else None
+    return shift if shift and shift.deleted_at is None and shift.school_id == school_class.school_id else None
+
+
+def _active_plans(db: Session, **filters) -> list[ClassSubjectPlan]:
+    query = select(ClassSubjectPlan).where(ClassSubjectPlan.deleted_at.is_(None))
+    for name, value in filters.items():
+        query = query.where(getattr(ClassSubjectPlan, name) == value)
+    return db.scalars(query.order_by(ClassSubjectPlan.id)).all()
+
+
+def _plan_rows(db: Session, school_class: SchoolClass, slots: list[LessonSlot]) -> list[dict]:
+    """Sinf o'quv rejasi: har fandan haftalik soat, kim o'tadi va jadvalga nechtasi qo'yilgan."""
+
+    placed: dict[str, int] = {}
+    for slot in slots:
+        key = (slot.subject or "").lower()
+        placed[key] = placed.get(key, 0) + 1
+    rows = []
+    for plan in _active_plans(db, class_id=school_class.id):
+        teacher = db.get(User, plan.teacher_user_id) if plan.teacher_user_id else None
+        rows.append({
+            "subject": plan.subject,
+            "hours": plan.hours,
+            "teacher_user_id": plan.teacher_user_id,
+            "teacher_name": teacher.full_name if teacher else "",
+            "placed": placed.get(plan.subject.lower(), 0),
+        })
+    return rows
+
+
+def _active_school_member(db: Session, school_id: int, user_id: int) -> SchoolMember | None:
+    return db.scalar(
+        select(SchoolMember).where(
+            SchoolMember.school_id == school_id, SchoolMember.user_id == user_id, SchoolMember.left_at.is_(None)
+        )
+    )
+
+
+def _workload_view(member: SchoolMember) -> dict:
+    return {
+        "weekly_hours": member.weekly_hours,
+        "work_days": _json_list(member.work_days) if member.work_days else [],
+        "work_start": member.work_start,
+        "work_end": member.work_end,
+    }
+
+
+def _apply_shift_period(db: Session, school_class: SchoolClass, body: LessonSlotIn) -> None:
+    """Setkadagi dars raqami berilgan bo'lsa — vaqt sinf smenasidan olinadi."""
+
+    if body.period is None:
+        return
+    shift = _class_shift(db, school_class)
+    if not shift:
+        raise HTTPException(status_code=422, detail="Sinfga smena (qo'ng'iroq setkasi) tanlanmagan")
+    periods = _json_list(shift.periods)
+    if body.period > len(periods):
+        raise HTTPException(status_code=422, detail=f"«{shift.name}» da {body.period}-dars yo'q")
+    if body.weekday not in _json_list(shift.weekdays):
+        raise HTTPException(status_code=422, detail=f"«{shift.name}» {WEEKDAYS[body.weekday].lower()} kuni ishlamaydi")
+    body.start_time, body.end_time = periods[body.period - 1]["start"], periods[body.period - 1]["end"]
+
+
+def _check_teacher_hours(db: Session, school_id: int, body: LessonSlotIn) -> None:
+    """O'qituvchining ish kunidan yoki ish vaqtidan tashqariga dars qo'yilmaydi."""
+
+    if not body.teacher_user_id:
+        return
+    member = _active_school_member(db, school_id, body.teacher_user_id)
+    if not member:
+        return
+    name = member.user.full_name if member.user else "O'qituvchi"
+    days = _json_list(member.work_days) if member.work_days else []
+    if days and body.weekday not in days:
+        listed = ", ".join(WEEKDAYS[day] for day in days if 0 <= day < 7)
+        raise HTTPException(
+            status_code=409, detail=f"{name} {WEEKDAYS[body.weekday].lower()} kuni ishlamaydi (ish kunlari: {listed})"
+        )
+    if member.work_start and member.work_end and (body.start_time < member.work_start or body.end_time > member.work_end):
+        raise HTTPException(
+            status_code=409,
+            detail=f"{name}ning ish vaqti {member.work_start}–{member.work_end}, bu dars esa {body.start_time}–{body.end_time}",
+        )
+
+
+def _retime_slots(db: Session, school_id: int, slots: list[LessonSlot], shift: ScheduleShift) -> None:
+    """Setkadagi darslar smenaning (yangi) vaqtiga ko'chiriladi. Dars yoki kun setkada bo'lmasa,
+    yoki o'qituvchida boshqa dars bilan ustma-ust tushsa — hech narsa o'zgarmaydi (409)."""
+
+    periods, weekdays = _json_list(shift.periods), _json_list(shift.weekdays)
+    changed = []
+    for slot in slots:
+        if slot.period is None:
+            continue
+        if slot.period > len(periods) or slot.weekday not in weekdays:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{WEEKDAYS[slot.weekday]} {slot.period}-darsda «{slot.subject or 'dars'}» bor — «{shift.name}» setkasida "
+                "bu kun yoki dars yo'q. Avval o'sha darslarni jadvaldan olib tashlang.",
+            )
+        slot.start_time, slot.end_time = periods[slot.period - 1]["start"], periods[slot.period - 1]["end"]
+        changed.append(slot)
+    db.flush()
+    for slot in changed:
+        if not slot.teacher_user_id:
+            continue
+        for other in _active_slots(db, school_id=school_id, teacher_user_id=slot.teacher_user_id, weekday=slot.weekday):
+            if other.id != slot.id and other.start_time < slot.end_time and slot.start_time < other.end_time:
+                db.rollback()
+                teacher = db.get(User, slot.teacher_user_id)
+                teacher_name = teacher.full_name if teacher else "O'qituvchi"
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Yangi vaqtda {teacher_name}ning {WEEKDAYS[slot.weekday].lower()} "
+                    f"kuni ikki darsi ustma-ust tushadi ({slot.start_time}–{slot.end_time})",
+                )
+
+
+@app.get("/api/schools/timetable")
+def school_timetable(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Jadval rejasi: smenalar, sinflarning o'quv rejasi, o'qituvchilar yuklamasi va fanlar bo'yicha jamlanma."""
+
+    member = _require_school_member(db, user)
+    school_id = member.school_id
+    leader = _is_director(member)
+    classes = db.scalars(
+        select(SchoolClass).where(SchoolClass.school_id == school_id, SchoolClass.deleted_at.is_(None)).order_by(SchoolClass.name)
+    ).all()
+    class_ids = {item.id for item in classes}
+    members = db.scalars(
+        select(SchoolMember).where(SchoolMember.school_id == school_id, SchoolMember.left_at.is_(None)).order_by(SchoolMember.id)
+    ).all()
+    names = {item.user_id: (item.user.full_name if item.user else "Noma'lum") for item in members}
+    slots = [slot for slot in _active_slots(db, school_id=school_id) if slot.class_id in class_ids]
+    plans = [plan for plan in _active_plans(db, school_id=school_id) if plan.class_id in class_ids]
+    shift_ids = {shift.id for shift in _active_shifts(db, school_id)}
+
+    class_rows = []
+    for school_class in classes:
+        own_slots = [slot for slot in slots if slot.class_id == school_class.id]
+        rows = _plan_rows(db, school_class, own_slots)
+        class_rows.append({
+            "id": school_class.id,
+            "name": school_class.name,
+            "shift_id": school_class.shift_id if school_class.shift_id in shift_ids else None,
+            "can_edit": _can_edit_schedule(school_class, member),
+            "plan": rows,
+            "planned_hours": sum(row["hours"] for row in rows),
+            "placed_hours": len(own_slots),
+        })
+
+    teachers, subjects = [], []
+    if leader:
+        assigned: dict[int, int] = {}
+        for plan in plans:
+            if plan.teacher_user_id:
+                assigned[plan.teacher_user_id] = assigned.get(plan.teacher_user_id, 0) + plan.hours
+        placed: dict[int, int] = {}
+        for slot in slots:
+            if slot.teacher_user_id:
+                placed[slot.teacher_user_id] = placed.get(slot.teacher_user_id, 0) + 1
+        teachers = [
+            {
+                "user_id": item.user_id,
+                "name": names[item.user_id],
+                "subjects": _read_subjects(item),
+                **_workload_view(item),
+                "assigned_hours": assigned.get(item.user_id, 0),
+                "placed_hours": placed.get(item.user_id, 0),
+            }
+            for item in members
+        ]
+        # Fanlar bo'yicha: nechta o'qituvchi o'tadi, rejada haftasiga necha soat, qanchasiga o'qituvchi biriktirilmagan
+        summary: dict[str, dict] = {}
+
+        def entry(name: str) -> dict:
+            return summary.setdefault(name.lower(), {"subject": name, "teachers": [], "needed_hours": 0, "unassigned_hours": 0})
+
+        for item in teachers:
+            for subject in item["subjects"]:
+                entry(subject)["teachers"].append(item["name"])
+        for plan in plans:
+            row = entry(plan.subject)
+            row["needed_hours"] += plan.hours
+            if not plan.teacher_user_id:
+                row["unassigned_hours"] += plan.hours
+        subjects = sorted(summary.values(), key=lambda row: row["subject"].lower())
+
+    return {
+        "can_manage": leader,
+        "shifts": [_shift_view(shift) for shift in _active_shifts(db, school_id)],
+        "classes": class_rows,
+        "teachers": teachers,
+        "subjects": subjects,
+    }
+
+
+@app.post("/api/schools/shifts")
+def create_shift(body: ShiftIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    member = _require_school_member(db, user)
+    _require_director(member)
+    db.add(ScheduleShift(
+        school_id=member.school_id,
+        name=body.name,
+        weekdays=json.dumps(body.weekdays),
+        periods=json.dumps([period.model_dump() for period in body.periods]),
+    ))
+    db.commit()
+    return school_timetable(user, db)
+
+
+@app.put("/api/schools/shifts/{shift_id}")
+def update_shift(shift_id: int, body: ShiftIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Setka o'zgarsa — shu smenadagi sinflarning darslari yangi vaqtga o'zi ko'chadi."""
+
+    member = _require_school_member(db, user)
+    _require_director(member)
+    shift = _school_shift(db, member, shift_id)
+    shift.name = body.name
+    shift.weekdays = json.dumps(body.weekdays)
+    shift.periods = json.dumps([period.model_dump() for period in body.periods])
+    class_ids = db.scalars(
+        select(SchoolClass.id).where(SchoolClass.shift_id == shift.id, SchoolClass.deleted_at.is_(None))
+    ).all()
+    slots = [slot for class_id in class_ids for slot in _active_slots(db, class_id=class_id)]
+    _retime_slots(db, member.school_id, slots, shift)
+    db.commit()
+    return school_timetable(user, db)
+
+
+@app.delete("/api/schools/shifts/{shift_id}")
+def delete_shift(shift_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    member = _require_school_member(db, user)
+    _require_director(member)
+    shift = _school_shift(db, member, shift_id)
+    used = db.scalars(
+        select(SchoolClass.name).where(SchoolClass.shift_id == shift.id, SchoolClass.deleted_at.is_(None))
+    ).all()
+    if used:
+        raise HTTPException(
+            status_code=409, detail=f"Bu smenada sinflar bor ({', '.join(used)}) — avval ularni boshqa smenaga o'tkazing"
+        )
+    shift.deleted_at = utcnow()
+    db.commit()
+    return school_timetable(user, db)
+
+
+@app.put("/api/classes/{class_id}/shift")
+def set_class_shift(class_id: int, body: ClassShiftIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Sinf smenasi. Setkadagi darslari bo'lsa — yangi smenaning shu raqamli darsiga ko'chadi."""
+
+    school_class, member = _school_class(db, user, class_id)
+    _require_director(member)
+    slots = _active_slots(db, class_id=school_class.id)
+    if body.shift_id is None:
+        if any(slot.period is not None for slot in slots):
+            raise HTTPException(status_code=409, detail="Sinf jadvalida setkadagi darslar bor — smenani olib tashlab bo'lmaydi")
+        school_class.shift_id = None
+    else:
+        shift = _school_shift(db, member, body.shift_id)
+        school_class.shift_id = shift.id
+        _retime_slots(db, member.school_id, slots, shift)
+    db.commit()
+    return school_timetable(user, db)
+
+
+@app.put("/api/classes/{class_id}/plan")
+def set_class_plan(class_id: int, body: ClassPlanIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Sinf o'quv rejasi: fan — haftasiga necha soat — kim o'tadi. Ro'yxatda yo'q fanlar rejadan chiqariladi
+    (jadvaldagi darslari o'z joyida qoladi)."""
+
+    school_class, member = _school_class(db, user, class_id)
+    _require_director(member)
+    for item in body.items:
+        _check_slot_teacher(db, school_class.school_id, item.teacher_user_id)
+    existing = {plan.subject.lower(): plan for plan in _active_plans(db, class_id=school_class.id)}
+    for item in body.items:
+        plan = existing.pop(item.subject.lower(), None)
+        if plan:
+            plan.subject, plan.hours, plan.teacher_user_id = item.subject, item.hours, item.teacher_user_id
+        else:
+            db.add(ClassSubjectPlan(
+                school_id=school_class.school_id,
+                class_id=school_class.id,
+                subject=item.subject,
+                hours=item.hours,
+                teacher_user_id=item.teacher_user_id,
+            ))
+    for plan in existing.values():
+        plan.deleted_at = utcnow()
+    db.commit()
+    return school_timetable(user, db)
+
+
+@app.put("/api/schools/members/{user_id}/workload")
+def set_member_workload(user_id: int, body: WorkloadIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """O'qituvchi yuklamasi: haftalik soat me'yori, ish kunlari va ish vaqti."""
+
+    member = _require_school_member(db, user)
+    _require_director(member)
+    target = _active_school_member(db, member.school_id, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Bu o'qituvchi maktabingizda yo'q")
+    target.weekly_hours = body.weekly_hours
+    target.work_days = json.dumps(body.work_days) if body.work_days else None
+    target.work_start, target.work_end = body.work_start, body.work_end
+    db.commit()
+    return school_timetable(user, db)
 
 
 def _today_lessons(db: Session, member: SchoolMember, user: User, classes: list[SchoolClass], local_now: datetime,

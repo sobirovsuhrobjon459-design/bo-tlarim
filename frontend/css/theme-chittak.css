@@ -1188,3 +1188,288 @@ h2 {
 .page-header .page-brand {
   flex-shrink: 0;
 }
+
+/* ---------- Dars jadvali setkasi (kunlar × darslar), o'quv reja va smenalar ---------- */
+
+.tt-scroll {
+  margin-top: 10px;
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  -webkit-overflow-scrolling: touch;
+}
+
+.tt-grid {
+  width: 100%;
+  min-width: 420px;
+  border-collapse: separate;
+  border-spacing: 4px;
+  table-layout: fixed;
+}
+
+.tt-grid th {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--color-text-muted);
+  text-align: center;
+  padding: 4px 0;
+}
+
+.tt-grid thead th:first-child {
+  width: 50px;
+}
+
+.tt-grid th.is-today {
+  color: var(--green-deep);
+}
+
+.tt-period {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--color-surface);
+  vertical-align: middle;
+}
+
+.tt-period b {
+  display: block;
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.tt-period small {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+
+.tt-grid td {
+  padding: 0;
+}
+
+.tt-cell {
+  display: grid;
+  align-content: center;
+  gap: 1px;
+  width: 100%;
+  min-height: 52px;
+  padding: 5px 4px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+button.tt-cell {
+  cursor: pointer;
+}
+
+.tt-cell.is-filled {
+  background: var(--lilac);
+  border-color: var(--lilac-strong);
+}
+
+.tt-cell.is-filled b {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 11.5px;
+  line-height: 1.2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+}
+
+.tt-cell.is-filled small {
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tt-cell.is-empty {
+  border: 1.5px dashed var(--color-border);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--green-deep);
+}
+
+.tt-break td {
+  padding: 1px 0;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.tt-plan {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tt-plan-chip {
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tt-plan-chip.is-done {
+  background: var(--mint);
+  border-color: var(--peach-strong);
+}
+
+.tt-plan-chip.is-over {
+  background: #fde8e6;
+  border-color: #f5b5ae;
+}
+
+.tt-pick {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.tt-pick-item {
+  display: grid;
+  gap: 2px;
+  padding: 9px 10px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tt-pick-item small {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+
+.tt-pick-item.is-full {
+  opacity: 0.6;
+}
+
+.tt-pick-item.active {
+  border-color: var(--green);
+  background: var(--lilac);
+  opacity: 1;
+}
+
+.tt-select {
+  width: 100%;
+}
+
+.tt-select-small {
+  width: auto;
+  max-width: 55%;
+}
+
+.lesson-state.is-warn {
+  background: #fde8e6;
+  color: #b3261e;
+}
+
+.tt-shift {
+  margin-top: 10px;
+  padding: 12px 14px;
+}
+
+.tt-shift-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tt-shift-head small {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+}
+
+.tt-shift-periods {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.tt-period-chip {
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--lilac);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tt-break-chip {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.tt-period-row {
+  display: grid;
+  grid-template-columns: 22px 1fr auto 1fr 36px;
+  align-items: center;
+  gap: 6px;
+}
+
+.tt-gap {
+  margin: 4px 0 4px 28px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.tt-gap.is-bad {
+  color: #b3261e;
+  font-weight: 700;
+}
+
+.tt-remove {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  font: inherit;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.tt-remove:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.tt-plan-row {
+  display: grid;
+  grid-template-columns: 1fr 64px 36px;
+  gap: 6px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tt-plan-row .tt-select {
+  grid-column: 1 / -1;
+}
+
+.tt-hours {
+  text-align: center;
+}

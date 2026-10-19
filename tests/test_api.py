@@ -4287,6 +4287,94 @@ def test_android_ilovaga_bot_orqali_kirish():
     assert client.get(f"/api/app-login/{old}").status_code == 410
 
 
+def test_dars_jadvali_setka_oquv_reja_va_yuklama():
+    """Smena setkasi, sinf o'quv rejasi, o'qituvchi yuklamasi va darsni setkaga qo'yish (to'qnashuvlar bilan)."""
+
+    reset_database()
+    _set_name(701, "Aziza", "Karimova")
+    school = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                               "name": "Jadval maktabi", "subjects": []}, headers=as_user(701)).json()["school"]
+    _set_name(702, "Bobur", "Aliyev")
+    _set_name(703, "Dilnoza", "Rahimova")
+    for tg_id, subject in ((702, "Matematika"), (703, "Ona tili")):
+        joined = client.post("/api/schools/join", json={"phone": "901234567", "code": current_code(school), "subjects": [subject]},
+                             headers=as_user(tg_id))
+        assert joined.status_code == 200, joined.text
+    a = client.post("/api/classes", json={"name": "5-A"}, headers=as_user(701)).json()
+    b = client.post("/api/classes", json={"name": "5-B"}, headers=as_user(701)).json()
+    users = {member["name"]: member["user_id"] for member in
+             client.get("/api/schools/me", headers=as_user(701)).json()["school"]["members"]}
+    bobur, dilnoza = users["Bobur Aliyev"], users["Dilnoza Rahimova"]
+
+    # Smenani faqat rahbariyat tuzadi; darslar ustma-ust tushmaydi
+    shift_body = {"name": "1-smena", "weekdays": [0, 1, 2, 3, 4, 5],
+                  "periods": [{"start": "08:00", "end": "08:45"}, {"start": "08:55", "end": "09:40"}, {"start": "09:50", "end": "10:35"}]}
+    assert client.post("/api/schools/shifts", json=shift_body, headers=as_user(702)).status_code == 403
+    bad = {**shift_body, "periods": [{"start": "08:00", "end": "08:45"}, {"start": "08:40", "end": "09:20"}]}
+    assert client.post("/api/schools/shifts", json=bad, headers=as_user(701)).status_code == 422
+    plan = client.post("/api/schools/shifts", json=shift_body, headers=as_user(701)).json()
+    shift_id = plan["shifts"][0]["id"]
+    assert plan["shifts"][0]["periods"][1] == {"start": "08:55", "end": "09:40"}, plan
+    for class_id in (a["id"], b["id"]):
+        assert client.put(f"/api/classes/{class_id}/shift", json={"shift_id": shift_id}, headers=as_user(701)).status_code == 200
+
+    # O'quv reja: 5-A da Matematika 5 soat (Bobur), Ona tili 4 soat (o'qituvchisiz)
+    plan = client.put(f"/api/classes/{a['id']}/plan", json={"items": [
+        {"subject": "Matematika", "hours": 5, "teacher_user_id": bobur},
+        {"subject": "Ona tili", "hours": 4},
+    ]}, headers=as_user(701)).json()
+    row = next(item for item in plan["classes"] if item["id"] == a["id"])
+    assert row["planned_hours"] == 9 and row["shift_id"] == shift_id, row
+    math = next(item for item in plan["subjects"] if item["subject"] == "Matematika")
+    assert math["teachers"] == ["Bobur Aliyev"] and math["needed_hours"] == 5 and math["unassigned_hours"] == 0, math
+    mother = next(item for item in plan["subjects"] if item["subject"] == "Ona tili")
+    assert mother["unassigned_hours"] == 4, mother
+    dup = client.put(f"/api/classes/{a['id']}/plan", json={"items": [{"subject": "Fizika", "hours": 2}, {"subject": "fizika", "hours": 1}]},
+                     headers=as_user(701))
+    assert dup.status_code == 422, dup.text
+
+    # Yuklama: Bobur 18 soat, faqat Du–Chor, 08:00–10:00
+    plan = client.put(f"/api/schools/members/{bobur}/workload", json={"weekly_hours": 18, "work_days": [0, 1, 2],
+                                                                      "work_start": "08:00", "work_end": "10:00"}, headers=as_user(701)).json()
+    teacher = next(item for item in plan["teachers"] if item["user_id"] == bobur)
+    assert (teacher["weekly_hours"], teacher["work_days"], teacher["assigned_hours"]) == (18, [0, 1, 2], 5), teacher
+
+    def place(class_id, weekday, period, subject="Matematika", teacher_id=bobur):
+        return client.post(f"/api/classes/{class_id}/schedule", json={
+            "weekday": weekday, "period": period, "start_time": "00:00", "end_time": "00:01",
+            "subject": subject, "teacher_user_id": teacher_id}, headers=as_user(701))
+
+    # Vaqt setkadan olinadi (yuborilgan 00:00 emas)
+    first = place(a["id"], 0, 2)
+    assert first.status_code == 200, first.text
+    slot = first.json()["slots"][0]
+    assert (slot["start_time"], slot["end_time"], slot["period"]) == ("08:55", "09:40", 2), slot
+    assert first.json()["plan"][0]["placed"] == 1, first.json()["plan"]
+    # O'qituvchi bir vaqtda ikki sinfda bo'lmaydi; ish kuni va ish vaqtidan tashqarida ham
+    assert place(b["id"], 0, 2).status_code == 409
+    assert "ishlamaydi" in place(b["id"], 4, 1).json()["detail"]
+    assert "ish vaqti" in place(b["id"], 0, 3).json()["detail"]
+    assert place(a["id"], 6, 1).status_code == 422  # smenada yakshanba yo'q
+    assert place(a["id"], 0, 4).status_code == 422  # 4-dars yo'q
+    assert place(b["id"], 1, 1).status_code == 200
+
+    # Setka o'zgarsa — darslar yangi vaqtga ko'chadi
+    moved = {**shift_body, "periods": [{"start": "08:30", "end": "09:15"}, {"start": "09:20", "end": "09:59"}, {"start": "10:05", "end": "10:50"}]}
+    assert client.put(f"/api/schools/shifts/{shift_id}", json=moved, headers=as_user(701)).status_code == 200
+    slot = client.get(f"/api/classes/{a['id']}/schedule", headers=as_user(701)).json()["slots"][0]
+    assert (slot["start_time"], slot["end_time"]) == ("09:20", "09:59"), slot
+    # Darsi bor kun yoki dars setkadan olib tashlanmaydi; ishlatilayotgan smena o'chirilmaydi
+    fewer = {**moved, "periods": moved["periods"][:1]}
+    assert client.put(f"/api/schools/shifts/{shift_id}", json=fewer, headers=as_user(701)).status_code == 409
+    assert client.delete(f"/api/schools/shifts/{shift_id}", headers=as_user(701)).status_code == 409
+
+    # Oddiy o'qituvchi rejani ko'radi, lekin yuklamalarni ko'rmaydi va o'zgartira olmaydi
+    seen = client.get("/api/schools/timetable", headers=as_user(703)).json()
+    assert seen["can_manage"] is False and seen["teachers"] == [] and seen["classes"], seen
+    assert client.put(f"/api/classes/{a['id']}/plan", json={"items": []}, headers=as_user(703)).status_code == 403
+    assert client.put(f"/api/schools/members/{dilnoza}/workload", json={"weekly_hours": 10}, headers=as_user(703)).status_code == 403
+
+
 def test_maxfiylik_siyosati_sahifasi():
     """Ochiq havola: kirishsiz ochiladi."""
 

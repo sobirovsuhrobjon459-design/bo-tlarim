@@ -525,6 +525,12 @@ class SchoolMember(Base):
     # Pasport seriya va raqami (AA1234567) — ixtiyoriy, faqat rahbariyat ko'radi
     passport: Mapped[str | None] = mapped_column(String(20), default=None)
     subjects: Mapped[str] = mapped_column(Text, default="[]")  # JSON ro'yxat: ["Matematika", ...]
+    # Dars jadvali uchun: haftalik soat me'yori (stavka), ish kunlari (JSON [0..6]) va kun ichidagi ish vaqti.
+    # Bo'sh — cheklanmagan (istalgan kun/vaqtga dars qo'yiladi)
+    weekly_hours: Mapped[int | None] = mapped_column(default=None)
+    work_days: Mapped[str | None] = mapped_column(Text, default=None)
+    work_start: Mapped[str | None] = mapped_column(String(5), default=None)
+    work_end: Mapped[str | None] = mapped_column(String(5), default=None)
     joined_at: Mapped[datetime] = mapped_column(default=utcnow)
     left_at: Mapped[datetime | None] = mapped_column(default=None)
 
@@ -573,6 +579,8 @@ class SchoolClass(Base):
     teacher_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)  # kim yaratgan
     curator_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
     name: Mapped[str] = mapped_column(String(100))
+    # Qo'ng'iroq setkasi (smena) — darslar shu setka kataklariga qo'yiladi
+    shift_id: Mapped[int | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(default=None)
 
@@ -807,7 +815,41 @@ class LessonSlot(Base):
     end_time: Mapped[str] = mapped_column(String(5))
     subject: Mapped[str] = mapped_column(String(100), default="")
     teacher_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
+    # Setkadagi dars raqami (1-dars, 2-dars...); bo'sh — setkasiz, qo'lda kiritilgan vaqt
+    period: Mapped[int | None] = mapped_column(default=None)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
+class ScheduleShift(Base):
+    """
+    Qo'ng'iroq setkasi (smena): ish kunlari va darslar vaqti (1-dars 08:00–08:45, ...).
+    Tanaffus — ketma-ket darslar orasidagi bo'sh vaqt. Sinf o'z smenasini tanlaydi.
+    """
+
+    __tablename__ = "schedule_shifts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    name: Mapped[str] = mapped_column(String(60))
+    weekdays: Mapped[str] = mapped_column(Text, default="[0, 1, 2, 3, 4, 5]")  # JSON: 0 — dushanba
+    periods: Mapped[str] = mapped_column(Text, default="[]")  # JSON: [{"start": "08:00", "end": "08:45"}, ...]
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
+class ClassSubjectPlan(Base):
+    """O'quv reja: sinfda fan haftasiga necha soat o'tiladi va uni kim o'tadi."""
+
+    __tablename__ = "class_subject_plans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    class_id: Mapped[int] = mapped_column(ForeignKey("school_classes.id"), index=True)
+    subject: Mapped[str] = mapped_column(String(100))
+    hours: Mapped[int] = mapped_column(default=1)
+    teacher_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(default=None)
 
@@ -843,12 +885,99 @@ class LessonSlotIn(BaseModel):
     end_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     subject: str = Field(default="", max_length=100)
     teacher_user_id: int | None = None
+    # Setkadagi dars raqami — berilsa, vaqt sinf smenasidan olinadi
+    period: int | None = Field(default=None, ge=1, le=12)
 
     @model_validator(mode="after")
     def check_times(self) -> "LessonSlotIn":
         self.subject = " ".join(self.subject.split())
         if self.end_time <= self.start_time:
             raise ValueError("Dars tugash vaqti boshlanishidan keyin bo'lishi kerak")
+        return self
+
+
+def _clean_weekdays(days: list[int]) -> list[int]:
+    if any(day < 0 or day > 6 for day in days):
+        raise ValueError("Hafta kuni noto'g'ri")
+    return sorted(set(days))
+
+
+class PeriodIn(BaseModel):
+    """Setkadagi bitta dars vaqti."""
+
+    start: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    end: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+class ShiftIn(BaseModel):
+    """Smena: nomi, ish kunlari va darslar vaqti (ketma-ket, ustma-ust tushmaydi)."""
+
+    name: str = Field(min_length=1, max_length=60)
+    weekdays: list[int] = Field(min_length=1, max_length=7)
+    periods: list[PeriodIn] = Field(min_length=1, max_length=12)
+
+    @model_validator(mode="after")
+    def check(self) -> "ShiftIn":
+        self.name = " ".join(self.name.split())
+        if not self.name:
+            raise ValueError("Smena nomini yozing")
+        self.weekdays = _clean_weekdays(self.weekdays)
+        previous_end = ""
+        for number, period in enumerate(self.periods, start=1):
+            if period.end <= period.start:
+                raise ValueError(f"{number}-dars tugash vaqti boshlanishidan keyin bo'lishi kerak")
+            if previous_end and period.start < previous_end:
+                raise ValueError(f"{number}-dars oldingi dars tugashidan oldin boshlanyapti")
+            previous_end = period.end
+        return self
+
+
+class ClassShiftIn(BaseModel):
+    """Sinf smenasi (bo'sh — setkasiz)."""
+
+    shift_id: int | None = None
+
+
+class SubjectPlanItem(BaseModel):
+    subject: str = Field(min_length=1, max_length=100)
+    hours: int = Field(ge=1, le=20)
+    teacher_user_id: int | None = None
+
+
+class ClassPlanIn(BaseModel):
+    """Sinfning butun o'quv rejasi (yuborilgan ro'yxat eskisining o'rniga yoziladi)."""
+
+    items: list[SubjectPlanItem] = Field(max_length=40)
+
+    @model_validator(mode="after")
+    def check(self) -> "ClassPlanIn":
+        seen = set()
+        for item in self.items:
+            item.subject = " ".join(item.subject.split())
+            key = item.subject.lower()
+            if not key:
+                raise ValueError("Fan nomini yozing")
+            if key in seen:
+                raise ValueError(f"«{item.subject}» rejada ikki marta yozilgan")
+            seen.add(key)
+        return self
+
+
+class WorkloadIn(BaseModel):
+    """O'qituvchi yuklamasi: haftalik soat me'yori, ish kunlari va ish vaqti (bo'sh — cheklanmagan)."""
+
+    weekly_hours: int | None = Field(default=None, ge=0, le=60)
+    work_days: list[int] = Field(default_factory=list, max_length=7)
+    work_start: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    work_end: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+    @model_validator(mode="after")
+    def check(self) -> "WorkloadIn":
+        self.work_days = _clean_weekdays(self.work_days)
+        if bool(self.work_start) != bool(self.work_end):
+            raise ValueError("Ish vaqtining boshlanishi va tugashini birga kiriting")
+        if self.work_start and self.work_end <= self.work_start:
+            raise ValueError("Ish tugash vaqti boshlanishidan keyin bo'lishi kerak")
         return self
 
 
