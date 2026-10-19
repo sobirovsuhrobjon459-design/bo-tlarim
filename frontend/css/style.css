@@ -769,7 +769,8 @@ table td {
   padding: 12px 18px;
   border-radius: var(--radius-sm);
   font-size: 14px;
-  z-index: 50;
+  /* Hamma narsadan ustida — ochiq oyna (sheet, 60) va matematik klaviatura (10050) ustida ham ko'rinsin */
+  z-index: 10100;
   box-shadow: var(--shadow-md);
   animation: banner-rise 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
