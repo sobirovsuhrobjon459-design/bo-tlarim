@@ -100,6 +100,7 @@ from .database import (
     PromoCode,
     PromoCreateIn,
     PromoRedeemIn,
+    ReviewLoginIn,
     PromoRedemption,
     SectionsIn,
     TuitionPayment,
@@ -3263,7 +3264,8 @@ def missing_default_channels(tg_id: int) -> list[str]:
     alohida, qat'iy tekshiriladi.
     """
 
-    if not DEFAULT_REQUIRED_CHANNELS or not BOT_TOKEN or BOT_TOKEN == "your_bot_token_here":
+    # Sinov akkaunti (Google tekshiruvchisi) Telegram'da yo'q — obuna ekrani uni to'sib qo'ymasin
+    if tg_id == REVIEW_TG_ID or not DEFAULT_REQUIRED_CHANNELS or not BOT_TOKEN or BOT_TOKEN == "your_bot_token_here":
         return []
     confirmed_at = _subscription_confirmed.get(tg_id)
     if confirmed_at and time.monotonic() - confirmed_at < SUBSCRIPTION_CACHE_SECONDS:
@@ -4230,6 +4232,31 @@ def poll_app_login(token: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=410, detail="Kirish havolasi eskirdi — qaytadan urinib ko'ring")
     session_token = secrets.token_urlsafe(32)
     db.add(AppSession(token_hash=app_session_hash(session_token), user_id=login.user_id))
+    db.commit()
+    return {"status": "ok", "session": session_token}
+
+
+# ---------- Google Play tekshiruvchisi uchun sinov akkaunti ----------
+# Tekshiruvchida Telegram yo'q — u login/parol bilan alohida demo akkauntga kiradi.
+# Kodda faqat parolning izi (sha256) saqlanadi. Demo akkauntning Telegram ID'si
+# manfiy: haqiqiy foydalanuvchi bilan hech qachon to'qnashmaydi.
+REVIEW_USERNAME = "reviewer@chittak.uz"
+REVIEW_PASSWORD_SHA256 = "30ebfaa67f914651135f61dddb1d8c5165738d9205b87957a272a5fbaa68cc55"
+REVIEW_TG_ID = -100
+
+
+@app.post("/api/review-login")
+def review_login(body: ReviewLoginIn, db: Session = Depends(get_db)):
+    import hashlib
+
+    password_hash = hashlib.sha256(body.password.encode()).hexdigest()
+    if not (hmac.compare_digest(body.username.strip().lower(), REVIEW_USERNAME)
+            and hmac.compare_digest(password_hash, REVIEW_PASSWORD_SHA256)):
+        raise HTTPException(status_code=401, detail="Login yoki parol noto'g'ri")
+    remember_bot_user(db, REVIEW_TG_ID, "Demo o'qituvchi", None)
+    user = db.scalar(select(User).where(User.tg_id == REVIEW_TG_ID))
+    session_token = secrets.token_urlsafe(32)
+    db.add(AppSession(token_hash=app_session_hash(session_token), user_id=user.id))
     db.commit()
     return {"status": "ok", "session": session_token}
 

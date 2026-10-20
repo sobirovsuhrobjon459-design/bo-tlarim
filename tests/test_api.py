@@ -4287,6 +4287,33 @@ def test_android_ilovaga_bot_orqali_kirish():
     assert client.get(f"/api/app-login/{old}").status_code == 410
 
 
+def test_google_tekshiruvchisi_sinov_akkauntiga_kiradi():
+    reset_database()
+    wrong = client.post("/api/review-login", json={"username": "reviewer@chittak.uz", "password": "noto'g'ri"})
+    assert wrong.status_code == 401, wrong.text
+
+    original = main.REVIEW_PASSWORD_SHA256
+    main.REVIEW_PASSWORD_SHA256 = hashlib.sha256(b"sinov-parol").hexdigest()
+    try:
+        granted = client.post("/api/review-login", json={"username": " Reviewer@Chittak.uz ", "password": "sinov-parol"})
+        again = client.post("/api/review-login", json={"username": "reviewer@chittak.uz", "password": "sinov-parol"})
+    finally:
+        main.REVIEW_PASSWORD_SHA256 = original
+    assert granted.status_code == 200 and again.status_code == 200, granted.text
+
+    headers = {"X-App-Session": granted.json()["session"]}
+    me = client.get("/api/me", headers=headers).json()
+    assert me["tg_id"] == main.REVIEW_TG_ID, me
+    # Ikkinchi kirish o'sha bitta demo akkauntga tushadi
+    assert client.get("/api/me", headers={"X-App-Session": again.json()["session"]}).json()["id"] == me["id"]
+    # Telegram'da yo'q akkauntni majburiy kanal ekrani to'smaydi
+    assert client.get("/api/me/subscription", headers=headers).json() == {"missing": []}
+    # Tekshiruvchi o'qituvchi bo'lib, test yarata oladi
+    registered = client.post("/api/teacher/register", json={"first_name": "Demo", "last_name": "O'qituvchi"}, headers=headers)
+    assert registered.status_code == 200, registered.text
+    assert client.get("/api/teacher/stats", headers=headers).status_code == 200
+
+
 def test_dars_jadvali_setka_oquv_reja_va_yuklama():
     """Smena setkasi, sinf o'quv rejasi, o'qituvchi yuklamasi va darsni setkaga qo'yish (to'qnashuvlar bilan)."""
 

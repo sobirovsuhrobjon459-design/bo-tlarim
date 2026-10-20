@@ -12815,8 +12815,53 @@ function renderAppLogin(errorText = "") {
     </div>
     <button class="btn" id="app-login-button" style="margin-top:24px">✈️ Telegram orqali kirish</button>
     <p class="subtitle" id="app-login-status" style="text-align:center;margin-top:14px">${escapeHtml(errorText)}</p>
+    <p style="text-align:center;margin-top:36px">
+      <button class="link-button" id="review-login-link" type="button" style="border:0;background:none;color:var(--color-text-muted);font:inherit;font-size:13px;text-decoration:underline;cursor:pointer">Sinov akkaunti bilan kirish</button>
+    </p>
   `);
   document.getElementById("app-login-button").addEventListener("click", guarded(startAppLogin));
+  document.getElementById("review-login-link").addEventListener("click", renderReviewLogin);
+}
+
+// Google Play tekshiruvchisi uchun: Telegram'siz, login va parol bilan demo akkauntga kirish
+function renderReviewLogin() {
+  clearInterval(appLoginPoll);
+  showPage(`
+    <div style="text-align:center;padding-top:40px">
+      <img src="/img/chittak-icon.png" alt="" style="width:72px;height:72px;border-radius:20px;display:block;margin:0 auto">
+      <h1 style="margin:12px 0 8px">Sinov akkaunti</h1>
+      <p class="subtitle">Login va parolni kiriting.</p>
+    </div>
+    <form id="review-login-form" style="display:grid;gap:12px;margin-top:20px">
+      <input class="input" id="review-username" type="email" autocomplete="username" placeholder="Login" required />
+      <input class="input" id="review-password" type="password" autocomplete="current-password" placeholder="Parol" required />
+      <button class="btn" type="submit">Kirish</button>
+      <p class="subtitle" id="review-login-status" style="text-align:center;margin:0"></p>
+    </form>
+    <button class="btn btn-ghost" id="review-login-back" type="button" style="margin-top:12px">← Orqaga</button>
+  `);
+  document.getElementById("review-login-back").addEventListener("click", () => renderAppLogin());
+  document.getElementById("review-login-form").addEventListener(
+    "submit",
+    guarded(async (event) => {
+      event.preventDefault();
+      const status = document.getElementById("review-login-status");
+      status.textContent = "";
+      try {
+        const result = await api("/api/review-login", {
+          method: "POST",
+          body: {
+            username: document.getElementById("review-username").value,
+            password: document.getElementById("review-password").value,
+          },
+        });
+        setAppSession(result.session);
+        startApp();
+      } catch (error) {
+        status.textContent = error.message;
+      }
+    })
+  );
 }
 
 async function startAppLogin() {
