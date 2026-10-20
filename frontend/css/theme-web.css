@@ -442,23 +442,115 @@ html.web-mode body:has(.lp) {
 }
 
 /* Telefon maketi */
+.lp-device {
+  position: relative;
+  justify-self: end;
+  width: 300px;
+  animation: lp-float 6s ease-in-out infinite;
+}
+
+@keyframes lp-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-device {
+    animation: none;
+  }
+}
+
 .lp-phone {
-  border: 8px solid #13293a;
-  border-radius: 36px;
+  position: relative;
+  border: 9px solid #15293a;
+  border-radius: 42px;
   overflow: hidden;
   background: #f3faf5;
-  box-shadow: 0 0 80px rgba(0, 200, 83, 0.25), 0 30px 60px -20px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 90px rgba(0, 200, 83, 0.28), 0 40px 70px -24px rgba(0, 0, 0, 0.7);
   color: var(--lp-ink);
   font-size: 12px;
+}
+
+.lp-phone-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px 4px;
+  background: #0b1f2a;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.lp-phone-status i {
+  width: 78px;
+  height: 20px;
+  border-radius: 999px;
+  background: #000000;
+}
+
+.lp-status-dots {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 10px;
+}
+
+.lp-status-dots b {
+  width: 3px;
+  border-radius: 1px;
+  background: #ffffff;
+}
+
+.lp-status-dots b:nth-child(1) {
+  height: 4px;
+}
+
+.lp-status-dots b:nth-child(2) {
+  height: 7px;
+}
+
+.lp-status-dots b:nth-child(3) {
+  height: 10px;
 }
 
 .lp-phone-top {
   display: grid;
   gap: 12px;
-  padding: 18px 14px 16px;
+  padding: 10px 14px 16px;
   border-radius: 0 0 26px 26px;
-  background: #0b1f2a;
+  background: linear-gradient(160deg, #11313a 0%, #0b1f2a 60%);
   color: #ffffff;
+}
+
+.lp-phone-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.lp-bell {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.lp-bell::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--lp-lime);
 }
 
 .lp-hello {
@@ -503,7 +595,7 @@ html.web-mode body:has(.lp) {
 
 .lp-stats div {
   padding: 8px 4px;
-  border: 1px solid transparent;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.07);
   text-align: center;
@@ -511,12 +603,13 @@ html.web-mode body:has(.lp) {
 
 .lp-stats div.is-best {
   border-color: var(--lp-lime);
+  background: rgba(168, 240, 99, 0.08);
   color: var(--lp-lime);
 }
 
 .lp-stats b {
   display: block;
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .lp-stats small {
@@ -525,23 +618,24 @@ html.web-mode body:has(.lp) {
 }
 
 .lp-phone-cta {
-  padding: 12px;
+  padding: 11px;
   border-radius: 12px;
   background: var(--lp-green);
   color: var(--lp-ink);
   text-align: center;
   font-weight: 800;
   font-size: 13px;
+  box-shadow: 0 10px 20px -10px rgba(0, 200, 83, 0.8);
 }
 
 .lp-phone-body {
   display: grid;
-  gap: 10px;
-  padding: 14px 12px 12px;
+  gap: 8px;
+  padding: 12px 10px 10px;
 }
 
 .lp-mini {
-  padding: 12px;
+  padding: 11px 12px;
   border: 1px solid var(--lp-line);
   border-radius: 16px;
   background: #ffffff;
@@ -551,19 +645,95 @@ html.web-mode body:has(.lp) {
   font-size: 12px;
 }
 
-.lp-mini-row {
+.lp-mini-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.lp-mini-head small {
+  color: #0a7d3a;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.lp-pill {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--lp-soft);
+  color: #0a7d3a;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.lp-bars {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: repeat(7, 1fr);
+  align-items: end;
+  gap: 6px;
+  height: 66px;
   margin-top: 10px;
 }
 
-.lp-mini-row span {
-  padding: 8px;
-  border: 1px solid var(--lp-line);
-  border-radius: 10px;
+.lp-bars div {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  align-items: end;
+  height: 100%;
   text-align: center;
-  font-size: 11px;
+}
+
+.lp-bars i {
+  display: block;
+  border-radius: 5px 5px 2px 2px;
+  background: #cfeedd;
+}
+
+.lp-bars i.is-top {
+  background: var(--lp-green);
+}
+
+.lp-bars small {
+  margin-top: 4px;
+  color: var(--lp-muted);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.lp-test-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 10px;
+}
+
+.lp-test-row b {
+  display: block;
+}
+
+.lp-test-row small {
+  color: var(--lp-muted);
+  font-size: 9.5px;
+}
+
+.lp-test-row strong {
+  font-size: 13px;
+}
+
+.lp-progress {
+  grid-column: 1 / -1;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--lp-soft);
+  overflow: hidden;
+}
+
+.lp-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--lp-green);
 }
 
 .lp-mini-credit {
@@ -573,7 +743,7 @@ html.web-mode body:has(.lp) {
 }
 
 .lp-mini-credit strong {
-  font-size: 20px;
+  font-size: 18px;
 }
 
 .lp-mini-credit small {
@@ -585,34 +755,116 @@ html.web-mode body:has(.lp) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 70px;
-  padding: 10px 14px;
-  border-radius: 18px;
+  margin-top: 4px;
+  padding: 8px 12px;
+  border: 1px solid var(--lp-line);
+  border-radius: 20px;
   background: #ffffff;
-  font-size: 11px;
-  font-weight: 700;
 }
 
 .lp-phone-nav span {
-  padding: 4px 12px;
-  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: #9aaeb5;
+}
+
+.lp-phone-nav span svg {
+  width: 17px;
+  height: 17px;
 }
 
 .lp-phone-nav span.is-on {
   background: var(--lp-soft);
+  color: var(--lp-green);
 }
 
 .lp-phone-nav i {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
-  margin-top: -26px;
+  width: 38px;
+  height: 38px;
+  margin-top: -24px;
+  border: 4px solid #f3faf5;
   border-radius: 50%;
   background: var(--lp-green);
   font-style: normal;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 800;
+  box-shadow: 0 8px 16px -6px rgba(0, 200, 83, 0.7);
+}
+
+/* Telefon yonida suzib turuvchi kartochkalar */
+.lp-float {
+  position: absolute;
+  z-index: 2;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background: rgba(17, 40, 52, 0.82);
+  backdrop-filter: blur(10px);
+  color: #ffffff;
+  box-shadow: 0 20px 40px -18px rgba(0, 0, 0, 0.7);
+}
+
+.lp-float small {
+  display: block;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11px;
+}
+
+.lp-float-a {
+  top: 96px;
+  left: -178px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lp-float-a b {
+  font-size: 14px;
+}
+
+.lp-float-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--lp-green);
+  color: var(--lp-ink);
+}
+
+.lp-float-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.lp-float-b {
+  left: -112px;
+  bottom: 150px;
+  text-align: left;
+}
+
+/* Kartochkalar matn yoki telefon raqamlarini yopmasligi uchun faqat joy yetganda ko'rinadi */
+@media (min-width: 901px) and (max-width: 1180px), (max-width: 600px) {
+  .lp-float {
+    display: none;
+  }
+}
+
+.lp-float-b b {
+  display: block;
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.lp-float-b em {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--lp-lime);
 }
 
 /* Qiymatlar qatori */
@@ -857,10 +1109,11 @@ html.web-mode body:has(.lp) {
     padding-top: 32px;
   }
 
-  .lp-phone {
+  .lp-device {
     width: 280px;
     justify-self: center;
   }
+
 
   .lp-values .lp-wrap {
     grid-template-columns: 1fr 1fr;

@@ -12939,21 +12939,58 @@ function renderWebLogin(errorText = "") {
                 <a class="lp-btn lp-btn-ghost" href="#lp-features">Imkoniyatlarni ko'rish</a>
               </div>
             </div>
-            <div class="lp-phone" aria-hidden="true">
-              <div class="lp-phone-top">
-                ${brand("is-small")}
-                <div class="lp-hello"><span class="lp-avatar">S</span><div><b>Salom, Suxrobjon!</b><small>O'qituvchi</small></div></div>
-                <div class="lp-stats">
-                  <div><b>2</b><small>testlar</small></div>
-                  <div><b>17.8%</b><small>o'rtacha</small></div>
-                  <div class="is-best"><b>31.1%</b><small>eng yuqori</small></div>
-                </div>
-                <div class="lp-phone-cta">+ Yangi test yaratish</div>
+            <div class="lp-device" aria-hidden="true">
+              <div class="lp-float lp-float-a">
+                <span class="lp-float-icon">${LP_ICONS.sheet}</span>
+                <div><b>32 ta varaq</b><small>12 soniyada tekshirildi</small></div>
               </div>
-              <div class="lp-phone-body">
-                <div class="lp-mini"><b>Pullik test to'lovlari</b><div class="lp-mini-row"><span>Cheklar</span><span>Karta</span></div></div>
-                <div class="lp-mini lp-mini-credit"><b>Kredit balansi</b><strong>74 <small>ta</small></strong></div>
-                <div class="lp-phone-nav"><span class="is-on">Testlar</span><i>+</i><span>Natijalar</span></div>
+              <div class="lp-float lp-float-b"><small>Rasch bali</small><b>78.4</b><em>▲ 6.2</em></div>
+              <div class="lp-phone">
+                <div class="lp-phone-status"><span>9:41</span><i></i><span class="lp-status-dots"><b></b><b></b><b></b></span></div>
+                <div class="lp-phone-top">
+                  <div class="lp-phone-head">${brand("is-small")}<span class="lp-bell"></span></div>
+                  <div class="lp-hello"><span class="lp-avatar">S</span><div><b>Salom, Suxrobjon!</b><small>O'qituvchi</small></div></div>
+                  <div class="lp-stats">
+                    <div><b>24</b><small>testlar</small></div>
+                    <div><b>68.4%</b><small>o'rtacha</small></div>
+                    <div class="is-best"><b>96%</b><small>eng yuqori</small></div>
+                  </div>
+                  <div class="lp-phone-cta">+ Yangi test yaratish</div>
+                </div>
+                <div class="lp-phone-body">
+                  <div class="lp-mini">
+                    <div class="lp-mini-head"><b>Haftalik natijalar</b><span class="lp-pill">+12%</span></div>
+                    <div class="lp-bars">
+                      ${[46, 58, 52, 70, 64, 82, 76]
+                        .map((h, i) => `<div><i style="height:${h}%"${i === 5 ? ' class="is-top"' : ""}></i><small>${"DSCPJSY"[i]}</small></div>`)
+                        .join("")}
+                    </div>
+                  </div>
+                  <div class="lp-mini">
+                    <div class="lp-mini-head"><b>So'nggi testlar</b><small>Barchasi</small></div>
+                    ${[
+                      ["Algebra", "9-A sinf · 28 o'quvchi", 84],
+                      ["Geometriya", "10-B sinf · 25 o'quvchi", 71],
+                    ]
+                      .map(
+                        ([name, meta, score]) => `
+                      <div class="lp-test-row">
+                        <div><b>${name}</b><small>${meta}</small></div>
+                        <strong>${score}%</strong>
+                        <span class="lp-progress"><i style="width:${score}%"></i></span>
+                      </div>`
+                      )
+                      .join("")}
+                  </div>
+                  <div class="lp-mini lp-mini-credit"><b>Kredit balansi</b><strong>74 <small>ta</small></strong></div>
+                  <div class="lp-phone-nav">
+                    <span class="is-on">${LP_ICONS.school}</span>
+                    <span>${LP_ICONS.sheet}</span>
+                    <i>+</i>
+                    <span>${LP_ICONS.chart}</span>
+                    <span>${LP_ICONS.users}</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
