@@ -77,12 +77,26 @@ class _WebShellState extends State<WebShell> {
   }
 
   Future<void> _openExternal(WebUri uri) async {
+    final target = Uri.parse(uri.toString());
+    var opened = false;
     try {
-      await launchUrl(Uri.parse(uri.toString()), mode: LaunchMode.externalApplication);
+      opened = await launchUrl(target, mode: LaunchMode.externalApplication);
     } catch (_) {
-      // Telegram o'rnatilmagan bo'lsa — havola brauzerda ochiladi
-      if (uri.scheme == 'tg') return;
-      await launchUrl(Uri.parse(uri.toString()), mode: LaunchMode.platformDefault);
+      opened = false;
+    }
+    if (opened) return;
+    // Mos ilova yo'q (masalan Telegram o'rnatilmagan): tg://resolve?domain=x -> https://t.me/x brauzerda
+    var fallback = target;
+    if (target.scheme == 'tg') {
+      final domain = target.queryParameters['domain'];
+      if (domain == null) return;
+      final start = target.queryParameters['start'];
+      fallback = Uri.https('t.me', '/$domain', start == null ? null : {'start': start});
+    }
+    try {
+      await launchUrl(fallback, mode: LaunchMode.platformDefault);
+    } catch (_) {
+      // Ochib bo'lmadi — sahifada qolamiz
     }
   }
 

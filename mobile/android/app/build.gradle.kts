@@ -59,3 +59,10 @@ android {
 flutter {
     source = "../.."
 }
+
+// Kalitsiz release yig'ilmasin: debug imzoli AAB/APK Play Market'da rad etiladi (debug yig'ish esa ishlayveradi)
+gradle.taskGraph.whenReady {
+    if (keyProperties.isEmpty() && allTasks.any { it.name.contains("Release") }) {
+        throw GradleException("android/key.properties topilmadi — release faqat imzolash kaliti bilan yig'iladi")
+    }
+}

@@ -1,5 +1,5 @@
 name: testway
-description: "A new Flutter project."
+description: "Chittak — maktablar, o'quv markazlari va repetitorlar uchun ta'lim platformasi."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
