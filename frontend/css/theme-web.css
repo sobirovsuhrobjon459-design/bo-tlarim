@@ -236,3 +236,693 @@ html.web-mode:not(.web-signed-in) body {
     grid-column: 1 / -1;
   }
 }
+
+/* ---------- Sayt bosh sahifasi (kirmagan mehmon uchun landing) ---------- */
+
+html.web-mode body:has(.lp) {
+  background: #0b1f2a;
+}
+
+#app:has(> .page > .lp) {
+  max-width: none;
+  padding: 0;
+}
+
+.lp {
+  --lp-ink: #0b1f2a;
+  --lp-green: #00c853;
+  --lp-lime: #a8f063;
+  --lp-soft: #eaf7ee;
+  --lp-muted: #4f6670;
+  --lp-line: #ddefe2;
+  color: var(--lp-ink);
+  background: #ffffff;
+  font-family: "Plus Jakarta Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.lp h1,
+.lp h2,
+.lp h3 {
+  margin: 0;
+  background: none;
+  letter-spacing: -0.035em;
+  font-weight: 800;
+}
+
+.lp p {
+  margin: 0;
+}
+
+.lp em {
+  font-style: normal;
+  color: var(--lp-green);
+}
+
+.lp-wrap {
+  width: 100%;
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 0 16px;
+  box-sizing: border-box;
+}
+
+.lp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 0 28px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: var(--lp-green);
+  color: var(--lp-ink);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.lp-btn:hover {
+  transform: translateY(-1px);
+  background: #18d968;
+}
+
+.lp-btn-sm {
+  min-height: 44px;
+  padding: 0 20px;
+  font-size: 15px;
+}
+
+.lp-btn-ghost {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #ffffff;
+}
+
+.lp-btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.lp-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #ffffff;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.lp-brand img {
+  width: 40px;
+  height: 40px;
+  border-radius: 28%;
+}
+
+.lp-brand.is-small {
+  font-size: 18px;
+}
+
+.lp-brand.is-small img {
+  width: 28px;
+  height: 28px;
+}
+
+/* Hero */
+.lp-hero {
+  position: relative;
+  overflow: hidden;
+  padding-bottom: 80px;
+  background: #0b1f2a;
+  color: #ffffff;
+}
+
+.lp-hero::before {
+  content: "";
+  position: absolute;
+  right: -260px;
+  top: -200px;
+  width: 760px;
+  height: 760px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 200, 83, 0.32), rgba(0, 200, 83, 0) 65%);
+  pointer-events: none;
+}
+
+.lp-hero > .lp-wrap {
+  position: relative;
+}
+
+.lp-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 24px 0;
+}
+
+.lp-nav nav {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+
+.lp-nav nav a {
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.lp-nav nav a:hover {
+  color: var(--lp-lime);
+}
+
+.lp-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 290px;
+  align-items: center;
+  gap: 48px;
+  padding-top: 64px;
+}
+
+.lp-badge {
+  display: inline-block;
+  padding: 7px 16px;
+  border: 1px solid rgba(168, 240, 99, 0.6);
+  border-radius: 999px;
+  background: rgba(168, 240, 99, 0.08);
+  color: var(--lp-lime);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.lp-hero h1 {
+  margin: 28px 0 24px;
+  color: #ffffff;
+  font-size: clamp(42px, 7vw, 84px);
+  line-height: 1;
+  letter-spacing: -0.05em;
+}
+
+.lp-lead {
+  max-width: 540px;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 18px;
+  line-height: 1.6;
+}
+
+.lp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 36px;
+}
+
+/* Telefon maketi */
+.lp-phone {
+  border: 8px solid #13293a;
+  border-radius: 36px;
+  overflow: hidden;
+  background: #f3faf5;
+  box-shadow: 0 0 80px rgba(0, 200, 83, 0.25), 0 30px 60px -20px rgba(0, 0, 0, 0.6);
+  color: var(--lp-ink);
+  font-size: 12px;
+}
+
+.lp-phone-top {
+  display: grid;
+  gap: 12px;
+  padding: 18px 14px 16px;
+  border-radius: 0 0 26px 26px;
+  background: #0b1f2a;
+  color: #ffffff;
+}
+
+.lp-hello {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lp-hello b {
+  display: block;
+  font-size: 14px;
+}
+
+.lp-hello small {
+  display: inline-block;
+  margin-top: 3px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--lp-lime);
+  color: var(--lp-ink);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.lp-avatar {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--lp-lime);
+  color: var(--lp-ink);
+  font-weight: 800;
+  font-size: 16px;
+}
+
+.lp-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.lp-stats div {
+  padding: 8px 4px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.07);
+  text-align: center;
+}
+
+.lp-stats div.is-best {
+  border-color: var(--lp-lime);
+  color: var(--lp-lime);
+}
+
+.lp-stats b {
+  display: block;
+  font-size: 14px;
+}
+
+.lp-stats small {
+  font-size: 9px;
+  opacity: 0.8;
+}
+
+.lp-phone-cta {
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--lp-green);
+  color: var(--lp-ink);
+  text-align: center;
+  font-weight: 800;
+  font-size: 13px;
+}
+
+.lp-phone-body {
+  display: grid;
+  gap: 10px;
+  padding: 14px 12px 12px;
+}
+
+.lp-mini {
+  padding: 12px;
+  border: 1px solid var(--lp-line);
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+.lp-mini b {
+  font-size: 12px;
+}
+
+.lp-mini-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.lp-mini-row span {
+  padding: 8px;
+  border: 1px solid var(--lp-line);
+  border-radius: 10px;
+  text-align: center;
+  font-size: 11px;
+}
+
+.lp-mini-credit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.lp-mini-credit strong {
+  font-size: 20px;
+}
+
+.lp-mini-credit small {
+  font-size: 10px;
+  color: var(--lp-muted);
+}
+
+.lp-phone-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 70px;
+  padding: 10px 14px;
+  border-radius: 18px;
+  background: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.lp-phone-nav span {
+  padding: 4px 12px;
+  border-radius: 999px;
+}
+
+.lp-phone-nav span.is-on {
+  background: var(--lp-soft);
+}
+
+.lp-phone-nav i {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-top: -26px;
+  border-radius: 50%;
+  background: var(--lp-green);
+  font-style: normal;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+/* Qiymatlar qatori */
+.lp-values {
+  padding: 36px 0;
+  background: var(--lp-soft);
+}
+
+.lp-values .lp-wrap {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.lp-value {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 18px;
+}
+
+.lp-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: #ffffff;
+  color: var(--lp-green);
+}
+
+.lp-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* Bo'limlar */
+.lp-section {
+  padding: 100px 0;
+}
+
+.lp-kicker {
+  color: #0a7d3a;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.lp-section h2 {
+  margin: 14px 0 44px;
+  font-size: clamp(32px, 4.4vw, 52px);
+  line-height: 1.05;
+}
+
+.lp-features {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.lp-feature {
+  padding: 30px;
+  border: 1px solid var(--lp-line);
+  border-radius: 24px;
+  background: #ffffff;
+}
+
+.lp-feature .lp-icon {
+  width: 58px;
+  height: 58px;
+  background: var(--lp-soft);
+}
+
+.lp-feature h3 {
+  margin: 28px 0 14px;
+  font-size: 24px;
+}
+
+.lp-feature p {
+  color: var(--lp-muted);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.lp-feature.is-dark {
+  border-color: #0b1f2a;
+  background: #0b1f2a;
+  color: #ffffff;
+  box-shadow: 0 24px 50px -24px rgba(0, 200, 83, 0.45);
+}
+
+.lp-feature.is-dark .lp-icon {
+  background: var(--lp-lime);
+  color: var(--lp-ink);
+}
+
+.lp-feature.is-dark p {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.lp-how {
+  background: #f3faf5;
+}
+
+.lp-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 32px;
+}
+
+.lp-step {
+  padding-top: 24px;
+  border-top: 3px solid var(--lp-green);
+}
+
+.lp-step span {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #0b1f2a;
+  color: var(--lp-lime);
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.lp-step h3 {
+  margin: 24px 0 14px;
+  font-size: 22px;
+}
+
+.lp-step p {
+  color: var(--lp-muted);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+/* Shior */
+.lp-quote {
+  padding: 90px 0;
+  background: var(--lp-green);
+}
+
+.lp-quote blockquote {
+  max-width: 640px;
+  margin: 0;
+  font-size: clamp(32px, 4.4vw, 56px);
+  font-weight: 800;
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+}
+
+.lp-quote p {
+  margin-top: 22px;
+  font-size: 19px;
+  font-weight: 700;
+}
+
+/* Yakuniy chaqiruv */
+.lp-final {
+  position: relative;
+  overflow: hidden;
+  padding: 100px 0;
+  background: #0b1f2a;
+  color: #ffffff;
+}
+
+.lp-final::before {
+  content: "";
+  position: absolute;
+  left: -220px;
+  bottom: -260px;
+  width: 560px;
+  height: 560px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 200, 83, 0.3), rgba(0, 200, 83, 0) 65%);
+  pointer-events: none;
+}
+
+.lp-final .lp-wrap {
+  position: relative;
+}
+
+.lp-final h2 {
+  max-width: 600px;
+  color: #ffffff;
+  font-size: clamp(36px, 5vw, 64px);
+  line-height: 1.02;
+}
+
+.lp-final p {
+  margin: 26px 0 36px;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 18px;
+  line-height: 1.6;
+}
+
+.lp-footer {
+  padding: 28px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: #0b1f2a;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 14px;
+}
+
+.lp-footer .lp-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.lp-footer span:nth-child(2) {
+  color: #ffffff;
+  font-weight: 700;
+}
+
+/* Kirish oynasi */
+.lp-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: none;
+  place-items: center;
+  padding: 16px;
+  background: rgba(5, 20, 28, 0.7);
+  backdrop-filter: blur(4px);
+}
+
+.lp-modal.is-open {
+  display: grid;
+}
+
+/* Planshet va telefon */
+@media (max-width: 900px) {
+  .lp-hero-grid {
+    grid-template-columns: 1fr;
+    padding-top: 32px;
+  }
+
+  .lp-phone {
+    width: 280px;
+    justify-self: center;
+  }
+
+  .lp-values .lp-wrap {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .lp-features,
+  .lp-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .lp-section,
+  .lp-final {
+    padding: 70px 0;
+  }
+
+  .lp-quote {
+    padding: 64px 0;
+  }
+}
+
+@media (max-width: 600px) {
+  .lp-nav nav a {
+    display: none;
+  }
+
+  .lp-brand {
+    font-size: 22px;
+  }
+
+  .lp-brand img {
+    width: 34px;
+    height: 34px;
+  }
+
+  .lp-hero {
+    padding-bottom: 56px;
+  }
+
+  .lp-lead {
+    font-size: 16px;
+  }
+
+  .lp-actions .lp-btn {
+    width: 100%;
+  }
+
+  .lp-value {
+    font-size: 16px;
+    gap: 12px;
+  }
+
+  .lp-icon {
+    width: 44px;
+    height: 44px;
+  }
+
+  .lp-feature {
+    padding: 24px;
+  }
+
+  .lp-footer .lp-wrap {
+    flex-direction: column;
+    text-align: center;
+  }
+}

@@ -12879,27 +12879,175 @@ async function appLogout() {
 
 const WEB_LOGO = `<img src="/img/chittak-icon.png" alt="">`;
 
+const LP_ICONS = {
+  shield: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>`,
+  bolt: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></svg>`,
+  layout: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="6" height="6" rx="2"/><path d="M14 15h6M14 19h6"/></svg>`,
+  trend: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>`,
+  school: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/></svg>`,
+  sheet: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/><path d="M14 3v5h5"/><path d="m9 14 2 2 4-4"/></svg>`,
+  chart: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 20v-6M12 20V6M18 20v-9"/></svg>`,
+  clipboard: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6v3H9z"/><path d="m9 13 2 2 4-4"/></svg>`,
+  users: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M21 20c0-2.8-1.7-5-4-5.7"/></svg>`,
+};
+
+// Kirmagan mehmon uchun sayt bosh sahifasi (landing); "Telegramda ochish" tugmalari kirish oynasini ochadi
 function renderWebLogin(errorText = "") {
   clearInterval(appLoginPoll);
   document.getElementById("web-sidebar")?.remove();
   document.documentElement.classList.remove("web-signed-in");
+  const values = [
+    ["shield", "Ishonchli"],
+    ["bolt", "Tezkor"],
+    ["layout", "Sodda"],
+    ["trend", "Kelajak uchun"],
+  ];
+  const features = [
+    ["school", "Maktab CRM", "O'quvchilar, sinflar, guruhlar va ta'lim jarayonini bitta tizimda boshqarish."],
+    ["sheet", "Titul testlarini tekshirish", "Skaner orqali testlarni avtomatik va tezkor tekshirish."],
+    ["chart", "Rasch modeli", "Natijalarni ilmiy asosda tahlil qilish va dinamikani kuzatish.", true],
+    ["clipboard", "Mandat", "Imtihon natijalarini avtomatik hisoblash va hisobotlar."],
+    ["users", "Barchasi uchun", "Maktablar, o'quv markazlari va repetitorlar uchun qulay va tushunarli platforma."],
+  ];
+  const steps = [
+    ["Testni yarating", "Yangi test yarating va uni sinf yoki guruhga biriktiring."],
+    ["Javoblarni skanerlang", "Titul varaqlari skaner orqali avtomatik va tezkor tekshiriladi."],
+    ["Natijani tahlil qiling", "Rasch modeli va mandat hisobotlari natijani aniq ko'rsatadi."],
+  ];
+  const brand = (cls = "") => `<span class="lp-brand ${cls}"><img src="/img/chittak-icon.png" alt=""><b>Chittak</b></span>`;
   showPage(
     `
-    <div class="web-login">
-      <div class="web-login-brand">
-        <div class="web-logo">${WEB_LOGO}</div>
-        <h1>Chittak</h1>
-        <p>Ilg'or ta'lim, tezkor natija</p>
-      </div>
-      <div class="web-login-card" id="web-login-card">
-        <h2>Kirish</h2>
-        <p class="subtitle">Telegram akkauntingiz bilan kiring — testlar, natijalar va kreditlar botdagi bilan bir xil bo'ladi.</p>
-        <button class="btn" id="web-login-button" type="button">✈️ Telegram orqali kirish</button>
-        <p class="web-login-status" id="web-login-status">${escapeHtml(errorText)}</p>
+    <div class="lp">
+      <section class="lp-hero">
+        <div class="lp-wrap">
+          <header class="lp-nav">
+            ${brand()}
+            <nav>
+              <a href="#lp-features">Imkoniyatlar</a>
+              <a href="#lp-how">Qanday ishlaydi</a>
+              <button class="lp-btn lp-btn-sm" type="button" data-lp-login>Telegramda ochish</button>
+            </nav>
+          </header>
+          <div class="lp-hero-grid">
+            <div>
+              <span class="lp-badge">Ta'lim boshqaruvi va aqlli test tahlili: bir platformada</span>
+              <h1>Ta'limda tezlik.<br><em>Natijada aniqlik.</em></h1>
+              <p class="lp-lead">Chittak maktablar, o'quv markazlari va repetitorlar uchun yaratilgan zamonaviy platforma.
+                U ta'lim jarayonini boshqarish, testlarni tekshirish va natijalarni tahlil qilishni bitta tizimda birlashtiradi.</p>
+              <div class="lp-actions">
+                <button class="lp-btn" type="button" data-lp-login>Telegramda boshlash</button>
+                <a class="lp-btn lp-btn-ghost" href="#lp-features">Imkoniyatlarni ko'rish</a>
+              </div>
+            </div>
+            <div class="lp-phone" aria-hidden="true">
+              <div class="lp-phone-top">
+                ${brand("is-small")}
+                <div class="lp-hello"><span class="lp-avatar">S</span><div><b>Salom, Suxrobjon!</b><small>O'qituvchi</small></div></div>
+                <div class="lp-stats">
+                  <div><b>2</b><small>testlar</small></div>
+                  <div><b>17.8%</b><small>o'rtacha</small></div>
+                  <div class="is-best"><b>31.1%</b><small>eng yuqori</small></div>
+                </div>
+                <div class="lp-phone-cta">+ Yangi test yaratish</div>
+              </div>
+              <div class="lp-phone-body">
+                <div class="lp-mini"><b>Pullik test to'lovlari</b><div class="lp-mini-row"><span>Cheklar</span><span>Karta</span></div></div>
+                <div class="lp-mini lp-mini-credit"><b>Kredit balansi</b><strong>74 <small>ta</small></strong></div>
+                <div class="lp-phone-nav"><span class="is-on">Testlar</span><i>+</i><span>Natijalar</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="lp-values">
+        <div class="lp-wrap">
+          ${values.map(([icon, text]) => `<div class="lp-value"><span class="lp-icon">${LP_ICONS[icon]}</span><b>${text}</b></div>`).join("")}
+        </div>
+      </section>
+
+      <section class="lp-section" id="lp-features">
+        <div class="lp-wrap">
+          <p class="lp-kicker">Asosiy imkoniyatlar</p>
+          <h2>Ta'lim jarayonining hammasi<br>bitta joyda</h2>
+          <div class="lp-features">
+            ${features
+              .map(
+                ([icon, title, text, dark]) => `
+              <article class="lp-feature${dark ? " is-dark" : ""}">
+                <span class="lp-icon">${LP_ICONS[icon]}</span>
+                <h3>${title}</h3>
+                <p>${text}</p>
+              </article>`
+              )
+              .join("")}
+          </div>
+        </div>
+      </section>
+
+      <section class="lp-section lp-how" id="lp-how">
+        <div class="lp-wrap">
+          <p class="lp-kicker">Qanday ishlaydi</p>
+          <h2>Uch qadamda aniq natija</h2>
+          <div class="lp-steps">
+            ${steps.map(([title, text], i) => `<div class="lp-step"><span>${i + 1}</span><h3>${title}</h3><p>${text}</p></div>`).join("")}
+          </div>
+        </div>
+      </section>
+
+      <section class="lp-quote">
+        <div class="lp-wrap">
+          <blockquote>“Zamonaviy ta'lim – aqlli texnologiyalar bilan.”</blockquote>
+          <p>Kichik qadamlar – katta natijalar!</p>
+        </div>
+      </section>
+
+      <section class="lp-final">
+        <div class="lp-wrap">
+          <h2>Chittak bilan <em>bugun boshlang</em></h2>
+          <p>Maktablar, o'quv markazlari va repetitorlar uchun to'liq platforma.<br>Telegramda oching va birinchi testni yarating.</p>
+          <button class="lp-btn" type="button" data-lp-login>Telegramda ochish</button>
+        </div>
+      </section>
+
+      <footer class="lp-footer">
+        <div class="lp-wrap">
+          ${brand("is-small")}
+          <span>Ta'limda tezlik. <em>Natijada aniqlik.</em></span>
+          <span>© ${new Date().getFullYear()} Chittak</span>
+        </div>
+      </footer>
+
+      <div class="lp-modal${errorText ? " is-open" : ""}" id="lp-modal">
+        <div class="web-login-card" id="web-login-card">
+          <h2>Kirish</h2>
+          <p class="subtitle">Telegram akkauntingiz bilan kiring — testlar, natijalar va kreditlar botdagi bilan bir xil bo'ladi.</p>
+          <button class="btn" id="web-login-button" type="button">✈️ Telegram orqali kirish</button>
+          <p class="web-login-status" id="web-login-status">${escapeHtml(errorText)}</p>
+          <button class="btn btn-ghost" id="lp-modal-close" type="button">Yopish</button>
+        </div>
       </div>
     </div>
   `,
     { exitRoot: true }
+  );
+  const modal = document.getElementById("lp-modal");
+  const closeModal = () => {
+    clearInterval(appLoginPoll);
+    modal.classList.remove("is-open");
+  };
+  document.querySelectorAll("[data-lp-login]").forEach((button) =>
+    button.addEventListener("click", () => modal.classList.add("is-open"))
+  );
+  document.getElementById("lp-modal-close").addEventListener("click", closeModal);
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) closeModal();
+  });
+  document.querySelectorAll('.lp a[href^="#lp-"]').forEach((link) =>
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      document.querySelector(link.getAttribute("href"))?.scrollIntoView({ behavior: "smooth" });
+    })
   );
   document.getElementById("web-login-button").addEventListener("click", guarded(startWebLogin));
 }
