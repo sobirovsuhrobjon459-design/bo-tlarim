@@ -1,4 +1,4 @@
-package uz.testway.testway
+package uz.chittak.app
 
 import io.flutter.embedding.android.FlutterActivity
 

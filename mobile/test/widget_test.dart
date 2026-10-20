@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:testway/main.dart';
+import 'package:chittak/main.dart';
 
 void main() {
   test('ilova chittak.uz saytini ochadi', () {

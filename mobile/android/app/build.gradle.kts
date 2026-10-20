@@ -7,15 +7,15 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-// Imzolash kaliti (android/key.properties + android/testway-release.jks) — git'ga qo'shilmaydi.
-// Yangilanish eski ilova ustidan o'rnatilishi uchun HAR DOIM shu kalit bilan imzolanadi.
+// Imzolash kaliti (android/key.properties + android/chittak-upload.jks) — git'ga qo'shilmaydi.
+// Play Market'ga HAR DOIM shu upload kaliti bilan yuklanadi (yo'qolsa — Play Console orqali tiklanadi).
 val keyProperties = Properties().apply {
     val file = rootProject.file("key.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
 
 android {
-    namespace = "uz.testway.testway"
+    namespace = "uz.chittak.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -29,7 +29,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "uz.testway.app"
+        applicationId = "uz.chittak.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
