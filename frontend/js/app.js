@@ -13117,7 +13117,7 @@ function renderWebLogin(errorText = "") {
           <div class="lp-hero-grid">
             <div>
               <span class="lp-badge">Ta'lim boshqaruvi va aqlli test tahlili: bir platformada</span>
-              <h1>Ta'limda tezlik.<br><em>Natijada aniqlik.</em></h1>
+              <h1>Ilg'or ta'lim,<br><em>tezkor natija</em></h1>
               <p class="lp-lead">Chittak maktablar, o'quv markazlari va repetitorlar uchun yaratilgan zamonaviy platforma.
                 U ta'lim jarayonini boshqarish, testlarni tekshirish va natijalarni tahlil qilishni bitta tizimda birlashtiradi.</p>
               <div class="lp-actions">
@@ -13236,7 +13236,7 @@ function renderWebLogin(errorText = "") {
       <footer class="lp-footer">
         <div class="lp-wrap">
           ${brand("is-small")}
-          <span>Ta'limda tezlik. <em>Natijada aniqlik.</em></span>
+          <span>Ilg'or ta'lim, <em>tezkor natija</em></span>
           <span>© ${new Date().getFullYear()} Chittak</span>
         </div>
       </footer>
