@@ -1,4 +1,4 @@
-// Chittak — Android ilova. Render'dagi Mini App'ni WebView ichida ochadi.
+// Chittak — Android ilova. chittak.uz saytidagi Mini App'ni WebView ichida ochadi.
 //
 // Telegram ichida bo'lmagani uchun kirish bot orqali tasdiqlanadi (sayt o'zi
 // "Telegram orqali kirish" sahifasini ko'rsatadi). Ilova faqat:
@@ -16,8 +16,10 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-const appUrl = 'https://bo-tlarim.onrender.com/';
+const appUrl = 'https://www.chittak.uz/';
 final appHost = Uri.parse(appUrl).host;
+// chittak.uz o'zi www.chittak.uz ga yo'naltiradi — ikkalasi ham o'z saytimiz
+const ownHosts = {'www.chittak.uz', 'chittak.uz'};
 
 const _navy = Color(0xFF0B1F2A);
 const _background = Color(0xFFF3FAF5);
@@ -129,7 +131,7 @@ class _WebShellState extends State<WebShell> {
                 shouldOverrideUrlLoading: (controller, action) async {
                   final uri = action.request.url;
                   if (uri == null) return NavigationActionPolicy.ALLOW;
-                  final isOwnSite = uri.host == appHost && (uri.scheme == 'https' || uri.scheme == 'http');
+                  final isOwnSite = ownHosts.contains(uri.host) && (uri.scheme == 'https' || uri.scheme == 'http');
                   final isInternal = uri.scheme == 'about' || uri.scheme == 'blob' || uri.scheme == 'data';
                   if (isOwnSite || isInternal) return NavigationActionPolicy.ALLOW;
                   await _openExternal(uri);
@@ -144,7 +146,7 @@ class _WebShellState extends State<WebShell> {
                 // Jonli skaner kamerani so'raydi — Android ruxsati olinib, faqat o'z saytimizga beriladi
                 onPermissionRequest: (controller, request) async {
                   final wantsCamera = request.resources.contains(PermissionResourceType.CAMERA);
-                  final ownSite = request.origin.host == appHost;
+                  final ownSite = ownHosts.contains(request.origin.host);
                   final granted = wantsCamera && ownSite && (await Permission.camera.request()).isGranted;
                   return PermissionResponse(
                     resources: request.resources,
