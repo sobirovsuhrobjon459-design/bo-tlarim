@@ -4541,6 +4541,15 @@ def test_maxfiylik_siyosati_sahifasi():
         assert page.status_code == 200 and "Maxfiylik siyosati" in page.text, path
 
 
+def test_akkauntni_ochirish_sahifasi():
+    """Google Play talabi: ilova nomi, o'chirish qadamlari va saqlanadigan ma'lumotlar — kirishsiz ochiladi."""
+
+    for path in ("/hisobni-ochirish", "/delete-account"):
+        page = client.get(path)
+        assert page.status_code == 200, path
+        assert "Chittak" in page.text and "Akkauntimni o'chiring" in page.text and "saqlanib qoladi" in page.text, path
+
+
 def _sheet_photo(test_id: int, marks: dict[int, str], skew: bool = True, code_of: int | None = None) -> str:
     """
     Varaq "surati": chop etiladigan PDF'ning o'zi rasmga aylantiriladi (ixcham titulda — A4 dagi

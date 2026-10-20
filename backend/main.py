@@ -11609,6 +11609,68 @@ def privacy_page():
     return HTMLResponse(_privacy_html())
 
 
+def _account_deletion_html() -> str:
+    contacts = "".join(
+        f"<li>{label}: <b>{html_escape(text)}</b></li>"
+        for label, text in (("Telegram", LEGAL_BOT), ("Telefon", LEGAL_PHONE), ("E-mail", LEGAL_EMAIL))
+        if text
+    )
+    return f"""<!doctype html>
+<html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Akkauntni o'chirish — Chittak</title>
+<style>
+  :root {{ color-scheme: light; --ink: #0b1f2a; --muted: #4f6670; --bg: #f3faf5; --line: #ddefe2 }}
+  body {{ margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif }}
+  main {{ max-width: 760px; margin: 0 auto; padding: 28px 18px 60px; background: #fff; min-height: 100vh; box-sizing: border-box }}
+  h1 {{ font-size: 26px; line-height: 1.25; margin: 0 0 6px }}
+  h2 {{ font-size: 18px; margin: 28px 0 8px }}
+  p, li {{ margin: 0 0 8px }}
+  .muted {{ color: var(--muted); font-size: 14px }}
+  ol.steps {{ padding-left: 22px }}
+  .note {{ padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg) }}
+</style></head><body><main>
+<h1>Chittak — akkaunt va ma'lumotlarni o'chirish</h1>
+<p class="muted">Chittak ilovasi (Android, Telegram Mini App va chittak.uz sayti) foydalanuvchilari uchun.
+Ishlab chiquvchi: {html_escape(LEGAL_NAME)}.</p>
+
+<h2>Akkauntni o'chirishni qanday so'rash mumkin</h2>
+<ol class="steps">
+  <li>Quyidagi aloqa usullaridan biri orqali bizga yozing:
+    <ul>{contacts}</ul>
+  </li>
+  <li>Xabarda <b>«Akkauntimni o'chiring»</b> deb yozing va Chittak'dagi ismingizni yoki Telegram username'ingizni ko'rsating.</li>
+  <li>Akkaunt sizniki ekanini tekshirish uchun xabarni o'sha Telegram akkauntdan yuboring (yoki biz so'ragan tasdiqni bering).</li>
+  <li>So'rov <b>30 kun ichida</b> bajariladi va bu haqda sizga javob yozamiz.</li>
+</ol>
+
+<h2>Qaysi ma'lumotlar o'chiriladi</h2>
+<ul>
+  <li>Profil: ism, Telegram username, profil rasmi havolasi, telefon raqami.</li>
+  <li>Yaratgan testlaringiz, test javoblaringiz va natijalaringiz.</li>
+  <li>Siz kiritgan o'quvchilar ro'yxatlari, sinflar, davomat va boshqa ma'lumotlar.</li>
+  <li>Kirish seanslari (ilova va saytdan avtomatik chiqasiz).</li>
+</ul>
+
+<h2>Qaysi ma'lumotlar saqlanib qoladi</h2>
+<ul>
+  <li>To'lovlar va pul yechish bo'yicha yozuvlar (summa, sana, to'lov tizimi) — O'zbekiston Respublikasi qonunchiligi
+    talab qilgan muddat davomida saqlanadi, so'ngra o'chiriladi.</li>
+</ul>
+
+<p class="note">Akkauntni o'chirmasdan faqat ayrim ma'lumotlarni (masalan, telefon raqamini yoki ma'lum test natijalarini)
+o'chirishni ham xuddi shu aloqa orqali so'rashingiz mumkin.</p>
+
+<p class="muted">Batafsil: <a href="/maxfiylik">Maxfiylik siyosati</a>.</p>
+</main></body></html>"""
+
+
+@app.get("/hisobni-ochirish", include_in_schema=False)
+@app.get("/delete-account", include_in_schema=False)
+def account_deletion_page():
+    """Akkauntni o'chirish tartibi — Google Play talab qiladigan ommaviy sahifa."""
+    return HTMLResponse(_account_deletion_html())
+
+
 @app.get("/", include_in_schema=False)
 def serve_index(request: Request):
     """Bosh sahifa: har safar yangi tekshiriladi va fayl havolalari versiyalanadi."""
