@@ -1371,6 +1371,7 @@ function renderSchoolFolder() {
 
 function renderTestFolder() {
   setInstKind("school");
+  testForClass = null;
   showPage(`
     <div class="page-header">
       <button class="back-button" type="button" data-action="home" style="margin:0">←</button>
@@ -1519,7 +1520,7 @@ function renderCreateClass() {
 const CLASS_TABS = [
   { id: "students", icon: svgIcon("users"), label: "O'quvchilar" },
   { id: "attendance", icon: svgIcon("clipboard"), label: "Davomat" },
-  { id: "results", icon: svgIcon("chart"), label: "Natijalar" },
+  { id: "results", icon: svgIcon("chart"), label: "Sinov natijalari" },
 ];
 
 let currentClass = null;
@@ -2348,11 +2349,26 @@ async function renderClassResultsTab(schoolClass) {
   showPage(`
     <div data-class-tab="results">
       ${classHeader(schoolClass)}
-      <button class="btn" id="add-class-test-button">+ Test natijasini kiritish</button>
+      <p class="section-label">TEST MARKAZI</p>
+      <div class="row-between" style="gap:8px">
+        <button class="btn" id="class-new-exam-button" style="margin:0">📝 Yangi imtihon</button>
+        <button class="btn btn-ghost" id="class-attach-exam-button" style="margin:0">🔗 Testni biriktirish</button>
+      </div>
+      <p class="subtitle" style="margin:6px 0 0">Titul bilan o'tkaziladigan imtihon shu sinfga biriktiriladi: o'quvchilar ID raqami bilan ro'yxatga qo'shiladi, skanerlangan natijalar shu yerga yoziladi.</p>
+      <div id="class-center-tests" style="margin-top:10px"></div>
+
+      <p class="section-label" style="margin-top:18px">SINOV NATIJALARI</p>
+      <button class="btn btn-ghost" id="add-class-test-button">+ Natijani qo'lda kiritish</button>
       <div id="class-tests" style="margin-top:14px"><p class="subtitle">⏳ Yuklanmoqda...</p></div>
     </div>
   `);
   wireClassTab(schoolClass, "results");
+  document.getElementById("class-new-exam-button").addEventListener("click", guarded(() => startClassExam(schoolClass)));
+  document.getElementById("class-attach-exam-button").addEventListener(
+    "click",
+    guarded(() => openAttachExistingTest(schoolClass, () => loadClassCenterTests(schoolClass)))
+  );
+  loadClassCenterTests(schoolClass);
   document.getElementById("add-class-test-button").addEventListener("click", () => {
     if (!schoolClass.students.length) {
       showToast("Avval sinfga o'quvchilarni qo'shing");
@@ -2382,6 +2398,107 @@ async function renderClassResultsTab(schoolClass) {
       : `<p class="subtitle" style="margin:6px 0 0">Hali natija kiritilmagan. Sinfda o'tkazgan testingiz natijalarini kiriting — har bir o'quvchining foizi va bahosi chiqadi.</p>`;
     holder.querySelectorAll("[data-class-test]").forEach((item) => {
       item.addEventListener("click", guarded(() => renderClassTestDetail(Number(item.dataset.classTest), schoolClass)));
+    });
+  } catch (error) {
+    if (holder.isConnected) holder.innerHTML = `<p class="subtitle">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+/*
+  Sinf ↔ Test markazi. Sinf ichidan imtihon yaratiladi yoki mavjud oflayn
+  (titulli) test biriktiriladi; biriktirilgan imtihonlar skanerlash holati
+  bilan shu yerda ko'rinadi. Skanerlangan natija "Sinov natijalari"ga tushadi.
+*/
+let testForClass = null; // yaratilayotgan test qaysi sinfga biriktiriladi ({ id, name })
+
+async function ensureTeacher() {
+  if (homeSnapshot?.is_teacher || isTeacher) return true;
+  const me = await api("/api/me");
+  isTeacher = Boolean(me.is_teacher);
+  if (!isTeacher) {
+    showToast("Avval Test markazida o'qituvchi sifatida ro'yxatdan o'ting");
+    renderTeacherRegister();
+  }
+  return isTeacher;
+}
+
+async function startClassExam(schoolClass) {
+  if (!schoolClass.students?.length) throw new Error("Avval sinfga o'quvchilarni qo'shing");
+  if (!(await ensureTeacher())) return;
+  testForClass = { id: schoolClass.id, name: schoolClass.name };
+  renderNewTestForm("rash", { paid: false, enrollment: "closed" });
+}
+
+async function openAttachExistingTest(schoolClass, onDone) {
+  if (!(await ensureTeacher())) return;
+  const tests = (await api("/api/teacher/tests")).filter((test) => test.enrollment_type === "closed" && test.status !== "closed");
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 6px">🔗 Testni «${escapeHtml(schoolClass.name)}» sinfiga biriktirish</h3>
+    <p class="subtitle" style="margin:0 0 12px">Faqat titul bilan o'tkaziladigan (oflayn) faol testlaringiz.</p>
+    ${
+      tests.length
+        ? `<div class="panel pick-list">${tests
+            .map(
+              (test) => `
+                <button type="button" class="pick-item" data-attach-test="${test.id}">
+                  <span class="pick-title">📝 ${escapeHtml(test.title)}
+                    <small>${escapeHtml(test.subject || "")} · ${test.count} ta savol · kod ${escapeHtml(test.code)}</small>
+                  </span>
+                  <span>＋</span>
+                </button>`
+            )
+            .join("")}</div>`
+        : `<p class="subtitle">Faol oflayn testingiz yo'q. «📝 Yangi imtihon» bilan yarating.</p>`
+    }
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:12px">Yopish</button>
+  `);
+  sheet.querySelectorAll("[data-attach-test]").forEach((button) =>
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        const { added } = await api(`/api/teacher/tests/${button.dataset.attachTest}/classes`, {
+          method: "POST",
+          body: { class_ids: [schoolClass.id] },
+        });
+        showToast(added ? `✅ ${added} ta o'quvchi imtihonga qo'shildi` : "Bu test sinfga allaqachon biriktirilgan");
+        close();
+        onDone?.();
+      })
+    )
+  );
+}
+
+async function loadClassCenterTests(schoolClass) {
+  const holder = document.getElementById("class-center-tests");
+  if (!holder) return;
+  try {
+    const tests = await api(`/api/classes/${schoolClass.id}/center-tests`);
+    if (!holder.isConnected) return;
+    holder.innerHTML = tests.length
+      ? `<div class="panel pick-list">${tests
+          .map(
+            (test) => `
+              <button type="button" class="pick-item" data-center-test="${test.id}">
+                <span class="pick-title">🧾 ${escapeHtml(test.title)}
+                  <small>${test.subject ? `${escapeHtml(test.subject)} · ` : ""}skanerlangan ${test.done} / ${test.total}${
+                    test.status === "closed" ? " · yakunlangan" : ""
+                  }${test.is_mine ? "" : ` · ${escapeHtml(test.teacher)}`}</small>
+                </span>
+                <span>›</span>
+              </button>`
+          )
+          .join("")}</div>`
+      : `<p class="subtitle" style="margin:0">Hali Test markazidan imtihon biriktirilmagan.</p>`;
+    holder.querySelectorAll("[data-center-test]").forEach((button) => {
+      const test = tests.find((item) => item.id === Number(button.dataset.centerTest));
+      button.addEventListener(
+        "click",
+        guarded(async () => {
+          if (test.is_mine) await renderTestDetail(test.id); // skanerlash, kalit, titul — Test markazida
+          else if (test.class_test_id) await renderClassTestDetail(test.class_test_id, schoolClass);
+          else showToast(`Bu imtihon ${test.teacher}niki — natijalar skanerlangach shu yerda chiqadi`);
+        })
+      );
     });
   } catch (error) {
     if (holder.isConnected) holder.innerHTML = `<p class="subtitle">${escapeHtml(error.message)}</p>`;
@@ -7942,6 +8059,7 @@ function fetchTeacherDashboardData() {
 }
 
 async function renderTeacherDashboard() {
+  testForClass = null;
   try {
     await renderWithCache(
       "teacher-dashboard",
@@ -8793,6 +8911,11 @@ function renderNewTestForm(testType, draft = {}) {
 
   const header = `
     ${pageHeader("Yangi test")}
+    ${
+      testForClass
+        ? `<div class="notice is-info" style="margin:0 0 10px">🏫 Oflayn (titulli) test «${escapeHtml(testForClass.name)}» sinfiga avtomatik biriktiriladi.</div>`
+        : ""
+    }
 
     <div class="test-kind-banner ${draft.paid ? "is-paid" : "is-free"}">
       <div style="min-width:0">
@@ -9430,6 +9553,18 @@ async function saveNewTest() {
     }
   }
   showToast(`✅ Test yaratildi! Kodi: ${result.code}`);
+
+  // Sinf ichidan boshlangan imtihon — o'sha sinfga darhol biriktiriladi
+  const forClass = testForClass;
+  testForClass = null;
+  if (forClass && body.enrollment_type === "closed") {
+    try {
+      const { added } = await api(`/api/teacher/tests/${result.id}/classes`, { method: "POST", body: { class_ids: [forClass.id] } });
+      showToast(`✅ Test yaratildi va «${forClass.name}» sinfiga biriktirildi (${added} ta o'quvchi)`);
+    } catch (error) {
+      showToast(`Sinfga biriktirib bo'lmadi: ${error.message}`);
+    }
+  }
 
   // Test yaratilgach, darhol shu testning sahifasi ochiladi — o'quvchi qo'shish,
   // javoblar varaqasini olish va yakunlash shu yerdan qilinadi.

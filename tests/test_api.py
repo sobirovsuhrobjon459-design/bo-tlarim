@@ -5473,3 +5473,24 @@ def test_tarixsiz_oshirilgan_narxni_tuzatish():
     info = client.get(f"/api/classes/{group['id']}/students/{sid}/payments", headers=kind).json()
     months = {row["month"]: row for row in info["months"]}
     assert months[one_ago]["status"] == "paid" and months[now]["due"] == 400_000 and info["total_debt"] == 400_000, info
+
+
+def test_sinf_ichida_test_markazi_imtihonlari():
+    """Sinfga biriktirilgan Test markazi imtihonlari sinf sahifasida: skanerlash holati, egasi."""
+    reset_database()
+    school_class = _school_with_class(701)
+    register_teacher(701, "Aziza", "Karimova")
+    cid = school_class["id"]
+    client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Ali Valiyev", "Zuhra Karimova"]}, headers=as_user(701))
+    assert client.get(f"/api/classes/{cid}/center-tests", headers=as_user(701)).json() == []
+
+    test = create_test(701, enrollment_type="closed")
+    attached = client.post(f"/api/teacher/tests/{test['id']}/classes", json={"class_ids": [cid]}, headers=as_user(701))
+    assert attached.status_code == 200 and attached.json()["added"] == 2, attached.text
+    listed = client.get(f"/api/classes/{cid}/center-tests", headers=as_user(701)).json()
+    assert len(listed) == 1 and listed[0]["id"] == test["id"], listed
+    assert listed[0]["is_mine"] is True and listed[0]["total"] == 2 and listed[0]["done"] == 0, listed
+
+    # Boshqa maktab o'qituvchisi bu sinfni ko'rmaydi
+    _set_name(799, "Begona", "Ustoz")
+    assert client.get(f"/api/classes/{cid}/center-tests", headers=as_user(799)).status_code == 404

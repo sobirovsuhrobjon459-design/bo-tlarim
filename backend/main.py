@@ -8794,6 +8794,58 @@ def list_class_tests(class_id: int, user: User = Depends(get_current_user), db: 
     return [_class_test_view(db, test, member, with_scores=False) for test in tests if _can_see_class_test(test, member)]
 
 
+@app.get("/api/classes/{class_id}/center-tests")
+def class_center_tests(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Test markazidan shu sinfga biriktirilgan imtihonlar: nechta o'quvchi
+    skanerlangan, kimning testi va sinf natijalaridagi yozuvi (bo'lsa).
+    """
+
+    school_class, _ = _school_class(db, user, class_id)
+    student_ids = [student.id for student in school_class.students]
+    if not student_ids:
+        return []
+    counts = db.execute(
+        select(Attempt.test_id, Attempt.status, func.count())
+        .where(Attempt.class_student_id.in_(student_ids), Attempt.status.in_(("pending", "done")))
+        .group_by(Attempt.test_id, Attempt.status)
+    ).all()
+    by_test: dict[int, dict[str, int]] = {}
+    for test_id, status, count in counts:
+        by_test.setdefault(test_id, {})[status] = count
+    if not by_test:
+        return []
+    tests = db.scalars(
+        select(Test).where(Test.id.in_(list(by_test)), Test.deleted_at.is_(None)).order_by(Test.id.desc())
+    ).all()
+    class_tests = {
+        item.source_test_id: item.id
+        for item in db.scalars(
+            select(ClassTest).where(
+                ClassTest.class_id == school_class.id, ClassTest.source_test_id.in_(list(by_test)), ClassTest.deleted_at.is_(None)
+            )
+        )
+    }
+    result = []
+    for test in tests:
+        owner = db.get(Teacher, test.teacher_id)
+        done = by_test[test.id].get("done", 0)
+        result.append({
+            "id": test.id,
+            "title": test.title,
+            "code": test.code,
+            "subject": test.subject,
+            "status": test.status,
+            "created_at": test.created_at,
+            "teacher": owner.user.full_name if owner and owner.user else "",
+            "is_mine": bool(owner and owner.user_id == user.id),
+            "done": done,
+            "total": done + by_test[test.id].get("pending", 0),
+            "class_test_id": class_tests.get(test.id),
+        })
+    return result
+
+
 @app.post("/api/classes/{class_id}/tests")
 def create_class_test(class_id: int, body: ClassTestIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """O'qituvchi sinfda o'tkazgan test natijalarini kiritadi."""
