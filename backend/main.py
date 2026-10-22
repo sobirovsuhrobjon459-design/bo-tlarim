@@ -8911,7 +8911,7 @@ def class_center_tests(class_id: int, user: User = Depends(get_current_user), db
     skanerlangan, kimning testi va sinf natijalaridagi yozuvi (bo'lsa).
     """
 
-    school_class, _ = _school_class(db, user, class_id)
+    school_class, member = _school_class(db, user, class_id)
     student_ids = [student.id for student in school_class.students]
     if not student_ids:
         return []
@@ -8949,11 +8949,53 @@ def class_center_tests(class_id: int, user: User = Depends(get_current_user), db
             "created_at": test.created_at,
             "teacher": owner.user.full_name if owner and owner.user else "",
             "is_mine": bool(owner and owner.user_id == user.id),
+            # Sinfdan olib tashlash — test egasi yoki admin/direktor
+            "can_remove": bool(owner and owner.user_id == user.id) or _can_delete_classes(member),
             "done": done,
             "total": done + by_test[test.id].get("pending", 0),
             "class_test_id": class_tests.get(test.id),
         })
     return result
+
+
+@app.delete("/api/classes/{class_id}/center-tests/{test_id}")
+def detach_center_test(class_id: int, test_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Imtihonni sinfdan olib tashlash (bekor qilish): sinf o'quvchilari imtihon
+    ro'yxatidan chiqadi (skanerlanganlari ham), "Sinov natijalari"dagi yozuvi
+    o'chadi. Imtihonning o'zi Test markazida qoladi (boshqa sinflar o'zgarmaydi).
+    Butunlay o'chirilmaydi — holati "deleted" bo'ladi. Test egasi yoki admin/direktor.
+    """
+
+    school_class, member = _school_class(db, user, class_id)
+    test = db.get(Test, test_id)
+    owner = db.get(Teacher, test.teacher_id) if test else None
+    if not test or test.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Imtihon topilmadi")
+    if not (owner and owner.user_id == user.id) and not _can_delete_classes(member):
+        raise HTTPException(status_code=403, detail="Imtihonni testni yaratgan o'qituvchi yoki admin/direktor olib tashlaydi")
+
+    student_ids = [student.id for student in school_class.students]
+    attempts = db.scalars(
+        select(Attempt).where(
+            Attempt.test_id == test.id, Attempt.class_student_id.in_(student_ids or [-1]),
+            Attempt.status.in_(("pending", "done")),
+        )
+    ).all()
+    if not attempts:
+        raise HTTPException(status_code=404, detail="Bu imtihon sinfga biriktirilmagan")
+    for attempt in attempts:
+        attempt.status = "deleted"
+    for class_test in db.scalars(
+        select(ClassTest).where(
+            ClassTest.class_id == school_class.id, ClassTest.source_test_id == test.id, ClassTest.deleted_at.is_(None)
+        )
+    ).all():
+        class_test.deleted_at = utcnow()
+    db.commit()
+    logging.getLogger("backend").info("Imtihon sinfdan olib tashlandi: test=%s class=%s user=%s (%s ta o'quvchi)",
+                                      test.id, school_class.id, user.id, len(attempts))
+    return {"removed": len(attempts)}
 
 
 @app.post("/api/classes/{class_id}/tests")

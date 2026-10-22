@@ -5491,9 +5491,24 @@ def test_sinf_ichida_test_markazi_imtihonlari():
     assert len(listed) == 1 and listed[0]["id"] == test["id"], listed
     assert listed[0]["is_mine"] is True and listed[0]["total"] == 2 and listed[0]["done"] == 0, listed
 
-    # Boshqa maktab o'qituvchisi bu sinfni ko'rmaydi
+    assert listed[0]["can_remove"] is True, listed
+
+    # Boshqa maktab o'qituvchisi bu sinfni ko'rmaydi va olib tashlay olmaydi
     _set_name(799, "Begona", "Ustoz")
     assert client.get(f"/api/classes/{cid}/center-tests", headers=as_user(799)).status_code == 404
+    assert client.delete(f"/api/classes/{cid}/center-tests/{test['id']}", headers=as_user(799)).status_code == 404
+
+    # Imtihonni sinfdan olib tashlash: sinf ro'yxatidan va imtihon ro'yxatidan chiqadi, test qoladi
+    removed = client.delete(f"/api/classes/{cid}/center-tests/{test['id']}", headers=as_user(701))
+    assert removed.status_code == 200 and removed.json()["removed"] == 2, removed.text
+    assert client.get(f"/api/classes/{cid}/center-tests", headers=as_user(701)).json() == []
+    detail = client.get(f"/api/teacher/tests/{test['id']}", headers=as_user(701))
+    assert detail.status_code == 200 and detail.json()["students"] == [], detail.text
+    again = client.delete(f"/api/classes/{cid}/center-tests/{test['id']}", headers=as_user(701))
+    assert again.status_code == 404, again.text
+    # Qayta biriktirish mumkin
+    reattached = client.post(f"/api/teacher/tests/{test['id']}/classes", json={"class_ids": [cid]}, headers=as_user(701))
+    assert reattached.json()["added"] == 2, reattached.text
 
 
 def test_dtm_testi_fan_shabloni():

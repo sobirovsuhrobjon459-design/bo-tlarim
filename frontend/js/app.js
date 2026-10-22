@@ -537,7 +537,126 @@ function showPage(html, { exitRoot = false } = {}) {
   window.scrollTo(0, 0);
   exitRootPage = exitRoot;
   syncTelegramBackButton();
+  navRecordPage();
 }
+
+/*
+  Orqaga qaytish — har doim BIR QADAM ortga (ilovadagi "←", Telegram'ning
+  "‹ Back" va Android'ning orqaga tugmasi — uchalasi ham "←" ni bosadi).
+
+  Sahifa chizuvchi funksiyalar (render…, enter…) o'raladi: foydalanuvchi
+  bosgandan keyingi BIRINCHI chaqiruv — "u qaysi sahifani ochdi" (nomi va
+  argumentlari) — sahifa chizilganda tarixga yoziladi. "←" bosilsa oldingi
+  yozuv xuddi shu argumentlar bilan qayta chaqiriladi (ma'lumot yangidan).
+    • Forma (yaratish, tahrirlash, natija kiritish, o'chirish tasdig'i)
+      saqlangach tarixdan chiqadi — orqaga qaytilganda bo'sh forma ochilmaydi;
+    • pastki menyu bo'limlari (O'quvchilar / Davomat / Sinov) va bir sahifaning
+      o'zi (oy almashtirish kabi) yangi qadam emas — joriy yozuv almashadi;
+    • test ishlash va skanerlash oynalari tarixga yozilmaydi — ulardagi "←"
+      o'z ishini qiladi (masalan, testdan chiqishni so'raydi).
+  Tarix bo'sh bo'lsa, "←" avvalgidek o'z manziliga olib boradi.
+*/
+const NAV_DISPATCHERS = [
+  "enterInstitution", "enterTeacherArea", "loadHome", "openClassTab", "openSchoolTab", "openPaymentsEntry", "renderClass",
+  "renderStudentHome", "renderTeacherDashboard",
+];
+const NAV_UNTRACKED = new Set([
+  "showPage", "startLiveScan", "renderSkeleton", "renderWithCache", "renderFullQuizQuestion", "renderKeyQuizQuestion",
+  "renderQuizQuestion", "renderQuizResult", "renderScanReview", "renderScanSaved", "renderScanQueue", "renderChannelGate",
+  "renderAppLogin", "renderWebLogin", "renderReviewLogin",
+]);
+const NAV_FORM_PAGE = /Form$|Create|New|Join|Register|Edit|Delete|Leave|Choice|Return/;
+const NAV_MAX = 60;
+
+let navHistory = []; // [{ name, args }] — eng oxirgisi joriy sahifa
+let navIntent = null; // shu bosishdan keyin ochilayotgan sahifa
+let navFresh = false; // foydalanuvchi hozirgina bosdi — keyingi sahifa chaqiruvi yoziladi
+let navReplace = false; // pastki menyu — joriy yozuv almashadi
+let navReplaying = false; // "←" — oldingi sahifa qayta chizilmoqda (yozilmaydi)
+let navUntrackedPage = false; // joriy sahifa tarixda yo'q (test ishlash, skaner)
+let navLastRenderer = ""; // sahifani haqiqatda chizgan funksiya — bir xil ekran ikki marta yozilmasin
+
+function navRecordPage() {
+  const intent = navIntent;
+  navIntent = null;
+  if (!intent || navReplaying) return;
+  navUntrackedPage = false;
+  intent.page = navLastRenderer || intent.name;
+  const top = navHistory[navHistory.length - 1];
+  if (top && (navReplace || top.page === intent.page || NAV_FORM_PAGE.test(top.page))) navHistory.pop();
+  navReplace = false;
+  navHistory.push(intent);
+  if (navHistory.length > NAV_MAX) navHistory.splice(1, navHistory.length - NAV_MAX);
+}
+
+function installNavHistory() {
+  const names = Object.getOwnPropertyNames(window).filter(
+    (name) =>
+      /^(render|enter|load|draw)[A-Z]/.test(name) || NAV_DISPATCHERS.includes(name) || NAV_UNTRACKED.has(name)
+  );
+  names.forEach((name) => {
+    const original = window[name];
+    if (typeof original !== "function" || name === "showPage") return;
+    const isPage = NAV_DISPATCHERS.includes(name) || String(original).includes("showPage(");
+    if (!isPage && !NAV_UNTRACKED.has(name)) return;
+    const drawsPage = String(original).includes("showPage(");
+    window[name] = function (...args) {
+      if (drawsPage) navLastRenderer = name;
+      if (NAV_UNTRACKED.has(name)) {
+        if (!navReplaying) navUntrackedPage = true;
+      } else if (name === "loadHome") {
+        // Bosh sahifa — tarixning boshi
+        navHistory = [];
+        navIntent = { name, args };
+        navFresh = false;
+      } else if (navFresh && !navIntent && !navReplaying) {
+        navIntent = { name, args };
+        navFresh = false;
+      }
+      return original.apply(this, args);
+    };
+  });
+}
+
+async function navBack() {
+  if (!(await confirmLeave())) return;
+  navHistory.pop();
+  // Oldingi sahifa ochilmasa (masalan, o'chirilgan sinf) — undan oldingisiga
+  while (navHistory.length) {
+    const previous = navHistory[navHistory.length - 1];
+    navReplaying = true;
+    try {
+      navIntent = null;
+      await window[previous.name](...previous.args);
+      navUntrackedPage = false;
+      return;
+    } catch (error) {
+      navHistory.pop();
+    } finally {
+      navReplaying = false;
+    }
+  }
+  await loadHome();
+}
+
+// Har bir bosish: "←" bo'lsa — bir qadam ortga; aks holda keyingi sahifa tarixga yoziladi
+document.addEventListener(
+  "click",
+  (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const back = target?.closest(".back-button");
+    if (back && appElement.contains(back) && !navUntrackedPage && navHistory.length > 1 && !exitRootPage) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      navBack().catch((error) => showToast(error.message || "Orqaga qaytib bo'lmadi"));
+      return;
+    }
+    navFresh = true;
+    navIntent = null;
+    navReplace = Boolean(target?.closest(".bottom-nav, [data-class-nav], [data-school-nav]"));
+  },
+  true
+);
 
 const TOAST_VISIBLE_MS = 2400;
 const TOAST_FADE_MS = 220; // CSS'dagi .toast.is-leaving davomiyligi bilan bir xil
@@ -2474,26 +2593,55 @@ async function loadClassCenterTests(schoolClass) {
   try {
     const tests = await api(`/api/classes/${schoolClass.id}/center-tests`);
     if (!holder.isConnected) return;
+    // Test markazidagi testlar ro'yxati kartasi bilan bir xil: nomi, holati, fani, kodi, qizil 🗑 va ›
     holder.innerHTML = tests.length
-      ? `<div class="panel pick-list">${tests
+      ? tests
           .map(
             (test) => `
-              <button type="button" class="pick-item" data-center-test="${test.id}">
-                <span class="pick-title">🧾 ${escapeHtml(test.title)}
-                  <small>${test.subject ? `${escapeHtml(test.subject)} · ` : ""}skanerlangan ${test.done} / ${test.total}${
-                    test.status === "closed" ? " · yakunlangan" : ""
-                  }${test.is_mine ? "" : ` · ${escapeHtml(test.teacher)}`}</small>
-                </span>
-                <span>›</span>
-              </button>`
+              <div class="card card-entrance" data-center-test="${test.id}">
+                <div class="card-body" style="width:100%">
+                  <div class="row-between" style="align-items:flex-start">
+                    <div style="min-width:0">
+                      <h3 style="margin-bottom:6px">${escapeHtml(test.title)} ${testBadges({ ...test, enrollment_type: "closed" })}</h3>
+                      <p><b>${escapeHtml(test.subject || "")}</b></p>
+                      <p class="subtitle" style="margin:0">Test kodi: ${copyCodeChip(test.code)}</p>
+                      <p class="subtitle" style="margin:0">Skanerlangan: <b>${test.done} / ${test.total}</b>${
+                        test.is_mine ? "" : ` · ${escapeHtml(test.teacher)}`
+                      }</p>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+                      ${test.can_remove ? deleteButton("data-remove-center-test", test.id) : ""}
+                      <span style="color:var(--color-text-muted);font-size:22px">›</span>
+                    </div>
+                  </div>
+                </div>
+              </div>`
           )
-          .join("")}</div>`
+          .join("")
       : `<p class="subtitle" style="margin:0">Hali Test markazidan imtihon biriktirilmagan.</p>`;
-    holder.querySelectorAll("[data-center-test]").forEach((button) => {
-      const test = tests.find((item) => item.id === Number(button.dataset.centerTest));
+    holder.querySelectorAll("[data-remove-center-test]").forEach((button) => {
+      const test = tests.find((item) => item.id === Number(button.dataset.removeCenterTest));
       button.addEventListener(
         "click",
         guarded(async () => {
+          const scanned = test.done ? ` ${test.done} ta skanerlangan natija ham sinf natijalaridan o'chadi.` : "";
+          const sure = await askConfirm(
+            `«${test.title}» imtihonini «${schoolClass.name}» sinfidan olib tashlaysizmi?${scanned} Imtihonning o'zi Test markazida qoladi.`
+          );
+          if (!sure) return;
+          await api(`/api/classes/${schoolClass.id}/center-tests/${test.id}`, { method: "DELETE" });
+          showToast("🗑 Imtihon sinfdan olib tashlandi");
+          await renderClassResultsTab(schoolClass);
+        })
+      );
+    });
+    holder.querySelectorAll("[data-center-test]").forEach((card) => {
+      const test = tests.find((item) => item.id === Number(card.dataset.centerTest));
+      card.addEventListener(
+        "click",
+        guarded(async (event) => {
+          // 🗑 va kodni nusxalash — o'z ishini qiladi, kartani ochmaydi
+          if (event.target.closest("[data-remove-center-test], [data-copy]")) return;
           if (test.is_mine) await renderTestDetail(test.id); // skanerlash, kalit, titul — Test markazida
           else if (test.class_test_id) await renderClassTestDetail(test.class_test_id, schoolClass);
           else showToast(`Bu imtihon ${test.teacher}niki — natijalar skanerlangach shu yerda chiqadi`);
@@ -13724,4 +13872,5 @@ function startApp() {
     .then((allowed) => allowed && openPendingSchoolInvite());
 }
 
+installNavHistory();
 startApp();
