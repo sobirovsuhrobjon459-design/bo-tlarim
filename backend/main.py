@@ -96,6 +96,13 @@ from .database import (
     ClassTestIn,
     ClassTestScore,
     DiscountIn,
+    DormCheck,
+    DormCheckIn,
+    DormCheckMark,
+    DormPlaceIn,
+    DormResident,
+    DormRoom,
+    DormRoomIn,
     FeeChange,
     FeeIn,
     PaymentCancelIn,
@@ -7650,6 +7657,12 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         "invite_link": school_invite_link(school.code) if member.role == "owner" else None,
         # Oylik to'lov — summani admin/direktor belgilaydi; to'lovlarni ular va kuratorlar kiritadi
         "monthly_fee": school.monthly_fee,
+        # Yotoqxona: rahbariyat va tarbiyachilar ochadi (to'garakda yo'q)
+        "dorm": (school.kind or "school") != "club" and (
+            _can_delete_classes(member)
+            or bool(db.scalar(select(DormRoom.id).where(DormRoom.school_id == school.id, DormRoom.deleted_at.is_(None),
+                                                       DormRoom.warden_user_id == user.id)))
+        ),
         "can_set_fee": _can_delete_classes(member),
         "can_remove_members": _can_delete_classes(member),
         "members": [
@@ -10913,6 +10926,314 @@ def delete_announcement(announcement_id: int, user: User = Depends(get_current_u
     item.deleted_at = utcnow()
     db.commit()
     return {"ok": True}
+
+
+# ---------- Yotoqxona: xonalar, joylashtirish, kechki yo'qlama ----------
+# Maktab va o'quv markazida (to'garakda yo'q). Rahbariyat (admin, direktor) — hamma xona: ochadi,
+# o'quvchilarni joylashtiradi, tarbiyachi tayinlaydi. Tarbiyachi — faqat o'z xonalari: ko'radi va yo'qlama oladi.
+
+DORM_STATUSES = {"present": "Bor", "absent": "Yo'q", "sick": "Kasal", "excused": "Ruxsat bilan"}
+
+
+def _dorm_member(db: Session, user: User) -> SchoolMember:
+    member = _require_school_member(db, user)
+    if (member.school.kind or "school") == "club":
+        raise HTTPException(status_code=404, detail="Yotoqxona bo'limi to'garaklarda yo'q")
+    return member
+
+
+def _dorm_rooms_of(db: Session, member: SchoolMember) -> list[DormRoom]:
+    """Ko'rinadigan xonalar: rahbariyatga — hammasi, tarbiyachiga — o'ziniki."""
+    query = select(DormRoom).where(DormRoom.school_id == member.school_id, DormRoom.deleted_at.is_(None))
+    if not _can_delete_classes(member):
+        query = query.where(DormRoom.warden_user_id == member.user_id)
+    return db.scalars(query.order_by(DormRoom.floor, DormRoom.name)).all()
+
+
+def _dorm_room(db: Session, member: SchoolMember, room_id: int, manage: bool = False) -> DormRoom:
+    room = db.get(DormRoom, room_id)
+    if not room or room.deleted_at is not None or room.school_id != member.school_id:
+        raise HTTPException(status_code=404, detail="Xona topilmadi")
+    leader = _can_delete_classes(member)
+    if manage and not leader:
+        raise HTTPException(status_code=403, detail="Xonalarni admin yoki direktor boshqaradi")
+    if not leader and room.warden_user_id != member.user_id:
+        raise HTTPException(status_code=403, detail="Bu xona sizga biriktirilmagan")
+    return room
+
+
+def _dorm_residents(db: Session, room_ids: list[int]) -> dict[int, list[tuple[DormResident, ClassStudent, SchoolClass]]]:
+    """Xonalardagi hozirgi o'quvchilar (sinfdan chiqarilgan yoki sinfi o'chirilganlar — yo'q)."""
+    result: dict[int, list] = {room_id: [] for room_id in room_ids}
+    if not room_ids:
+        return result
+    rows = db.execute(
+        select(DormResident, ClassStudent, SchoolClass)
+        .join(ClassStudent, ClassStudent.id == DormResident.student_id)
+        .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
+        .where(DormResident.room_id.in_(room_ids), DormResident.left_at.is_(None),
+               ClassStudent.removed_at.is_(None), SchoolClass.deleted_at.is_(None))
+        .order_by(ClassStudent.full_name)
+    ).all()
+    for resident, student, school_class in rows:
+        result[resident.room_id].append((resident, student, school_class))
+    return result
+
+
+def _dorm_today() -> date:
+    return (utcnow() + TASHKENT_OFFSET).date()
+
+
+def _dorm_check_counts(check: DormCheck | None) -> dict | None:
+    if not check:
+        return None
+    counts = {status: 0 for status in DORM_STATUSES}
+    for mark in check.marks:
+        counts[mark.status] = counts.get(mark.status, 0) + 1
+    return counts
+
+
+def _dorm_room_view(room: DormRoom, residents: list, warden: User | None, today_check: DormCheck | None) -> dict:
+    return {
+        "id": room.id,
+        "name": room.name,
+        "floor": room.floor,
+        "capacity": room.capacity,
+        "occupied": len(residents),
+        "free": max(room.capacity - len(residents), 0),
+        "warden": {"user_id": warden.id, "name": warden.full_name} if warden else None,
+        "residents": [
+            {"id": student.id, "name": student.full_name, "class_id": school_class.id, "class_name": school_class.name}
+            for _, student, school_class in residents
+        ],
+        "today": _dorm_check_counts(today_check),
+    }
+
+
+@app.get("/api/dorm")
+def dorm_overview(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Yotoqxona: xonalar (qavat bo'yicha), bandlik va bugungi kechki yo'qlama holati."""
+
+    member = _dorm_member(db, user)
+    leader = _can_delete_classes(member)
+    rooms = _dorm_rooms_of(db, member)
+    if not leader and not rooms:
+        raise HTTPException(status_code=403, detail="Yotoqxona bo'limi rahbariyat va tarbiyachilar uchun")
+    residents = _dorm_residents(db, [room.id for room in rooms])
+    wardens = {
+        item.id: item
+        for item in db.scalars(select(User).where(User.id.in_({room.warden_user_id for room in rooms if room.warden_user_id})))
+    } if rooms else {}
+    today = _dorm_today()
+    checks = {
+        check.room_id: check
+        for check in db.scalars(
+            select(DormCheck).where(DormCheck.room_id.in_([room.id for room in rooms] or [-1]), DormCheck.check_date == today)
+        )
+    }
+    views = [_dorm_room_view(room, residents[room.id], wardens.get(room.warden_user_id), checks.get(room.id)) for room in rooms]
+    present = sum((view["today"] or {}).get("present", 0) for view in views)
+    sick = sum((view["today"] or {}).get("sick", 0) for view in views)
+    return {
+        "can_manage": leader,
+        "date": today,
+        "rooms": views,
+        "totals": {
+            "rooms": len(views),
+            "capacity": sum(view["capacity"] for view in views),
+            "occupied": sum(view["occupied"] for view in views),
+            "free": sum(view["free"] for view in views),
+            "checked_rooms": sum(1 for view in views if view["today"] is not None),
+            "rooms_with_residents": sum(1 for view in views if view["occupied"]),
+            "present": present,
+            "absent": sum((view["today"] or {}).get("absent", 0) for view in views),
+            "sick": sick,
+            "excused": sum((view["today"] or {}).get("excused", 0) for view in views),
+        },
+    }
+
+
+def _dorm_warden(db: Session, member: SchoolMember, warden_user_id: int | None) -> int | None:
+    if warden_user_id is None:
+        return None
+    staff = db.scalar(select(SchoolMember.id).where(SchoolMember.school_id == member.school_id,
+                                                     SchoolMember.user_id == warden_user_id, SchoolMember.left_at.is_(None)))
+    if not staff:
+        raise HTTPException(status_code=404, detail="Bu xodim muassasangizda yo'q")
+    return warden_user_id
+
+
+@app.post("/api/dorm/rooms")
+def create_dorm_room(body: DormRoomIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    member = _dorm_member(db, user)
+    if not _can_delete_classes(member):
+        raise HTTPException(status_code=403, detail="Xonalarni admin yoki direktor ochadi")
+    same = db.scalar(select(DormRoom.id).where(DormRoom.school_id == member.school_id, DormRoom.deleted_at.is_(None),
+                                               func.lower(DormRoom.name) == body.name.lower()))
+    if same:
+        raise HTTPException(status_code=409, detail=f"«{body.name}» xonasi allaqachon bor")
+    room = DormRoom(school_id=member.school_id, name=body.name, floor=body.floor, capacity=body.capacity,
+                    warden_user_id=_dorm_warden(db, member, body.warden_user_id))
+    db.add(room)
+    db.commit()
+    return {"id": room.id}
+
+
+@app.put("/api/dorm/rooms/{room_id}")
+def update_dorm_room(room_id: int, body: DormRoomIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    member = _dorm_member(db, user)
+    room = _dorm_room(db, member, room_id, manage=True)
+    occupied = len(_dorm_residents(db, [room.id])[room.id])
+    if body.capacity < occupied:
+        raise HTTPException(status_code=422, detail=f"Xonada {occupied} ta o'quvchi bor — o'rinlar soni undan kam bo'lmasin")
+    same = db.scalar(select(DormRoom.id).where(DormRoom.school_id == member.school_id, DormRoom.deleted_at.is_(None),
+                                               DormRoom.id != room.id, func.lower(DormRoom.name) == body.name.lower()))
+    if same:
+        raise HTTPException(status_code=409, detail=f"«{body.name}» xonasi allaqachon bor")
+    room.name, room.floor, room.capacity = body.name, body.floor, body.capacity
+    room.warden_user_id = _dorm_warden(db, member, body.warden_user_id)
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/dorm/rooms/{room_id}")
+def delete_dorm_room(room_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    member = _dorm_member(db, user)
+    room = _dorm_room(db, member, room_id, manage=True)
+    if _dorm_residents(db, [room.id])[room.id]:
+        raise HTTPException(status_code=409, detail="Xonada o'quvchilar bor — avval ularni chiqaring")
+    room.deleted_at = utcnow()
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/dorm/rooms/{room_id}")
+def dorm_room_detail(room_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Xona: o'quvchilar va oxirgi yo'qlamalar (14 kun)."""
+
+    member = _dorm_member(db, user)
+    room = _dorm_room(db, member, room_id)
+    residents = _dorm_residents(db, [room.id])[room.id]
+    checks = db.scalars(
+        select(DormCheck).where(DormCheck.room_id == room.id).order_by(DormCheck.check_date.desc()).limit(14)
+    ).all()
+    today = _dorm_today()
+    view = _dorm_room_view(room, residents, db.get(User, room.warden_user_id) if room.warden_user_id else None,
+                           next((check for check in checks if check.check_date == today), None))
+    takers = {item.id: item.full_name for item in db.scalars(select(User).where(User.id.in_({c.taken_by for c in checks})))} \
+        if checks else {}
+    return {
+        **view,
+        "can_manage": _can_delete_classes(member),
+        "date": today,
+        "checks": [
+            {"date": check.check_date, "counts": _dorm_check_counts(check), "taken_by": takers.get(check.taken_by, ""),
+             "absent": [mark.student_name for mark in check.marks if mark.status == "absent"]}
+            for check in checks
+        ],
+    }
+
+
+@app.get("/api/dorm/candidates")
+def dorm_candidates(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Joylashtirish uchun: hali yotoqxonada joyi yo'q o'quvchilar (sinfi bilan)."""
+
+    member = _dorm_member(db, user)
+    if not _can_delete_classes(member):
+        raise HTTPException(status_code=403, detail="O'quvchilarni admin yoki direktor joylashtiradi")
+    placed = select(DormResident.student_id).where(DormResident.school_id == member.school_id, DormResident.left_at.is_(None))
+    rows = db.execute(
+        select(ClassStudent, SchoolClass)
+        .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
+        .where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None),
+               ClassStudent.removed_at.is_(None), ClassStudent.id.not_in(placed))
+        .order_by(SchoolClass.name, ClassStudent.full_name)
+    ).all()
+    return [{"id": student.id, "name": student.full_name, "class_name": school_class.name} for student, school_class in rows]
+
+
+@app.post("/api/dorm/rooms/{room_id}/residents")
+def place_dorm_residents(room_id: int, body: DormPlaceIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """O'quvchilarni xonaga joylashtirish. Boshqa xonada bo'lsa — shu xonaga ko'chiriladi."""
+
+    member = _dorm_member(db, user)
+    room = _dorm_room(db, member, room_id, manage=True)
+    current = {student.id for _, student, _ in _dorm_residents(db, [room.id])[room.id]}
+    new_ids = [student_id for student_id in dict.fromkeys(body.student_ids) if student_id not in current]
+    if len(current) + len(new_ids) > room.capacity:
+        raise HTTPException(status_code=422, detail=f"«{room.name}» xonasida {room.capacity - len(current)} ta bo'sh o'rin bor")
+    for student_id in new_ids:
+        student = db.get(ClassStudent, student_id)
+        school_class = db.get(SchoolClass, student.class_id) if student else None
+        if not student or student.removed_at is not None or not school_class or school_class.school_id != member.school_id \
+                or school_class.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+        for old in db.scalars(select(DormResident).where(DormResident.student_id == student.id, DormResident.left_at.is_(None))):
+            old.left_at = utcnow()  # boshqa xonadan ko'chirildi
+        db.add(DormResident(school_id=member.school_id, room_id=room.id, student_id=student.id))
+    db.commit()
+    return {"placed": len(new_ids)}
+
+
+@app.delete("/api/dorm/rooms/{room_id}/residents/{student_id}")
+def remove_dorm_resident(room_id: int, student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    member = _dorm_member(db, user)
+    room = _dorm_room(db, member, room_id, manage=True)
+    resident = db.scalar(select(DormResident).where(DormResident.room_id == room.id, DormResident.student_id == student_id,
+                                                    DormResident.left_at.is_(None)))
+    if not resident:
+        raise HTTPException(status_code=404, detail="Bu o'quvchi xonada yo'q")
+    resident.left_at = utcnow()
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/dorm/rooms/{room_id}/check")
+def dorm_check(room_id: int, check_date: date | None = None, user: User = Depends(get_current_user),
+               db: Session = Depends(get_db)):
+    """Shu kungi yo'qlama (olinmagan bo'lsa — hamma "Bor" bilan tayyor ro'yxat)."""
+
+    member = _dorm_member(db, user)
+    room = _dorm_room(db, member, room_id)
+    day = check_date or _dorm_today()
+    check = db.scalar(select(DormCheck).where(DormCheck.room_id == room.id, DormCheck.check_date == day))
+    marks = {mark.student_id: mark.status for mark in check.marks} if check else {}
+    residents = _dorm_residents(db, [room.id])[room.id]
+    rows = [{"id": student.id, "name": student.full_name, "class_name": school_class.name,
+             "status": marks.get(student.id, "present")} for _, student, school_class in residents]
+    if check:  # yo'qlamadan keyin xonadan chiqqanlar ham tarixda ko'rinadi
+        known = {row["id"] for row in rows}
+        rows += [{"id": mark.student_id, "name": mark.student_name, "class_name": "", "status": mark.status}
+                 for mark in check.marks if mark.student_id not in known]
+    return {"room": {"id": room.id, "name": room.name}, "date": day, "taken": check is not None,
+            "taken_at": check.taken_at if check else None, "rows": rows}
+
+
+@app.put("/api/dorm/rooms/{room_id}/check")
+def save_dorm_check(room_id: int, body: DormCheckIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Kechki yo'qlamani saqlash (tarbiyachi yoki rahbariyat). Shu kun uchun qayta saqlansa — yangilanadi."""
+
+    member = _dorm_member(db, user)
+    room = _dorm_room(db, member, room_id)
+    day = body.check_date or _dorm_today()
+    if day > _dorm_today():
+        raise HTTPException(status_code=422, detail="Kelajakdagi kun uchun yo'qlama olinmaydi")
+    residents = {student.id: student for _, student, _ in _dorm_residents(db, [room.id])[room.id]}
+    if not residents:
+        raise HTTPException(status_code=400, detail="Xonada o'quvchi yo'q")
+    check = db.scalar(select(DormCheck).where(DormCheck.room_id == room.id, DormCheck.check_date == day))
+    if check:
+        check.marks.clear()
+        check.updated_at = utcnow()
+        check.taken_by = user.id
+    else:
+        check = DormCheck(school_id=member.school_id, room_id=room.id, check_date=day, taken_by=user.id)
+        db.add(check)
+    for student_id, student in residents.items():
+        check.marks.append(DormCheckMark(student_id=student_id, student_name=student.full_name,
+                                         status=body.marks.get(student_id, "present")))
+    db.commit()
+    return {"date": day, "counts": _dorm_check_counts(check)}
 
 
 def _attendance_context(db: Session, attendance: Attendance) -> dict:

@@ -609,8 +609,14 @@ function navRecordPage() {
   if (!intent || navReplaying) return;
   navUntrackedPage = false;
   intent.page = navLastRenderer || intent.name;
-  const top = navHistory[navHistory.length - 1];
-  if (top && (navReplace || top.page === intent.page || NAV_FORM_PAGE.test(top.page))) navHistory.pop();
+  let top = navHistory[navHistory.length - 1];
+  // Forma (saqlandi) yoki pastki menyu bo'limi — joriy yozuv o'rniga
+  if (top && (navReplace || NAV_FORM_PAGE.test(top.page))) {
+    navHistory.pop();
+    top = navHistory[navHistory.length - 1];
+  }
+  // Xuddi shu sahifa (forma ostida turgani ham) — ikki marta yozilmaydi
+  if (top && top.page === intent.page) navHistory.pop();
   navReplace = false;
   navHistory.push(intent);
   if (navHistory.length > NAV_MAX) navHistory.splice(1, navHistory.length - NAV_MAX);
@@ -4092,6 +4098,7 @@ function renderMySchool(school, { refresh = true } = {}) {
         ${schoolMenuItem("announcements", svgIcon("megaphone"), "E'lonlar", "Maktab va sinflar")}
         <span id="school-payments-tile" style="display:contents">${schoolPaymentsTileHtml(schoolOverviewCache)}</span>
         ${isLeader(school) ? schoolMenuItem("results", svgIcon("chart"), "Test natijalari", "Sinflar bo'yicha", "wide") : ""}
+        ${school.dorm ? schoolMenuItem("dorm", svgIcon("house"), "Yotoqxona", "Xonalar va kechki yo'qlama", "wide") : ""}
         ${schoolMenuItem("teachers", svgIcon("users"), "Xodimlar", `${school.members.length} ta xodim`, "wide")}
       </div>
       <div id="school-announcements">${schoolAnnouncementsHtml(schoolOverviewCache)}</div>
@@ -4136,8 +4143,373 @@ async function openSchoolMenu(target, classId = null) {
   else if (target === "class-payments") await renderClassPayments(Number(classId));
   else if (target === "schedule") await renderSchedule("today");
   else if (target === "announcements") await renderAnnouncements();
+  else if (target === "dorm") await renderDorm();
   else if (target === "new-announcement") await openAnnouncementSheet(null, loadSchoolOverview);
   else openSchoolTab(target);
+}
+
+/* ---------- Yotoqxona: xonalar, joylashtirish, kechki yo'qlama ----------
+   Rahbariyat (admin, direktor) — hamma xona: ochadi, o'quvchilarni joylashtiradi, tarbiyachi tayinlaydi.
+   Tarbiyachi — faqat o'z xonalari: o'quvchilarni ko'radi va kechki yo'qlama oladi. */
+
+const DORM_STATES = [
+  { id: "present", label: "Bor", icon: "✅" },
+  { id: "absent", label: "Yo'q", icon: "❌" },
+  { id: "sick", label: "Kasal", icon: "🤒" },
+  { id: "excused", label: "Ruxsat bilan", icon: "🟡" },
+];
+const DORM_STATE_BY_ID = Object.fromEntries(DORM_STATES.map((state) => [state.id, state]));
+
+// "201" → "201-xona"; "Qizlar 12" o'zgarmaydi
+function dormRoomTitle(room) {
+  return /^\d+[a-zA-Z]?$/.test(room.name) ? `${room.name}-xona` : room.name;
+}
+
+function dormTodayChip(room) {
+  if (!room.occupied) return `<span class="badge badge-gray">Bo'sh xona</span>`;
+  if (!room.today) return `<span class="badge badge-gray">⏳ Yo'qlama olinmagan</span>`;
+  if (room.today.absent) {
+    return `<span class="badge" style="background:#fde8e7;color:#b42318">❌ ${room.today.absent} ta yo'q</span>`;
+  }
+  return `<span class="badge badge-green">✅ Hammasi joyida${room.today.sick ? ` · 🤒 ${room.today.sick}` : ""}${
+    room.today.excused ? ` · 🟡 ${room.today.excused}` : ""
+  }</span>`;
+}
+
+function dormCountsHtml(counts) {
+  return `
+    <div class="att-counts">
+      ${DORM_STATES.map(
+        (state) => `<span class="att-count ${state.id}">${state.icon} ${state.label}: <b>${counts[state.id] || 0}</b></span>`
+      ).join("")}
+    </div>`;
+}
+
+async function renderDorm() {
+  const dorm = await api("/api/dorm");
+  const totals = dorm.totals;
+  const floors = new Map();
+  dorm.rooms.forEach((room) => {
+    const key = room.floor ?? "none";
+    if (!floors.has(key)) floors.set(key, []);
+    floors.get(key).push(room);
+  });
+
+  const roomCard = (room) => `
+    <div class="card card-entrance" data-dorm-room="${room.id}">
+      <div class="card-body" style="width:100%">
+        <div class="row-between" style="align-items:flex-start">
+          <div style="min-width:0">
+            <h3 style="margin-bottom:6px">${escapeHtml(dormRoomTitle(room))} ${dormTodayChip(room)}</h3>
+            <p style="margin:0">🛏 <b>${room.occupied} / ${room.capacity}</b> o'rin${room.free ? ` · ${room.free} ta bo'sh` : " · to'lgan"}</p>
+            <p class="subtitle" style="margin:0">${
+              room.warden ? `👤 Tarbiyachi: ${escapeHtml(room.warden.name)}` : "⚠️ Tarbiyachi tayinlanmagan"
+            }</p>
+          </div>
+          <span style="color:var(--color-text-muted);font-size:22px">›</span>
+        </div>
+      </div>
+    </div>`;
+
+  showPage(`
+    ${schoolSubHeader("Yotoqxona")}
+    <div class="stats-grid">
+      <div class="stat-tile"><span class="stat-value">${totals.rooms}</span>Xonalar</div>
+      <div class="stat-tile"><span class="stat-value">${totals.occupied} / ${totals.capacity}</span>Band o'rinlar</div>
+      <div class="stat-tile"><span class="stat-value">${totals.free}</span>Bo'sh o'rinlar</div>
+      <div class="stat-tile"><span class="stat-value">${totals.checked_rooms} / ${totals.rooms_with_residents}</span>Bugun yo'qlama</div>
+    </div>
+    ${totals.checked_rooms ? dormCountsHtml(totals) : ""}
+    ${dorm.can_manage ? `<button class="btn" id="dorm-add-room" style="margin-top:12px">+ Xona qo'shish</button>` : ""}
+    ${
+      dorm.rooms.length
+        ? [...floors.entries()]
+            .sort(([a], [b]) => (a === "none" ? 1 : b === "none" ? -1 : a - b))
+            .map(
+              ([floor, rooms]) => `
+                <p class="section-label" style="margin-top:18px">${floor === "none" ? "QAVAT KO'RSATILMAGAN" : `${floor}-QAVAT`}</p>
+                ${rooms.map(roomCard).join("")}`
+            )
+            .join("")
+        : `<div class="empty-state"><div style="font-size:42px">🏠</div><p>Hali xona yo'q.${
+            dorm.can_manage ? " «+ Xona qo'shish» bilan birinchi xonani oching." : ""
+          }</p></div>`
+    }
+  `);
+  wireSchoolSubPage();
+  document.getElementById("dorm-add-room")?.addEventListener("click", () => openDormRoomSheet(null, (id) => renderDormRoom(id)));
+  document.querySelectorAll("[data-dorm-room]").forEach((card) =>
+    card.addEventListener("click", guarded(() => renderDormRoom(Number(card.dataset.dormRoom))))
+  );
+}
+
+async function renderDormRoom(roomId) {
+  const room = await api(`/api/dorm/rooms/${roomId}`);
+  const manage = room.can_manage;
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-dorm" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">${escapeHtml(dormRoomTitle(room))}</h2>
+      ${manage ? `<button type="button" class="icon-button" id="dorm-room-settings" aria-label="Xona sozlamalari">⚙️</button>` : ""}
+    </div>
+    <p class="subtitle" style="margin:0 0 12px">${room.floor != null ? `${room.floor}-qavat · ` : ""}🛏 ${room.occupied} / ${room.capacity} o'rin · ${
+      room.warden ? `👤 ${escapeHtml(room.warden.name)}` : "tarbiyachi tayinlanmagan"
+    }</p>
+    ${
+      room.occupied
+        ? `<button class="btn" id="dorm-check-button">🌙 Kechki yo'qlama${room.today ? " — olingan (tahrirlash)" : ""}</button>
+           ${room.today ? dormCountsHtml(room.today) : ""}`
+        : ""
+    }
+    <p class="section-label" style="margin-top:16px">O'QUVCHILAR</p>
+    ${
+      room.residents.length
+        ? `<div class="panel pick-list">${room.residents
+            .map(
+              (student) => `
+                <div class="pick-item" style="cursor:default">
+                  <span class="pick-title">${escapeHtml(student.name)}<small>${escapeHtml(student.class_name)}</small></span>
+                  ${manage ? deleteButton("data-remove-resident", student.id) : ""}
+                </div>`
+            )
+            .join("")}</div>`
+        : `<p class="subtitle" style="margin:0">Xonada hali o'quvchi yo'q.</p>`
+    }
+    ${
+      manage && room.free
+        ? `<button class="btn btn-ghost" id="dorm-place-button" style="margin-top:10px">+ O'quvchi joylashtirish (${room.free} ta bo'sh o'rin)</button>`
+        : ""
+    }
+    ${
+      room.checks.length
+        ? `<p class="section-label" style="margin-top:18px">OXIRGI YO'QLAMALAR</p>
+           <div class="panel pick-list">${room.checks
+             .map(
+               (check) => `
+                 <button type="button" class="pick-item" data-dorm-check="${check.date}">
+                   <span class="pick-title">📅 ${formatDate(check.date)}
+                     <small>✅ ${check.counts.present} · ❌ ${check.counts.absent} · 🤒 ${check.counts.sick || 0} · 🟡 ${check.counts.excused}${
+                       check.absent.length ? ` — yo'q: ${escapeHtml(check.absent.join(", "))}` : ""
+                     }${check.taken_by ? ` · ${escapeHtml(check.taken_by)}` : ""}</small>
+                   </span>
+                   <span>›</span>
+                 </button>`
+             )
+             .join("")}</div>`
+        : ""
+    }
+  `);
+
+  document.querySelector('[data-action="back-dorm"]').addEventListener("click", guarded(renderDorm));
+  document.getElementById("dorm-room-settings")?.addEventListener("click", () =>
+    openDormRoomSheet(room, (id) => (id ? renderDormRoom(id) : renderDorm()))
+  );
+  document.getElementById("dorm-check-button")?.addEventListener("click", guarded(() => renderDormCheckForm(room)));
+  document.getElementById("dorm-place-button")?.addEventListener("click", guarded(() => openDormPlaceSheet(room)));
+  document.querySelectorAll("[data-dorm-check]").forEach((button) =>
+    button.addEventListener("click", guarded(() => renderDormCheckForm(room, button.dataset.dormCheck)))
+  );
+  document.querySelectorAll("[data-remove-resident]").forEach((button) =>
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        const student = room.residents.find((item) => item.id === Number(button.dataset.removeResident));
+        if (!(await askConfirm(`${student.name} ${dormRoomTitle(room)}dan chiqarilsinmi?`))) return;
+        await api(`/api/dorm/rooms/${room.id}/residents/${student.id}`, { method: "DELETE" });
+        showToast("✅ O'quvchi xonadan chiqarildi");
+        await renderDormRoom(room.id);
+      })
+    )
+  );
+}
+
+// Xona qo'shish / sozlash: nomi, qavati, o'rinlar soni, tarbiyachisi; bo'sh xonani o'chirish
+function openDormRoomSheet(room, onSaved) {
+  const members = currentSchool?.members || [];
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 10px">${room ? "⚙️ Xona sozlamalari" : "🏠 Yangi xona"}</h3>
+    <label class="field-label" for="dorm-room-name">Xona raqami yoki nomi</label>
+    <input class="input" id="dorm-room-name" maxlength="40" value="${escapeHtml(room?.name || "")}" placeholder="Masalan: 201" />
+    <div class="row-between" style="gap:8px">
+      <div style="flex:1">
+        <label class="field-label" for="dorm-room-floor">Qavat</label>
+        <input class="input" id="dorm-room-floor" type="number" inputmode="numeric" value="${room?.floor ?? ""}" placeholder="2" />
+      </div>
+      <div style="flex:1">
+        <label class="field-label" for="dorm-room-capacity">O'rinlar soni</label>
+        <input class="input" id="dorm-room-capacity" type="number" inputmode="numeric" min="1" max="50" value="${room?.capacity ?? 4}" />
+      </div>
+    </div>
+    <label class="field-label" for="dorm-room-warden">👤 Tarbiyachi (kechki yo'qlamani oladi)</label>
+    <select id="dorm-room-warden">
+      <option value="">— Tayinlanmagan —</option>
+      ${members
+        .map(
+          (member) =>
+            `<option value="${member.user_id}" ${room?.warden?.user_id === member.user_id ? "selected" : ""}>${escapeHtml(member.name)}</option>`
+        )
+        .join("")}
+    </select>
+    <button class="btn" id="dorm-room-save" style="margin-top:14px">💾 Saqlash</button>
+    ${room && !room.occupied ? `<button class="btn btn-ghost" id="dorm-room-delete" style="margin-top:8px">🗑 Xonani o'chirish</button>` : ""}
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+  sheet.querySelector("#dorm-room-save").addEventListener(
+    "click",
+    guarded(async () => {
+      const floorRaw = sheet.querySelector("#dorm-room-floor").value.trim();
+      const warden = sheet.querySelector("#dorm-room-warden").value;
+      const body = {
+        name: sheet.querySelector("#dorm-room-name").value.trim(),
+        floor: floorRaw === "" ? null : Number(floorRaw),
+        capacity: Number(sheet.querySelector("#dorm-room-capacity").value) || 0,
+        warden_user_id: warden ? Number(warden) : null,
+      };
+      if (!body.name) throw new Error("Xona raqamini kiriting");
+      if (body.capacity < 1) throw new Error("O'rinlar sonini kiriting");
+      const saved = room
+        ? await api(`/api/dorm/rooms/${room.id}`, { method: "PUT", body })
+        : await api("/api/dorm/rooms", { method: "POST", body });
+      close();
+      showToast(room ? "✅ Xona saqlandi" : "✅ Xona ochildi");
+      await onSaved(room ? room.id : saved.id);
+    })
+  );
+  sheet.querySelector("#dorm-room-delete")?.addEventListener(
+    "click",
+    guarded(async () => {
+      if (!(await askConfirm(`${dormRoomTitle(room)} o'chirilsinmi?`))) return;
+      await api(`/api/dorm/rooms/${room.id}`, { method: "DELETE" });
+      close();
+      showToast("🗑 Xona o'chirildi");
+      await onSaved(null);
+    })
+  );
+}
+
+// O'quvchi joylashtirish: hali yotoqxonada joyi yo'qlar (sinfi bilan), qidiruv; bo'sh o'rindan ko'p tanlanmaydi
+async function openDormPlaceSheet(room) {
+  const candidates = await api("/api/dorm/candidates");
+  const picked = new Set();
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 6px">+ ${escapeHtml(dormRoomTitle(room))}ga joylashtirish</h3>
+    <p class="subtitle" style="margin:0 0 10px">Bo'sh o'rin: <b id="dorm-free-left">${room.free}</b> ta. Boshqa xonadagi o'quvchi bu ro'yxatda yo'q — avval o'sha xonadan chiqaring.</p>
+    <input class="input" id="dorm-place-search" placeholder="🔍 Ism yoki sinf bo'yicha qidirish" />
+    <div class="panel pick-list" id="dorm-place-list" style="max-height:50vh;overflow:auto">
+      ${
+        candidates.length
+          ? candidates
+              .map(
+                (student) => `
+                  <label class="pick-item" data-name="${escapeHtml(`${student.name} ${student.class_name}`.toLowerCase())}">
+                    <span class="pick-title">${escapeHtml(student.name)}<small>${escapeHtml(student.class_name)}</small></span>
+                    <input type="checkbox" value="${student.id}" />
+                  </label>`
+              )
+              .join("")
+          : `<p class="subtitle" style="padding:10px">Joylashtirilmagan o'quvchi yo'q.</p>`
+      }
+    </div>
+    <button class="btn" id="dorm-place-save" style="margin-top:12px">✅ Joylashtirish</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+  sheet.querySelector("#dorm-place-search").addEventListener("input", (event) => {
+    const query = event.target.value.trim().toLowerCase();
+    sheet.querySelectorAll("#dorm-place-list [data-name]").forEach((item) => {
+      item.hidden = Boolean(query) && !item.dataset.name.includes(query);
+    });
+  });
+  sheet.querySelectorAll("#dorm-place-list input[type=checkbox]").forEach((box) =>
+    box.addEventListener("change", () => {
+      if (box.checked && picked.size >= room.free) {
+        box.checked = false;
+        showToast(`Xonada ${room.free} ta bo'sh o'rin bor`);
+        return;
+      }
+      box.checked ? picked.add(Number(box.value)) : picked.delete(Number(box.value));
+      sheet.querySelector("#dorm-free-left").textContent = room.free - picked.size;
+    })
+  );
+  sheet.querySelector("#dorm-place-save").addEventListener(
+    "click",
+    guarded(async () => {
+      if (!picked.size) throw new Error("Kamida bitta o'quvchini tanlang");
+      const { placed } = await api(`/api/dorm/rooms/${room.id}/residents`, {
+        method: "POST",
+        body: { student_ids: [...picked] },
+      });
+      close();
+      showToast(`✅ ${placed} ta o'quvchi joylashtirildi`);
+      await renderDormRoom(room.id);
+    })
+  );
+}
+
+// Kechki yo'qlama: o'quvchini bosing — Bor → Yo'q → Kasal → Ruxsat bilan; bir kun — bitta yo'qlama (qayta saqlansa yangilanadi)
+async function renderDormCheckForm(room, date = null) {
+  const data = await api(`/api/dorm/rooms/${room.id}/check${date ? `?check_date=${date}` : ""}`);
+  const rows = data.rows.map((row) => ({ ...row }));
+  const counts = () => rows.reduce((result, row) => ({ ...result, [row.status]: (result[row.status] || 0) + 1 }), {});
+
+  showPage(`
+    ${schoolPageHeader(`Yo'qlama — ${dormRoomTitle(room)}`, "back-dorm-room")}
+    <p class="subtitle" style="margin:0">📅 ${formatDate(data.date)}${data.taken ? " · olingan, tahrirlash" : ""}</p>
+    <div id="dorm-counts-host">${dormCountsHtml(counts())}</div>
+    <p class="subtitle" style="margin:4px 0 8px">O'quvchini bosing: Bor → Yo'q → Kasal → Ruxsat bilan</p>
+    <div class="panel" style="padding:4px 0">
+      ${rows
+        .map(
+          (row, index) => `
+            <button type="button" class="att-row" data-row="${index}">
+              <span class="att-number">${index + 1}</span>
+              <span class="att-name">${escapeHtml(row.name)}${row.class_name ? ` <small class="subtitle">${escapeHtml(row.class_name)}</small>` : ""}</span>
+              <span class="att-status ${row.status}">${DORM_STATE_BY_ID[row.status].icon} ${DORM_STATE_BY_ID[row.status].label}</span>
+            </button>`
+        )
+        .join("")}
+    </div>
+    <div class="att-save-bar">
+      <button class="btn" id="save-dorm-check" style="margin:0">💾 Saqlash</button>
+    </div>
+  `);
+
+  markUnsaved();
+  document.querySelector('[data-action="back-dorm-room"]').addEventListener(
+    "click",
+    guarded(async () => {
+      if (!(await confirmLeave())) return;
+      await renderDormRoom(room.id);
+    })
+  );
+  document.querySelectorAll(".att-row").forEach((button) =>
+    button.addEventListener("click", () => {
+      const row = rows[Number(button.dataset.row)];
+      const order = DORM_STATES.map((state) => state.id);
+      row.status = order[(order.indexOf(row.status) + 1) % order.length];
+      const state = DORM_STATE_BY_ID[row.status];
+      const pill = button.querySelector(".att-status");
+      pill.className = `att-status ${row.status}`;
+      pill.textContent = `${state.icon} ${state.label}`;
+      document.getElementById("dorm-counts-host").innerHTML = dormCountsHtml(counts());
+      telegram?.HapticFeedback?.selectionChanged?.();
+    })
+  );
+  document.getElementById("save-dorm-check").addEventListener(
+    "click",
+    guarded(async () => {
+      const marks = Object.fromEntries(rows.map((row) => [row.id, row.status]));
+      const saved = await api(`/api/dorm/rooms/${room.id}/check`, {
+        method: "PUT",
+        body: { marks, check_date: data.date },
+      });
+      unsavedChanges = false;
+      setExitProtection(false);
+      showToast(
+        `✅ Yo'qlama saqlandi: ✅ ${saved.counts.present} · ❌ ${saved.counts.absent} · 🤒 ${saved.counts.sick} · 🟡 ${saved.counts.excused}`
+      );
+      await renderDormRoom(room.id);
+    })
+  );
 }
 
 async function loadSchoolOverview() {

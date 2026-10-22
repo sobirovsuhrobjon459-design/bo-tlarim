@@ -881,6 +881,67 @@ class ClassSubjectPlan(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(default=None)
 
 
+class DormRoom(Base):
+    """
+    Yotoqxona xonasi (maktab yoki o'quv markazi). Rahbariyat (admin, direktor)
+    xonalarni ochadi va o'quvchilarni joylashtiradi; xonaga tarbiyachi (mas'ul
+    xodim) tayinlanadi — u o'z xonalarida kechki yo'qlama oladi.
+    O'chirilganda bazada qoladi (deleted_at).
+    """
+
+    __tablename__ = "dorm_rooms"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    name: Mapped[str] = mapped_column(String(40))  # "201", "3-xona", "Qizlar 12"
+    floor: Mapped[int | None] = mapped_column(default=None)
+    capacity: Mapped[int] = mapped_column(default=4)
+    warden_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
+class DormResident(Base):
+    """O'quvchining xonadagi joyi. Chiqarilganda o'chirilmaydi — left_at (yo'qlama tarixi saqlanadi)."""
+
+    __tablename__ = "dorm_residents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    room_id: Mapped[int] = mapped_column(ForeignKey("dorm_rooms.id"), index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("class_students.id"), index=True)
+    placed_at: Mapped[datetime] = mapped_column(default=utcnow)
+    left_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
+class DormCheck(Base):
+    """Xonaning bir kunlik kechki yo'qlamasi (bir xona — bir kun — bitta yozuv, qayta saqlansa yangilanadi)."""
+
+    __tablename__ = "dorm_checks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    room_id: Mapped[int] = mapped_column(ForeignKey("dorm_rooms.id"), index=True)
+    check_date: Mapped[date] = mapped_column(index=True)
+    taken_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    taken_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime | None] = mapped_column(default=None)
+
+    marks: Mapped[list["DormCheckMark"]] = relationship(order_by="DormCheckMark.id", cascade="all, delete-orphan")
+
+
+class DormCheckMark(Base):
+    """Yo'qlamadagi bitta o'quvchi: present (bor) | absent (yo'q) | sick (kasal) | excused (ruxsat bilan ketgan)."""
+
+    __tablename__ = "dorm_check_marks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    check_id: Mapped[int] = mapped_column(ForeignKey("dorm_checks.id"), index=True)
+    student_id: Mapped[int] = mapped_column(index=True)
+    student_name: Mapped[str] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(10), default="present")
+
+
 class SchoolAnnouncement(Base):
     """
     Maktab yoki sinf e'loni. Xodimlarga bot orqali yuborilishi mumkin; ota-onalarga
@@ -1036,6 +1097,33 @@ class AutoTimetableIn(BaseModel):
     mode: str = Field(default="fill", pattern="^(fill|replace)$")
     class_ids: list[int] | None = Field(default=None, max_length=300)  # bo'sh — smenasi va rejasi bor hamma sinflar
     apply: bool = False
+
+
+class DormRoomIn(BaseModel):
+    """Yotoqxona xonasi: nomi/raqami, qavati, necha o'rinli, tarbiyachisi (bo'sh — tayinlanmagan)."""
+
+    name: str = Field(min_length=1, max_length=40)
+    floor: int | None = Field(default=None, ge=-5, le=100)
+    capacity: int = Field(default=4, ge=1, le=50)
+    warden_user_id: int | None = None
+
+    @model_validator(mode="after")
+    def _clean(self):
+        self.name = " ".join(self.name.split())
+        if not self.name:
+            raise ValueError("Xona nomini kiriting")
+        return self
+
+
+class DormPlaceIn(BaseModel):
+    student_ids: list[int] = Field(min_length=1, max_length=60)
+
+
+class DormCheckIn(BaseModel):
+    """Kechki yo'qlama: {o'quvchi_id: holat}; sana bo'sh — bugun (Toshkent vaqti)."""
+
+    marks: dict[int, Literal["present", "absent", "sick", "excused"]]
+    check_date: date | None = None
 
 
 class AnnouncementIn(BaseModel):

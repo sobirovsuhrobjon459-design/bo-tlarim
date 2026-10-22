@@ -1696,6 +1696,11 @@ select option {
   background: #2e75b6;
 }
 
+/* Yotoqxona yo'qlamasi: kasal */
+.att-status.sick {
+  background: #8e44ad;
+}
+
 /* Saqlash tugmasi pastda doim ko'rinib tursin */
 .att-save-bar {
   position: sticky;

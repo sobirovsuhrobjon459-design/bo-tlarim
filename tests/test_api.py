@@ -5663,3 +5663,89 @@ def test_dtm_ismli_titul_skanerlanadi():
     read = result["answers"]
     assert all(read.get(str(n)) == answers[str(n)] for n in range(1, 91)), {
         n: (read.get(str(n)), answers[str(n)]) for n in range(1, 91) if read.get(str(n)) != answers[str(n)]}
+
+
+def test_yotoqxona_xonalar_joylashtirish_va_kechki_yoqlama():
+    """Rahbariyat xona ochadi va o'quvchilarni joylashtiradi; tarbiyachi faqat o'z xonasida yo'qlama oladi."""
+    reset_database()
+    school_class = _school_with_class(701)  # 701 — maktab admini
+    cid = school_class["id"]
+    client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Ali Valiyev", "Zuhra Karimova", "Jasur Umarov"]},
+                headers=as_user(701))
+    students = {s["full_name"]: s["id"] for s in client.get(f"/api/classes/{cid}", headers=as_user(701)).json()["students"]}
+
+    # Tarbiyachi va oddiy o'qituvchi
+    school = client.get("/api/schools/me", headers=as_user(701)).json()["school"]
+    assert school["dorm"] is True
+    for tg_id, first in ((702, "Tarbiyachi"), (703, "Oddiy")):
+        _set_name(tg_id, first, "Ustoz")
+        client.post("/api/schools/join", json={"code": current_code(school), "subjects": ["Fizika"], "phone": "901112233"},
+                    headers=as_user(tg_id))
+    assert client.get("/api/schools/me", headers=as_user(703)).json()["school"]["dorm"] is False
+    assert client.get("/api/dorm", headers=as_user(703)).status_code == 403
+    assert client.post("/api/dorm/rooms", json={"name": "201"}, headers=as_user(703)).status_code == 403
+
+    room = client.post("/api/dorm/rooms", json={"name": "201", "floor": 2, "capacity": 2, "warden_user_id": None},
+                       headers=as_user(701))
+    assert room.status_code == 200, room.text
+    room_id = room.json()["id"]
+    other = client.post("/api/dorm/rooms", json={"name": "202", "floor": 2, "capacity": 4}, headers=as_user(701)).json()["id"]
+    assert client.post("/api/dorm/rooms", json={"name": "201"}, headers=as_user(701)).status_code == 409
+
+    # Joylashtirish: sig'imdan oshmaydi; boshqa xonaga ko'chirish
+    assert len(client.get("/api/dorm/candidates", headers=as_user(701)).json()) == 3
+    too_many = client.post(f"/api/dorm/rooms/{room_id}/residents", json={"student_ids": list(students.values())},
+                           headers=as_user(701))
+    assert too_many.status_code == 422 and "2 ta bo'sh o'rin" in too_many.text, too_many.text
+    placed = client.post(f"/api/dorm/rooms/{room_id}/residents",
+                         json={"student_ids": [students["Ali Valiyev"], students["Zuhra Karimova"]]}, headers=as_user(701))
+    assert placed.json()["placed"] == 2
+    assert [c["name"] for c in client.get("/api/dorm/candidates", headers=as_user(701)).json()] == ["Jasur Umarov"]
+    client.post(f"/api/dorm/rooms/{other}/residents", json={"student_ids": [students["Zuhra Karimova"]]}, headers=as_user(701))
+    overview = client.get("/api/dorm", headers=as_user(701)).json()
+    occupied = {item["name"]: item["occupied"] for item in overview["rooms"]}
+    assert occupied == {"201": 1, "202": 1}, occupied
+    assert overview["totals"]["capacity"] == 6 and overview["totals"]["free"] == 4, overview["totals"]
+
+    # Tarbiyachi tayinlanadi — faqat o'z xonasini ko'radi, joylashtira olmaydi
+    tarbiyachi = next(m["user_id"] for m in client.get("/api/schools/me", headers=as_user(701)).json()["school"]["members"]
+                      if m["name"].startswith("Tarbiyachi"))
+    assert client.put(f"/api/dorm/rooms/{room_id}", json={"name": "201", "floor": 2, "capacity": 2, "warden_user_id": tarbiyachi},
+                      headers=as_user(701)).status_code == 200
+    assert client.get("/api/schools/me", headers=as_user(702)).json()["school"]["dorm"] is True
+    warden_view = client.get("/api/dorm", headers=as_user(702)).json()
+    assert [item["name"] for item in warden_view["rooms"]] == ["201"] and warden_view["can_manage"] is False
+    assert client.get(f"/api/dorm/rooms/{other}", headers=as_user(702)).status_code == 403
+    assert client.post(f"/api/dorm/rooms/{room_id}/residents", json={"student_ids": [students["Jasur Umarov"]]},
+                       headers=as_user(702)).status_code == 403
+
+    # Kechki yo'qlama: tarbiyachi oladi, qayta saqlansa — yangilanadi (bir kun — bitta)
+    blank = client.get(f"/api/dorm/rooms/{room_id}/check", headers=as_user(702)).json()
+    assert blank["taken"] is False and [row["status"] for row in blank["rows"]] == ["present"]
+    saved = client.put(f"/api/dorm/rooms/{room_id}/check", json={"marks": {str(students["Ali Valiyev"]): "absent"}},
+                       headers=as_user(702))
+    assert saved.status_code == 200 and saved.json()["counts"]["absent"] == 1, saved.text
+    resaved = client.put(f"/api/dorm/rooms/{room_id}/check", json={"marks": {str(students["Ali Valiyev"]): "excused"}},
+                         headers=as_user(702)).json()
+    assert resaved["counts"] == {"present": 0, "absent": 0, "sick": 0, "excused": 1}, resaved
+    sick = client.put(f"/api/dorm/rooms/{room_id}/check", json={"marks": {str(students["Ali Valiyev"]): "sick"}},
+                      headers=as_user(702)).json()
+    assert sick["counts"]["sick"] == 1, sick
+    assert client.get("/api/dorm", headers=as_user(701)).json()["totals"]["sick"] == 1
+    client.put(f"/api/dorm/rooms/{room_id}/check", json={"marks": {str(students["Ali Valiyev"]): "excused"}},
+               headers=as_user(702))
+    detail = client.get(f"/api/dorm/rooms/{room_id}", headers=as_user(701)).json()
+    assert len(detail["checks"]) == 1 and detail["today"]["excused"] == 1, detail
+    assert client.get("/api/dorm", headers=as_user(701)).json()["totals"]["checked_rooms"] == 1
+
+    # Xonani o'chirish: avval o'quvchilarni chiqarish kerak
+    assert client.delete(f"/api/dorm/rooms/{room_id}", headers=as_user(701)).status_code == 409
+    assert client.delete(f"/api/dorm/rooms/{room_id}/residents/{students['Ali Valiyev']}", headers=as_user(701)).status_code == 200
+    assert client.delete(f"/api/dorm/rooms/{room_id}", headers=as_user(701)).status_code == 200
+
+    # To'garakda yotoqxona yo'q
+    _set_name(710, "Murabbiy", "Aliyev")
+    client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani", "name": "Sport"},
+                headers=_as_kind(710, "club"))
+    assert client.get("/api/schools/me", headers=_as_kind(710, "club")).json()["school"]["dorm"] is False
+    assert client.get("/api/dorm", headers=_as_kind(710, "club")).status_code == 404
