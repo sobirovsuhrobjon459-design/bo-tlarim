@@ -9089,7 +9089,7 @@ function renderNewTestForm(testType, draft = {}) {
   const offline = draft.enrollment === "closed" && !draft.paid;
   // Fan bo'yicha tuzilish faqat Rash testda (Milliy sertifikat mockida) qo'llanadi
   const structure = offline
-    ? { ...preset, testCount: "", optionCount: 4, textCount: 0, textParts: 1, partOverrides: {}, options: {}, note: "" }
+    ? { ...preset, testCount: subject === DTM_SUBJECT ? 90 : "", optionCount: 4, textCount: 0, textParts: 1, partOverrides: {}, options: {}, note: "" }
     : type === "rash"
       ? subjectStructure(subject, preset)
       : { ...preset, options: {}, note: "" };
@@ -9260,6 +9260,13 @@ function renderNewTestForm(testType, draft = {}) {
 
   // Fan almashtirilganda, o'sha fandagi Milliy sertifikat tuzilishi qo'llanadi
   subjectSelect.addEventListener("change", () => {
+    // DTM testi — oflayn (titulli) testda ham savollar soni darhol 90 ta (titul shunga moslashadi)
+    if (offline && subjectSelect.value === DTM_SUBJECT) {
+      document.getElementById("field-test-count").value = 90;
+      updateTotalHint();
+      buildKeyQuestionRows();
+      return;
+    }
     if (type !== "rash" || offline) return;
 
     const next = subjectStructure(subjectSelect.value, preset);
@@ -12280,7 +12287,8 @@ async function renderTestDetail(testId) {
            <button class="btn btn-ghost" id="answer-key-button">🔑 To'g'ri javoblar (kalit)</button>
            ${
              test.sheet_version >= 2
-               ? `<button class="btn btn-ghost" id="named-sheets-button">👥 O'quvchilar ro'yxati (ism va ID)</button>`
+               ? `<button class="btn btn-ghost" id="personal-sheets-button">🧾 Ismli titullar (har o'quvchiga, ID bo'yalgan)</button>
+                  <button class="btn btn-ghost" id="named-sheets-button">👥 O'quvchilar ro'yxati (ism va ID)</button>`
                : ""
            }
            ${test.mode === "key" ? `<button class="btn btn-ghost" id="variants-button">🔀 Variantlar${test.variants.length ? ` (${test.variants.join(", ")})` : " (A/B/C/D)"}</button>` : ""}
@@ -12354,6 +12362,21 @@ async function renderTestDetail(testId) {
     slot.innerHTML = `<button class="btn btn-ghost" id="scan-queue-button">📥 Navbatdagi varaqlar: ${mine.length}${review ? ` (${review} tasi tekshirish kerak)` : ""}</button>`;
     document.getElementById("scan-queue-button").addEventListener("click", guarded(() => renderScanQueue(testId, test)));
   });
+  // Har o'quvchiga alohida titul: ism-familiyasi yozilgan, ID raqami bo'yalgan — hammasi bitta PDF'da
+  document.getElementById("personal-sheets-button")?.addEventListener(
+    "click",
+    guarded(() => {
+      if (!test.students.some((student) => student.editable)) {
+        throw new Error("O'quvchi yo'q — sinfni biriktiring yoki «O'quvchilarni qo'shish» orqali qo'shing");
+      }
+      return deliverPdf(
+        `/api/teacher/tests/${testId}/answer-sheet?personal=true`,
+        `${test.code}_ismli_titullar.pdf`,
+        "🧾 Ismli titullar Telegramga yuborildi"
+      );
+    })
+  );
+
   document.getElementById("named-sheets-button")?.addEventListener(
     "click",
     guarded(() => {

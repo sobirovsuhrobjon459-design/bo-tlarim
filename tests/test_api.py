@@ -5583,3 +5583,83 @@ def test_dtm_testi_natijasi_dtm_bali_bilan():
     client.post(f"/api/teacher/tests/{plain['id']}/students/{sid}/answers", json={"answers": {"1": "B"}}, headers=as_user(555))
     plain_results = client.get(f"/api/teacher/tests/{plain['id']}/results", headers=as_user(555)).json()
     assert plain_results["rows"][0]["dtm_ball"] is None and plain_results["summary"]["dtm_max"] is None
+
+
+def test_dtm_ismli_titul_skanerlanadi():
+    """
+    Sinfga biriktirilgan DTM imtihoni: har o'quvchiga ismli titul (ID bo'yalgan, bitta PDF), bloklar
+    fanlar bo'yicha (namunadagidek). Skaner chop etilgan ismli titulni o'qiydi: o'quvchi ID'dan
+    taniladi, javoblar to'g'ri savollarga tushadi (31–45 — 1-ustun pastida, 76–90 — 4-ustun pastida).
+    """
+
+    import fitz
+    from PIL import Image, ImageDraw
+
+    from backend.database import Test
+
+    reset_database()
+    school_class = _school_with_class(701)
+    register_teacher(701, "Aziza", "Karimova")
+    cid = school_class["id"]
+    client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Ali Valiyev", "Zuhra Karimova"]}, headers=as_user(701))
+    client.put(f"/api/classes/{cid}/student-codes", json={"start": 1001, "end": 1038}, headers=as_user(701))
+    key = [{"number": n, "question_type": "single", "option_count": 4, "correct": "ABCD"[n % 4]} for n in range(1, 91)]
+    created = create_test(701, enrollment_type="closed", subject="DTM testi", duration=180, key_questions=key)
+    base = f"/api/teacher/tests/{created['id']}"
+    client.put(f"{base}/sections", headers=as_user(701), json={"text": "\n".join([
+        "Ona tili (majburiy): 1-10", "Matematika (majburiy): 11-20", "O'zbekiston tarixi (majburiy): 21-30",
+        "Matematika: 31-60", "Fizika: 61-90"])})
+    assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json()["added"] == 2
+
+    # Ismli titullar: har o'quvchiga bitta sahifa
+    personal = client.get(f"{base}/answer-sheet?personal=true", headers=as_user(701))
+    assert personal.status_code == 200 and personal.content[:4] == b"%PDF", personal.text[:200]
+    document = fitz.open(stream=personal.content, filetype="pdf")
+    assert len(document) == 2
+    texts = [page.get_text() for page in document]
+    assert "Ali Valiyev" in texts[0] and "Zuhra Karimova" in texts[1], texts
+    for title in ("1-majburiy fan", "O'zbekiston tarixi", "1-asosiy fan: Matematika (31–60)", "2-asosiy fan: Fizika (61–90)"):
+        assert title in texts[0], title
+
+    # Bloklar namunadagidek: 31 — 1-ustunda (ID ostida), 76 — 4-ustunda; 1 — 2-ustun tepasida
+    with SessionLocal() as session:
+        sheet_test = session.get(Test, created["id"])
+        bubbles: list[dict] = []
+        main.generate_answer_sheet_pdf(sheet_test, bubbles=bubbles)
+        geometry = main._sheet_geometry(sheet_test)
+        session.expunge(sheet_test)
+    first_x = {bubble["label"]: bubble["x"] for bubble in bubbles if bubble.get("letter") == "A" and bubble["kind"] != "id"}
+    id_x = min(bubble["x"] for bubble in bubbles if bubble["kind"] == "id")
+    assert abs(first_x["31"] - id_x) < 1 and first_x["1"] > first_x["31"] and first_x["76"] > first_x["61"], first_x
+
+    # Zuhraning titulini "suratga olamiz": javoblarni bo'yaymiz (ID titulda allaqachon bo'yalgan)
+    zuhra_page = next(index for index, text in enumerate(texts) if "Zuhra Karimova" in text)
+    zoom = 2.0
+    rendered = document[zuhra_page].get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+    page = Image.frombytes("RGB", (rendered.width, rendered.height), rendered.samples)
+    width, height = geometry["width"], geometry["height"]
+    left = (page.width / zoom - width) / 2
+    page = page.crop((round(left * zoom), 0, round((left + width) * zoom), round(height * zoom)))
+    draw = ImageDraw.Draw(page)
+    answers = {str(n): "ABCD"[n % 4] if n <= 60 else "A" for n in range(1, 91)}  # 61–90: hammasi A
+    for bubble in bubbles:
+        if bubble["page"] != 1 or bubble["kind"] in ("code", "mark", "anchor", "id"):
+            continue
+        if answers.get(bubble["label"]) == bubble["letter"]:
+            cx, cy, r = bubble["x"] * zoom, (height - bubble["y"]) * zoom, bubble["r"] * zoom
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline="black", width=2, fill=(40, 40, 40))
+    background = Image.new("RGB", (page.width + 300, page.height + 300), (90, 70, 60))
+    background.paste(page.rotate(4, expand=True, fillcolor=(90, 70, 60)), (120, 110))
+    buffer = io.BytesIO()
+    background.save(buffer, "JPEG", quality=85)
+    photo = base64.b64encode(buffer.getvalue()).decode()
+
+    scanned = client.post(f"{base}/scan", json={"image_base64": photo}, headers=as_user(701))
+    assert scanned.status_code == 200, scanned.text
+    result = scanned.json()
+    zuhra = next(student for student in client.get(f"/api/classes/{cid}", headers=as_user(701)).json()["students"]
+                 if student["full_name"] == "Zuhra Karimova")
+    assert result["sheet_number"] == zuhra["code"] and result["match"]["name"] == "Zuhra Karimova", result
+    read = result["answers"]
+    assert all(read.get(str(n)) == answers[str(n)] for n in range(1, 91)), {
+        n: (read.get(str(n)), answers[str(n)]) for n in range(1, 91) if read.get(str(n)) != answers[str(n)]}

@@ -2567,15 +2567,21 @@ SHEET8_STYLE = {"edge_marks": 9, "row": 13, "header": 9, "radius": 5.5, "gap": 1
                 "sana_width": 120, "name_area": (118, 46, 540, 70), "instructions": False, "sparse": False,
                 "columns": 4, "column_width": (A4[0] - 2 * SHEET_CORNER) / 4,
                 "step": (A4[1] - 2 * SHEET_CORNER) / 10, "width": A4[0], "height": A4[1]}
-SHEET9_BASE = {"column": 120, "step": 78, "row": 13, "header": 9, "radius": 5.5, "gap": 19, "label": 24}
+SHEET9 = {"column": 120, "step": 78, "row": 13, "header": 9, "radius": 5.5, "gap": 19, "label": 24}
+SHEET_LOGO = FRONTEND_DIR / "img" / "chittak-logo-wide.png"  # qush + "Chittak" yozuvi, shaffof fon
+SHEET_LOGO_RATIO = 600 / 149
+SHEET9_BASE = SHEET9
+DTM_TITLE_BAND = 20  # DTM titulida blok sarlavhasi shuncha balandroq — fan nomi (ikki qator) A B C D ustida sig'adi
 SHEET9_MAX_SCALE = 1.3   # savol kam bo'lsa doirachalar shuncha kattalashadi
 SHEET9_MIN_SCALE = 0.7
 
 
-def _adaptive_style(cells: int, reserved: int = 2) -> dict:
+def _adaptive_style(cells: int, reserved: int = 2, title_band: float = 0.0) -> dict:
     """9-versiya: cells ta blok (ID bilan) sig'adigan eng katta masshtab; tengida — kamroq katak, tikroq titul.
-    reserved — 1-ustunda ID (va variant) uchun bloklar: qatorlar soni undan kam bo'lmaydi."""
+    reserved — 1-ustunda ID (va variant) uchun bloklar: qatorlar soni undan kam bo'lmaydi.
+    title_band — blok sarlavhasiga qo'shimcha balandlik (DTM titulida fan nomi uchun)."""
 
+    SHEET9_BASE = {**SHEET9, "header": SHEET9["header"] + title_band, "step": SHEET9["step"] + title_band}
     best = None
     for columns in range(2, 6):
         for rows in range(max(2, reserved), 12):
@@ -2598,6 +2604,9 @@ def _adaptive_style(cells: int, reserved: int = 2) -> dict:
     box_top, box_bottom = SHEET_CORNER + 12, SHEET_CORNER + step - max(8.0, 0.12 * step)
     box_middle = (box_top + box_bottom) / 2
     box_font = 10 * font
+    # Ism-familiya qatorining o'ng tomonidagi Chittak logosi (qush + yozuv), qator balandligiga moslab
+    logo_height = max(8.0, ((box_middle - box_top) - 9) * 0.7)
+    logo_width = logo_height * SHEET_LOGO_RATIO
     return {
         "edge_marks": rows + 1, "step": step, "row": SHEET9_BASE["row"] * scale,
         "header": SHEET9_BASE["header"] * scale, "radius": SHEET9_BASE["radius"] * scale,
@@ -2605,10 +2614,40 @@ def _adaptive_style(cells: int, reserved: int = 2) -> dict:
         "number_font": 8.5 * scale, "letter_font": 7 * scale, "digit_font": 8 * scale,
         "box": (box_top, box_middle, box_bottom), "box_font": box_font,
         "sana_width": min(120 * font, (width - 2 * SHEET_CORNER - 32) * 0.3),
-        "name_area": (SHEET_CORNER + 16 + 7.2 * box_font, box_top + 2, width - SHEET_CORNER - 16, box_middle),
-        "instructions": True, "sparse": True, "columns": columns,
+        "name_area": (SHEET_CORNER + 16 + 7.2 * box_font, box_top + 2, width - SHEET_CORNER - 16 - logo_width - 10, box_middle),
+        "logo": (logo_width, logo_height),
+        "instructions": True, "sparse": True, "columns": columns, "title_band": title_band * scale,
         "column_width": SHEET9_BASE["column"] * scale, "width": width, "height": height, "scale": scale,
     }
+
+
+# DTM titulida bloklar (5 savoldan) qayerda turadi: (ustun, blok qatori). 1-ustun tepasida — ID.
+DTM_SHEET_BLOCKS = [(1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1),  # majburiy fanlar: 1–10, 11–20, 21–30
+                    (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4),  # 1-asosiy fan: 31–45, 46–60
+                    (2, 2), (2, 3), (2, 4), (3, 2), (3, 3), (3, 4)]  # 2-asosiy fan: 61–75, 76–90
+
+
+def _dtm_sheet_plan(test: Test, items: list, style: dict, reserved: int) -> dict | None:
+    """
+    DTM testi titulida savollar fanlar bo'yicha guruhlanadi (namunadagidek): tepada uchta majburiy fan
+    yonma-yon, pastda ikkita asosiy fan (har biri ikki ustunda). Skaner to'ri o'zgarmaydi — 4 ustun ×
+    5 blok qatori, faqat bloklar boshqa tartibda. Variantli testda (ID ostida variant) — oddiy tartib.
+    """
+
+    if reserved != 2 or not score_weights(test.subject, len(items)) or len(items) != 90:
+        return None
+    if style["columns"] != 4 or style["edge_marks"] - 1 != 5 or not style.get("title_band"):
+        return None
+    slots = [(item, *DTM_SHEET_BLOCKS[index // 5], index % 5) for index, item in enumerate(items)]
+    names = [section["name"] for section in _test_sections(test)]
+    if len(names) != 5:
+        names = ["Ona tili", "Matematika", "O'zbekiston tarixi", "1-asosiy fan", "2-asosiy fan"]
+    parts = [title.split("\n") + [""] for title in _dtm_section_titles(names)]
+    # (ustun, blok qatori, nechta ustun kengligida, 1-qator (kichik), 2-qator (katta)); asosiy fan — bir qatorda
+    titles = [(1, 0, 1, parts[0][0], parts[0][1]), (2, 0, 1, parts[1][0], parts[1][1]), (3, 0, 1, parts[2][0], parts[2][1]),
+              (0, 2, 2, "", f"{parts[3][0]}: {parts[3][1]} (31–60)" if parts[3][1] else f"{parts[3][0]} (31–60)"),
+              (2, 2, 2, "", f"{parts[4][0]}: {parts[4][1]} (61–90)" if parts[4][1] else f"{parts[4][0]} (61–90)")]
+    return {"slots": slots, "titles": titles}
 
 
 def _evalbee_plan(test: Test, variants: list[str] | None = None, key_override: dict | None = None) -> dict:
@@ -2617,12 +2656,18 @@ def _evalbee_plan(test: Test, variants: list[str] | None = None, key_override: d
     items = [item for item in _answer_sheet_items(test, key_override) if item[1] != "text"]
     reserved = 3 if variants else 2  # 1-ustunda ID (2 blok) va variant (1 blok)
     if (test.sheet_version or 1) >= 9:
-        style = _adaptive_style(reserved + math.ceil(len(items) / 5), reserved)
+        dtm_titles = reserved == 2 and len(items) == 90 and bool(score_weights(test.subject, len(items)))
+        style = _adaptive_style(reserved + math.ceil(len(items) / 5), reserved, DTM_TITLE_BAND if dtm_titles else 0.0)
         # 10-versiya: ID raqamlari 0–9 oraliqsiz, tekis ketma-ket (9-versiyada 4 va 5 orasida bo'sh joy bor)
         style["id_tight"] = test.sheet_version >= 10
     else:
         style = SHEET8_STYLE
     block_rows = style["edge_marks"] - 1
+    dtm = _dtm_sheet_plan(test, items, style, reserved)
+    if dtm:
+        return {"width": style["width"], "height": style["height"], "edge_marks": style["edge_marks"],
+                "pages": [dtm["slots"]], "column_width": style["column_width"], "style": style, "reserved": reserved,
+                "titles": dtm["titles"]}
     pages, rest = [], items
     while rest or not pages:
         slots = [(column, block_row) for column in range(style["columns"]) for block_row in range(block_rows)
@@ -2752,6 +2797,14 @@ def _draw_evalbee_card(sheet, test: Test, plan: dict, page: int, with_answers: b
     sheet.drawString(box_left + 6, name_y, "Ism-familiya :")
     sheet.drawString(box_left + 6, exam_y, "Imtihon :")
     sheet.drawString(box_right - sana + 6, exam_y, "Sana :")
+    if style.get("logo"):
+        logo_width, logo_height = style["logo"]
+        row_height = box_middle - box_top
+        try:
+            sheet.drawImage(str(SHEET_LOGO), box_right - logo_width - 6, top(box_middle) + (row_height - logo_height) / 2,
+                            logo_width, logo_height, mask="auto")
+        except Exception:
+            logging.getLogger("backend").warning("Titul logosi chizilmadi", exc_info=True)
     sheet.setFont(REPORT_FONT_BOLD, font)
     if student:
         sheet.drawString(box_left + 8 * font, name_y, student[1][:60])
@@ -2779,13 +2832,18 @@ def _draw_evalbee_card(sheet, test: Test, plan: dict, page: int, with_answers: b
         for block_row in (0, 1):
             corners = block(0, block_row)
             if block_row == 0:
+                # Yozish kataklari "0" qatoridagi doirachalardan ajralib turadi (tegib qolmasin)
+                bubble_top = line_y(0) - header - 0.5 * style["row"] + radius
+                box_bottom = bubble_top + 2.5
+                box_height = min(header - 3, 13 * min(style.get("scale", 1), 1.2))
+                text_y = box_bottom + (box_height - style["letter_font"] * 0.7) / 2
                 sheet.setFont("Helvetica-Bold", style["letter_font"])
-                sheet.drawRightString(line_x(0) + label_right, line_y(0) - header + 1.5, "ID")
+                sheet.drawRightString(line_x(0) + label_right, text_y, "ID")
                 for column in range(4):
                     x = option_x(0, column)
-                    sheet.rect(x - radius - 0.5, line_y(0) - header, 2 * radius + 1, header - 0.5, stroke=1, fill=0)
+                    sheet.rect(x - radius - 0.5, box_bottom, 2 * radius + 1, box_height, stroke=1, fill=0)
                     if digits:
-                        sheet.drawCentredString(x, line_y(0) - header + 1.5, digits[column])
+                        sheet.drawCentredString(x, text_y, digits[column])
             for line in range(5):
                 digit = block_row * 5 + line
                 center = row_center(block_row, line)
@@ -2814,6 +2872,33 @@ def _draw_evalbee_card(sheet, test: Test, plan: dict, page: int, with_answers: b
                 sheet.circle(x, center, radius, stroke=1, fill=1 if student_variant == name else 0)
                 note({"ref": "variant", "label": "Variant", "kind": "variant", "letter": name,
                       "x": x, "y": center, "r": radius, "block": corners})
+
+    if page == 1 and plan.get("titles"):
+        # Sarlavha: chiziqdagi kvadratlar (±yarim o'lcham) ostida, A B C D harflari ustida; kvadratlar faqat
+        # chiziqda turadi — ostidagi joy ochiq, asosiy fan sarlavhasi ikki ustun kengligida yoziladi
+        letters_top = header - 1.5 - style["letter_font"] * 0.8  # chiziqdan harflarning yuqori chetigacha
+        for column, block_row, span, caption, text in plan["titles"]:
+            # Majburiy fan — o'z bloki o'rtasida; asosiy fan (ikki ustunli) — chapga tekislangan
+            center = line_x(column) + span * column_width / 2
+            left = line_x(column) + SHEET_EDGE_SIZE / 2 + 5
+            room = span * column_width - SHEET_EDGE_SIZE - 10
+            y = line_y(block_row) - SHEET_EDGE_SIZE / 2 - 1.5
+            if caption:
+                sheet.setFont(REPORT_FONT, 8.5)
+                y -= 6.2
+                sheet.drawCentredString(center, y, caption)
+            size = 10.0
+            while size > 7 and sheet.stringWidth(text, REPORT_FONT_BOLD, size) > room:
+                size -= 0.25
+            while len(text) > 4 and sheet.stringWidth(text, REPORT_FONT_BOLD, size) > room:
+                text = text[:-2].rstrip() + "…"
+            y -= size * (1.0 if caption else 0.85)
+            y = max(y, line_y(block_row) - letters_top + 2)  # harflarga tegmasin
+            sheet.setFont(REPORT_FONT_BOLD, size)
+            if span > 1:
+                sheet.drawString(left, y, text)
+            else:
+                sheet.drawCentredString(center, y, text)
 
     headers_drawn = set()
     for (label, question_type, options, correct, ref), column, block_row, line in plan["pages"][page - 1]:
@@ -5470,8 +5555,10 @@ def _student_attempt(db: Session, test: Test, student: ClassStudent) -> Attempt:
     )
     if attempt:
         return attempt
+    # O'chirilgan (sinfdan olib tashlangan) yozuv raqamni band qilmaydi — qayta biriktirilsa ID o'sha qoladi
     number_taken = student.student_code and db.scalar(
-        select(Attempt.id).where(Attempt.test_id == test.id, Attempt.sheet_number == student.student_code)
+        select(Attempt.id).where(Attempt.test_id == test.id, Attempt.sheet_number == student.student_code,
+                                 Attempt.status.in_(("pending", "done", "in_progress")))
     )
     attempt = Attempt(
         test_id=test.id, offline_name=student.full_name[:200], status="pending", class_student_id=student.id,
@@ -6626,18 +6713,32 @@ def _named_sheet_students(db: Session, test: Test, named: bool) -> list[tuple] |
     return students
 
 
+def _personal_sheets_pdf(db: Session, test: Test) -> tuple[bytes, int]:
+    """Har o'quvchiga alohida titul (ismi yozilgan, ID'si bo'yalgan) — hammasi bitta PDF'da."""
+    students = _named_sheet_students(db, test, True)
+    return generate_answer_sheet_pdf(test, students=students, variants=_variant_names(db, test) or None), len(students)
+
+
 @app.get("/api/teacher/tests/{test_id}/answer-sheet")
 def download_answer_sheet(
     test_id: int,
     answers: bool = False,
     named: bool = False,
+    personal: bool = False,
     variant: str | None = None,
     teacher: Teacher = Depends(get_current_teacher),
     db: Session = Depends(get_db),
 ):
-    """Javoblar varaqasini brauzerga yuklab beradi (answers=true bo'lsa — to'g'ri javobli kalit)."""
+    """
+    Javoblar varaqasini brauzerga yuklab beradi (answers=true bo'lsa — to'g'ri javobli kalit).
+    personal=true — har o'quvchiga ismli titul (ID bo'yalgan), named=true — o'quvchilar ro'yxati (ism va ID).
+    """
 
     test = _get_own_test(db, teacher, test_id)
+    if personal and not answers:
+        pdf_bytes, _ = _personal_sheets_pdf(db, test)
+        return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf",
+                                 headers={"Content-Disposition": f'attachment; filename="{test.code}_ismli_titullar.pdf"'})
     students = _named_sheet_students(db, test, named and not answers)
     if students:
         pdf_bytes = generate_student_id_list_pdf(test, students)  # faqat ism va ID — to'liq titul emas
@@ -6657,6 +6758,7 @@ def send_answer_sheet_to_telegram(
     test_id: int,
     answers: bool = False,
     named: bool = False,
+    personal: bool = False,
     variant: str | None = None,
     teacher: Teacher = Depends(get_current_teacher),
     user: User = Depends(get_current_user),
@@ -6665,6 +6767,15 @@ def send_answer_sheet_to_telegram(
     """Javoblar varaqasini (yoki to'g'ri javobli kalitni) o'qituvchining Telegram chatiga yuboradi."""
 
     test = _get_own_test(db, teacher, test_id)
+
+    if personal and not answers:
+        pdf_bytes, count = _personal_sheets_pdf(db, test)
+        _send_pdf_to_telegram(
+            user.tg_id, f"{test.code}_ismli_titullar.pdf", pdf_bytes,
+            caption=(f"🧾 Ismli titullar — {count} ta\n📝 {test.title} ({test.code})\n\n"
+                     "Har titulda o'quvchining ismi yozilgan va ID raqami bo'yalgan — chop etib, egasiga tarqating."),
+        )
+        return {"ok": True}
 
     if answers:
         caption = (
@@ -8986,6 +9097,7 @@ def detach_center_test(class_id: int, test_id: int, user: User = Depends(get_cur
         raise HTTPException(status_code=404, detail="Bu imtihon sinfga biriktirilmagan")
     for attempt in attempts:
         attempt.status = "deleted"
+        attempt.sheet_number = None  # ID raqam bo'shaydi — qayta biriktirilsa o'quvchi o'z ID'si bilan qaytadi
     for class_test in db.scalars(
         select(ClassTest).where(
             ClassTest.class_id == school_class.id, ClassTest.source_test_id == test.id, ClassTest.deleted_at.is_(None)
