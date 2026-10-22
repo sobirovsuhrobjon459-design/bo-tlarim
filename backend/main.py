@@ -54,7 +54,7 @@ from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import CondPageBreak, HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import String, case, cast, delete, distinct, func, inspect, or_, select, text, update
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, object_session, selectinload
 
 from .rasch import grade_for, rasch_scores
 from .timetable import ClassInput, Period, TeacherInput, build_timetable
@@ -96,6 +96,7 @@ from .database import (
     ClassTestIn,
     ClassTestScore,
     DiscountIn,
+    FeeChange,
     FeeIn,
     PaymentCancelIn,
     PaymentIn,
@@ -9136,14 +9137,104 @@ def _student_months(student: ClassStudent, limit: int = 24) -> list[str]:
     return months
 
 
-def _class_fee(school: PrivateSchool, school_class: SchoolClass) -> int:
-    """Guruhning oylik narxi: o'zida belgilangan bo'lsa — shu, aks holda muassasaning umumiy summasi."""
-    return school_class.monthly_fee if school_class.monthly_fee is not None else (school.monthly_fee or 0)
+FEE_HISTORY_START = "0000-00"  # narx tarixi yozila boshlangungacha amalda bo'lgan narx
+_NO_FEE_HISTORY = object()
 
 
-def _student_due(school: PrivateSchool, student: ClassStudent) -> int:
-    """Chegirma hisobga olingan oylik summa."""
-    return round(_class_fee(school, student.school_class) * (100 - (student.discount_percent or 0)) / 100)
+def _fee_changes(db: Session, school_id: int) -> list[FeeChange]:
+    """Muassasaning narx tarixi (so'rov davomida eslab qolinadi — har o'quvchi/oy uchun qayta so'ralmasin)."""
+    cache = db.info.setdefault("fee_changes", {})
+    if school_id not in cache:
+        cache[school_id] = db.scalars(
+            select(FeeChange).where(FeeChange.school_id == school_id).order_by(FeeChange.from_month, FeeChange.id)
+        ).all()
+    return cache[school_id]
+
+
+def _fee_at(changes: list[FeeChange], class_id: int | None, month: str):
+    """Shu oyda amalda bo'lgan yozuv qiymati; tarix yo'q bo'lsa — _NO_FEE_HISTORY."""
+    value = _NO_FEE_HISTORY
+    for change in changes:
+        if change.class_id == class_id and change.from_month <= month:
+            value = change.monthly_fee
+    return value
+
+
+def _class_fee(school: PrivateSchool, school_class: SchoolClass, month: str | None = None) -> int:
+    """
+    Guruhning shu oydagi narxi: guruhning o'z narxi bo'lsa — shu, aks holda
+    muassasaning umumiy summasi. Oy berilmasa — joriy oy. Narx o'zgargan
+    bo'lsa, o'tgan oylar O'SHA paytdagi narx bilan hisoblanadi.
+    """
+
+    month = month or _current_month()
+    db = object_session(school)
+    changes = _fee_changes(db, school.id) if db else []
+    own = _fee_at(changes, school_class.id, month)
+    if own is _NO_FEE_HISTORY:
+        own = school_class.monthly_fee
+    if own is not None:
+        return own
+    general = _fee_at(changes, None, month)
+    return (school.monthly_fee if general is _NO_FEE_HISTORY else general) or 0
+
+
+def _student_due(school: PrivateSchool, student: ClassStudent, month: str | None = None) -> int:
+    """Chegirma hisobga olingan, shu oydagi narx bo'yicha oylik summa."""
+    return round(_class_fee(school, student.school_class, month) * (100 - (student.discount_percent or 0)) / 100)
+
+
+def _record_fee_change(db: Session, school: PrivateSchool, school_class: SchoolClass | None, fee: int | None,
+                       from_month: str | None, user: User) -> str:
+    """
+    Narx o'zgarishini tarixga yozadi. Birinchi o'zgarishda avvalgi narx ham
+    "avvaldan" deb yoziladi — shunda o'tgan oylar eski narxda qoladi.
+    """
+
+    current = _current_month()
+    from_month = from_month or current
+    if from_month > _shift_month(current, 3):
+        raise HTTPException(status_code=422, detail="Narxni ko'pi bilan 3 oy oldindan belgilash mumkin")
+
+    class_id = school_class.id if school_class else None
+    changes = [item for item in _fee_changes(db, school.id) if item.class_id == class_id]
+    if not changes:
+        previous = school_class.monthly_fee if school_class else school.monthly_fee
+        charged = _class_fee(school, school_class, current) if school_class else (school.monthly_fee or 0)
+        if charged <= 0 and from_month == current:
+            # Avval umuman narx bo'lmagan — birinchi narx boshidan amal qiladi (o'tgan oylar ham to'lanadi)
+            from_month = FEE_HISTORY_START
+        elif from_month != FEE_HISTORY_START:
+            db.add(FeeChange(school_id=school.id, class_id=class_id, monthly_fee=previous, from_month=FEE_HISTORY_START))
+    same_month = next((item for item in changes if item.from_month == from_month), None)
+    if same_month:
+        same_month.monthly_fee, same_month.created_by, same_month.created_at = fee, user.id, utcnow()
+    else:
+        db.add(FeeChange(school_id=school.id, class_id=class_id, monthly_fee=fee, from_month=from_month, created_by=user.id))
+    db.flush()
+    db.info.get("fee_changes", {}).pop(school.id, None)
+
+    # Saqlangan "hozirgi narx" — joriy oydagi qiymat (ro'yxat va sozlamalarda ko'rinadi)
+    now_value = _fee_at(_fee_changes(db, school.id), class_id, current)
+    if school_class:
+        school_class.monthly_fee = None if now_value is _NO_FEE_HISTORY else now_value
+    else:
+        school.monthly_fee = 0 if now_value is _NO_FEE_HISTORY or now_value is None else now_value
+    return from_month
+
+
+def _fee_history(db: Session, school: PrivateSchool, school_class: SchoolClass | None) -> list[dict]:
+    """Narx tarixi (eng yangisi birinchi) — sozlamalar oynasida ko'rsatish uchun."""
+    class_id = school_class.id if school_class else None
+    rows = [item for item in _fee_changes(db, school.id) if item.class_id == class_id]
+    return [
+        {
+            "from_month": item.from_month,
+            "label": "Avvaldan" if item.from_month == FEE_HISTORY_START else f"{_month_label(item.from_month)} dan",
+            "monthly_fee": item.monthly_fee,
+        }
+        for item in reversed(rows)
+    ]
 
 
 def _paid_sums(db: Session, student_ids: list[int], months: list[str] | None = None) -> dict[tuple[int, str], int]:
@@ -9213,10 +9304,23 @@ def set_monthly_fee(body: FeeIn, user: User = Depends(get_current_user), db: Ses
     member = _require_school_member(db, user)
     if not _can_delete_classes(member):
         raise HTTPException(status_code=403, detail="Oylik to'lovni faqat admin yoki direktor belgilaydi")
-    member.school.monthly_fee = body.monthly_fee
+    from_month = _record_fee_change(db, member.school, None, body.monthly_fee, body.from_month, user)
     db.commit()
-    logging.getLogger("backend").info("Oylik to'lov o'zgardi: school=%s fee=%s user=%s", member.school_id, body.monthly_fee, user.id)
-    return {"school": _school_view(db, member, user)}
+    logging.getLogger("backend").info("Oylik to'lov o'zgardi: school=%s fee=%s from=%s user=%s",
+                                      member.school_id, body.monthly_fee, from_month, user.id)
+    return {"school": _school_view(db, member, user), "history": _fee_history(db, member.school, None)}
+
+
+@app.get("/api/schools/fee-history")
+def fee_history(class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Umumiy summa yoki guruh narxining tarixi (admin va direktor)."""
+    if class_id:
+        school_class, member = _school_class(db, user, class_id)
+    else:
+        school_class, member = None, _require_school_member(db, user)
+    if not _can_delete_classes(member):
+        raise HTTPException(status_code=403, detail="Narx tarixini admin yoki direktor ko'radi")
+    return {"history": _fee_history(db, member.school, school_class)}
 
 
 @app.put("/api/classes/{class_id}/fee")
@@ -9225,11 +9329,13 @@ def set_class_fee(class_id: int, body: ClassFeeIn, user: User = Depends(get_curr
     school_class, member = _school_class(db, user, class_id)
     if not _can_delete_classes(member):
         raise HTTPException(status_code=403, detail="Narxni faqat admin yoki direktor belgilaydi")
-    school_class.monthly_fee = body.monthly_fee
+    from_month = _record_fee_change(db, member.school, school_class, body.monthly_fee, body.from_month, user)
     db.commit()
-    logging.getLogger("backend").info("Guruh narxi o'zgardi: class=%s fee=%s user=%s", class_id, body.monthly_fee, user.id)
+    logging.getLogger("backend").info("Guruh narxi o'zgardi: class=%s fee=%s from=%s user=%s",
+                                      class_id, body.monthly_fee, from_month, user.id)
     return {"id": school_class.id, "monthly_fee": school_class.monthly_fee,
-            "effective_fee": _class_fee(member.school, school_class)}
+            "effective_fee": _class_fee(member.school, school_class),
+            "history": _fee_history(db, member.school, school_class)}
 
 
 @app.get("/api/classes/{class_id}/payments")
@@ -9242,13 +9348,13 @@ def class_payments(class_id: int, month: str | None = None, user: User = Depends
     order = {"unpaid": 0, "partial": 1, "paid": 2, "free": 3}
     rows = []
     for student in students:
-        info = _month_status(_student_due(school, student), paid.get((student.id, month), 0))
+        info = _month_status(_student_due(school, student, month), paid.get((student.id, month), 0))
         rows.append({"id": student.id, "name": student.full_name, "discount": student.discount_percent or 0, **info})
     rows.sort(key=lambda row: (order[row["status"]], row["name"].lower()))
     return {
         "month": month,
         "month_label": _month_label(month),
-        "monthly_fee": _class_fee(school, school_class),
+        "monthly_fee": _class_fee(school, school_class, month),
         "class_name": school_class.name,
         "students": rows,
         "totals": {
@@ -9267,7 +9373,12 @@ def student_payments(class_id: int, student_id: int, user: User = Depends(get_cu
     months = _student_months(student)
     due = _student_due(school, student)
     paid = _paid_sums(db, [student.id])
-    month_rows = [{"month": month, "label": _month_label(month), **_month_status(due, paid.get((student.id, month), 0))} for month in months]
+    # Har oy o'sha oydagi narx bilan: narx oshgani to'langan eski oylarni qarzga aylantirmaydi
+    month_rows = [
+        {"month": month, "label": _month_label(month),
+         **_month_status(_student_due(school, student, month), paid.get((student.id, month), 0))}
+        for month in months
+    ]
     payments = db.scalars(
         select(TuitionPayment).where(TuitionPayment.student_id == student.id).order_by(TuitionPayment.id.desc())
     ).all()
@@ -9297,12 +9408,12 @@ def add_payment(class_id: int, student_id: int, body: PaymentIn, user: User = De
     school_class, _, school, student = _payments_student(db, user, class_id, student_id)
     if student.removed_at is not None:
         raise HTTPException(status_code=422, detail="Bu o'quvchi sinfdan chiqarilgan")
-    if _class_fee(school, school_class) <= 0:
-        raise HTTPException(status_code=422, detail="Avval oylik to'lov summasini belgilang (admin yoki direktor)")
     if body.month > _shift_month(_current_month(), 3):
         raise HTTPException(status_code=422, detail="Faqat 3 oygacha oldindan to'lov qabul qilinadi")
+    if _class_fee(school, school_class, body.month) <= 0:
+        raise HTTPException(status_code=422, detail="Avval oylik to'lov summasini belgilang (admin yoki direktor)")
 
-    due = _student_due(school, student)
+    due = _student_due(school, student, body.month)
     already = _paid_sums(db, [student.id], [body.month]).get((student.id, body.month), 0)
     remaining = max(due - already, 0)
     if remaining == 0:
@@ -9357,7 +9468,7 @@ def _receipt_context(db: Session, payment: TuitionPayment) -> dict:
     school = db.get(PrivateSchool, payment.school_id)
     school_class = db.get(SchoolClass, payment.class_id)
     student = db.get(ClassStudent, payment.student_id)
-    due = _student_due(school, student)
+    due = _student_due(school, student, payment.month)
     paid = _paid_sums(db, [student.id], [payment.month]).get((student.id, payment.month), 0)
     taker = db.get(User, payment.created_by)
     return {

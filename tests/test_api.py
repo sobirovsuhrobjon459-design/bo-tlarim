@@ -5386,3 +5386,90 @@ def test_guruhning_oz_oylik_narxi():
                 headers=as_user(702))
     denied = client.put(f"/api/classes/{english['id']}/fee", json={"monthly_fee": 1}, headers=as_user(702))
     assert denied.status_code == 403, denied.text
+
+
+def test_narx_oshsa_tolangan_eski_oylar_qarzga_aylanmaydi():
+    """Har oy o'sha oydagi narx bilan hisoblanadi; narxni qaysi oydan amal qilishini tanlash mumkin."""
+    from backend.database import ClassStudent, SessionLocal
+    from backend.main import _current_month, _shift_month
+
+    reset_database()
+    _set_name(701, "Aziza", "Karimova")
+    kind = _as_kind(701, "course")
+    client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani", "name": "Ilm markazi"},
+                headers=kind)
+    group = client.post("/api/classes", json={"name": "Ingliz tili"}, headers=kind).json()
+    client.post(f"/api/classes/{group['id']}/students", json={"full_name": "Ali Valiyev"}, headers=kind)
+    sid = client.get(f"/api/classes/{group['id']}", headers=kind).json()["students"][0]["id"]
+    with SessionLocal() as session:  # o'quvchi 2 oy oldin qo'shilgan
+        session.get(ClassStudent, sid).created_at -= timedelta(days=70)
+        session.commit()
+
+    now = _current_month()
+    two_ago, one_ago = _shift_month(now, -2), _shift_month(now, -1)
+    client.put(f"/api/classes/{group['id']}/fee", json={"monthly_fee": 300_000}, headers=kind)
+    for month in (two_ago, one_ago):
+        paid = client.post(f"/api/classes/{group['id']}/students/{sid}/payments", json={"month": month, "amount": 300_000},
+                           headers=kind)
+        assert paid.status_code == 200, paid.text
+
+    # Narx oshdi (joriy oydan) — o'tgan oylar to'liq to'langanicha qoladi
+    raised = client.put(f"/api/classes/{group['id']}/fee", json={"monthly_fee": 400_000}, headers=kind).json()
+    assert raised["effective_fee"] == 400_000
+    assert [row["monthly_fee"] for row in raised["history"]] == [400_000, 300_000], raised["history"]
+    info = client.get(f"/api/classes/{group['id']}/students/{sid}/payments", headers=kind).json()
+    by_month = {row["month"]: row for row in info["months"]}
+    assert by_month[two_ago]["status"] == "paid" and by_month[one_ago]["status"] == "paid", by_month
+    assert by_month[now]["due"] == 400_000 and info["total_debt"] == 400_000, info
+    past = client.get(f"/api/classes/{group['id']}/payments", params={"month": one_ago}, headers=kind).json()
+    assert past["monthly_fee"] == 300_000 and past["totals"]["debtors"] == 0, past
+
+    # Umumiy summa ham tarix bilan: guruhning o'z narxi bo'lmasa, eski oylar eski summada
+    client.put("/api/schools/fee", json={"monthly_fee": 200_000}, headers=kind)
+    other = client.post("/api/classes", json={"name": "Matematika"}, headers=kind).json()
+    client.put("/api/schools/fee", json={"monthly_fee": 250_000, "from_month": _shift_month(now, 1)}, headers=kind)
+    assert client.get(f"/api/classes/{other['id']}/payments", headers=kind).json()["monthly_fee"] == 200_000
+    assert client.get(f"/api/classes/{other['id']}/payments", params={"month": _shift_month(now, 1)},
+                      headers=kind).json()["monthly_fee"] == 250_000
+
+    # Ilgari noto'g'ri bo'lib qolgan tarixni tuzatish: narxni o'tgan oydan qo'yish mumkin
+    fixed = client.put(f"/api/classes/{group['id']}/fee", json={"monthly_fee": 350_000, "from_month": one_ago}, headers=kind).json()
+    assert [row["from_month"] for row in fixed["history"]][:2] == [now, one_ago], fixed["history"]
+    too_far = client.put(f"/api/classes/{group['id']}/fee", json={"monthly_fee": 1, "from_month": _shift_month(now, 5)},
+                         headers=kind)
+    assert too_far.status_code == 422, too_far.text
+    assert client.get("/api/schools/fee-history", params={"class_id": group["id"]}, headers=kind).json()["history"][0]["monthly_fee"] == 400_000
+
+
+def test_tarixsiz_oshirilgan_narxni_tuzatish():
+    """Tuzatishdan oldin oshirilgan narx (tarixsiz): eski narx "avvaldan", yangisi oshgan oydan — eski qarzlar yo'qoladi."""
+    from backend.database import ClassStudent, SchoolClass, SessionLocal
+    from backend.main import _current_month, _shift_month
+
+    reset_database()
+    _set_name(701, "Aziza", "Karimova")
+    kind = _as_kind(701, "course")
+    client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani", "name": "Ilm markazi"},
+                headers=kind)
+    group = client.post("/api/classes", json={"name": "Ingliz tili"}, headers=kind).json()
+    client.post(f"/api/classes/{group['id']}/students", json={"full_name": "Ali Valiyev"}, headers=kind)
+    sid = client.get(f"/api/classes/{group['id']}", headers=kind).json()["students"][0]["id"]
+    now = _current_month()
+    one_ago = _shift_month(now, -1)
+    with SessionLocal() as session:
+        session.get(ClassStudent, sid).created_at -= timedelta(days=40)
+        session.get(SchoolClass, group["id"]).monthly_fee = 300_000  # eski tizimda — tarixsiz
+        session.commit()
+    client.post(f"/api/classes/{group['id']}/students/{sid}/payments", json={"month": one_ago, "amount": 300_000}, headers=kind)
+    with SessionLocal() as session:
+        session.get(SchoolClass, group["id"]).monthly_fee = 400_000  # eski tizimda oshirilgan — tarix yo'q
+        session.commit()
+    broken = client.get(f"/api/classes/{group['id']}/students/{sid}/payments", headers=kind).json()
+    assert {row["month"]: row["remaining"] for row in broken["months"]}[one_ago] == 100_000  # xato qarz
+
+    client.put(f"/api/classes/{group['id']}/fee", json={"monthly_fee": 300_000, "from_month": "0000-00"}, headers=kind)
+    fixed = client.put(f"/api/classes/{group['id']}/fee", json={"monthly_fee": 400_000, "from_month": now}, headers=kind).json()
+    assert [(row["from_month"], row["monthly_fee"]) for row in fixed["history"]] == [(now, 400_000), ("0000-00", 300_000)]
+    info = client.get(f"/api/classes/{group['id']}/students/{sid}/payments", headers=kind).json()
+    months = {row["month"]: row for row in info["months"]}
+    assert months[one_ago]["status"] == "paid" and months[now]["due"] == 400_000 and info["total_debt"] == 400_000, info

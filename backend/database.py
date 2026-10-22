@@ -779,6 +779,26 @@ class PromoRedemption(Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
+class FeeChange(Base):
+    """
+    Oylik narx tarixi: qaysi oydan qancha. Har oyning qarzi O'SHA oydagi narx
+    bilan hisoblanadi — narx oshsa, avval to'liq to'langan oylar qarzga aylanmaydi.
+
+    class_id bo'sh — muassasaning umumiy summasi; to'ldirilgan — guruhning o'z
+    narxi (monthly_fee bo'sh bo'lsa — o'sha oydan umumiy summaga qaytgan).
+    """
+
+    __tablename__ = "fee_changes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    class_id: Mapped[int | None] = mapped_column(ForeignKey("school_classes.id"), index=True, default=None)
+    monthly_fee: Mapped[int | None] = mapped_column(default=None)
+    from_month: Mapped[str] = mapped_column(String(7))  # "2026-10"; "0000-00" — tarix boshlanishidan oldingi narx
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
 class TuitionPayment(Base):
     """
     O'qish to'lovi (pul qabul qilindi). HECH QACHON o'chirilmaydi: xato
@@ -1469,11 +1489,14 @@ class SectionsIn(BaseModel):
 
 class FeeIn(BaseModel):
     monthly_fee: int = Field(ge=0, le=100_000_000)
+    # Qaysi oydan amal qiladi ("2026-11"); "0000-00" — avvaldan (barcha oylar); bo'sh — joriy oydan
+    from_month: str | None = Field(default=None, pattern=r"^(\d{4}-(0[1-9]|1[0-2])|0000-00)$")
 
 
 class ClassFeeIn(BaseModel):
     # None — guruh muassasaning umumiy summasiga qaytadi
     monthly_fee: int | None = Field(default=None, ge=0, le=100_000_000)
+    from_month: str | None = Field(default=None, pattern=r"^(\d{4}-(0[1-9]|1[0-2])|0000-00)$")
 
 
 class DiscountIn(BaseModel):

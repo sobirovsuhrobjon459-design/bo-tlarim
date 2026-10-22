@@ -1702,7 +1702,9 @@ function openClassSettings(schoolClass, tab) {
                currentSchool?.monthly_fee ? `Umumiy summa: ${money(currentSchool.monthly_fee)}` : "Masalan: 350000"
              }" />
            <p class="subtitle" style="margin:4px 0 0">Bo'sh qoldirilsa — umumiy oylik summa olinadi. Har sinfning narxi har xil bo'lsa, shu yerda belgilang.</p>
-           <button class="btn" id="sheet-save-fee" style="margin-top:10px">💰 Narxni saqlash</button>`
+           ${feeMonthFieldHtml("sheet-fee-from-month")}
+           <button class="btn" id="sheet-save-fee" style="margin-top:10px">💰 Narxni saqlash</button>
+           <div id="sheet-fee-history"></div>`
         : ""
     }
 
@@ -1740,20 +1742,24 @@ function openClassSettings(schoolClass, tab) {
     })
   );
 
+  const feeHistoryHolder = sheet.querySelector("#sheet-fee-history");
+  if (feeHistoryHolder) loadFeeHistoryInto(feeHistoryHolder, schoolClass.id);
+
   sheet.querySelector("#sheet-save-fee")?.addEventListener(
     "click",
     guarded(async () => {
       const raw = sheet.querySelector("#sheet-class-fee").value.trim();
       const value = raw === "" ? null : Math.round(Number(raw));
       if (value !== null && (!Number.isFinite(value) || value < 0)) throw new Error("Narxni to'g'ri kiriting");
-      const saved = await api(`/api/classes/${schoolClass.id}/fee`, { method: "PUT", body: { monthly_fee: value } });
+      const fromMonth = sheet.querySelector("#sheet-fee-from-month").value;
+      const saved = await api(`/api/classes/${schoolClass.id}/fee`, {
+        method: "PUT",
+        body: { monthly_fee: value, from_month: fromMonth },
+      });
       schoolClass.monthly_fee = saved.monthly_fee;
       schoolOverviewCache = null;
-      showToast(
-        saved.monthly_fee === null
-          ? `✅ Umumiy summa olinadi: ${saved.effective_fee ? money(saved.effective_fee) : "belgilanmagan"}`
-          : `✅ Oylik narx: ${money(saved.monthly_fee)}`
-      );
+      const since = fromMonth === FEE_HISTORY_START ? "barcha oylar uchun" : `${feeMonthName(fromMonth)} dan`;
+      showToast(value === null ? `✅ ${since} umumiy summa olinadi` : `✅ ${money(value)} — ${since}`);
       close();
     })
   );
@@ -4113,6 +4119,59 @@ function shiftMonth(month, delta) {
   return `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, "0")}`;
 }
 
+/*
+  Narx qaysi oydan amal qiladi. Har oyning qarzi o'sha oydagi narx bilan
+  hisoblanadi: narx oshsa, to'langan eski oylar qarzga aylanmaydi.
+  "Avvaldan" — barcha oylar uchun (masalan, eski narxni tiklash).
+*/
+const FEE_MONTH_NAMES = ["Yanvar", "Fevral", "Mart", "Aprel", "May", "Iyun", "Iyul", "Avgust", "Sentabr", "Oktabr", "Noyabr", "Dekabr"];
+const FEE_HISTORY_START = "0000-00";
+
+function feeMonthName(month) {
+  const [year, number] = month.split("-").map(Number);
+  return `${FEE_MONTH_NAMES[number - 1]} ${year}`;
+}
+
+function feeMonthFieldHtml(id) {
+  const now = new Date();
+  const current = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const months = [];
+  for (let delta = 3; delta >= -12; delta -= 1) months.push(shiftMonth(current, delta));
+  return `
+    <label class="field-label" for="${id}">Qaysi oydan</label>
+    <select id="${id}">
+      ${months
+        .map((month) => `<option value="${month}" ${month === current ? "selected" : ""}>${feeMonthName(month)} dan${month === current ? " (shu oy)" : ""}</option>`)
+        .join("")}
+      <option value="${FEE_HISTORY_START}">Avvaldan (barcha oylar)</option>
+    </select>
+    <p class="subtitle" style="margin:4px 0 0">O'tgan oylar o'sha paytdagi narx bilan hisoblanadi — narx oshsa, to'langan oylar qarzga aylanmaydi.</p>`;
+}
+
+function feeHistoryHtml(history, fallbackLabel = "umumiy summa") {
+  if (!history?.length) return "";
+  return `
+    <p class="section-label" style="margin-top:14px">NARXLAR TARIXI</p>
+    <div class="fee-history">
+      ${history
+        .map(
+          (row) =>
+            `<div class="row" style="display:flex;justify-content:space-between;gap:12px;padding:4px 0"><span>${escapeHtml(row.label)}</span><b>${
+              row.monthly_fee === null ? fallbackLabel : money(row.monthly_fee)
+            }</b></div>`
+        )
+        .join("")}
+    </div>`;
+}
+
+function loadFeeHistoryInto(holder, classId = null) {
+  api(`/api/schools/fee-history${classId ? `?class_id=${classId}` : ""}`)
+    .then(({ history }) => {
+      if (holder.isConnected) holder.innerHTML = feeHistoryHtml(history);
+    })
+    .catch(() => {});
+}
+
 // "💰 To'lovlar" bo'limi: rahbariyat — umumiy hisobot, kurator — o'z sinfi
 async function openPaymentsEntry() {
   if (currentSchool?.can_set_fee) {
@@ -4128,19 +4187,26 @@ function openFeeSheet(onSaved = null) {
     <p class="subtitle" style="margin:0 0 12px">Barcha o'quvchilar uchun bitta summa. Chegirmani har bir o'quvchiga alohida berasiz.</p>
     <label class="field-label" for="fee-input">Oyiga (so'm)</label>
     <input class="input" id="fee-input" type="number" inputmode="numeric" min="0" step="10000" value="${currentSchool?.monthly_fee || ""}" placeholder="Masalan: 450000" />
+    ${feeMonthFieldHtml("fee-from-month")}
     <button class="btn" id="fee-save-button" style="margin-top:12px">💾 Saqlash</button>
+    <div id="fee-history"></div>
     <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
   `);
+  loadFeeHistoryInto(sheet.querySelector("#fee-history"));
   sheet.querySelector("#fee-save-button").addEventListener(
     "click",
     guarded(async () => {
       const value = Number(sheet.querySelector("#fee-input").value);
       if (!Number.isFinite(value) || value < 0) throw new Error("Summani to'g'ri kiriting");
-      const { school } = await api("/api/schools/fee", { method: "PUT", body: { monthly_fee: Math.round(value) } });
+      const fromMonth = sheet.querySelector("#fee-from-month").value;
+      const { school } = await api("/api/schools/fee", {
+        method: "PUT",
+        body: { monthly_fee: Math.round(value), from_month: fromMonth },
+      });
       currentSchool = school;
       schoolOverviewCache = null;
       close();
-      showToast(`✅ Oylik to'lov: ${money(school.monthly_fee)}`);
+      showToast(`✅ ${money(Math.round(value))} — ${fromMonth === FEE_HISTORY_START ? "barcha oylar uchun" : `${feeMonthName(fromMonth)} dan`}`);
       if (onSaved) await onSaved();
       else renderMySchool(school, { refresh: false });
     })
