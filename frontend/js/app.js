@@ -4220,7 +4220,8 @@ async function renderDorm() {
       <div class="stat-tile"><span class="stat-value">${totals.checked_rooms} / ${totals.rooms_with_residents}</span>Bugun yo'qlama</div>
     </div>
     ${totals.checked_rooms ? dormCountsHtml(totals) : ""}
-    ${dorm.can_manage ? `<button class="btn" id="dorm-add-room" style="margin-top:12px">+ Xona qo'shish</button>` : ""}
+    ${dorm.rooms.length ? `<button class="btn btn-ghost" id="dorm-share" style="margin-top:12px">📤 Hisobotni yuborish (rasm, matn, PDF)</button>` : ""}
+    ${dorm.can_manage ? `<button class="btn" id="dorm-add-room" style="margin-top:8px">+ Xona qo'shish</button>` : ""}
     ${
       dorm.rooms.length
         ? [...floors.entries()]
@@ -4237,6 +4238,7 @@ async function renderDorm() {
     }
   `);
   wireSchoolSubPage();
+  document.getElementById("dorm-share")?.addEventListener("click", () => openDormShareSheet(totals));
   document.getElementById("dorm-add-room")?.addEventListener("click", () => openDormRoomSheet(null, (id) => renderDormRoom(id)));
   document.querySelectorAll("[data-dorm-room]").forEach((card) =>
     card.addEventListener("click", guarded(() => renderDormRoom(Number(card.dataset.dormRoom))))
@@ -4321,6 +4323,51 @@ async function renderDormRoom(roomId) {
       })
     )
   );
+}
+
+/*
+  Yotoqxona hisoboti (bugungi): rasm va PDF — barcha xonalar jadvali va yotoqxonada bo'lmaganlar;
+  matn — faqat yo'q, kasal va ruxsat bilan ketganlar (Telegram'da to'g'ridan-to'g'ri guruhga ulashiladi).
+  Rasm va PDF bot chatingizga keladi (u yerdan rahbariyat guruhiga uzatiladi), brauzerda — yuklab olinadi.
+*/
+async function sendDormReport(format) {
+  if (format === "text") {
+    const { text } = await api("/api/dorm/report/text");
+    if (telegram?.openTelegramLink) {
+      openExternalLink(`https://t.me/share/url?url=${encodeURIComponent(" ")}&text=${encodeURIComponent(text)}`);
+    } else {
+      await copyToClipboard(text, "📋 Yotoqxona hisoboti nusxalandi");
+    }
+    return;
+  }
+  if (sendsViaBot()) {
+    await api(`/api/dorm/report/send?format=${format}`, { method: "POST", body: {} });
+    showToast(`✅ ${format === "image" ? "Rasm" : "PDF"} bot chatiga yuborildi`);
+  } else {
+    await downloadFile(`/api/dorm/report/file?format=${format}`, format === "image" ? "yotoqxona.png" : "yotoqxona.pdf");
+  }
+}
+
+function openDormShareSheet(totals) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 6px">📤 Yotoqxona hisoboti — bugun</h3>
+    <p class="subtitle" style="margin:0 0 12px">Yo'qlama: ${totals.checked_rooms} / ${totals.rooms_with_residents} xona${
+      totals.checked_rooms < totals.rooms_with_residents ? " — olinmaganlari hisobotda ko'rsatiladi" : ""
+    }</p>
+    ${roleCard("dorm-send-image", "🖼", "RASM", "Barcha xonalar jadvali va yotoqxonada bo'lmaganlar")}
+    ${roleCard("dorm-send-text", "📝", "MATN", "Faqat yo'q, kasal va ruxsat bilan ketganlar")}
+    ${roleCard("dorm-send-pdf", "📄", "PDF", "Xonalar (tarbiyachi bilan) va ro'yxat — printerga ham qulay")}
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:12px">Yopish</button>
+  `);
+  [["dorm-send-image", "image"], ["dorm-send-text", "text"], ["dorm-send-pdf", "pdf"]].forEach(([action, format]) => {
+    sheet.querySelector(`[data-action="${action}"]`).addEventListener(
+      "click",
+      guarded(async () => {
+        await sendDormReport(format);
+        close();
+      })
+    );
+  });
 }
 
 // Xona qo'shish / sozlash: nomi, qavati, o'rinlar soni, tarbiyachisi; bo'sh xonani o'chirish

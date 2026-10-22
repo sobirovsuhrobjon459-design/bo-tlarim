@@ -5738,6 +5738,16 @@ def test_yotoqxona_xonalar_joylashtirish_va_kechki_yoqlama():
     assert len(detail["checks"]) == 1 and detail["today"]["excused"] == 1, detail
     assert client.get("/api/dorm", headers=as_user(701)).json()["totals"]["checked_rooms"] == 1
 
+    # Hisobot: matn (faqat yo'qlar), rasm va PDF; tarbiyachi ham oladi, oddiy o'qituvchi — yo'q
+    text = client.get("/api/dorm/report/text", headers=as_user(701)).json()["text"]
+    assert "Yotoqxona" in text and "Ruxsat bilan" in text and "Ali Valiyev — 201-xona" in text, text
+    assert "Yo'qlama olinmagan: 202-xona" in text, text
+    image = client.get("/api/dorm/report/file", params={"format": "image"}, headers=as_user(702))
+    assert image.status_code == 200 and image.content[:4] == b"\x89PNG", image.status_code
+    pdf = client.get("/api/dorm/report/file", params={"format": "pdf"}, headers=as_user(701))
+    assert pdf.status_code == 200 and pdf.content[:4] == b"%PDF"
+    assert client.get("/api/dorm/report/text", headers=as_user(703)).status_code == 403
+
     # Xonani o'chirish: avval o'quvchilarni chiqarish kerak
     assert client.delete(f"/api/dorm/rooms/{room_id}", headers=as_user(701)).status_code == 409
     assert client.delete(f"/api/dorm/rooms/{room_id}/residents/{students['Ali Valiyev']}", headers=as_user(701)).status_code == 200
