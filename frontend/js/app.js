@@ -522,6 +522,7 @@ function addPageBrand(page) {
 }
 
 function showPage(html, { exitRoot = false } = {}) {
+  const scrollTarget = navScrollTarget();
   stopLiveScan(); // jonli skaner kamerasi boshqa sahifada yonib qolmasin
   // Menyu avval yashiriladi — kerak bo'lsa, sahifa o'zi qaytadan ko'rsatadi.
   // Ikkalasi bitta qadamda bo'lgani uchun ekranda miltillash sezilmaydi.
@@ -534,7 +535,7 @@ function showPage(html, { exitRoot = false } = {}) {
   appElement.innerHTML = `<div class="page">${html}</div>`;
   addPageBrand(appElement.firstElementChild);
   animatePageEntrance(appElement.firstElementChild);
-  window.scrollTo(0, 0);
+  window.scrollTo(0, scrollTarget);
   exitRootPage = exitRoot;
   syncTelegramBackButton();
   navRecordPage();
@@ -575,6 +576,32 @@ let navReplace = false; // pastki menyu — joriy yozuv almashadi
 let navReplaying = false; // "←" — oldingi sahifa qayta chizilmoqda (yozilmaydi)
 let navUntrackedPage = false; // joriy sahifa tarixda yo'q (test ishlash, skaner)
 let navLastRenderer = ""; // sahifani haqiqatda chizgan funksiya — bir xil ekran ikki marta yozilmasin
+let navReplayScroll = 0; // "←" bilan qaytilayotgan sahifa qayerda qoldirilgan edi
+
+/*
+  Sahifa qayerdan ko'rsatiladi:
+    • "←" — qoldirilgan joyidan (bo'limga kirib qaytganda sahifa tepaga sakramaydi);
+    • fonda yangilangan ma'lumot bilan qayta chizish (bosishsiz) — joyi o'zgarmaydi;
+    • yangi sahifa — tepasidan.
+*/
+function navScrollTarget() {
+  if (navReplaying) return navReplayScroll;
+  if (!navIntent && !navFresh && navHistory.length) return window.scrollY;
+  return 0;
+}
+
+// Ro'yxatlar fonda yuklanib, sahifa keyin uzayadi — joyga yetguncha bir necha marta urinib ko'riladi
+function navRestoreScroll(y) {
+  if (!y) return;
+  const page = appElement.firstElementChild;
+  let tries = 0;
+  const attempt = () => {
+    if (appElement.firstElementChild !== page) return; // boshqa sahifa ochildi
+    if (Math.abs(window.scrollY - y) > 2) window.scrollTo(0, y);
+    if (Math.abs(window.scrollY - y) > 2 && tries++ < 12) setTimeout(attempt, 120);
+  };
+  requestAnimationFrame(attempt);
+}
 
 function navRecordPage() {
   const intent = navIntent;
@@ -625,10 +652,12 @@ async function navBack() {
   while (navHistory.length) {
     const previous = navHistory[navHistory.length - 1];
     navReplaying = true;
+    navReplayScroll = previous.scroll || 0;
     try {
       navIntent = null;
       await window[previous.name](...previous.args);
       navUntrackedPage = false;
+      navRestoreScroll(previous.scroll || 0);
       return;
     } catch (error) {
       navHistory.pop();
@@ -651,6 +680,8 @@ document.addEventListener(
       navBack().catch((error) => showToast(error.message || "Orqaga qaytib bo'lmadi"));
       return;
     }
+    const current = navHistory[navHistory.length - 1];
+    if (current && !navUntrackedPage) current.scroll = window.scrollY;
     navFresh = true;
     navIntent = null;
     navReplace = Boolean(target?.closest(".bottom-nav, [data-class-nav], [data-school-nav]"));
