@@ -3,13 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-  <title>Chittak</title>
+  <title>Chittak — test, titul skaneri va maktab CRM | Ilg'or ta'lim, tezkor natija</title>
   <meta name="theme-color" content="#F3FAF5" />
   <link rel="icon" type="image/png" href="/img/favicon.png" />
   <link rel="apple-touch-icon" href="/img/chittak-icon.png" />
+  <link rel="canonical" href="https://www.chittak.uz/" />
 
-  <!-- Havola Telegram va boshqa joylarda ulashilganda chiqadigan ko'rinish -->
-  <meta name="description" content="Maktablar, o'quv markazlari va repetitorlar uchun platforma: testlar, titul skaneri, natijalar tahlili va maktab CRM." />
+  <!-- Google qidiruvi va havola ulashilganda chiqadigan ko'rinish -->
+  <meta name="description" content="Chittak — maktablar, o'quv markazlari va repetitorlar uchun platforma: onlayn testlar, titul (javob varaqasi) skaneri, Rasch modeli bo'yicha natijalar tahlili, davomat, o'qish to'lovlari va maktab CRM." />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Chittak" />
   <meta property="og:title" content="Chittak — Ilg'or ta'lim, tezkor natija" />
@@ -106,7 +107,44 @@
       }, 100);
     })();
   </script>
-  <div id="app"></div>
+  <!--
+    Ilova yuklanguncha (va qidiruv tizimlari uchun) — sahifaning qisqa matni.
+    app.js birinchi sahifani chizganda bu blok o'rniga ilova chiqadi.
+  -->
+  <div id="app">
+    <main class="seo-fallback" style="max-width:720px;margin:0 auto;padding:24px 16px;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;line-height:1.6">
+      <h1>Chittak — ilg'or ta'lim, tezkor natija</h1>
+      <p>Chittak — maktablar, o'quv markazlari va repetitorlar uchun platforma. U ta'lim jarayonini boshqarish, testlarni tekshirish va natijalarni tahlil qilishni bitta tizimda birlashtiradi. Telegram orqali ishlaydi.</p>
+      <h2>Imkoniyatlar</h2>
+      <ul>
+        <li><b>Titul testlarini tekshirish</b> — javob varaqalari telefon kamerasi bilan skanerlanadi va avtomatik baholanadi.</li>
+        <li><b>Rasch modeli</b> — natijalar ilmiy asosda tahlil qilinadi, o'quvchi dinamikasi kuzatiladi.</li>
+        <li><b>Mandat</b> — imtihon natijalari va hisobotlar avtomatik hisoblanadi.</li>
+        <li><b>Maktab CRM</b> — sinflar, guruhlar, o'qituvchilar, dars jadvali, davomat va o'qish to'lovlari.</li>
+        <li><b>O'quv kurslari va to'garaklar</b> — har guruhning o'z narxi, qarzdorlar va to'lov cheklari.</li>
+      </ul>
+      <h2>Qanday ishlaydi</h2>
+      <ol>
+        <li>Testni yarating va sinf yoki guruhga biriktiring.</li>
+        <li>Titul varaqlarini skanerlang — tekshirish avtomatik.</li>
+        <li>Natijani Rasch modeli va mandat hisobotlarida tahlil qiling.</li>
+      </ol>
+      <p><a href="/maxfiylik">Maxfiylik siyosati</a></p>
+    </main>
+  </div>
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "Chittak",
+      "url": "https://www.chittak.uz/",
+      "applicationCategory": "EducationalApplication",
+      "operatingSystem": "Web, Android, Telegram",
+      "inLanguage": "uz",
+      "description": "Maktablar, o'quv markazlari va repetitorlar uchun platforma: onlayn testlar, titul skaneri, Rasch modeli bo'yicha tahlil, davomat, to'lovlar va maktab CRM.",
+      "slogan": "Ilg'or ta'lim, tezkor natija"
+    }
+  </script>
 
   <script src="/js/icons.js"></script>
   <script src="/js/app.js"></script>
