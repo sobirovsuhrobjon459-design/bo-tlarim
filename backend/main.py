@@ -18,6 +18,7 @@ lekin "Web Service" bepul — shuning uchun ikkalasini bitta xizmatga birlashtir
 import asyncio
 import base64
 import binascii
+import contextvars
 import hmac
 import io
 import json
@@ -88,6 +89,7 @@ from .database import (
     AttendanceIn,
     AttendanceMark,
     Base,
+    ClassFeeIn,
     ClassIn,
     ClassStudent,
     ClassTest,
@@ -207,8 +209,11 @@ def _add_missing_columns() -> None:
         },
         "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)"},
         "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)"},
-        "school_classes": {"curator_user_id": "INTEGER", "code_start": "INTEGER", "code_end": "INTEGER", "shift_id": "INTEGER"},
-        "private_schools": {"monthly_fee": "INTEGER DEFAULT 0"},
+        "school_classes": {
+            "curator_user_id": "INTEGER", "code_start": "INTEGER", "code_end": "INTEGER", "shift_id": "INTEGER",
+            "monthly_fee": "INTEGER",
+        },
+        "private_schools": {"monthly_fee": "INTEGER DEFAULT 0", "kind": "VARCHAR(10) DEFAULT 'school'"},
         "class_students": {"discount_percent": "INTEGER DEFAULT 0", "student_code": "INTEGER"},
         "class_tests": {"source_test_id": "INTEGER"},
         "promo_codes": {"per_teacher_limit": "INTEGER DEFAULT 3"},
@@ -436,6 +441,32 @@ class AutosaveLoadShedding:
 
 AUTOSAVE_SHED_AT = 40  # anyio ip havzasi (40) to'lganda — avtosaqlashlar kutmaydi
 app.add_middleware(AutosaveLoadShedding, shed_at=AUTOSAVE_SHED_AT)
+
+
+# Ta'lim muassasalari uch turda: xususiy maktab, o'quv markazi (kurslar) va to'garak.
+# Ilova qaysi bo'limda ekanini X-Inst-Kind sarlavhasida yuboradi; "maktabim" degan
+# hamma joy (_active_membership) shu turdagi a'zolikni oladi. Sarlavha yo'q — maktab.
+INSTITUTION_KINDS = ("school", "course", "club")
+_request_inst_kind: contextvars.ContextVar[str] = contextvars.ContextVar("inst_kind", default="school")
+
+
+class InstitutionKindMiddleware:
+    def __init__(self, asgi_app):
+        self.app = asgi_app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            kind = dict(scope.get("headers") or []).get(b"x-inst-kind", b"school").decode("latin-1")
+            token = _request_inst_kind.set(kind if kind in INSTITUTION_KINDS else "school")
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                _request_inst_kind.reset(token)
+            return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(InstitutionKindMiddleware)
 
 
 @app.get("/api/health")
@@ -5399,8 +5430,8 @@ def _sync_class_result(db: Session, test: Test, teacher: Teacher, attempt: Attem
 @app.get("/api/teacher/tests/{test_id}/classes")
 def test_school_classes(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
     test = _paper_test(db, teacher, test_id)
-    member = _active_membership(db, teacher.user)
-    if not member:
+    members = _all_memberships(db, teacher.user)
+    if not members:
         return {"available": False, "classes": []}
     attached = set(
         db.scalars(
@@ -5409,15 +5440,18 @@ def test_school_classes(test_id: int, teacher: Teacher = Depends(get_current_tea
             .where(Attempt.test_id == test.id, Attempt.status.in_(("pending", "done")))
         ).all()
     )
+    # Maktab, o'quv markazi va to'garakdagi guruhlar birga; bir nechta muassasa bo'lsa — nomi bilan
+    schools = {member.school_id: member.school for member in members}
     classes = db.scalars(
         select(SchoolClass)
-        .where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None))
-        .order_by(SchoolClass.name)
+        .where(SchoolClass.school_id.in_(list(schools)), SchoolClass.deleted_at.is_(None))
+        .order_by(SchoolClass.school_id, SchoolClass.name)
     ).all()
     return {
         "available": True,
         "classes": [
-            {"id": item.id, "name": item.name, "students": len(_active_students(item)), "attached": item.id in attached}
+            {"id": item.id, "name": item.name, "students": len(_active_students(item)), "attached": item.id in attached,
+             "school": schools[item.school_id].name if len(schools) > 1 else None}
             for item in classes
         ],
     }
@@ -5428,15 +5462,15 @@ def attach_school_classes(
     test_id: int, body: TestClassesIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
 ):
     test = _paper_test(db, teacher, test_id)
-    member = _active_membership(db, teacher.user)
-    if not member:
-        raise HTTPException(status_code=403, detail="Siz hech qaysi maktabga a'zo emassiz")
-    _assign_student_codes(db, member.school_id)
+    school_ids = {member.school_id for member in _all_memberships(db, teacher.user)}
+    if not school_ids:
+        raise HTTPException(status_code=403, detail="Siz hech qaysi ta'lim muassasasiga a'zo emassiz")
     added = 0
     for class_id in body.class_ids:
         school_class = db.get(SchoolClass, class_id)
-        if not school_class or school_class.school_id != member.school_id or school_class.deleted_at is not None:
+        if not school_class or school_class.school_id not in school_ids or school_class.deleted_at is not None:
             raise HTTPException(status_code=404, detail="Sinf topilmadi")
+        _assign_student_codes(db, school_class.school_id)
         for student in _active_students(school_class):
             before = db.scalar(select(func.count()).select_from(Attempt).where(Attempt.test_id == test.id))
             _student_attempt(db, test, student)
@@ -5654,12 +5688,13 @@ def _old_id_bubbles(test: Test, variants: list[str]) -> list[dict]:
     return old_bubbles
 
 
-def _school_students_query(member):
-    """O'qituvchi maktabidagi (faol sinflardagi) o'quvchilar — 4 xonali ID'si bilan."""
+def _school_students_query(members):
+    """O'qituvchi muassasalaridagi (faol sinflardagi) o'quvchilar — 4 xonali ID'si bilan."""
+    members = members if isinstance(members, list) else [members]
     return (
         select(ClassStudent)
         .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
-        .where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None),
+        .where(SchoolClass.school_id.in_([member.school_id for member in members]), SchoolClass.deleted_at.is_(None),
                ClassStudent.removed_at.is_(None), ClassStudent.student_code.is_not(None))
     )
 
@@ -5677,8 +5712,8 @@ def _attempt_by_sheet_number(db: Session, teacher: Teacher, test: Test, number: 
     )
     if found:
         return found
-    member = _active_membership(db, teacher.user)
-    student = member and db.scalar(_school_students_query(member).where(ClassStudent.student_code == number))
+    members = _all_memberships(db, teacher.user)
+    student = members and db.scalars(_school_students_query(members).where(ClassStudent.student_code == number)).first()
     if not student:
         return None
     found = _student_attempt(db, test, student)  # maktab o'quvchisi — imtihon ro'yxatiga qo'shiladi
@@ -5730,8 +5765,8 @@ def scan_layout(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
         .where(Attempt.test_id == test.id, Attempt.user_id.is_(None), Attempt.status.in_(("pending", "done")))
         .order_by(Attempt.offline_name)
     ).all()
-    member = _active_membership(db, teacher.user)
-    school = db.scalars(_school_students_query(member)).all() if member else []
+    members = _all_memberships(db, teacher.user)
+    school = db.scalars(_school_students_query(members)).all() if members else []
     return {
         "bubbles": bubbles,
         "sheet_version": test.sheet_version or 1,
@@ -7253,12 +7288,47 @@ def _record_code_failure(user: User) -> None:
     _school_code_failures.setdefault(user.id, []).append(time.monotonic())
 
 
-def _active_membership(db: Session, user: User) -> SchoolMember | None:
+def _active_membership(db: Session, user: User, kind: str | None = None) -> SchoolMember | None:
+    """Foydalanuvchining shu turdagi muassasadagi a'zoligi (tur berilmasa — so'rov sarlavhasidagi bo'lim)."""
     return db.scalar(
         select(SchoolMember)
-        .where(SchoolMember.user_id == user.id, SchoolMember.left_at.is_(None))
+        .join(PrivateSchool, PrivateSchool.id == SchoolMember.school_id)
+        .where(
+            SchoolMember.user_id == user.id,
+            SchoolMember.left_at.is_(None),
+            PrivateSchool.kind == (kind or _request_inst_kind.get()),
+        )
         .order_by(SchoolMember.id.desc())
     )
+
+
+def _all_memberships(db: Session, user: User) -> list[SchoolMember]:
+    """Barcha muassasalardagi faol a'zoliklar (maktab, o'quv markazi, to'garak) — test markazi uchun."""
+    return db.scalars(
+        select(SchoolMember)
+        .where(SchoolMember.user_id == user.id, SchoolMember.left_at.is_(None))
+        .order_by(SchoolMember.id)
+    ).all()
+
+
+def _member_in_school(db: Session, user: User, school_id: int) -> SchoolMember | None:
+    return db.scalar(
+        select(SchoolMember).where(
+            SchoolMember.school_id == school_id, SchoolMember.user_id == user.id, SchoolMember.left_at.is_(None)
+        )
+    )
+
+
+# Xabarlarda muassasa nomi turiga qarab: (nomi, qaratqich "...ga", bo'lim nomi)
+KIND_WORDS = {
+    "school": {"noun": "maktab", "to": "maktabga", "section": "Xususiy maktab", "group": "sinf"},
+    "course": {"noun": "o'quv markazi", "to": "o'quv markaziga", "section": "O'quv kurslari", "group": "guruh"},
+    "club": {"noun": "to'garak markazi", "to": "to'garak markaziga", "section": "To'garaklar", "group": "guruh"},
+}
+
+
+def _kind_words(kind: str | None = None) -> dict:
+    return KIND_WORDS.get(kind or _request_inst_kind.get(), KIND_WORDS["school"])
 
 
 def _new_school_code(db: Session) -> str:
@@ -7339,6 +7409,7 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
     return {
         "id": school.id,
         "name": school.name,
+        "kind": school.kind or "school",
         "region": school.region,
         "district": school.district,
         # Kod faqat adminda: o'qituvchilarni maktabga faqat admin qo'shadi
@@ -7413,7 +7484,7 @@ def list_schools(
     if region not in REGIONS or (district and not is_valid_location(region, district)):
         raise HTTPException(status_code=422, detail="Viloyat yoki tuman noto'g'ri tanlangan")
 
-    query = select(PrivateSchool).where(PrivateSchool.region == region)
+    query = select(PrivateSchool).where(PrivateSchool.region == region, PrivateSchool.kind == _request_inst_kind.get())
     if district:
         query = query.where(PrivateSchool.district == district)
     schools = db.scalars(query.order_by(PrivateSchool.district, PrivateSchool.name)).all()
@@ -7482,8 +7553,8 @@ def return_to_own_school(school_id: int, user: User = Depends(get_current_user),
         raise HTTPException(status_code=404, detail="Maktab topilmadi")
     if school.owner_user_id != user.id:
         raise HTTPException(status_code=403, detail="Bu maktab sizniki emas — kirish uchun maktab kodi kerak")
-    if _active_membership(db, user):
-        raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz")
+    if _active_membership(db, user, school.kind):
+        raise HTTPException(status_code=409, detail=f"Siz allaqachon {_kind_words(school.kind)['to']} a'zosiz")
 
     member = _rejoin_as_director(db, user, school)
     return {"school": _school_view(db, member, user)}
@@ -7518,11 +7589,12 @@ def request_school_code(school_id: int, user: User = Depends(get_current_user), 
     # Oddiy matnda tg:// havola bosilmaydi — username bo'lmasa, Telegram ID yoziladi
     requester_link = f"@{user.username}" if user.username else f"Telegram ID: {user.tg_id}"
 
+    words = _kind_words(school.kind)
     founder_text = (
-        f"🔑 Maktab kodi so'raldi\n\n"
+        f"🔑 Kirish kodi so'raldi\n\n"
         f"👤 {user.full_name} ({requester_link})\n"
-        f"«{school.name}» maktabingizga o'qituvchi sifatida qo'shilmoqchi.\n\n"
-        f"✅ Agar u haqiqatan maktabingiz o'qituvchisi bo'lsa — unga Telegram orqali maktab kodini yuboring:\n"
+        f"«{school.name}» ({words['noun']}) ga o'qituvchi sifatida qo'shilmoqchi.\n\n"
+        f"✅ Agar u haqiqatan sizning o'qituvchingiz bo'lsa — unga Telegram orqali kirish kodini yuboring:\n"
         f"{school.code}\n\n"
         f"⛔️ Tanimasangiz yoki boshqa maktabdan bo'lsa — kodni BERMANG. Kod bilan har kim "
         f"maktabingizga kira oladi."
@@ -7532,10 +7604,10 @@ def request_school_code(school_id: int, user: User = Depends(get_current_user), 
     founder_ref = f"@{contact['username']}" if contact["username"] else contact["name"]
     requester_text = (
         f"📨 Kod so'rovingiz yuborildi\n\n"
-        f"«{school.name}» maktabi admini — {contact['name']} ({founder_ref}).\n"
-        f"U sizga maktab kodini Telegram orqali yuboradi. Tezroq bo'lishi uchun unga o'zingiz ham yozishingiz mumkin.\n\n"
-        f"Kodni olgach: Ta'lim muassasalari → Xususiy maktab → Maktabga kirish → maktabingizni tanlang → kodni kiriting.\n\n"
-        f"Kodni hech kimga bermang — u faqat maktabingiz o'qituvchilari uchun."
+        f"«{school.name}» admini — {contact['name']} ({founder_ref}).\n"
+        f"U sizga kirish kodini Telegram orqali yuboradi. Tezroq bo'lishi uchun unga o'zingiz ham yozishingiz mumkin.\n\n"
+        f"Kodni olgach: Ta'lim muassasalari → {words['section']} → «{school.name}» ni tanlang → kodni kiriting.\n\n"
+        f"Kodni hech kimga bermang — u faqat shu yerning o'qituvchilari uchun."
     )
     if delivered:
         _send_bot_text(user.tg_id, requester_text)
@@ -7553,7 +7625,11 @@ def my_school(user: User = Depends(get_current_user), db: Session = Depends(get_
         return {"school": _school_view(db, member, user)}
 
     # A'zo emas, lekin o'zi ochgan maktab bor — kodsiz qaytish uchun
-    owned = db.scalar(select(PrivateSchool).where(PrivateSchool.owner_user_id == user.id).order_by(PrivateSchool.id.desc()))
+    owned = db.scalar(
+        select(PrivateSchool)
+        .where(PrivateSchool.owner_user_id == user.id, PrivateSchool.kind == _request_inst_kind.get())
+        .order_by(PrivateSchool.id.desc())
+    )
     return {
         "school": None,
         "owned_school": (
@@ -7567,8 +7643,10 @@ def create_school(body: SchoolCreateIn, user: User = Depends(get_current_user), 
     """Yangi xususiy maktab ochadi; yaratgan o'qituvchi uning egasi bo'ladi."""
 
     _require_profile_name(user)
-    if _active_membership(db, user):
-        raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
+    kind = _request_inst_kind.get()
+    words = _kind_words(kind)
+    if _active_membership(db, user, kind):
+        raise HTTPException(status_code=409, detail=f"Siz allaqachon {words['to']} a'zosiz. Avval undan chiqing.")
     if not is_valid_location(body.region, body.district):
         raise HTTPException(status_code=422, detail="Viloyat yoki tuman noto'g'ri tanlangan")
 
@@ -7577,16 +7655,18 @@ def create_school(body: SchoolCreateIn, user: User = Depends(get_current_user), 
         select(PrivateSchool.id).where(
             PrivateSchool.region == body.region,
             PrivateSchool.district == body.district,
+            PrivateSchool.kind == kind,
             func.lower(PrivateSchool.name) == body.name.lower(),
         )
     )
     if same_name:
         raise HTTPException(
             status_code=409,
-            detail=f"«{body.name}» maktabi bu tumanda allaqachon ochilgan. Uni ro'yxatdan tanlab, kod bilan kiring.",
+            detail=f"«{body.name}» bu tumanda allaqachon ochilgan. Uni ro'yxatdan tanlab, kod bilan kiring.",
         )
 
     school = PrivateSchool(
+        kind=kind,
         name=body.name,
         region=body.region,
         district=body.district,
@@ -7610,7 +7690,7 @@ def create_school(body: SchoolCreateIn, user: User = Depends(get_current_user), 
     db.commit()
     db.refresh(member)
 
-    logging.getLogger("backend").info("Xususiy maktab ochildi: id=%s kod=%s", school.id, school.code)
+    logging.getLogger("backend").info("Muassasa ochildi (%s): id=%s kod=%s", kind, school.id, school.code)
     return {"school": _school_view(db, member, user)}
 
 
@@ -7649,7 +7729,7 @@ def lookup_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db
 
     school = _school_by_code(db, user, body.code, body.school_id)
     return {
-        "school": {"id": school.id, "name": school.name},
+        "school": {"id": school.id, "name": school.name, "kind": school.kind or "school"},
         "open_classes": [{"id": item.id, "name": item.name} for item in _open_classes(db, school.id)],
     }
 
@@ -7703,10 +7783,10 @@ def join_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db: 
     """
 
     _require_profile_name(user)
-    if _active_membership(db, user):
-        raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
-
     school = _school_by_code(db, user, body.code, body.school_id)
+    if _active_membership(db, user, school.kind):
+        words = _kind_words(school.kind)
+        raise HTTPException(status_code=409, detail=f"Siz allaqachon {words['to']} a'zosiz. Avval undan chiqing.")
     member = _join_as_teacher(db, user, school, body)
     if member.role != "owner":
         school.code = _new_school_code(db)
@@ -7762,7 +7842,8 @@ def invite_info(token: str, user: User = Depends(get_current_user), db: Session 
     school = db.get(PrivateSchool, invite.school_id)
     inviter = db.get(User, invite.created_by)
     return {
-        "school": {"id": school.id, "name": school.name, "region": school.region, "district": school.district},
+        "school": {"id": school.id, "name": school.name, "kind": school.kind or "school",
+                   "region": school.region, "district": school.district},
         "invited_by": inviter.full_name if inviter else "",
         "open_classes": [{"id": item.id, "name": item.name} for item in _open_classes(db, school.id)],
     }
@@ -7775,14 +7856,14 @@ def accept_invite(
     """Shaxsiy havola orqali — kodsiz qo'shilish. Havola shu bilan yopiladi."""
 
     _require_profile_name(user)
-    if _active_membership(db, user):
-        raise HTTPException(status_code=409, detail="Siz allaqachon maktabga a'zosiz. Avval undan chiqing.")
-
     invite = db.scalar(select(SchoolInvite).where(SchoolInvite.token == token).with_for_update())
     if not invite:
         raise HTTPException(status_code=404, detail="Taklif havolasi topilmadi")
     invite = _valid_invite(db, token)
     school = db.get(PrivateSchool, invite.school_id)
+    if _active_membership(db, user, school.kind):
+        words = _kind_words(school.kind)
+        raise HTTPException(status_code=409, detail=f"Siz allaqachon {words['to']} a'zosiz. Avval undan chiqing.")
 
     member = _join_as_teacher(db, user, school, body)
     invite.used_by = user.id
@@ -7981,9 +8062,10 @@ def _require_school_member(db: Session, user: User) -> SchoolMember:
 def _school_class(db: Session, user: User, class_id: int) -> tuple[SchoolClass, SchoolMember]:
     """Foydalanuvchi maktabidagi sinf (maktabning har bir o'qituvchisi ko'ra oladi)."""
 
-    member = _require_school_member(db, user)
     school_class = db.get(SchoolClass, class_id)
-    if not school_class or school_class.deleted_at is not None or school_class.school_id != member.school_id:
+    # Sinf o'z muassasasi bo'yicha tekshiriladi: o'qituvchi maktabda ham, kursda ham bo'lsa — ikkalasida ishlaydi
+    member = _member_in_school(db, user, school_class.school_id) if school_class else None
+    if not school_class or school_class.deleted_at is not None or not member:
         raise HTTPException(status_code=404, detail="Sinf topilmadi")
     return school_class, member
 
@@ -8186,6 +8268,8 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
         "code_start": school_class.code_start,
         "code_end": school_class.code_end,
         "can_delete": bool(member and _can_delete_classes(member)),
+        # Guruhning o'z narxi (bo'sh — muassasaning umumiy summasi)
+        "monthly_fee": school_class.monthly_fee,
     }
     if with_details:
         if any(not student.student_code for student in students):
@@ -9052,9 +9136,14 @@ def _student_months(student: ClassStudent, limit: int = 24) -> list[str]:
     return months
 
 
+def _class_fee(school: PrivateSchool, school_class: SchoolClass) -> int:
+    """Guruhning oylik narxi: o'zida belgilangan bo'lsa — shu, aks holda muassasaning umumiy summasi."""
+    return school_class.monthly_fee if school_class.monthly_fee is not None else (school.monthly_fee or 0)
+
+
 def _student_due(school: PrivateSchool, student: ClassStudent) -> int:
     """Chegirma hisobga olingan oylik summa."""
-    return round(school.monthly_fee * (100 - (student.discount_percent or 0)) / 100)
+    return round(_class_fee(school, student.school_class) * (100 - (student.discount_percent or 0)) / 100)
 
 
 def _paid_sums(db: Session, student_ids: list[int], months: list[str] | None = None) -> dict[tuple[int, str], int]:
@@ -9130,6 +9219,19 @@ def set_monthly_fee(body: FeeIn, user: User = Depends(get_current_user), db: Ses
     return {"school": _school_view(db, member, user)}
 
 
+@app.put("/api/classes/{class_id}/fee")
+def set_class_fee(class_id: int, body: ClassFeeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Guruhning o'z oylik narxi (admin yoki direktor). Bo'sh — muassasaning umumiy summasiga qaytadi."""
+    school_class, member = _school_class(db, user, class_id)
+    if not _can_delete_classes(member):
+        raise HTTPException(status_code=403, detail="Narxni faqat admin yoki direktor belgilaydi")
+    school_class.monthly_fee = body.monthly_fee
+    db.commit()
+    logging.getLogger("backend").info("Guruh narxi o'zgardi: class=%s fee=%s user=%s", class_id, body.monthly_fee, user.id)
+    return {"id": school_class.id, "monthly_fee": school_class.monthly_fee,
+            "effective_fee": _class_fee(member.school, school_class)}
+
+
 @app.get("/api/classes/{class_id}/payments")
 def class_payments(class_id: int, month: str | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Sinf o'quvchilarining shu oydagi to'lov holati (qarzdorlar tepada)."""
@@ -9146,7 +9248,7 @@ def class_payments(class_id: int, month: str | None = None, user: User = Depends
     return {
         "month": month,
         "month_label": _month_label(month),
-        "monthly_fee": school.monthly_fee,
+        "monthly_fee": _class_fee(school, school_class),
         "class_name": school_class.name,
         "students": rows,
         "totals": {
@@ -9171,7 +9273,7 @@ def student_payments(class_id: int, student_id: int, user: User = Depends(get_cu
     ).all()
     return {
         "student": {"id": student.id, "name": student.full_name, "class_name": school_class.name},
-        "monthly_fee": school.monthly_fee,
+        "monthly_fee": _class_fee(school, school_class),
         "discount": student.discount_percent or 0,
         "due": due,
         "months": month_rows,
@@ -9195,8 +9297,8 @@ def add_payment(class_id: int, student_id: int, body: PaymentIn, user: User = De
     school_class, _, school, student = _payments_student(db, user, class_id, student_id)
     if student.removed_at is not None:
         raise HTTPException(status_code=422, detail="Bu o'quvchi sinfdan chiqarilgan")
-    if school.monthly_fee <= 0:
-        raise HTTPException(status_code=422, detail="Avval maktabning oylik to'lov summasini belgilang (admin yoki direktor)")
+    if _class_fee(school, school_class) <= 0:
+        raise HTTPException(status_code=422, detail="Avval oylik to'lov summasini belgilang (admin yoki direktor)")
     if body.month > _shift_month(_current_month(), 3):
         raise HTTPException(status_code=422, detail="Faqat 3 oygacha oldindan to'lov qabul qilinadi")
 
@@ -9396,7 +9498,8 @@ def payments_summary(month: str | None = None, user: User = Depends(get_current_
     rows = []
     for school_class in classes:
         info = class_payments(school_class.id, month, user, db)
-        rows.append({"id": school_class.id, "name": school_class.name, "students": len(info["students"]), **info["totals"]})
+        rows.append({"id": school_class.id, "name": school_class.name, "students": len(info["students"]),
+                     "monthly_fee": info["monthly_fee"], "own_fee": school_class.monthly_fee is not None, **info["totals"]})
     return {
         "month": month,
         "month_label": _month_label(month),
@@ -9459,7 +9562,7 @@ def school_overview(user: User = Depends(get_current_user), db: Session = Depend
     # Qarzdorlar (joriy oy): admin/direktor — butun maktab, kurator — o'z sinflari
     payment_classes = classes if head else curated
     debtors = debt_sum = None
-    if payment_classes and school.monthly_fee > 0:
+    if payment_classes and any(_class_fee(school, item) > 0 for item in payment_classes):
         month = _current_month()
         debtors = debt_sum = 0
         for item in payment_classes:
@@ -9533,7 +9636,7 @@ def school_overview(user: User = Depends(get_current_user), db: Session = Depend
         },
         "missing_attendance": missing_attendance,
         "classes_without_curator": sum(1 for item in classes if item.curator_user_id is None) if head else 0,
-        "needs_fee": head and school.monthly_fee <= 0,
+        "needs_fee": head and bool(classes) and all(_class_fee(school, item) <= 0 for item in classes),
         "chart": chart,
         "can": {
             "payments": bool(payment_classes),

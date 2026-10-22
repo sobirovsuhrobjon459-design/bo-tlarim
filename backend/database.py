@@ -498,6 +498,9 @@ class PrivateSchool(Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     # Oylik o'qish to'lovi (so'm) — barcha o'quvchilar uchun bitta summa
     monthly_fee: Mapped[int] = mapped_column(default=0)
+    # Muassasa turi: school (xususiy maktab) | course (o'quv markazi) | club (to'garak).
+    # Hammasi bir xil tizimda ishlaydi; o'qituvchi har turdan bittasiga a'zo bo'la oladi
+    kind: Mapped[str] = mapped_column(String(10), default="school", index=True)
 
     members: Mapped[list["SchoolMember"]] = relationship(back_populates="school", order_by="SchoolMember.id")
 
@@ -583,6 +586,8 @@ class SchoolClass(Base):
     name: Mapped[str] = mapped_column(String(100))
     # Qo'ng'iroq setkasi (smena) — darslar shu setka kataklariga qo'yiladi
     shift_id: Mapped[int | None] = mapped_column(default=None)
+    # Guruhning o'z oylik narxi (kurs va to'garaklarda har guruh har xil); bo'sh — muassasaning umumiy summasi
+    monthly_fee: Mapped[int | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(default=None)
 
@@ -1464,6 +1469,11 @@ class SectionsIn(BaseModel):
 
 class FeeIn(BaseModel):
     monthly_fee: int = Field(ge=0, le=100_000_000)
+
+
+class ClassFeeIn(BaseModel):
+    # None — guruh muassasaning umumiy summasiga qaytadi
+    monthly_fee: int | None = Field(default=None, ge=0, le=100_000_000)
 
 
 class DiscountIn(BaseModel):

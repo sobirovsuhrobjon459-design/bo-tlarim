@@ -87,6 +87,18 @@ bot = Bot(token=BOT_TOKEN) if TOKEN_IS_SET else None
 dispatcher = Dispatcher()
 
 
+# Taklif xabarlari muassasa turiga qarab: belgi, nomi (kimning o'qituvchilari), qaratqich, tugma yozuvi
+INSTITUTION_WORDS = {
+    "school": ("🏫", "xususiy maktab", "maktab", "🏫 Maktabga qo'shilish"),
+    "course": ("📚", "o'quv markazi", "o'quv markazi", "📚 O'quv markaziga qo'shilish"),
+    "club": ("🎨", "to'garak markazi", "to'garak markazi", "🎨 To'garakka qo'shilish"),
+}
+
+
+def _institution_words(kind: str | None) -> tuple[str, str, str, str]:
+    return INSTITUTION_WORDS.get(kind or "school", INSTITUTION_WORDS["school"])
+
+
 def _find_school(code: str):
     """Taklif havolasidagi kod bo'yicha maktab (nomi va joylashuvi) — alohida ipda chaqiriladi."""
 
@@ -95,7 +107,7 @@ def _find_school(code: str):
 
     with SessionLocal() as session:
         school = session.scalar(select(PrivateSchool).where(PrivateSchool.code == code))
-        return (school.name, school.region, school.district) if school else None
+        return (school.name, school.region, school.district, school.kind) if school else None
 
 
 async def _handle_school_invite(message: Message, code: str) -> None:
@@ -110,13 +122,14 @@ async def _handle_school_invite(message: Message, code: str) -> None:
         await message.answer("❗️ Bu taklif havolasi eskirgan yoki noto'g'ri. Maktab admini'dan yangisini so'rang.")
         return
 
-    name, region, district = school
+    name, region, district, kind = school
+    icon, title, noun, button = _institution_words(kind)
     text = (
-        f"🏫 <b>{name}</b>\n📍 {region}, {district}\n\n"
-        "Sizni shu xususiy maktab o'qituvchilari qatoriga taklif qilishdi.\n"
-        f"🔑 Maktab kodi: <code>{code}</code>\n\n"
+        f"{icon} <b>{name}</b>\n📍 {region}, {district}\n\n"
+        f"Sizni shu {title} o'qituvchilari qatoriga taklif qilishdi.\n"
+        f"🔑 Kirish kodi: <code>{code}</code>\n\n"
         "Ro'yxatdan o'tish uchun pastdagi tugmani bosing — ismingiz va dars beradigan fanlaringizni kiriting.\n\n"
-        "⚠️ Agar siz bu maktab o'qituvchisi bo'lmasangiz, qo'shilmang."
+        f"⚠️ Agar siz bu {noun} o'qituvchisi bo'lmasangiz, qo'shilmang."
     )
 
     if WEBAPP_URL.startswith("https://"):
@@ -124,7 +137,7 @@ async def _handle_school_invite(message: Message, code: str) -> None:
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[[
                 InlineKeyboardButton(
-                    text="🏫 Maktabga qo'shilish",
+                    text=button,
                     web_app=WebAppInfo(url=f"{WEBAPP_URL}{separator}school_code={code}"),
                 )
             ]]
@@ -150,7 +163,7 @@ def _find_invite(token: str):
             return None, "Taklif havolasining muddati tugagan. Admindan yangisini so'rang."
         school = session.get(PrivateSchool, invite.school_id)
         inviter = session.get(User, invite.created_by)
-        return (school.name, school.region, school.district, inviter.full_name if inviter else ""), None
+        return (school.name, school.region, school.district, inviter.full_name if inviter else "", school.kind), None
 
 
 async def _handle_teacher_invite(message: Message, token: str) -> None:
@@ -164,10 +177,11 @@ async def _handle_teacher_invite(message: Message, token: str) -> None:
         await message.answer(f"❗️ {error}\n\n{SUPPORT_TEXT}")
         return
 
-    name, region, district, inviter = found
+    name, region, district, inviter, kind = found
+    icon, _, noun, button = _institution_words(kind)
     text = (
-        f"🏫 <b>{name}</b>\n📍 {region}, {district}\n\n"
-        f"👤 {inviter} sizni shu maktabga o'qituvchi sifatida taklif qildi.\n"
+        f"{icon} <b>{name}</b>\n📍 {region}, {district}\n\n"
+        f"👤 {inviter} sizni shu {noun}ga o'qituvchi sifatida taklif qildi.\n"
         "Kod kerak emas — pastdagi tugmani bosing va ismingiz, fan yoki sinfingizni kiriting."
     )
     if WEBAPP_URL.startswith("https://"):
@@ -175,7 +189,7 @@ async def _handle_teacher_invite(message: Message, token: str) -> None:
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[[
                 InlineKeyboardButton(
-                    text="🏫 Maktabga qo'shilish",
+                    text=button,
                     web_app=WebAppInfo(url=f"{WEBAPP_URL}{separator}invite={token}"),
                 )
             ]]

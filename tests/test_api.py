@@ -1230,7 +1230,7 @@ def test_kod_sorash_asoschiga_va_sorovchiga_bot_xabari():
     assert set(by_chat) == {701, 702}, sent
     assert school["code"] in by_chat[701] and "Bobur Aliyev" in by_chat[701] and "BERMANG" in by_chat[701]
     assert school["code"] not in by_chat[702], "kod so'rovchiga yuborilib qoldi!"
-    assert "@aziza_teacher" in by_chat[702] and "Maktabga kirish" in by_chat[702]
+    assert "@aziza_teacher" in by_chat[702] and "Xususiy maktab" in by_chat[702]
 
 
 def _school_with_class(tg_id: int = 701) -> dict:
@@ -5287,3 +5287,102 @@ def test_3_xonali_eski_titul_yangi_testda_ham_oqiladi():
     scanned = client.post(f"/api/teacher/tests/{test_id}/scan", json={"image_base64": old_photo}, headers=as_user(555)).json()
     assert scanned["sheet_number"] == 2 and scanned["match"]["name"] == "Ikkinchi", scanned
     assert scanned["answers"] == {"1": "B"}
+
+
+def _as_kind(tg_id: int, kind: str) -> dict:
+    """Ilova "O'quv kurslari"/"To'garaklar" bo'limida — so'rovlar shu turdagi muassasaga."""
+    return {**as_user(tg_id), "X-Inst-Kind": kind}
+
+
+def test_kurs_va_togarak_maktabdan_alohida_muassasa():
+    """Bir o'qituvchi maktabda ham, o'quv markazida ham ishlaydi; har bo'lim o'z muassasasini ko'radi."""
+    reset_database()
+    _set_name(701, "Aziza", "Karimova")
+    place = {"region": "Toshkent shahri", "district": "Chilonzor tumani"}
+    school = client.post("/api/schools", json={**place, "name": "Ilm maktabi"}, headers=as_user(701)).json()["school"]
+    assert school["kind"] == "school"
+    # Xuddi shu nom bilan o'quv markazi — boshqa turda takror emas
+    course = client.post("/api/schools", json={**place, "name": "Ilm maktabi"}, headers=_as_kind(701, "course"))
+    assert course.status_code == 200, course.text
+    course = course.json()["school"]
+    assert course["kind"] == "course" and course["id"] != school["id"]
+    # Ikkinchi o'quv markazi ochilmaydi (har turdan bittaga a'zo)
+    again = client.post("/api/schools", json={**place, "name": "Boshqa markaz"}, headers=_as_kind(701, "course"))
+    assert again.status_code == 409 and "o'quv markazi" in again.text, again.text
+
+    assert client.get("/api/schools/me", headers=as_user(701)).json()["school"]["id"] == school["id"]
+    assert client.get("/api/schools/me", headers=_as_kind(701, "course")).json()["school"]["id"] == course["id"]
+    assert client.get("/api/schools/me", headers=_as_kind(701, "club")).json()["school"] is None
+    # Ro'yxatda faqat shu turdagilar
+    listed = client.get("/api/schools", params=place, headers=_as_kind(701, "course")).json()
+    assert [item["id"] for item in listed] == [course["id"]], listed
+
+    # Guruhlar har muassasada alohida
+    school_class = client.post("/api/classes", json={"name": "10/2"}, headers=as_user(701)).json()
+    group = client.post("/api/classes", json={"name": "Ingliz tili B1"}, headers=_as_kind(701, "course")).json()
+    assert [item["id"] for item in client.get("/api/classes", headers=as_user(701)).json()] == [school_class["id"]]
+    assert [item["id"] for item in client.get("/api/classes", headers=_as_kind(701, "course")).json()] == [group["id"]]
+    # Guruh sahifasi qaysi bo'limdan ochilsa ham ishlaydi (guruh o'z muassasasi bo'yicha tekshiriladi)
+    assert client.get(f"/api/classes/{group['id']}", headers=as_user(701)).status_code == 200
+
+    # Kod bilan qo'shilish — kod qaysi turga tegishli bo'lsa, o'sha turga
+    _set_name(702, "Bobur", "Aliyev")
+    joined = client.post("/api/schools/join", json={"code": current_code(course), "subjects": ["Ingliz tili"], "phone": "901112233"},
+                         headers=as_user(702))
+    assert joined.status_code == 200 and joined.json()["school"]["kind"] == "course", joined.text
+    assert client.get("/api/schools/me", headers=as_user(702)).json()["school"] is None
+
+    # Test markazi: o'qituvchining hamma muassasalaridagi guruhlar, muassasa nomi bilan
+    register_teacher(701, "Aziza", "Karimova")
+    client.post(f"/api/classes/{group['id']}/students", json={"full_name": "Jasur Umarov"}, headers=as_user(701))
+    test = create_test(701, enrollment_type="closed")
+    base = f"/api/teacher/tests/{test['id']}"
+    classes = client.get(f"{base}/classes", headers=as_user(701)).json()
+    assert {item["id"] for item in classes["classes"]} == {school_class["id"], group["id"]}, classes
+    assert {item["school"] for item in classes["classes"]} == {"Ilm maktabi"} and len(classes["classes"]) == 2, classes
+    attached = client.post(f"{base}/classes", json={"class_ids": [group["id"]]}, headers=as_user(701))
+    assert attached.status_code == 200 and attached.json()["added"] == 1, attached.text
+
+
+def test_guruhning_oz_oylik_narxi():
+    """Kursda har guruhning o'z narxi; belgilanmagan guruh muassasaning umumiy summasini oladi."""
+    reset_database()
+    _set_name(701, "Aziza", "Karimova")
+    client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani", "name": "Ilm markazi"},
+                headers=_as_kind(701, "course"))
+    english = client.post("/api/classes", json={"name": "Ingliz tili"}, headers=_as_kind(701, "course")).json()
+    maths = client.post("/api/classes", json={"name": "Matematika"}, headers=_as_kind(701, "course")).json()
+    client.post(f"/api/classes/{english['id']}/students", json={"full_name": "Ali Valiyev"}, headers=_as_kind(701, "course"))
+    sid = client.get(f"/api/classes/{english['id']}", headers=as_user(701)).json()["students"][0]["id"]
+    month = client.get(f"/api/classes/{english['id']}/payments", headers=as_user(701)).json()["month"]
+
+    # Narx yo'q — to'lov qabul qilinmaydi
+    blocked = client.post(f"/api/classes/{english['id']}/students/{sid}/payments", json={"month": month, "amount": 1000},
+                          headers=as_user(701))
+    assert blocked.status_code == 422, blocked.text
+
+    fee = client.put(f"/api/classes/{english['id']}/fee", json={"monthly_fee": 300_000}, headers=as_user(701))
+    assert fee.status_code == 200 and fee.json()["effective_fee"] == 300_000, fee.text
+    status = client.get(f"/api/classes/{english['id']}/payments", headers=as_user(701)).json()
+    assert status["monthly_fee"] == 300_000 and status["students"][0]["due"] == 300_000, status
+    paid = client.post(f"/api/classes/{english['id']}/students/{sid}/payments", json={"month": month, "amount": 300_000},
+                       headers=as_user(701))
+    assert paid.status_code == 200, paid.text
+
+    # Umumiy summa faqat o'z narxi yo'q guruhlarga ta'sir qiladi
+    client.put("/api/schools/fee", json={"monthly_fee": 500_000}, headers=_as_kind(701, "course"))
+    summary = client.get("/api/schools/payments/summary", headers=_as_kind(701, "course")).json()
+    fees = {row["id"]: (row["monthly_fee"], row["own_fee"]) for row in summary["classes"]}
+    assert fees == {english["id"]: (300_000, True), maths["id"]: (500_000, False)}, fees
+
+    # Narxni o'chirish — umumiy summaga qaytadi
+    reset = client.put(f"/api/classes/{english['id']}/fee", json={"monthly_fee": None}, headers=as_user(701)).json()
+    assert reset["monthly_fee"] is None and reset["effective_fee"] == 500_000, reset
+
+    # Faqat admin/direktor belgilaydi
+    _set_name(702, "Bobur", "Aliyev")
+    course = client.get("/api/schools/me", headers=_as_kind(701, "course")).json()["school"]
+    client.post("/api/schools/join", json={"code": current_code(course), "subjects": ["Ingliz tili"], "phone": "901112233"},
+                headers=as_user(702))
+    denied = client.put(f"/api/classes/{english['id']}/fee", json={"monthly_fee": 1}, headers=as_user(702))
+    assert denied.status_code == 403, denied.text

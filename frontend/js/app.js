@@ -53,7 +53,117 @@ function authHeaders() {
     if (appSession) headers["X-App-Session"] = appSession;
     else headers["X-Dev-User"] = DEV_USER_ID;
   }
+  // Qaysi ta'lim muassasasi bo'limida ekanimiz — server "maktabim" deganda shu turdagisini oladi
+  if (instKind !== "school") headers["X-Inst-Kind"] = instKind;
   return headers;
+}
+
+/*
+  Ta'lim muassasalari uch turda: Xususiy maktab, O'quv kurslari (o'quv markazi)
+  va To'garaklar. Uchalasi ham bitta tizimda ishlaydi (sinflar, davomat, to'lov,
+  jadval, testlar); farqi — atamalar va har guruhning o'z narxi.
+
+  Atamalar ekranga chizilgandan keyin moslanadi: kurs/to'garak bo'limida
+  "maktab" → "markaz", "sinf" → "guruh", "kurator" → "ustoz"/"rahbar".
+  O'zbekcha qo'shimchalar o'zakka to'g'ri qo'shiladi (sinfga → guruhga,
+  maktabingiz → markazingiz), shuning uchun har bir matnni alohida yozish shart emas.
+*/
+let instKind = "school";
+
+const INST_KINDS = {
+  school: { title: "Xususiy maktab", place: "maktab", group: "sinf", lead: "kurator" },
+  course: { title: "O'quv kurslari", place: "markaz", group: "guruh", lead: "ustoz" },
+  club: { title: "To'garaklar", place: "markaz", group: "guruh", lead: "rahbar" },
+};
+
+function instTerms(kind = instKind) {
+  return INST_KINDS[kind] || INST_KINDS.school;
+}
+
+function matchCase(sample, word) {
+  if (sample === sample.toUpperCase() && sample !== sample.toLowerCase()) return word.toUpperCase();
+  if (sample[0] === sample[0].toUpperCase()) return word[0].toUpperCase() + word.slice(1);
+  return word;
+}
+
+const INST_WORDS_RE = /xususiy maktab|sinf \/ guruh|maktab|sinf|kurator/gi;
+
+function localizeInstText(text) {
+  if (instKind === "school" || !text) return text;
+  const terms = instTerms();
+  return text.replace(INST_WORDS_RE, (found, offset, whole) => {
+    const lower = found.toLowerCase();
+    // "Xususiy maktab" — bo'lim nomi; "xususiy maktabi" esa oddiy so'z birikmasi → "markazi"
+    if (lower === "xususiy maktab" && /^[a-z'ʻ’]/i.test(whole.slice(offset + found.length))) {
+      return matchCase(found.slice(0, 8), "xususiy ") + matchCase(found.slice(8), terms.place);
+    }
+    if (lower === "xususiy maktab") return matchCase(found, terms.title);
+    if (lower === "sinf / guruh") return matchCase(found, terms.group);
+    if (lower === "maktab") return matchCase(found, terms.place);
+    if (lower === "kurator") return matchCase(found, terms.lead);
+    // "9-sinf", "11 sinf" — guruh nomining bir qismi, o'zgarmaydi ("B1 sinfida" esa — qo'shimchali, almashadi)
+    const afterNumber = /\d[-\s]?$/.test(whole.slice(Math.max(0, offset - 2), offset));
+    if (afterNumber && !/^[a-z'ʻ’]/i.test(whole.slice(offset + found.length))) return found;
+    return matchCase(found, terms.group);
+  });
+}
+
+const LOCALIZED_ATTRIBUTES = ["placeholder", "title", "aria-label"];
+
+function localizeInstTree(root) {
+  if (instKind === "school" || !root) return;
+  if (root.nodeType === Node.TEXT_NODE) {
+    const next = localizeInstText(root.nodeValue);
+    if (next !== root.nodeValue) root.nodeValue = next;
+    return;
+  }
+  if (root.nodeType !== Node.ELEMENT_NODE || root.closest?.("script, style, textarea, [data-raw]")) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  for (let node = walker.currentNode; node; node = walker.nextNode()) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (node.parentElement?.closest("script, style, textarea, [data-raw]")) continue;
+      const next = localizeInstText(node.nodeValue);
+      if (next !== node.nodeValue) node.nodeValue = next;
+    } else if (!node.closest("[data-raw]")) {
+      LOCALIZED_ATTRIBUTES.forEach((name) => {
+        const value = node.getAttribute(name);
+        if (value) {
+          const next = localizeInstText(value);
+          if (next !== value) node.setAttribute(name, next);
+        }
+      });
+    }
+  }
+}
+
+// Kurs/to'garak bo'limida ekranga qo'shilgan har bir matn (sahifa, oyna, xabar) moslanadi
+const instObserver =
+  typeof MutationObserver !== "undefined"
+    ? new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+          if (mutation.type === "characterData") localizeInstTree(mutation.target);
+          else mutation.addedNodes.forEach((node) => localizeInstTree(node));
+        });
+      })
+    : null;
+
+// Bo'lim almashganda: eslangan "maktabim" ma'lumotlari boshqa muassasaniki — tozalanadi
+function setInstKind(kind) {
+  const next = INST_KINDS[kind] ? kind : "school";
+  if (next === instKind) return;
+  instKind = next;
+  currentSchool = null;
+  schoolMembershipKnown = false;
+  schoolOverviewCache = null;
+  myClassesCache = null;
+  pageDataCache.clear();
+  staleDataCache.clear();
+  classDetailCache.clear();
+  instObserver?.disconnect();
+  if (instKind !== "school" && instObserver) {
+    instObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+    localizeInstTree(document.body);
+  }
 }
 
 // Telegram akkaunti aniq (Mini App yoki ilova) — fayllar bot chatiga yuboriladi
@@ -1236,11 +1346,13 @@ function renderSchoolFolder() {
   // Bo'limlar ro'yxati — yangisini qo'shish uchun shu yerga bitta qator yetadi
   // Oxirgi ustun — bo'lim ochilganda nima bo'lishi (hozircha tayyorlari kam)
   const sections = [
-    ["private-school", ROLE_ICONS.privateSchool, "XUSUSIY MAKTAB", "Maktab oching yoki taklif bilan qo'shiling", enterPrivateSchool],
-    ["course", ROLE_ICONS.course, "O'QUV KURSLARI", "O'quv markazlari va kurslar", () => renderComingSoon("O'quv kurslari", ROLE_ICONS.course)],
-    ["club", ROLE_ICONS.club, "TO'GARAKLAR", "Sport, san'at va boshqa to'garaklar", () => renderComingSoon("To'garaklar", ROLE_ICONS.club)],
+    ["private-school", ROLE_ICONS.privateSchool, "XUSUSIY MAKTAB", "Maktab oching yoki taklif bilan qo'shiling", () => enterInstitution("school")],
+    ["course", ROLE_ICONS.course, "O'QUV KURSLARI", "O'quv markazlari va kurslar", () => enterInstitution("course")],
+    ["club", ROLE_ICONS.club, "TO'GARAKLAR", "Sport, san'at va boshqa to'garaklar", () => enterInstitution("club")],
   ];
 
+  // Papkaning o'zida uch tur yonma-yon turadi — atamalar moslanmaydi
+  setInstKind("school");
   showPage(`
     <div class="page-header">
       <button class="back-button" type="button" data-action="home" style="margin:0">←</button>
@@ -1258,6 +1370,7 @@ function renderSchoolFolder() {
 }
 
 function renderTestFolder() {
+  setInstKind("school");
   showPage(`
     <div class="page-header">
       <button class="back-button" type="button" data-action="home" style="margin:0">←</button>
@@ -1581,6 +1694,18 @@ function openClassSettings(schoolClass, tab) {
     <p class="subtitle" style="margin:4px 0 0">Kurator o'quvchilarni qo'shadi va sinfni boshqaradi.</p>
     <button class="btn" id="sheet-save-curator" style="margin-top:10px">🎓 Kuratorni saqlash</button>
 
+    ${
+      schoolClass.is_director
+        ? `<label class="field-label" for="sheet-class-fee" style="margin-top:16px">💰 Sinfning oylik narxi (so'm)</label>
+           <input class="input" id="sheet-class-fee" type="number" inputmode="numeric" min="0" step="10000"
+             value="${schoolClass.monthly_fee ?? ""}" placeholder="${
+               currentSchool?.monthly_fee ? `Umumiy summa: ${money(currentSchool.monthly_fee)}` : "Masalan: 350000"
+             }" />
+           <p class="subtitle" style="margin:4px 0 0">Bo'sh qoldirilsa — umumiy oylik summa olinadi. Har sinfning narxi har xil bo'lsa, shu yerda belgilang.</p>
+           <button class="btn" id="sheet-save-fee" style="margin-top:10px">💰 Narxni saqlash</button>`
+        : ""
+    }
+
     ${schoolClass.can_delete ? `<button class="btn btn-ghost" id="sheet-delete-class" style="margin-top:16px">🗑 Sinfni o'chirish</button>` : ""}
     <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Yopish</button>
   `);
@@ -1612,6 +1737,24 @@ function openClassSettings(schoolClass, tab) {
       showToast(updated.curator ? `✅ Kurator: ${updated.curator.name}` : "Kurator olib tashlandi");
       close();
       openClassTab(updated, tab);
+    })
+  );
+
+  sheet.querySelector("#sheet-save-fee")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const raw = sheet.querySelector("#sheet-class-fee").value.trim();
+      const value = raw === "" ? null : Math.round(Number(raw));
+      if (value !== null && (!Number.isFinite(value) || value < 0)) throw new Error("Narxni to'g'ri kiriting");
+      const saved = await api(`/api/classes/${schoolClass.id}/fee`, { method: "PUT", body: { monthly_fee: value } });
+      schoolClass.monthly_fee = saved.monthly_fee;
+      schoolOverviewCache = null;
+      showToast(
+        saved.monthly_fee === null
+          ? `✅ Umumiy summa olinadi: ${saved.effective_fee ? money(saved.effective_fee) : "belgilanmagan"}`
+          : `✅ Oylik narx: ${money(saved.monthly_fee)}`
+      );
+      close();
     })
   );
 
@@ -2758,26 +2901,6 @@ async function renderAttendanceDetail(attendanceId, schoolClass) {
   );
 }
 
-function renderComingSoon(title, icon) {
-  // Ta'lim muassasalari bo'limlari — mazmuni keyinroq qo'shiladi
-  showPage(`
-    <div class="page-header">
-      <button class="back-button" type="button" data-action="home" style="margin:0">←</button>
-      <h2 style="margin:0;flex:1">${escapeHtml(title)}</h2>
-    </div>
-    <div class="card" style="cursor:default">
-      <div class="card-icon">${icon}</div>
-      <div class="card-body">
-        <h3>Tez orada</h3>
-        <p>Bu bo'lim ustida ishlanmoqda va yaqin orada ishga tushadi.</p>
-      </div>
-    </div>
-    ${supportCardHtml("Bu bo'lim bo'yicha taklifingiz bo'lsa — yozing")}
-  `);
-
-  document.querySelector('[data-action="home"]').addEventListener("click", renderSchoolFolder);
-}
-
 /* ---------- Xususiy maktab ---------- */
 
 // Maktab profilida tanlanadigan fanlar (test fanlari ro'yxatidan, "Boshqa fan"siz)
@@ -2822,7 +2945,8 @@ async function prefetchSchoolData() {
   loadRegions().catch(() => {}); // viloyatlar ro'yxati ham tayyor tursin
 }
 
-async function enterPrivateSchool() {
+async function enterInstitution(kind) {
+  setInstKind(kind);
   if (schoolMembershipKnown) {
     // Darhol — eslangan holat bo'yicha
     if (currentSchool) renderMySchool(currentSchool);
@@ -3228,7 +3352,9 @@ async function renderCreateSchool() {
     <div id="existing-schools"></div>
 
     <label class="field-label" for="school-name-input">Maktab nomi</label>
-    <input class="input" id="school-name-input" placeholder="Masalan: Kelajak xususiy maktabi" />
+    <input class="input" id="school-name-input" placeholder="${
+      { school: "Masalan: Kelajak xususiy maktabi", course: "Masalan: Kelajak o'quv markazi", club: "Masalan: Yosh iste'dodlar to'garagi" }[instKind]
+    }" data-raw />
 
     <p class="section-label" style="margin-top:18px">MAKTAB ADMINI</p>
     <p class="subtitle" style="margin:0 0 6px">
@@ -3605,6 +3731,8 @@ function wireSchoolTab(tab) {
 
 // 🏫 Maktab tabi: maktab haqida ma'lumot
 function renderMySchool(school, { refresh = true } = {}) {
+  // Kod boshqa turdagi muassasaniki bo'lishi mumkin — bo'lim muassasaning o'z turiga o'tadi
+  setInstKind(school.kind);
   currentSchool = school;
   schoolMembershipKnown = true;
 
@@ -4057,7 +4185,9 @@ async function renderPaymentsSummary(month = null) {
               <span class="student-avatar is-class">${escapeHtml(row.name.slice(0, 4))}</span>
               <span class="student-info">
                 <b>${escapeHtml(row.name)}</b>
-                <small>${row.students} o'quvchi · tushgan ${formatNumber(row.paid)} / ${formatNumber(row.due)}</small>
+                <small>${row.students} o'quvchi · tushgan ${formatNumber(row.paid)} / ${formatNumber(row.due)}${
+                  row.own_fee ? ` · narxi ${formatNumber(row.monthly_fee)}` : ""
+                }</small>
               </span>
               ${
                 row.debtors
@@ -4074,15 +4204,16 @@ async function renderPaymentsSummary(month = null) {
       ${schoolSubHeader("O'quvchi to'lovlari")}
       ${monthSwitchHtml(summary.month, summary.month_label)}
       ${
-        summary.monthly_fee
+        summary.monthly_fee || summary.classes.some((row) => row.monthly_fee)
           ? paymentTotalsHtml(summary.totals)
           : `<div class="card warning-card" data-action="set-fee"><div class="card-icon">💰</div><div class="card-body">
                <h3 style="margin:0">Oylik to'lov summasi belgilanmagan</h3>
                <p style="margin:4px 0 0">Avval summani belgilang — keyin qarzdorlar hisoblanadi.</p></div></div>`
       }
-      <button type="button" class="btn btn-ghost" data-action="set-fee" style="margin:0 0 14px">⚙️ Oylik summa: ${
+      <button type="button" class="btn btn-ghost" data-action="set-fee" style="margin:0 0 4px">⚙️ Umumiy oylik summa: ${
         summary.monthly_fee ? money(summary.monthly_fee) : "belgilanmagan"
       }</button>
+      <p class="subtitle" style="margin:0 0 14px">Sinfning o'z narxi bo'lsa — sinf sozlamalarida (⚙️) belgilanadi.</p>
       <p class="section-label">SINFLAR BO'YICHA</p>
       <div class="student-list">${rows}</div>
     </div>
@@ -5981,8 +6112,9 @@ async function inviteTeacher() {
 }
 
 // Havoladan kelgan o'qituvchi — kodsiz qo'shilish sahifasi
-async function renderInviteJoin(token) {
-  const info = await api(`/api/schools/invites/${encodeURIComponent(token)}`);
+async function renderInviteJoin(token, info = null) {
+  info = info || (await api(`/api/schools/invites/${encodeURIComponent(token)}`));
+  setInstKind(info.school.kind);
   const nameFields = await profileNameFieldsHtml();
   const hasOpenClasses = info.open_classes.length > 0;
 
@@ -6283,6 +6415,7 @@ function showPendingPaymentsPrompt(count) {
 }
 
 async function loadHome() {
+  setInstKind("school");
   if (homeSnapshot) {
     renderHome(homeSnapshot.full_name || null, true);
     refreshHomeInBackground();
@@ -11615,11 +11748,11 @@ async function renderAttachClasses(testId) {
   showPage(`
     <div class="page-header">
       <button class="back-button" type="button" data-action="back-attach" style="margin:0">←</button>
-      <h2 style="margin:0;flex:1">Sinfni biriktirish</h2>
+      <h2 style="margin:0;flex:1">Sinf / guruhni biriktirish</h2>
     </div>
     ${
       !available
-        ? `<p class="subtitle">Siz hech qaysi maktabga a'zo emassiz. «Ta'lim muassasalari → Xususiy maktab» bo'limida maktabga qo'shiling.</p>`
+        ? `<p class="subtitle">Siz hech qaysi ta'lim muassasasiga a'zo emassiz. «Ta'lim muassasalari» bo'limida maktab, o'quv markazi yoki to'garakka qo'shiling.</p>`
         : `<p class="subtitle">Tanlangan sinflarning o'quvchilari o'z ID raqami bilan imtihonga qo'shiladi.
              Skanerlangan natija o'quvchining sinfidagi «📊 Natijalar» bo'limiga ham yoziladi.</p>
            ${
@@ -11631,12 +11764,14 @@ async function renderAttachClasses(testId) {
                          <input type="checkbox" value="${item.id}" ${item.attached ? "checked disabled" : ""} />
                          <div class="card-body" style="flex:1">
                            <b>${escapeHtml(item.name)}</b>
-                           <p>👥 ${item.students} ta o'quvchi${item.attached ? " · ✅ biriktirilgan" : ""}</p>
+                           <p>👥 ${item.students} ta o'quvchi${item.school ? ` · ${escapeHtml(item.school)}` : ""}${
+                             item.attached ? " · ✅ biriktirilgan" : ""
+                           }</p>
                          </div>
                        </label>`
                    )
                    .join("")
-               : `<p class="subtitle">Maktabda hali sinf yo'q.</p>`
+               : `<p class="subtitle">Hali sinf yoki guruh yo'q.</p>`
            }
            ${classes.some((item) => !item.attached) ? `<button class="btn" id="attach-classes-button">🏫 Biriktirish</button>` : ""}`
     }
@@ -12723,12 +12858,15 @@ async function openPendingSchoolInvite() {
     const rest = params.toString();
     history.replaceState(null, "", window.location.pathname + (rest ? `?${rest}` : "") + window.location.hash);
     try {
+      // Taklif qaysi turdagi muassasaga (maktab, o'quv markazi, to'garak) — avval shu bilinadi
+      const info = await api(`/api/schools/invites/${encodeURIComponent(inviteToken)}`);
+      setInstKind(info.school.kind);
       const { school } = await api("/api/schools/me");
       if (school) {
         showToast("Siz allaqachon maktabga a'zosiz");
         renderMySchool(school);
       } else {
-        await renderInviteJoin(inviteToken);
+        await renderInviteJoin(inviteToken, info);
       }
     } catch (error) {
       showToast(error.message || "Taklifni ochib bo'lmadi");
@@ -12745,6 +12883,9 @@ async function openPendingSchoolInvite() {
   history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : "") + window.location.hash);
 
   try {
+    // Kod qaysi turdagi muassasaniki — shu bo'lim ochiladi
+    const found = await api("/api/schools/lookup", { method: "POST", body: { code } }).catch(() => null);
+    if (found?.school?.kind) setInstKind(found.school.kind);
     const { school } = await api("/api/schools/me");
     if (school) renderMySchool(school);
     else await renderJoinSchool({ prefillCode: code, onBack: renderPrivateSchoolStart });
@@ -13214,7 +13355,10 @@ function renderWebSidebar(active, userName) {
         if (target === "home") await loadHome();
         else if (target === "school-folder") renderSchoolFolder();
         else if (target === "tests") renderTestFolder();
-        else if (target === "admin") await renderAdminDashboard();
+        else if (target === "admin") {
+          setInstKind("school");
+          await renderAdminDashboard();
+        }
       })
     );
   }
