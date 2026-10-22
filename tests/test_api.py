@@ -3684,7 +3684,7 @@ def test_har_fan_milliy_sertifikat_pasporti_boyicha_ishlaydi():
     register_teacher()
     expected_keyboard = {"Matematika": "math", "Fizika": "math", "Kimyo": "math", "Biologiya": "text",
                          "Tarix": "text", "Geografiya": "text", "Rus tili": "text",
-                         "Ona tili va adabiyot": "text"}
+                         "Ona tili va adabiyot": "text", "DTM testi": "text"}
     assert set(SUBJECTS) == set(expected_keyboard)
     for index, (subject, config) in enumerate(SUBJECTS.items()):
         created = create_test(subject=subject, key_questions=_subject_key(subject), duration=config["duration"])
@@ -5494,3 +5494,77 @@ def test_sinf_ichida_test_markazi_imtihonlari():
     # Boshqa maktab o'qituvchisi bu sinfni ko'rmaydi
     _set_name(799, "Begona", "Ustoz")
     assert client.get(f"/api/classes/{cid}/center-tests", headers=as_user(799)).status_code == 404
+
+
+def test_dtm_testi_fan_shabloni():
+    """DTM testi: 90 ta savol, majburiy 3 fan (10 tadan) va 2 mutaxassislik fani (30 tadan), yozmasiz."""
+    from backend.subjects import default_sections, frontend_config
+
+    config = frontend_config()["DTM testi"]
+    assert config["tests"] == 90 and config["written"] == 0 and config["duration"] == 180, config
+    sections = default_sections("DTM testi", 90)
+    assert [len(section["numbers"]) for section in sections] == [10, 10, 10, 30, 30], sections
+    assert sections[3]["numbers"][0] == 31 and sections[4]["numbers"][-1] == 90
+    assert default_sections("DTM testi", 45) == []  # boshqa tuzilishdagi testga shablon qo'llanmaydi
+
+
+def test_dtm_testi_natijasi_dtm_bali_bilan():
+    """DTM testida har to'g'ri javob o'z fanining koeffitsienti bilan: 1–30 — 1,1; 31–60 — 3,1; 61–90 — 2,1 (jami 189)."""
+    reset_database()
+    register_teacher()
+    key = [{"number": n, "question_type": "single", "option_count": 4, "correct": "A"} for n in range(1, 91)]
+    created = create_test(enrollment_type="closed", subject="DTM testi", duration=180, key_questions=key)
+    client.post(f"/api/teacher/tests/{created['id']}/students", json={"names": ["Hasan Hasanov", "Zuhra Karimova"]},
+                headers=as_user(555))
+    students = client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()["students"]
+    by_name = {student["name"]: student["id"] for student in students}
+
+    # Hasan: majburiy fanlarning hammasi (30×1,1 = 33) + 1-mutaxassislikdan 10 ta (10×3,1 = 31) = 64
+    hasan = {str(n): "A" for n in range(1, 31)} | {str(n): "A" for n in range(31, 41)} | {str(n): "B" for n in range(41, 91)}
+    # Zuhra: faqat 2-mutaxassislik (30×2,1 = 63) — to'g'ri javoblari ko'p (30 ta), lekin DTM bali kamroq
+    zuhra = {str(n): "B" for n in range(1, 61)} | {str(n): "A" for n in range(61, 91)}
+    for name, answers in (("Hasan Hasanov", hasan), ("Zuhra Karimova", zuhra)):
+        saved = client.post(f"/api/teacher/tests/{created['id']}/students/{by_name[name]}/answers",
+                            json={"answers": answers}, headers=as_user(555))
+        assert saved.status_code == 200, saved.text
+
+    results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
+    rows = {row["name"]: row for row in results["rows"]}
+    assert rows["Hasan Hasanov"]["dtm_ball"] == 64.0 and rows["Zuhra Karimova"]["dtm_ball"] == 63.0, rows
+    # O'rin DTM bali bo'yicha
+    assert [row["name"] for row in results["rows"]] == ["Hasan Hasanov", "Zuhra Karimova"]
+    assert results["summary"]["dtm_max"] == 189.0 and results["summary"]["max_dtm_ball"] == 64.0, results["summary"]
+    assert len(results["section_names"]) == 5, results["section_names"]
+    # Har fan bo'yicha: ball va to'g'ri/jami ("Ona tili: 11 (10/10)", "1-asosiy fan: 31 (10/30)")
+    hasan_scores = rows["Hasan Hasanov"]["section_scores"]
+    assert hasan_scores["Ona tili (majburiy)"] == {"ball": 11.0, "correct": 10, "total": 10}, hasan_scores
+    assert hasan_scores["1-asosiy fan"] == {"ball": 31.0, "correct": 10, "total": 30}, hasan_scores
+    assert hasan_scores["2-asosiy fan"]["ball"] == 0, hasan_scores
+
+    # Asosiy fanlar nomi bilan (o'qituvchi formada tanlaydi) — natijada ustun shu nom bilan
+    named = client.put(f"/api/teacher/tests/{created['id']}/sections", headers=as_user(555), json={"text": "\n".join([
+        "Ona tili (majburiy): 1-10", "Matematika (majburiy): 11-20", "O'zbekiston tarixi (majburiy): 21-30",
+        "Matematika: 31-60", "Fizika: 61-90"])})
+    assert named.status_code == 200, named.text
+    results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
+    assert results["section_names"][3:] == ["Matematika", "Fizika"], results["section_names"]
+    zuhra_row = next(row for row in results["rows"] if row["name"] == "Zuhra Karimova")
+    assert zuhra_row["section_scores"]["Fizika"] == {"ball": 63.0, "correct": 30, "total": 30}, zuhra_row
+
+    # Javobi kiritilmagan o'quvchi — "Kiritilmagan" ro'yxatida
+    client.post(f"/api/teacher/tests/{created['id']}/students", json={"names": ["Otabek Qodirov"]}, headers=as_user(555))
+    results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
+    assert results["pending"] == [{"name": "Otabek Qodirov"}], results["pending"]
+
+    # PDF va Excel hisobotlari DTM bali bilan yaratiladi
+    for path in ("pdf", "excel"):
+        response = client.get(f"/api/teacher/tests/{created['id']}/{path}", headers=as_user(555))
+        assert response.status_code == 200 and len(response.content) > 1000, (path, response.status_code)
+
+    # Oddiy test — DTM bali yo'q
+    plain = create_test(enrollment_type="closed")
+    client.post(f"/api/teacher/tests/{plain['id']}/students", json={"names": ["Ali Valiyev"]}, headers=as_user(555))
+    sid = client.get(f"/api/teacher/tests/{plain['id']}", headers=as_user(555)).json()["students"][0]["id"]
+    client.post(f"/api/teacher/tests/{plain['id']}/students/{sid}/answers", json={"answers": {"1": "B"}}, headers=as_user(555))
+    plain_results = client.get(f"/api/teacher/tests/{plain['id']}/results", headers=as_user(555)).json()
+    assert plain_results["rows"][0]["dtm_ball"] is None and plain_results["summary"]["dtm_max"] is None

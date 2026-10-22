@@ -58,7 +58,7 @@ from sqlalchemy.orm import Session, object_session, selectinload
 
 from .rasch import grade_for, rasch_scores
 from .timetable import ClassInput, Period, TeacherInput, build_timetable
-from .subjects import default_sections, frontend_config, subject_keyboard
+from .subjects import default_sections, frontend_config, score_weights, subject_keyboard
 from .regions import REGIONS, is_valid_location
 from .student_import import names_from_rows, parse_student_file, rows_from_text
 from .auth import (
@@ -1117,6 +1117,23 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             result[name] = round(sum(in_section) / len(in_section) * 100, 1) if in_section else 0.0
         return result
 
+    # DTM testi: har to'g'ri javob o'z fanining koeffitsienti bilan (1,1 / 3,1 / 2,1) — jami 189 ball
+    weights = score_weights(test.subject, total_questions)
+    item_weights = [weights.get(_item_number(label), 0.0) for _, label in items] if weights else None
+    dtm_max = round(sum(weights.values()), 1) if weights else None
+
+    def section_scores(row_matrix: list[int]) -> dict:
+        """Har fan bo'yicha DTM bali va to'g'ri javoblar: {"Fizika": {"ball": 58.8, "correct": 28, "total": 30}}."""
+        result = {}
+        for name in section_names:
+            columns = [index for index, sec in enumerate(item_section) if sec == name]
+            result[name] = {
+                "ball": round(sum(item_weights[index] for index in columns if row_matrix[index]), 1),
+                "correct": sum(row_matrix[index] for index in columns),
+                "total": len(columns),
+            }
+        return result
+
     rows = [
         {
             "attempt_id": attempt.id,
@@ -1129,13 +1146,20 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             "ball": score,
             "grade": grade_for(score) if uses_rasch else _school_grade(attempt.percent),
             "sections": split_sections(row_matrix),
+            "dtm_ball": round(sum(w for solved, w in zip(row_matrix, item_weights) if solved), 1) if item_weights else None,
+            "section_scores": section_scores(row_matrix) if item_weights else {},
+            "variant": attempt.variant,
         }
         for (attempt, name), score, row_matrix in zip(results, scores, matrix)
     ]
 
-    # O'rin: pullikda — Rasch balli, bepulda — to'g'ri javoblar/foiz; teng natija — teng o'rin (1, 1, 3 ...)
-    sort_key = (lambda row: row["ball"]) if uses_rasch else (lambda row: (row["correct"], row["percent"]))
-    rows.sort(key=lambda row: (-row["ball"] if uses_rasch else -row["correct"], -row["percent"], row["name"].lower()))
+    # O'rin: DTM testida — DTM bali, aks holda Rasch balli; teng natija — teng o'rin (1, 1, 3 ...)
+    if weights:
+        sort_key = lambda row: row["dtm_ball"]  # noqa: E731
+        rows.sort(key=lambda row: (-row["dtm_ball"], -row["ball"], row["name"].lower()))
+    else:
+        sort_key = (lambda row: row["ball"]) if uses_rasch else (lambda row: (row["correct"], row["percent"]))
+        rows.sort(key=lambda row: (-row["ball"] if uses_rasch else -row["correct"], -row["percent"], row["name"].lower()))
     for index, row in enumerate(rows):
         same_as_previous = index and sort_key(rows[index - 1]) == sort_key(row)
         row["rank"] = rows[index - 1]["rank"] if same_as_previous else index + 1
@@ -1160,7 +1184,11 @@ def build_rasch_report(db: Session, test: Test) -> dict:
         "items": item_stats,
         "uses_rasch": uses_rasch,
         "section_names": section_names,
+        "dtm_max": dtm_max,
         "summary": {
+            "dtm_max": dtm_max,
+            "max_dtm_ball": best["dtm_ball"] if best and weights else None,
+            "avg_dtm_ball": round(sum(row["dtm_ball"] for row in rows) / participants, 1) if participants and weights else None,
             "participants": participants,
             "uses_rasch": uses_rasch,
             "avg_ball": round(sum(row["ball"] for row in rows) / participants, 2) if participants and uses_rasch else None,
@@ -1244,7 +1272,15 @@ def _section_heading(text: str, styles: dict) -> list:
 
 
 def _stat_tiles(summary: dict, styles: dict, width: float):
-    if summary.get("uses_rasch"):
+    if summary.get("dtm_max"):
+        dtm = lambda value: f"{value or 0:g}".replace(".", ",")  # noqa: E731
+        tiles = [
+            ("ISHTIROKCHILAR", f"{summary['participants']}", ""),
+            ("O'RTACHA DTM BALI", dtm(summary.get("avg_dtm_ball")), f"{summary['dtm_max']:g} balldan"),
+            ("ENG YUQORI", dtm(summary.get("max_dtm_ball")), summary["max_name"]),
+            ("O'RTACHA FOIZ", f"{summary['avg_percent']}%", "to'g'ri javoblar"),
+        ]
+    elif summary.get("uses_rasch"):
         tiles = [
             ("ISHTIROKCHILAR", f"{summary['participants']}", ""),
             ("O'RTACHA BALL", f"{summary['avg_ball'] or 0:.2f}", f"o'rtacha foiz {summary['avg_percent']}%"),
@@ -1359,11 +1395,48 @@ def _question_list(title: str, items: list[dict], title_style, styles: dict, wid
             HRFlowable(width="100%", thickness=0.5, color=REPORT_GRID, spaceBefore=3, spaceAfter=5), table]
 
 
+DTM_MAX_BALL = 189.0
+
+
+def _dtm_section_titles(section_names: list[str]) -> list[str]:
+    """DTM ustun sarlavhalari: "1-majburiy fan\nOna tili", "1-asosiy fan\nFizika" (5 ta bo'lim tartibida)."""
+    titles = []
+    for index, name in enumerate(section_names):
+        subject = name.replace(" (majburiy)", "")
+        if index < 3:
+            titles.append(f"{index + 1}-majburiy fan\n{subject}")
+        elif index < 5:
+            kind = f"{index - 2}-asosiy fan"
+            titles.append(kind if subject == kind else f"{kind}\n{subject}")
+        else:
+            titles.append(subject)
+    return titles
+
+
+def _dtm_cell(row: dict, name: str) -> str:
+    score = (row.get("section_scores") or {}).get(name)
+    return f"{score['ball']:g}".replace(".", ",") + f"<br/>({score['correct']}/{score['total']})" if score else "—"
+
+
+def _is_dtm(rows: list[dict]) -> bool:
+    return bool(rows) and rows[0].get("dtm_ball") is not None
+
+
+def _total_column(rows: list[dict], uses_rasch: bool) -> tuple:
+    """Jadvalning "jami" ustuni: DTM testida — DTM bali, aks holda Rasch balli yoki foiz."""
+    if _is_dtm(rows):
+        return "DTM bali", lambda row: f"{row['dtm_ball']:g}".replace(".", ",")
+    if uses_rasch:
+        return "Ball", lambda row: f"{row['ball']:.2f}"
+    return "Foiz", lambda row: f"{row['percent']}%"
+
+
 def _results_table(rows: list[dict], styles: dict, width: float, uses_rasch: bool = True,
                    section_names: list[str] | None = None) -> Table:
     if section_names:
         return _section_results_table(rows, styles, width, uses_rasch, section_names)
-    header = ["O'rin", "F.I.Sh.", "To'g'ri", "Xato", "Foiz", "Ball", "Daraja"] if uses_rasch else \
+    total_title, total_of = _total_column(rows, uses_rasch)
+    header = ["O'rin", "F.I.Sh.", "To'g'ri", "Xato", "Foiz", total_title, "Daraja"] if uses_rasch else \
         ["O'rin", "F.I.Sh.", "To'g'ri", "Xato", "Foiz", "Baho"]
     data = [[Paragraph(f"<font color='white'>{xml_escape(text)}</font>", styles["cell_bold"]) for text in header]]
     for row in rows:
@@ -1374,7 +1447,7 @@ def _results_table(rows: list[dict], styles: dict, width: float, uses_rasch: boo
                 Paragraph(f"{row['correct']}/{row['total']}", styles["cell"]),
                 Paragraph(str(row["wrong"]), styles["cell"]),
                 Paragraph(f"{row['percent']}%", styles["cell"]),
-                *([Paragraph(f"{row['ball']:.2f}", styles["cell_bold"])] if uses_rasch else []),
+                *([Paragraph(total_of(row), styles["cell_bold"])] if uses_rasch else []),
                 Paragraph(xml_escape(row["grade"]), styles["cell_bold"]),
             ]
         )
@@ -1402,14 +1475,16 @@ GRADE_FILL = {"A+": "#1e7b34", "A": "#2e8b47", "B+": "#2e75b6", "B": "#3d85c6", 
 def _section_results_table(rows: list[dict], styles: dict, width: float, uses_rasch: bool, section_names: list[str]) -> Table:
     """Milliy sertifikat natijalari uslubida: №, F.I.Sh., bo'limlar, Ball/Foiz, Baho."""
 
-    total_title = "Ball" if uses_rasch else "Foiz"
-    header = ["№", "F.I.Sh.", *section_names, total_title, "Baho"]
+    total_title, total_of = _total_column(rows, uses_rasch)
+    dtm = _is_dtm(rows)
+    header = ["№", "F.I.Sh.", *(_dtm_section_titles(section_names) if dtm else section_names), total_title, "Baho"]
     centered = ParagraphStyle("cell_center", parent=styles["cell"], alignment=1)
-    data = [[Paragraph(f"<font color='white'><b>{xml_escape(text)}</b></font>", centered if index != 1 else styles["cell"])
+    data = [[Paragraph(f"<font color='white'><b>{xml_escape(text).replace(chr(10), '<br/>')}</b></font>",
+                       centered if index != 1 else styles["cell"])
              for index, text in enumerate(header)]]
     for row in rows:
-        values = [f"{row['sections'].get(name, 0):g}%" for name in section_names]
-        total = f"{row['ball']:.2f}" if uses_rasch else f"{row['percent']}%"
+        values = [_dtm_cell(row, name) if dtm else f"{row['sections'].get(name, 0):g}%" for name in section_names]
+        total = total_of(row)
         data.append([
             Paragraph(str(row["rank"]), centered),
             Paragraph(xml_escape(row["name"]), styles["cell"]),
@@ -1530,32 +1605,38 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
         middle = list(section_names)
     else:
         middle = ["To'g'ri", "Foiz"] if uses_rasch else ["To'g'ri"]
-    total_title = "Ball" if uses_rasch else "Foiz"
-    header = ["№", "Ism Familiya", *middle, total_title, "Baho"]
+    total_title, total_of = _total_column(rows, uses_rasch)
+    dtm = _is_dtm(rows) and bool(section_names)
+    header = ["№", "Ism Familiya", *(_dtm_section_titles(middle) if dtm else middle), "Jami ball" if dtm else total_title,
+              *([] if dtm else ["Baho"])]
     # Ko'p bo'limda (Fizika — 6 ta) ustunlar tor: sarlavha kichikroq shriftda,
     # aks holda "Mexanika" kabi so'zlar o'rtasidan bo'linib ketardi
     many = len(middle) > 4
     head_center = ParagraphStyle("grid_head", parent=centered, fontSize=7, leading=8.5) if many else centered
-    data = [[Paragraph(f"<font color='white'><b>{xml_escape(text)}</b></font>", styles["cell"] if index == 1 else head_center)
+    data = [[Paragraph(f"<font color='white'><b>{xml_escape(text).replace(chr(10), '<br/>')}</b></font>",
+                       styles["cell"] if index == 1 else head_center)
              for index, text in enumerate(header)]]
     for row in rows:
-        if section_names:
+        if dtm:
+            middle_values = [_dtm_cell(row, name) for name in section_names]
+        elif section_names:
             middle_values = [f"{row['sections'].get(name, 0):g}%" for name in section_names]
         else:
             middle_values = [f"{row['correct']}/{row['total']}"] + ([f"{row['percent']}%"] if uses_rasch else [])
-        total = f"{row['ball']:.2f}" if uses_rasch else f"{row['percent']}%"
+        total = total_of(row)
         data.append([
             Paragraph(str(row["rank"]), centered),
             Paragraph(xml_escape(row["name"]), styles["cell"]),
             *[Paragraph(value, centered) for value in middle_values],
             Paragraph(f"<b>{total}</b>", centered),
-            Paragraph(f"<font color='white'><b>{xml_escape(row['grade'])}</b></font>", centered),
+            *([] if dtm else [Paragraph(f"<font color='white'><b>{xml_escape(row['grade'])}</b></font>", centered)]),
         ])
 
     # Bo'limlar ko'p bo'lsa (Fizikada 6 ta) ustunlar torayadi — ism ustuniga kamida 24% qoladi
-    other = min(0.13, (1 - 0.07 - 0.24) / (len(middle) + 2))
-    name_share = 1 - 0.07 - other * (len(middle) + 2)
-    widths = [0.07, name_share, *([other] * (len(middle) + 2))]
+    tail = 1 if dtm else 2
+    other = min(0.13, (1 - 0.07 - 0.24) / (len(middle) + tail))
+    name_share = 1 - 0.07 - other * (len(middle) + tail)
+    widths = [0.07, name_share, *([other] * (len(middle) + tail))]
     table = Table(data, colWidths=[width * share for share in widths], repeatRows=1)
     commands = [
         ("BACKGROUND", (0, 0), (-1, 0), REPORT_TABLE_HEAD),
@@ -1568,14 +1649,16 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
         commands += [("LEFTPADDING", (2, 0), (-1, -1), 2), ("RIGHTPADDING", (2, 0), (-1, -1), 2)]
     for index, row in enumerate(rows, start=1):
         if index % 2 == 0:
-            commands.append(("BACKGROUND", (0, index), (-2, index), REPORT_TILE_BG))
+            commands.append(("BACKGROUND", (0, index), (-1 if dtm else -2, index), REPORT_TILE_BG))
+        if dtm:
+            continue
         fill = GRADE_FILL.get(row["grade"])
         commands.append(("BACKGROUND", (-1, index), (-1, index), colors.HexColor(fill) if fill else REPORT_MUTED))
     table.setStyle(TableStyle(commands))
     return table
 
 
-def _report_banner(test: Test, width: float, uses_rasch: bool) -> list:
+def _report_banner(test: Test, width: float, uses_rasch: bool, dtm_max: float | None = None) -> list:
     """Yuqoridagi kanal qatori va ko'k sarlavha bloki ("… NATIJALARI")."""
 
     elements = []
@@ -1586,8 +1669,11 @@ def _report_banner(test: Test, width: float, uses_rasch: bool) -> list:
                                  textColor=colors.white, alignment=1)
     subtitle_style = ParagraphStyle("banner_sub", fontName=REPORT_FONT_ITALIC, fontSize=8.5, leading=11,
                                     textColor=colors.HexColor("#B7CBBF"), alignment=1)
-    subtitle = ("Milliy sertifikat formatida · barcha ishtirokchilar" if uses_rasch
-                else "To'g'ri javoblar bo'yicha · barcha ishtirokchilar")
+    if dtm_max:
+        subtitle = f"DTM bali bo'yicha ({dtm_max:g} ball) · barcha ishtirokchilar"
+    else:
+        subtitle = ("Milliy sertifikat formatida · barcha ishtirokchilar" if uses_rasch
+                    else "To'g'ri javoblar bo'yicha · barcha ishtirokchilar")
     banner = Table(
         [[Paragraph(xml_escape(f"{test.title.upper()} NATIJALARI"), title_style)],
          [Paragraph(xml_escape(f"{test.subject} · {datetime.now():%d.%m.%Y} · {subtitle}"), subtitle_style)]],
@@ -1615,15 +1701,15 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes
     width = document.width
     big_heading = ParagraphStyle("big_heading", fontName=REPORT_FONT_BOLD, fontSize=20, leading=24, textColor=REPORT_BLUE)
 
-    elements = _report_banner(test, width, uses_rasch)
+    elements = _report_banner(test, width, uses_rasch, report.get("dtm_max"))
     elements += [Paragraph("Umumiy natijalar", big_heading), *_section_heading("Ishtirokchilar natijalari", styles)]
     if rows:
         elements.append(_results_grid(rows, styles, width, uses_rasch, section_names))
     else:
         elements.append(Paragraph("Hali hech kim testni yakunlamagan.", styles["cell"]))
 
-    # Har bir daraja alohida: A+ olganlar, A olganlar ... NC
-    order = RASCH_GRADE_ORDER if uses_rasch else SCHOOL_GRADE_ORDER
+    # Har bir daraja alohida: A+ olganlar, A olganlar ... NC (DTM testida — yo'q: natija DTM bali)
+    order = [] if report.get("dtm_max") else RASCH_GRADE_ORDER if uses_rasch else SCHOOL_GRADE_ORDER
     for grade in order:
         group = [row for row in rows if row["grade"] == grade]
         if not group:
@@ -4069,6 +4155,8 @@ def my_attempt_review(attempt_id: int, user: User = Depends(get_current_user), d
         "title": test.title,
         "subject": test.subject,
         "ball": row["ball"] if row else None,
+        "dtm_ball": row["dtm_ball"] if row else None,
+        "dtm_max": report["dtm_max"],
         "grade": row["grade"] if row else None,
         "rank": row["rank"] if row else None,
         "sections": row["sections"] if row else {},
@@ -5999,6 +6087,14 @@ def test_results(test_id: int, teacher: Teacher = Depends(get_current_teacher), 
         # Bo'limlarni tugmachalar bilan belgilash uchun savol raqamlari (a/b qismlar — bitta raqam)
         "question_numbers": sorted({number for number in (_item_number(label) for _, label in _rasch_items(test)) if number}),
         "rows": [{**row, **splits[row["attempt_id"]]} for row in report["rows"]],
+        "pending": [
+            {"name": name}
+            for name in db.scalars(
+                select(Attempt.offline_name)
+                .where(Attempt.test_id == test.id, Attempt.status == "pending", Attempt.user_id.is_(None))
+                .order_by(Attempt.offline_name)
+            ).all()
+        ],
     }
 
 
@@ -6150,9 +6246,13 @@ def _draw_certificate_page(pdf, test: Test, teacher: Teacher, row: dict, section
     # Natija
     ball = f"{row['ball']:.1f}" if row.get("ball") is not None else "—"
     field(height - 368, "Fan:", test.subject[:40])
-    field(height - 392, "Umumiy to'plagan bali:", ball, size=12)
+    if row.get("dtm_ball") is not None:
+        field(height - 392, "DTM bali:", f"{row['dtm_ball']:g} / {DTM_MAX_BALL:g}".replace(".", ","), size=12)
+    else:
+        field(height - 392, "Umumiy to'plagan bali:", ball, size=12)
     field(height - 416, "To'g'ri javoblar foizi:", f"{row['percent']:g} %  ({row['correct']}/{row['total']})", size=12)
-    field(height - 440, "Sertifikat darajasi:", row["grade"], size=13)
+    if row.get("dtm_ball") is None:  # DTM testida daraja yo'q — natija DTM bali
+        field(height - 440, "Sertifikat darajasi:", row["grade"], size=13)
     field(height - 464, "Qatnashchilar orasidagi o'rni:", str(row["rank"]))
 
     # Bo'limlar
@@ -6180,7 +6280,10 @@ def _draw_certificate_page(pdf, test: Test, teacher: Teacher, row: dict, section
     pdf.setFillColor(CERTIFICATE_MUTED)
     pdf.setFont(REPORT_FONT_ITALIC, 8.5)
     pdf.drawCentredString(width / 2, 112, "Ushbu hujjat o'quv (mock) test natijasini ko'rsatadi va RASMIY DAVLAT SERTIFIKATI HISOBLANMAYDI.")
-    pdf.drawCentredString(width / 2, 100, "Ball Rasch modeli bo'yicha shu testning qatnashchilariga nisbatan hisoblangan.")
+    if row.get("dtm_ball") is not None:
+        pdf.drawCentredString(width / 2, 100, "DTM bali: majburiy fanlar — 1,1, 1-mutaxassislik — 3,1, 2-mutaxassislik — 2,1 ball.")
+    else:
+        pdf.drawCentredString(width / 2, 100, "Ball Rasch modeli bo'yicha shu testning qatnashchilariga nisbatan hisoblangan.")
 
 
 def _certificate_rows(db: Session, test: Test, attempt_id: int | None = None) -> tuple[list[dict], list[str]]:
@@ -6216,11 +6319,15 @@ _certificates_lock = threading.Lock()
 
 
 def _certificate_caption(test: Test, row: dict) -> str:
+    # DTM testida natija — DTM bali; Rasch balli va darajasi (Milliy sertifikat uslubi) ko'rsatilmaydi
+    if row.get("dtm_ball") is not None:
+        score = (f"🎯 DTM bali: {row['dtm_ball']:g} / {DTM_MAX_BALL:g}".replace(".", ",") + "\n")
+    else:
+        score = f"📊 Ball: {row['ball']:.1f}\n🏅 Daraja: {row['grade']}\n"
     return (
         f"🎓 «{test.title}» testi natijangiz\n\n"
-        f"📊 Ball: {row['ball']:.1f}\n"
-        f"🏅 Daraja: {row['grade']}\n"
-        f"✅ To'g'ri javoblar: {row['correct']}/{row['total']} ({row['percent']:g}%)\n"
+        + score
+        + f"✅ To'g'ri javoblar: {row['correct']}/{row['total']} ({row['percent']:g}%)\n"
         f"🏆 O'rin: {row['rank']}"
     )
 
@@ -6403,12 +6510,15 @@ def generate_test_report_xlsx(db: Session, test: Test) -> bytes:
     # 1) Natijalar
     results = workbook.active
     results.title = "Natijalar"
-    header(results, ["O'rin", "Raqam", "Ism-familiya", "To'g'ri", "Xato", "Jami", "Foiz %", "Ball", "Daraja", *sections],
-           [7, 8, 32, 9, 8, 7, 9, 9, 9, *[14] * len(sections)])
+    dtm = _is_dtm(rows)
+    header(results, ["O'rin", "Raqam", "Ism-familiya", "To'g'ri", "Xato", "Jami", "Foiz %", *(["DTM bali"] if dtm else []),
+                     "Ball", "Daraja", *sections],
+           [7, 8, 32, 9, 8, 7, 9, *([10] if dtm else []), 9, 9, *[14] * len(sections)])
     for row in rows:
         results.append([
             row["rank"], numbers.get(row["attempt_id"]), row["name"], row["correct"], row["wrong"], row["total"],
-            row["percent"], row["ball"], row["grade"], *[row["sections"].get(name) for name in sections],
+            row["percent"], *([row["dtm_ball"]] if dtm else []), row["ball"], row["grade"],
+            *[row["sections"].get(name) for name in sections],
         ])
 
     # 2) Javoblar: birinchi qator — to'g'ri javoblar kaliti

@@ -118,6 +118,22 @@ SUBJECTS: dict[str, dict] = {
         "note": "Rus tili: 35 ta test (33–35 — moslashtirish), 9 ta yozma (a, b). "
                 "45 (insho) imtihonchi baholaydi — ilovada tekshirilmaydi",
     },
+    # Oliygohga kirish (DTM) testi: 3 ta majburiy fan (10 tadan) va 2 ta mutaxassislik fani (30 tadan),
+    # hammasi 4 variantli, yozmasiz, 3 soat
+    "DTM testi": {
+        "tests": 90, "options": {}, "written": 0, "parts": 1, "duration": 180, "keyboard": "text",
+        "sections": [
+            ("Ona tili (majburiy)", "1-10"),
+            ("Matematika (majburiy)", "11-20"),
+            ("O'zbekiston tarixi (majburiy)", "21-30"),
+            ("1-asosiy fan", "31-60"),
+            ("2-asosiy fan", "61-90"),
+        ],
+        "note": "DTM testi: 90 ta savol — majburiy fanlar 1–30 (ona tili, matematika, O'zbekiston tarixi), "
+                "1-asosiy fan 31–60, 2-asosiy fan 61–90; 180 daqiqa. Natija DTM bali bilan (189 ball)",
+        # DTM bali: har to'g'ri javob shu koeffitsientga ko'paytiriladi — 30×1,1 + 30×3,1 + 30×2,1 = 189
+        "weights": [("1-30", 1.1), ("31-60", 3.1), ("61-90", 2.1)],
+    },
 }
 
 
@@ -163,11 +179,22 @@ def default_sections(subject: str | None, question_count: int) -> list[dict]:
     return sections
 
 
+def score_weights(subject: str | None, question_count: int) -> dict[int, float] | None:
+    """
+    Ballik testlar (DTM) uchun har savolning bali: {savol raqami: ball}.
+    Faqat test tuzilishi shablonga to'liq mos kelsa (DTM — 90 ta savol); aks holda None.
+    """
+    config = subject_config(subject)
+    if not config or not config.get("weights") or question_count != config["tests"] + config["written"]:
+        return None
+    return {number: weight for ranges, weight in config["weights"] for number in _numbers(ranges)}
+
+
 def frontend_config() -> dict:
     """Ilovaga beriladigan ko'rinish (JSON): savol raqamlari kalitlari matn bo'ladi."""
     return {
         name: {
-            **{key: value for key, value in config.items() if key not in ("sections", "part_overrides")},
+            **{key: value for key, value in config.items() if key not in ("sections", "part_overrides", "weights")},
             "options": {str(number): count for number, count in config["options"].items()},
             "part_overrides": {str(number): count for number, count in config.get("part_overrides", {}).items()},
             "sections": [{"name": name_, "ranges": ranges} for name_, ranges in config["sections"]],

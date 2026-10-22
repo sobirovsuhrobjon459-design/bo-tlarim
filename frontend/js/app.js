@@ -7123,6 +7123,11 @@ async function renderMyAttemptReview(attemptId) {
       <p class="subtitle" style="margin:0">${escapeHtml(review.subject)}</p>
     </div>
     <div class="stats-grid">
+      ${
+        review.dtm_ball != null
+          ? `<div class="stat-tile"><span class="stat-value">${review.dtm_ball}</span>DTM bali (${review.dtm_max} dan)</div>`
+          : ""
+      }
       ${review.ball != null ? `<div class="stat-tile"><span class="stat-value" id="review-ball">0.0</span>Ball</div>` : ""}
       <div class="stat-tile"><span class="stat-value">${review.correct}/${review.total}</span>To'g'ri (${review.percent}%)</div>
       ${review.rank ? `<div class="stat-tile"><span class="stat-value">${review.rank}</span>O'rin (${review.participants} tadan)</div>` : ""}
@@ -8764,8 +8769,42 @@ const SUBJECTS = [
 ];
 
 // Test turiga qarab fanlar ro'yxati
+// DTM testi: 3 ta majburiy fan va o'qituvchi tanlaydigan 2 ta asosiy fan
+const DTM_SUBJECT = "DTM testi";
+const DTM_MAIN_SUBJECTS = [
+  "Matematika", "Fizika", "Kimyo", "Biologiya", "Ona tili va adabiyot", "Ingliz tili", "Rus tili",
+  "Nemis tili", "Fransuz tili", "Tarix", "Geografiya", "Huquq", "Informatika", "Ijodiy imtihon",
+];
+
+function dtmSubjectOptions() {
+  return `<option value="">— tanlang —</option>${DTM_MAIN_SUBJECTS.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("")}`;
+}
+
+function dtmSectionsText(first, second) {
+  return [
+    "Ona tili (majburiy): 1-10",
+    "Matematika (majburiy): 11-20",
+    "O'zbekiston tarixi (majburiy): 21-30",
+    `${first || "1-asosiy fan"}: 31-60`,
+    `${second || "2-asosiy fan"}: 61-90`,
+  ].join("\n");
+}
+
+// DTM ballari o'zbekcha yoziladi: 86,8
+function dtmNumber(value) {
+  return value == null ? "—" : String(value).replace(".", ",");
+}
+
+// Natijalar jadvali ustunlari: "1-majburiy fan / Ona tili", "1-asosiy fan / Fizika"
+function dtmSectionTitle(name, index) {
+  const subject = name.replace(" (majburiy)", "");
+  if (index < 3) return `${index + 1}-majburiy fan<br>${escapeHtml(subject)}`;
+  const kind = `${index - 2}-asosiy fan`;
+  return subject === kind ? kind : `${kind}<br>${escapeHtml(subject)}`;
+}
+
 const SUBJECTS_BY_TYPE = {
-  rash: ["Tarix", "Matematika", "Kimyo", "Biologiya", "Huquq", "Fizika", "Ona tili va adabiyot"],
+  rash: ["Tarix", "Matematika", "Kimyo", "Biologiya", "Huquq", "Fizika", "Ona tili va adabiyot", "DTM testi"],
   boshlangich: SUBJECTS, // barcha fanlar
 };
 
@@ -9038,6 +9077,18 @@ function renderNewTestForm(testType, draft = {}) {
         <span style="min-width:0"><b>🧩 Bo'limlar:</b> <span id="geometry-summary"></span></span>
         <button class="btn btn-ghost" id="pick-geometry-button" style="width:auto;padding:6px 12px;margin:0">Belgilash</button>
       </div>
+      <div id="dtm-main-subjects" ${subject === DTM_SUBJECT ? "" : "hidden"} style="margin-top:10px">
+        <div class="row-between" style="gap:8px;align-items:flex-end">
+          <div style="flex:1;min-width:0">
+            <label class="field-label" for="dtm-first-subject">1-asosiy fan (31–60)</label>
+            <select id="dtm-first-subject">${dtmSubjectOptions()}</select>
+          </div>
+          <div style="flex:1;min-width:0">
+            <label class="field-label" for="dtm-second-subject">2-asosiy fan (61–90)</label>
+            <select id="dtm-second-subject">${dtmSubjectOptions()}</select>
+          </div>
+        </div>
+      </div>
     </div>`;
 
   showPage(`
@@ -9212,6 +9263,32 @@ function renderNewTestForm(testType, draft = {}) {
   subjectSelect.addEventListener("change", () => {
     newTestSections = { text: "", picked: [], pickedName: "Geometriya", restName: "Algebra" };
     refreshGeometrySummary();
+  });
+
+  // DTM: asosiy fanlar tanlansa — bo'limlar shu nomlar bilan ("Fizika: 31-60"), natijada ustun sarlavhasi bo'ladi
+  const dtmBox = document.getElementById("dtm-main-subjects");
+  const dtmFirst = document.getElementById("dtm-first-subject");
+  const dtmSecond = document.getElementById("dtm-second-subject");
+  const applyDtmSubjects = () => {
+    if (subjectSelect.value !== DTM_SUBJECT) return;
+    if (dtmFirst.value && dtmFirst.value === dtmSecond.value) {
+      showToast("1- va 2-asosiy fan bir xil bo'lmasin");
+      dtmSecond.value = "";
+    }
+    if (!dtmFirst.value && !dtmSecond.value) {
+      newTestSections = { text: "", picked: [], pickedName: "Geometriya", restName: "Algebra" };
+    } else {
+      const text = dtmSectionsText(dtmFirst.value, dtmSecond.value);
+      newTestSections = { text, multi: true, summary: text.split("\n").map((line) => line.split(":")[0]).join(", ") };
+    }
+    refreshGeometrySummary();
+  };
+  dtmFirst.addEventListener("change", applyDtmSubjects);
+  dtmSecond.addEventListener("change", applyDtmSubjects);
+  subjectSelect.addEventListener("change", () => {
+    dtmBox.hidden = subjectSelect.value !== DTM_SUBJECT;
+    dtmFirst.value = "";
+    dtmSecond.value = "";
   });
   new MutationObserver(refreshGeometrySummary).observe(document.getElementById("key-questions-container"), { childList: true, subtree: true });
   geometryButton.addEventListener("click", () => {
@@ -12631,7 +12708,11 @@ function resultLineHtml(row, results) {
               : `✅ ${row.correct} • ❌ ${row.wrong} • ${row.percent}%`
           }</small>
         </span>
-        <span class="result-percent">${usesRasch ? ballText(row.ball) : `${row.percent}%`}<small class="result-grade">${usesRasch ? escapeHtml(row.grade) : `baho ${escapeHtml(row.grade)}`}</small></span>
+        ${
+          row.dtm_ball != null
+            ? `<span class="result-percent">${row.dtm_ball}<small class="result-grade">DTM bali</small></span>`
+            : `<span class="result-percent">${usesRasch ? ballText(row.ball) : `${row.percent}%`}<small class="result-grade">${usesRasch ? escapeHtml(row.grade) : `baho ${escapeHtml(row.grade)}`}</small></span>`
+        }
       </div>`;
 }
 
@@ -12908,8 +12989,24 @@ function renderResultsTestList(tests) {
 
 async function renderTestResults(testId) {
   const results = await api(`/api/teacher/tests/${testId}/results`);
+  const isDtm = Boolean(results.summary.dtm_max) && results.section_names?.length > 0;
+  const hasVariants = results.rows.some((row) => row.variant);
 
-  const tableRow = (row) => `
+  const dtmRow = (row) =>
+    row.pending
+      ? `<tr class="result-row is-pending"><td>—</td><td>${escapeHtml(row.name)}</td>${hasVariants ? "<td>—</td>" : ""}${results.section_names
+          .map(() => "<td>—</td>")
+          .join("")}<td><small>Kiritilmagan</small></td></tr>`
+      : `<tr class="result-row"><td>${row.rank}</td><td>${escapeHtml(row.name)}</td>${
+          hasVariants ? `<td>${escapeHtml(row.variant || "A")}</td>` : ""
+        }${results.section_names
+          .map((name) => {
+            const score = row.section_scores?.[name];
+            return `<td style="text-align:center">${score ? `${dtmNumber(score.ball)}<br><small>(${score.correct}/${score.total})</small>` : "—"}</td>`;
+          })
+          .join("")}<td style="text-align:center"><b>${dtmNumber(row.dtm_ball)}</b></td></tr>`;
+
+  const tableRow = (row) => isDtm ? dtmRow(row) : `
         <tr class="result-row">
           <td>${row.rank}</td><td>${escapeHtml(row.name)}</td>
           <td>${row.correct}</td><td>${row.wrong}</td><td>${row.percent}%</td>
@@ -12927,7 +13024,11 @@ async function renderTestResults(testId) {
     <div class="stats-grid">
       <div class="stat-tile"><span class="stat-value">${results.summary.participants}</span>Qatnashchilar</div>
       ${
-        results.uses_rasch
+        results.summary.dtm_max
+          ? `<div class="stat-tile"><span class="stat-value">${dtmNumber(results.summary.avg_dtm_ball)}</span>O'rtacha DTM bali</div>
+             <div class="stat-tile"><span class="stat-value">${dtmNumber(results.summary.max_dtm_ball)}</span>Eng yuqori (${results.summary.dtm_max} dan)</div>
+             <div class="stat-tile"><span class="stat-value">${results.summary.avg_percent}%</span>O'rtacha foiz</div>`
+          : results.uses_rasch
           ? `<div class="stat-tile"><span class="stat-value">${ballText(results.summary.avg_ball)}</span>O'rtacha ball</div>
              <div class="stat-tile"><span class="stat-value">${ballText(results.summary.max_ball)}</span>Eng yuqori ball</div>
              <div class="stat-tile"><span class="stat-value">${results.summary.top_count} ta</span>A+ va A</div>`
@@ -12942,7 +13043,13 @@ async function renderTestResults(testId) {
     <input class="input" id="filter-input" placeholder="🔍 O'quvchini qidirish..." />
     <div style="overflow-x:auto">
       <table>
-        <thead><tr><th>O'rin</th><th>O'quvchi</th><th>✅</th><th>❌</th><th>%</th>${results.uses_rasch ? "<th>Ball</th><th>Daraja</th>" : "<th>Baho</th>"}</tr></thead>
+        <thead>${
+          isDtm
+            ? `<tr><th>№</th><th>O'quvchi ism-familiyasi</th>${hasVariants ? "<th>Var.</th>" : ""}${results.section_names
+                .map((name, index) => `<th style="text-align:center">${dtmSectionTitle(name, index)}</th>`)
+                .join("")}<th style="text-align:center">Jami ball</th></tr>`
+            : `<tr><th>O'rin</th><th>O'quvchi</th><th>✅</th><th>❌</th><th>%</th>${results.uses_rasch ? "<th>Ball</th><th>Daraja</th>" : "<th>Baho</th>"}</tr>`
+        }</thead>
         <tbody id="results-table-body"></tbody>
       </table>
     </div>
@@ -12960,7 +13067,8 @@ async function renderTestResults(testId) {
   );
   mountPagedList({
     container: document.getElementById("results-table-body"),
-    items: results.rows,
+    // DTM jadvalida javoblari hali kiritilmagan o'quvchilar ham pastda ("Kiritilmagan")
+    items: isDtm ? [...results.rows, ...(results.pending || []).map((item) => ({ ...item, pending: true }))] : results.rows,
     renderItem: tableRow,
     filterInput: document.getElementById("filter-input"),
     matches: (row, query) => row.name.toLowerCase().includes(query),
