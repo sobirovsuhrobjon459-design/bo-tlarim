@@ -1520,7 +1520,7 @@ function renderCreateClass() {
 const CLASS_TABS = [
   { id: "students", icon: svgIcon("users"), label: "O'quvchilar" },
   { id: "attendance", icon: svgIcon("clipboard"), label: "Davomat" },
-  { id: "results", icon: svgIcon("chart"), label: "Sinov natijalari" },
+  { id: "results", icon: svgIcon("chart"), label: "Sinov" },
 ];
 
 let currentClass = null;
