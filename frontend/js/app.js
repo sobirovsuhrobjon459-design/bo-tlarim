@@ -12922,9 +12922,10 @@ async function renderAttachClasses(testId) {
   );
 }
 
-// Test sahifasidagi ixcham amal tugmasi: faqat ikonka, nomi — title va aria-label'da
-function actionTile(id, emoji, label) {
-  return `<button class="btn btn-ghost action-tile" id="${id}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${emoji}</button>`;
+// Test sahifasidagi ixcham amal tugmasi: ikonka va ostida qisqa nom; to'liq nomi — title va aria-label'da
+function actionTile(id, emoji, short, label = short) {
+  return `<button class="btn btn-ghost action-tile" id="${id}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
+    <span class="action-tile-icon">${emoji}</span><span class="action-tile-label">${escapeHtml(short)}</span></button>`;
 }
 
 async function renderTestDetail(testId) {
@@ -12989,27 +12990,27 @@ async function renderTestDetail(testId) {
     }
     ${isClosedTest ? `<div id="scan-queue-slot"></div>` : ""}
     <div class="action-grid">
-      ${actionTile("edit-test-button", "⚙️", "Tahrirlash (nomi, vaqti)")}
-      ${test.mode === "key" ? actionTile("edit-key-button", "📝", "Javoblar kalitini tahrirlash") : ""}
+      ${actionTile("edit-test-button", "⚙️", "Nomi, vaqti", "Tahrirlash (nomi, vaqti)")}
+      ${test.mode === "key" ? actionTile("edit-key-button", "📝", "Kalitni tuzatish", "Javoblar kalitini tahrirlash") : ""}
       ${
         // Titul (javoblar varaqasi) faqat oflayn (yopiq) testda — onlayn testda o'quvchi ilovada belgilaydi
         isClosedTest
-          ? `${actionTile("answer-sheet-button", "📄", "Javoblar varaqasini olish")}
-             ${actionTile("answer-key-button", "🔑", "To'g'ri javoblar (kalit)")}
+          ? `${actionTile("answer-sheet-button", "📄", "Titul", "Javoblar varaqasini olish")}
+             ${actionTile("answer-key-button", "🔑", "Kalit PDF", "To'g'ri javoblar (kalit)")}
              ${
                test.sheet_version >= 2
-                 ? `${actionTile("personal-sheets-button", "🧾", "Ismli titullar (har o'quvchiga, ID bo'yalgan)")}
-                    ${actionTile("named-sheets-button", "🆔", "O'quvchilar ro'yxati (ism va ID)")}`
+                 ? `${actionTile("personal-sheets-button", "🧾", "Ismli titul", "Ismli titullar (har o'quvchiga, ID bo'yalgan)")}
+                    ${actionTile("named-sheets-button", "🆔", "Ro'yxat (ID)", "O'quvchilar ro'yxati (ism va ID)")}`
                  : ""
              }
-             ${test.mode === "key" ? actionTile("variants-button", "🔀", `Variantlar${test.variants.length ? ` (${test.variants.join(", ")})` : " (A/B/C/D)"}`) : ""}`
+             ${test.mode === "key" ? actionTile("variants-button", "🔀", "Variantlar", `Variantlar${test.variants.length ? ` (${test.variants.join(", ")})` : " (A/B/C/D)"}`) : ""}`
           : ""
       }
-      ${isClosedTest && !isFinished ? actionTile("add-students-button", "👥", "O'quvchilarni qo'shish") : ""}
-      ${isClosedTest && !isFinished ? actionTile("attach-classes-button-open", "🏫", "Sinfni biriktirish") : ""}
-      ${!isFinished && !isClosedTest && !test.broadcast_at ? actionTile("broadcast-button", "📢", "Hammaga e'lon qilish") : ""}
-      ${actionTile("results-button", "📊", "Natijalarni ko'rish")}
-      ${isFinished ? actionTile("reopen-button", "🔓", "Testni qayta ochish") : actionTile("finish-button", "🏁", "Yakunlash va natijalarni olish")}
+      ${isClosedTest && !isFinished ? actionTile("add-students-button", "👥", "O'quvchi qo'shish", "O'quvchilarni qo'shish") : ""}
+      ${isClosedTest && !isFinished ? actionTile("attach-classes-button-open", "🏫", "Sinf biriktirish", "Sinfni biriktirish") : ""}
+      ${!isFinished && !isClosedTest && !test.broadcast_at ? actionTile("broadcast-button", "📢", "E'lon qilish", "Hammaga e'lon qilish") : ""}
+      ${actionTile("results-button", "📊", "Natijalar", "Natijalarni ko'rish")}
+      ${isFinished ? actionTile("reopen-button", "🔓", "Qayta ochish", "Testni qayta ochish") : actionTile("finish-button", "🏁", "Yakunlash", "Yakunlash va natijalarni olish")}
     </div>
     ${test.broadcast_at ? `<p class="subtitle" style="margin:4px 4px 10px">📢 E'lon qilingan: ${formatDateTime(test.broadcast_at)}</p>` : ""}
 

@@ -1691,13 +1691,27 @@ button.tt-cell {
 
 .action-grid .btn.action-tile {
   margin: 0;
-  height: 58px;
-  padding: 0;
-  display: grid;
-  place-items: center;
+  min-height: 72px;
+  padding: 8px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   border-radius: 16px;
-  font-size: 26px;
   color: var(--color-primary);
+}
+
+.action-tile-icon {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.action-tile-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--color-text);
 }
 
 .action-grid .btn.action-tile:active {
