@@ -2580,6 +2580,7 @@ SHEET8_STYLE = {"edge_marks": 9, "row": 13, "header": 9, "radius": 5.5, "gap": 1
 SHEET9 = {"column": 120, "step": 78, "row": 13, "header": 9, "radius": 5.5, "gap": 19, "label": 24}
 SHEET_LOGO = FRONTEND_DIR / "img" / "chittak-logo-wide.png"  # qush + "Chittak" yozuvi, shaffof fon
 SHEET_LOGO_RATIO = 600 / 149
+SHEET_LOGO_HEIGHT = 22.0  # ism qatoridagi logo balandligi (pt)
 SHEET_NAME_MIN_ROOM = 220  # ism-familiyaga kamida shuncha joy qolsagina ism qatorida logo bo'ladi
 SHEET9_BASE = SHEET9
 DTM_TITLE_BAND = 20  # DTM titulida blok sarlavhasi shuncha balandroq — fan nomi (ikki qator) A B C D ustida sig'adi
@@ -2630,7 +2631,8 @@ def _adaptive_style(cells: int, reserved: int = 2, title_band: float = 0.0) -> d
     box_middle = (box_top + box_bottom) / 2
     box_font = 10 * font
     # Ism-familiya qatorining o'ng tomonidagi Chittak logosi (qush + yozuv), qator balandligiga moslab
-    logo_height = max(8.0, ((box_middle - box_top) - 9) * 0.7)
+    # Logo hamma titulda bir xil kattalikda (DTM titulidagidek) — titul kattalashsa ham o'smaydi
+    logo_height = max(8.0, min(SHEET_LOGO_HEIGHT, (box_middle - box_top) - 8))
     logo_width = logo_height * SHEET_LOGO_RATIO
     # Tor titulda (savollar kam — 2 ustun) ism uchun joy kam: logo ism qatoriga qo'yilmaydi
     # (titul ostidagi Chittak belgisi baribir bor) — uzun ism logoning ustiga chiqmasin
