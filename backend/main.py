@@ -96,6 +96,8 @@ from .database import (
     ClassTestIn,
     ClassTestScore,
     DiscountIn,
+    DormBuilding,
+    DormBuildingIn,
     DormCheck,
     DormCheckIn,
     DormCheckMark,
@@ -231,6 +233,7 @@ def _add_missing_columns() -> None:
             "work_hours": "TEXT",
         },
         "lesson_slots": {"period": "INTEGER"},
+        "dorm_rooms": {"building_id": "INTEGER"},
         "attendances": {
             "lesson_start": "VARCHAR(5)",
             "lesson_end": "VARCHAR(5)",
@@ -10997,6 +11000,7 @@ def _dorm_room_view(room: DormRoom, residents: list, warden: User | None, today_
     return {
         "id": room.id,
         "name": room.name,
+        "building_id": room.building_id,
         "floor": room.floor,
         "capacity": room.capacity,
         "occupied": len(residents),
@@ -11032,25 +11036,104 @@ def dorm_overview(user: User = Depends(get_current_user), db: Session = Depends(
         )
     }
     views = [_dorm_room_view(room, residents[room.id], wardens.get(room.warden_user_id), checks.get(room.id)) for room in rooms]
-    present = sum((view["today"] or {}).get("present", 0) for view in views)
-    sick = sum((view["today"] or {}).get("sick", 0) for view in views)
+    buildings = _dorm_buildings_of(db, member, rooms)
+    building_views = [
+        {"id": building.id if building else None, "name": building.name if building else DORM_NO_BUILDING,
+         **_dorm_totals([view for view in views if view["building_id"] == (building.id if building else None)])}
+        for building in buildings
+    ]
     return {
         "can_manage": leader,
         "date": today,
+        "buildings": building_views,
         "rooms": views,
-        "totals": {
-            "rooms": len(views),
-            "capacity": sum(view["capacity"] for view in views),
-            "occupied": sum(view["occupied"] for view in views),
-            "free": sum(view["free"] for view in views),
-            "checked_rooms": sum(1 for view in views if view["today"] is not None),
-            "rooms_with_residents": sum(1 for view in views if view["occupied"]),
-            "present": present,
-            "absent": sum((view["today"] or {}).get("absent", 0) for view in views),
-            "sick": sick,
-            "excused": sum((view["today"] or {}).get("excused", 0) for view in views),
-        },
+        "totals": _dorm_totals(views),
     }
+
+
+DORM_NO_BUILDING = "Binoga biriktirilmagan"
+
+
+def _dorm_totals(views: list[dict]) -> dict:
+    """Xonalar bo'yicha jami: o'rinlar, bandlik, bugungi yo'qlama (har holat bo'yicha o'quvchilar soni)."""
+    status_total = lambda status: sum((view["today"] or {}).get(status, 0) for view in views)  # noqa: E731
+    return {
+        "rooms": len(views),
+        "capacity": sum(view["capacity"] for view in views),
+        "occupied": sum(view["occupied"] for view in views),
+        "free": sum(view["free"] for view in views),
+        "checked_rooms": sum(1 for view in views if view["today"] is not None),
+        "rooms_with_residents": sum(1 for view in views if view["occupied"]),
+        "not_checked_students": sum(view["occupied"] for view in views if view["today"] is None),
+        **{status: status_total(status) for status in ("present", "absent", "sick", "excused")},
+    }
+
+
+def _dorm_buildings_of(db: Session, member: SchoolMember, rooms: list[DormRoom]) -> list[DormBuilding | None]:
+    """
+    Ko'rinadigan binolar: rahbariyatga — hammasi (bo'sh binolar ham), tarbiyachiga — o'z xonalari bor binolar.
+    None — binoga biriktirilmagan xonalar (binolar qo'shilishidan oldin ochilganlar) guruhi.
+    """
+    query = select(DormBuilding).where(DormBuilding.school_id == member.school_id, DormBuilding.deleted_at.is_(None))
+    if not _can_delete_classes(member):
+        query = query.where(DormBuilding.id.in_({room.building_id for room in rooms if room.building_id} or {-1}))
+    result: list[DormBuilding | None] = list(db.scalars(query.order_by(DormBuilding.name)).all())
+    if any(room.building_id is None for room in rooms):
+        result.append(None)
+    return result
+
+
+def _dorm_building(db: Session, member: SchoolMember, building_id: int | None) -> int | None:
+    if building_id is None:
+        return None
+    building = db.get(DormBuilding, building_id)
+    if not building or building.deleted_at is not None or building.school_id != member.school_id:
+        raise HTTPException(status_code=404, detail="Bino topilmadi")
+    return building.id
+
+
+@app.post("/api/dorm/buildings")
+def create_dorm_building(body: DormBuildingIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    member = _dorm_member(db, user)
+    if not _can_delete_classes(member):
+        raise HTTPException(status_code=403, detail="Binolarni admin yoki direktor qo'shadi")
+    same = db.scalar(select(DormBuilding.id).where(DormBuilding.school_id == member.school_id, DormBuilding.deleted_at.is_(None),
+                                                   func.lower(DormBuilding.name) == body.name.lower()))
+    if same:
+        raise HTTPException(status_code=409, detail=f"«{body.name}» binosi allaqachon bor")
+    building = DormBuilding(school_id=member.school_id, name=body.name)
+    db.add(building)
+    db.commit()
+    return {"id": building.id, "name": building.name}
+
+
+@app.put("/api/dorm/buildings/{building_id}")
+def rename_dorm_building(building_id: int, body: DormBuildingIn, user: User = Depends(get_current_user),
+                        db: Session = Depends(get_db)):
+    member = _dorm_member(db, user)
+    if not _can_delete_classes(member):
+        raise HTTPException(status_code=403, detail="Binolarni admin yoki direktor boshqaradi")
+    building = db.get(DormBuilding, _dorm_building(db, member, building_id))
+    same = db.scalar(select(DormBuilding.id).where(DormBuilding.school_id == member.school_id, DormBuilding.deleted_at.is_(None),
+                                                   DormBuilding.id != building.id, func.lower(DormBuilding.name) == body.name.lower()))
+    if same:
+        raise HTTPException(status_code=409, detail=f"«{body.name}» binosi allaqachon bor")
+    building.name = body.name
+    db.commit()
+    return {"id": building.id, "name": building.name}
+
+
+@app.delete("/api/dorm/buildings/{building_id}")
+def delete_dorm_building(building_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    member = _dorm_member(db, user)
+    if not _can_delete_classes(member):
+        raise HTTPException(status_code=403, detail="Binolarni admin yoki direktor boshqaradi")
+    building = db.get(DormBuilding, _dorm_building(db, member, building_id))
+    if db.scalar(select(DormRoom.id).where(DormRoom.building_id == building.id, DormRoom.deleted_at.is_(None))):
+        raise HTTPException(status_code=409, detail="Binoda xonalar bor — avval ularni o'chiring yoki boshqa binoga o'tkazing")
+    building.deleted_at = utcnow()
+    db.commit()
+    return {"ok": True}
 
 
 def _dorm_warden(db: Session, member: SchoolMember, warden_user_id: int | None) -> int | None:
@@ -11063,17 +11146,26 @@ def _dorm_warden(db: Session, member: SchoolMember, warden_user_id: int | None) 
     return warden_user_id
 
 
+def _dorm_same_room(db: Session, member: SchoolMember, name: str, building_id: int | None, exclude: int | None = None):
+    """Shu binoda shu nomli xona bormi (har binoda o'z 201-xonasi bo'lishi mumkin)."""
+    query = select(DormRoom.id).where(DormRoom.school_id == member.school_id, DormRoom.deleted_at.is_(None),
+                                      func.lower(DormRoom.name) == name.lower(),
+                                      DormRoom.building_id.is_(None) if building_id is None else DormRoom.building_id == building_id)
+    if exclude:
+        query = query.where(DormRoom.id != exclude)
+    return db.scalar(query)
+
+
 @app.post("/api/dorm/rooms")
 def create_dorm_room(body: DormRoomIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     member = _dorm_member(db, user)
     if not _can_delete_classes(member):
         raise HTTPException(status_code=403, detail="Xonalarni admin yoki direktor ochadi")
-    same = db.scalar(select(DormRoom.id).where(DormRoom.school_id == member.school_id, DormRoom.deleted_at.is_(None),
-                                               func.lower(DormRoom.name) == body.name.lower()))
-    if same:
-        raise HTTPException(status_code=409, detail=f"«{body.name}» xonasi allaqachon bor")
+    building_id = _dorm_building(db, member, body.building_id)
+    if _dorm_same_room(db, member, body.name, building_id):
+        raise HTTPException(status_code=409, detail=f"«{body.name}» xonasi bu binoda allaqachon bor")
     room = DormRoom(school_id=member.school_id, name=body.name, floor=body.floor, capacity=body.capacity,
-                    warden_user_id=_dorm_warden(db, member, body.warden_user_id))
+                    warden_user_id=_dorm_warden(db, member, body.warden_user_id), building_id=building_id)
     db.add(room)
     db.commit()
     return {"id": room.id}
@@ -11086,11 +11178,10 @@ def update_dorm_room(room_id: int, body: DormRoomIn, user: User = Depends(get_cu
     occupied = len(_dorm_residents(db, [room.id])[room.id])
     if body.capacity < occupied:
         raise HTTPException(status_code=422, detail=f"Xonada {occupied} ta o'quvchi bor — o'rinlar soni undan kam bo'lmasin")
-    same = db.scalar(select(DormRoom.id).where(DormRoom.school_id == member.school_id, DormRoom.deleted_at.is_(None),
-                                               DormRoom.id != room.id, func.lower(DormRoom.name) == body.name.lower()))
-    if same:
-        raise HTTPException(status_code=409, detail=f"«{body.name}» xonasi allaqachon bor")
-    room.name, room.floor, room.capacity = body.name, body.floor, body.capacity
+    building_id = _dorm_building(db, member, body.building_id)
+    if _dorm_same_room(db, member, body.name, building_id, exclude=room.id):
+        raise HTTPException(status_code=409, detail=f"«{body.name}» xonasi bu binoda allaqachon bor")
+    room.name, room.floor, room.capacity, room.building_id = body.name, body.floor, body.capacity, building_id
     room.warden_user_id = _dorm_warden(db, member, body.warden_user_id)
     db.commit()
     return {"ok": True}
@@ -11122,8 +11213,10 @@ def dorm_room_detail(room_id: int, user: User = Depends(get_current_user), db: S
                            next((check for check in checks if check.check_date == today), None))
     takers = {item.id: item.full_name for item in db.scalars(select(User).where(User.id.in_({c.taken_by for c in checks})))} \
         if checks else {}
+    building = db.get(DormBuilding, room.building_id) if room.building_id else None
     return {
         **view,
+        "building_name": building.name if building else DORM_NO_BUILDING,
         "can_manage": _can_delete_classes(member),
         "date": today,
         "checks": [
@@ -11265,17 +11358,25 @@ def _dorm_report_context(db: Session, user: User, check_date: date | None) -> di
     }
     wardens = {item.id: item.full_name for item in db.scalars(
         select(User).where(User.id.in_({room.warden_user_id for room in rooms if room.warden_user_id} or {-1})))}
+    building_names = {item.id: item.name for item in db.scalars(
+        select(DormBuilding).where(DormBuilding.id.in_({room.building_id for room in rooms if room.building_id} or {-1})))}
     class_of = {student.id: school_class.name for room_id in residents for _, student, school_class in residents[room_id]}
     room_rows, missing = [], {status: [] for status in ("absent", "sick", "excused")}
     for room in rooms:
         check = checks.get(room.id)
         counts = _dorm_check_counts(check)
         title = _dorm_room_title(room)
-        room_rows.append({"title": title, "floor": room.floor, "warden": wardens.get(room.warden_user_id, ""),
-                          "occupied": len(residents[room.id]), "capacity": room.capacity, "counts": counts})
+        building = building_names.get(room.building_id, DORM_NO_BUILDING) if building_names or room.building_id else ""
+        label = f"{building}, {title}" if building else title  # ro'yxatlarda: qaysi binodagi xona
+        room_rows.append({"title": title, "label": label, "floor": room.floor, "warden": wardens.get(room.warden_user_id, ""),
+                          "building": building, "occupied": len(residents[room.id]), "capacity": room.capacity,
+                          "free": max(room.capacity - len(residents[room.id]), 0), "counts": counts})
         for mark in (check.marks if check else []):
             if mark.status in missing:
-                missing[mark.status].append({"name": mark.student_name, "room": title, "class_name": class_of.get(mark.student_id, "")})
+                missing[mark.status].append({"name": mark.student_name, "room": label, "class_name": class_of.get(mark.student_id, "")})
+    # Binolar tartibida (nomi bo'yicha), bino ichida — qavat va xona nomi bo'yicha
+    room_rows.sort(key=lambda row: (row["building"] == DORM_NO_BUILDING, row["building"], row["floor"] is None,
+                                    row["floor"] or 0, row["title"]))
     totals = {status: sum((row["counts"] or {}).get(status, 0) for row in room_rows) for status in DORM_REPORT_LABELS}
     return {
         "school_name": member.school.name,
@@ -11286,8 +11387,11 @@ def _dorm_report_context(db: Session, user: User, check_date: date | None) -> di
         "occupied": sum(row["occupied"] for row in room_rows),
         "capacity": sum(row["capacity"] for row in room_rows),
         "checked": sum(1 for row in room_rows if row["counts"] is not None),
+        "free": sum(row["free"] for row in room_rows),
+        "not_checked_students": sum(row["occupied"] for row in room_rows if row["counts"] is None),
+        "has_buildings": any(row["building"] for row in room_rows),
         "with_residents": sum(1 for row in room_rows if row["occupied"]),
-        "not_checked": [row["title"] for row in room_rows if row["occupied"] and row["counts"] is None],
+        "not_checked": [row["label"] for row in room_rows if row["occupied"] and row["counts"] is None],
     }
 
 
@@ -11301,10 +11405,31 @@ def dorm_report_caption(context: dict) -> str:
     ])
 
 
-def dorm_report_text(context: dict) -> str:
-    """Matn — faqat yotoqxonada BO'LMAGANLAR (yo'q, kasal, ruxsat bilan) va yo'qlama olinmagan xonalar."""
+def dorm_report_stats(context: dict) -> list[tuple[str, str, int]]:
+    """Alohida statistika: (belgi, nomi, soni) — jami o'quvchi, bor, yo'q, kasal, ruxsat bilan, yo'qlama olinmagan."""
+    totals = context["totals"]
+    rows = [("👥", "Jami o'quvchi", context["occupied"])]
+    rows += [(icon, label, totals.get(status, 0)) for status, (label, icon) in DORM_REPORT_LABELS.items()]
+    if context["not_checked_students"]:
+        rows.append(("⏳", "Yo'qlama olinmagan", context["not_checked_students"]))
+    rows.append(("🛏", "Bo'sh o'rin", context["free"]))
+    return rows
 
-    lines = [dorm_report_caption(context)]
+
+def dorm_free_places(context: dict) -> list[tuple[str, list[dict]]]:
+    """Bo'sh o'rinli xonalar binolar bo'yicha: [(bino, [xona, ...]), ...]."""
+    groups: dict[str, list[dict]] = {}
+    for row in context["rooms"]:
+        if row["free"]:
+            groups.setdefault(row["building"], []).append(row)
+    return list(groups.items())
+
+
+def dorm_report_text(context: dict) -> str:
+    """Matn — statistika, yotoqxonada BO'LMAGANLAR (yo'q, kasal, ruxsat bilan), bo'sh o'rinlar va yo'qlama olinmaganlar."""
+
+    lines = [f"🏠 Yotoqxona — {context['date']}", f"🏫 {context['school_name']}", "", "📊 Statistika:"]
+    lines += [f"{icon} {label}: {count}" for icon, label, count in dorm_report_stats(context)]
     for status in ("absent", "sick", "excused"):
         people = context["missing"][status]
         if not people:
@@ -11317,12 +11442,18 @@ def dorm_report_text(context: dict) -> str:
     if not any(context["missing"].values()) and context["checked"]:
         lines += ["", "✅ Yo'qlama olingan xonalarda hamma joyida."]
     if context["not_checked"]:
-        lines += ["", f"⏳ Yo'qlama olinmagan: {', '.join(context['not_checked'])}"]
+        lines += ["", f"⏳ Yo'qlama olinmagan xonalar: {', '.join(context['not_checked'])}"]
+    free = dorm_free_places(context)
+    if free:
+        lines += ["", f"🛏 Bo'sh o'rinlar ({context['free']} ta):"]
+        for building, rooms in free:
+            room_list = ", ".join(f"{row['title']} — {row['free']} ta" for row in rooms)
+            lines.append(f"{building}: {room_list}" if building else room_list)
     return "\n".join(lines)
 
 
 def dorm_report_image(context: dict) -> bytes:
-    """Rasm (PNG): umumiy ko'rsatkichlar, xonalar jadvali va yotoqxonada bo'lmaganlar."""
+    """Rasm (PNG): alohida statistika, xonalar jadvali (binolar bo'yicha, bo'sh o'rinlar bilan) va bo'lmaganlar."""
 
     from PIL import Image, ImageDraw, ImageFont
 
@@ -11333,38 +11464,55 @@ def dorm_report_image(context: dict) -> bytes:
             return ImageFont.load_default()
 
     title_font, text_font, bold_font = font("DejaVuSerif-Bold.ttf", 46), font("DejaVuSerif.ttf", 28), font("DejaVuSerif-Bold.ttf", 28)
+    big_font, small_font = font("DejaVuSans-Bold.ttf", 44), font("DejaVuSans.ttf", 22)
     width, row_height = 1080, 58
+    stats = dorm_report_stats(context)
+    stat_rows = math.ceil(len(stats) / 4)
+    buildings = [row["building"] for row in context["rooms"]]
+    building_rows = len({name for name in buildings if name}) if context["has_buildings"] else 0
     people = [(status, item) for status in ("absent", "sick", "excused") for item in context["missing"][status]]
-    height = 290 + row_height * (len(context["rooms"]) + 1) + (90 + row_height * (len(people) + 1) if people else 0) + 60
+    height = (190 + stat_rows * 130 + 30 + row_height * (len(context["rooms"]) + building_rows + 1)
+              + (90 + row_height * (len(people) + 1) if people else 0) + 60)
     image = Image.new("RGB", (width, height), "#ffffff")
     draw = ImageDraw.Draw(image)
     draw.text((50, 40), f"Yotoqxona — {context['date']}", font=title_font, fill="#0B1F2A")
     draw.text((50, 108), context["school_name"], font=text_font, fill="#4F6670")
-    draw.text((50, 150), f"Band: {context['occupied']} / {context['capacity']} o'rin  ·  Yo'qlama: "
-                         f"{context['checked']} / {context['with_residents']} xona", font=text_font, fill="#4F6670")
-    x = 50
-    for status, (label, _) in DORM_REPORT_LABELS.items():
-        text = f"{label}: {context['totals'].get(status, 0)}"
-        draw.text((x, 200), text, font=bold_font, fill=DORM_REPORT_COLORS[status])
-        x += draw.textlength(text, font=bold_font) + 36
 
-    # Xonalar jadvali: xona | band | bor | yo'q | kasal | ruxsat
-    columns = [(60, "Xona"), (380, "Band"), (520, "Bor"), (640, "Yo'q"), (770, "Kasal"), (900, "Ruxsat")]
-    y = 270
+    # Alohida statistika: plitkalar (soni katta, nomi ostida)
+    stat_colors = {"Jami o'quvchi": "#0B1F2A", "Yo'qlama olinmagan": "#6b7280", "Bo'sh o'rin": "#2e75b6",
+                   **{label: DORM_REPORT_COLORS[status] for status, (label, _) in DORM_REPORT_LABELS.items()}}
+    tile_width, gap, y = (width - 80 - 3 * 16) / 4, 16, 170
+    for index, (_, label, count) in enumerate(stats):
+        x = 40 + (index % 4) * (tile_width + gap)
+        top = y + (index // 4) * 130
+        draw.rounded_rectangle([x, top, x + tile_width, top + 112], radius=18, fill="#F3FAF5")
+        draw.text((x + tile_width / 2, top + 40), str(count), font=big_font, fill=stat_colors.get(label, "#0B1F2A"), anchor="mm")
+        draw.text((x + tile_width / 2, top + 86), label, font=small_font, fill="#4F6670", anchor="mm")
+
+    # Xonalar jadvali: bino sarlavhasi, xona | band | bo'sh | bor | yo'q | kasal | ruxsat
+    columns = [(60, "Xona"), (330, "Band"), (450, "Bo'sh"), (570, "Bor"), (680, "Yo'q"), (790, "Kasal"), (910, "Ruxsat")]
+    y = 170 + stat_rows * 130 + 30
     draw.rectangle([40, y, width - 40, y + row_height], fill="#00A844")
     for column_x, title in columns:
         draw.text((column_x, y + 13), title, font=bold_font, fill="#ffffff")
+    current_building = None
     for index, row in enumerate(context["rooms"], start=1):
+        if context["has_buildings"] and row["building"] != current_building:
+            current_building = row["building"]
+            y += row_height
+            draw.rectangle([40, y, width - 40, y + row_height], fill="#DDF3E4")
+            draw.text((60, y + 13), current_building, font=bold_font, fill="#0B5E2B")
         y += row_height
         if index % 2 == 0:
-            draw.rectangle([40, y, width - 40, y + row_height], fill="#F3FAF5")
+            draw.rectangle([40, y, width - 40, y + row_height], fill="#F7FBF8")
+        draw.text((60, y + 13), row["title"][:16], font=text_font, fill="#111827")
+        draw.text((330, y + 13), f"{row['occupied']}/{row['capacity']}", font=text_font, fill="#111827")
+        draw.text((450, y + 13), str(row["free"]), font=bold_font, fill="#2e75b6" if row["free"] else "#9ca3af")
         counts = row["counts"]
-        draw.text((60, y + 13), row["title"][:20], font=text_font, fill="#111827")
-        draw.text((420, y + 13), f"{row['occupied']}/{row['capacity']}", font=text_font, fill="#111827")
         if counts is None:
-            draw.text((520, y + 13), "yo'qlama olinmagan" if row["occupied"] else "bo'sh xona", font=text_font, fill="#9ca3af")
+            draw.text((570, y + 13), "yo'qlama olinmagan" if row["occupied"] else "bo'sh xona", font=text_font, fill="#9ca3af")
             continue
-        for (column_x, _), status in zip(columns[2:], ("present", "absent", "sick", "excused")):
+        for (column_x, _), status in zip(columns[3:], ("present", "absent", "sick", "excused")):
             draw.text((column_x, y + 13), str(counts.get(status, 0)), font=bold_font, fill=DORM_REPORT_COLORS[status])
 
     if people:
@@ -11372,15 +11520,15 @@ def dorm_report_image(context: dict) -> bytes:
         draw.text((50, y), "Yotoqxonada bo'lmaganlar", font=bold_font, fill="#0B1F2A")
         y += 50
         draw.rectangle([40, y, width - 40, y + row_height], fill="#00A844")
-        for column_x, title in ((60, "F.I.Sh."), (560, "Xona"), (800, "Holat")):
+        for column_x, title in ((60, "F.I.Sh."), (470, "Xona"), (830, "Holat")):
             draw.text((column_x, y + 13), title, font=bold_font, fill="#ffffff")
         for index, (status, item) in enumerate(people, start=1):
             y += row_height
             if index % 2 == 0:
                 draw.rectangle([40, y, width - 40, y + row_height], fill="#F3FAF5")
-            draw.text((60, y + 13), item["name"][:30], font=text_font, fill="#111827")
-            draw.text((560, y + 13), item["room"][:14], font=text_font, fill="#111827")
-            draw.text((800, y + 13), DORM_REPORT_LABELS[status][0], font=bold_font, fill=DORM_REPORT_COLORS[status])
+            draw.text((60, y + 13), item["name"][:24], font=text_font, fill="#111827")
+            draw.text((470, y + 17), item["room"][:30], font=small_font, fill="#111827")
+            draw.text((830, y + 13), DORM_REPORT_LABELS[status][0], font=bold_font, fill=DORM_REPORT_COLORS[status])
 
     buffer = io.BytesIO()
     image.save(buffer, format="PNG", optimize=True)
@@ -11388,7 +11536,7 @@ def dorm_report_image(context: dict) -> bytes:
 
 
 def dorm_report_pdf(context: dict) -> bytes:
-    """PDF: umumiy ko'rsatkichlar, xonalar jadvali (tarbiyachi bilan) va yotoqxonada bo'lmaganlar."""
+    """PDF: alohida statistika, xonalar (binolar bo'yicha, tarbiyachi va bo'sh o'rinlar bilan) va bo'lmaganlar."""
 
     styles = _report_styles()
     buffer = io.BytesIO()
@@ -11398,20 +11546,36 @@ def dorm_report_pdf(context: dict) -> bytes:
     def head(texts):
         return [Paragraph(f"<font color='white'>{xml_escape(text)}</font>", styles["cell_bold"]) for text in texts]
 
-    def striped(table: Table, rows: int, spans: list[int] = ()) -> Table:
+    def table_style(rows: int, spans: list[int] = (), groups: list[int] = ()) -> TableStyle:
         commands = [("BACKGROUND", (0, 0), (-1, 0), REPORT_TABLE_HEAD), ("LINEBELOW", (0, 0), (-1, -1), 0.4, REPORT_GRID),
                     ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]
-        commands += [("BACKGROUND", (0, row), (-1, row), REPORT_TILE_BG) for row in range(2, rows, 2)]
-        commands += [("SPAN", (3, row), (6, row)) for row in spans]  # "yo'qlama olinmagan" — 4 ustun kengligida
-        table.setStyle(TableStyle(commands))
-        return table
+        commands += [("BACKGROUND", (0, row), (-1, row), REPORT_TILE_BG) for row in range(2, rows, 2) if row not in groups]
+        commands += [("SPAN", (4, row), (7, row)) for row in spans]  # "yo'qlama olinmagan" — 4 ustun kengligida
+        commands += [cmd for row in groups for cmd in (("SPAN", (0, row), (-1, row)),
+                                                       ("BACKGROUND", (0, row), (-1, row), colors.HexColor("#DDF3E4")))]
+        return TableStyle(commands)
 
-    rooms = [head(("Xona", "Tarbiyachi", "Band", "Bor", "Yo'q", "Kasal", "Ruxsat"))]
-    spans = []
+    # Alohida statistika — bitta qatorli jadval: nomi tepada, soni ostida
+    stats = dorm_report_stats(context)
+    stat_table = Table(
+        [[Paragraph(f"<font color='#4F6670'>{xml_escape(label)}</font>", styles["cell"]) for _, label, _ in stats],
+         [Paragraph(f"<b>{count}</b>", styles["cell_bold"]) for _, _, count in stats]],
+        colWidths=[width / len(stats)] * len(stats))
+    stat_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), REPORT_TILE_BG), ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                                    ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                                    ("LINEABOVE", (0, 0), (-1, 0), 1.2, REPORT_TABLE_HEAD)]))
+
+    rooms = [head(("Xona", "Tarbiyachi", "Band", "Bo'sh", "Bor", "Yo'q", "Kasal", "Ruxsat"))]
+    spans, groups, current_building = [], [], None
     for row in context["rooms"]:
+        if context["has_buildings"] and row["building"] != current_building:
+            current_building = row["building"]
+            groups.append(len(rooms))
+            rooms.append([Paragraph(f"<b>{xml_escape(current_building)}</b>", styles["cell_bold"]), "", "", "", "", "", "", ""])
         counts = row["counts"]
         cells = [Paragraph(xml_escape(row["title"]), styles["cell_bold"]), Paragraph(xml_escape(row["warden"] or "—"), styles["cell"]),
-                 Paragraph(f"{row['occupied']}/{row['capacity']}", styles["cell"])]
+                 Paragraph(f"{row['occupied']}/{row['capacity']}", styles["cell"]),
+                 Paragraph(f"<font color='{'#2e75b6' if row['free'] else '#9ca3af'}'><b>{row['free']}</b></font>", styles["cell"])]
         if counts is None:
             note = "yo'qlama olinmagan" if row["occupied"] else "bo'sh"
             cells += [Paragraph(f"<font color='#9ca3af'>{note}</font>", styles["cell"]), "", "", ""]
@@ -11420,17 +11584,17 @@ def dorm_report_pdf(context: dict) -> bytes:
             cells += [Paragraph(f"<font color='{DORM_REPORT_COLORS[status]}'><b>{counts.get(status, 0)}</b></font>", styles["cell"])
                       for status in ("present", "absent", "sick", "excused")]
         rooms.append(cells)
-    room_table = striped(Table(rooms, colWidths=[width * share for share in (0.17, 0.33, 0.1, 0.1, 0.1, 0.1, 0.1)],
-                               repeatRows=1), len(rooms), spans)
+    room_table = Table(rooms, colWidths=[width * share for share in (0.15, 0.29, 0.09, 0.09, 0.09, 0.09, 0.1, 0.1)],
+                       repeatRows=1)
+    room_table.setStyle(table_style(len(rooms), spans, groups))
 
     elements = [
         Paragraph(xml_escape(f"Yotoqxona — {context['date']}"), styles["title"]),
         Paragraph(xml_escape(f"{context['school_name']}  ·  Band: {context['occupied']} / {context['capacity']} o'rin  ·  "
                              f"Yo'qlama: {context['checked']} / {context['with_residents']} xona"), styles["meta"]),
-        Spacer(1, 8),
-        Paragraph(xml_escape("   ".join(f"{label}: {context['totals'].get(status, 0)}"
-                                        for status, (label, _) in DORM_REPORT_LABELS.items())), styles["cell_bold"]),
         Spacer(1, 10),
+        stat_table,
+        Spacer(1, 14),
         room_table,
     ]
     people = [(status, item) for status in ("absent", "sick", "excused") for item in context["missing"][status]]
@@ -11441,9 +11605,9 @@ def dorm_report_pdf(context: dict) -> bytes:
                          Paragraph(xml_escape(item["room"]), styles["cell"]), Paragraph(xml_escape(item["class_name"]), styles["cell"]),
                          Paragraph(f"<font color='{DORM_REPORT_COLORS[status]}'><b>{DORM_REPORT_LABELS[status][0]}</b></font>",
                                    styles["cell"])])
-        elements += [Spacer(1, 16), Paragraph("Yotoqxonada bo'lmaganlar", styles["cell_bold"]), Spacer(1, 6),
-                     striped(Table(rows, colWidths=[width * share for share in (0.07, 0.38, 0.17, 0.18, 0.2)], repeatRows=1),
-                             len(rows))]
+        people_table = Table(rows, colWidths=[width * share for share in (0.07, 0.38, 0.17, 0.18, 0.2)], repeatRows=1)
+        people_table.setStyle(table_style(len(rows)))
+        elements += [Spacer(1, 16), Paragraph("Yotoqxonada bo'lmaganlar", styles["cell_bold"]), Spacer(1, 6), people_table]
     document.build(elements, canvasmaker=_brand_canvas(context["school_name"], "Yotoqxona hisoboti"))
     return buffer.getvalue()
 

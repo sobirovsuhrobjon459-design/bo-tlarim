@@ -5741,7 +5741,7 @@ def test_yotoqxona_xonalar_joylashtirish_va_kechki_yoqlama():
     # Hisobot: matn (faqat yo'qlar), rasm va PDF; tarbiyachi ham oladi, oddiy o'qituvchi — yo'q
     text = client.get("/api/dorm/report/text", headers=as_user(701)).json()["text"]
     assert "Yotoqxona" in text and "Ruxsat bilan" in text and "Ali Valiyev — 201-xona" in text, text
-    assert "Yo'qlama olinmagan: 202-xona" in text, text
+    assert "Yo'qlama olinmagan xonalar: 202-xona" in text, text
     image = client.get("/api/dorm/report/file", params={"format": "image"}, headers=as_user(702))
     assert image.status_code == 200 and image.content[:4] == b"\x89PNG", image.status_code
     pdf = client.get("/api/dorm/report/file", params={"format": "pdf"}, headers=as_user(701))
@@ -5759,3 +5759,54 @@ def test_yotoqxona_xonalar_joylashtirish_va_kechki_yoqlama():
                 headers=_as_kind(710, "club"))
     assert client.get("/api/schools/me", headers=_as_kind(710, "club")).json()["school"]["dorm"] is False
     assert client.get("/api/dorm", headers=_as_kind(710, "club")).status_code == 404
+
+
+def test_yotoqxona_binolar_va_hisobot_statistikasi():
+    """Binolar (nomi ixtiyoriy): har binoda o'z 201-xonasi; hisobotda statistika va xonalar bo'yicha bo'sh o'rinlar."""
+    reset_database()
+    school_class = _school_with_class(701)
+    h = as_user(701)
+    client.post(f"/api/classes/{school_class['id']}/students/bulk",
+                json={"names": ["Ali Valiyev", "Zuhra Karimova", "Jasur Umarov"]}, headers=h)
+    ids = [s["id"] for s in client.get(f"/api/classes/{school_class['id']}", headers=h).json()["students"]]
+
+    a = client.post("/api/dorm/buildings", json={"name": "A bino"}, headers=h).json()
+    b = client.post("/api/dorm/buildings", json={"name": "  Qizlar   binosi "}, headers=h).json()
+    assert b["name"] == "Qizlar binosi"
+    assert client.post("/api/dorm/buildings", json={"name": "a BINO"}, headers=h).status_code == 409
+    renamed = client.put(f"/api/dorm/buildings/{b['id']}", json={"name": "B bino"}, headers=h).json()
+    assert renamed["name"] == "B bino"
+
+    room_a = client.post("/api/dorm/rooms", json={"name": "201", "capacity": 2, "building_id": a["id"]}, headers=h)
+    room_b = client.post("/api/dorm/rooms", json={"name": "201", "capacity": 4, "building_id": b["id"]}, headers=h)
+    assert room_a.status_code == 200 and room_b.status_code == 200, (room_a.text, room_b.text)  # har binoda o'z 201-xonasi
+    assert client.post("/api/dorm/rooms", json={"name": "201", "building_id": a["id"]}, headers=h).status_code == 409
+    room_a, room_b = room_a.json()["id"], room_b.json()["id"]
+    client.post(f"/api/dorm/rooms/{room_a}/residents", json={"student_ids": ids[:2]}, headers=h)
+    client.post(f"/api/dorm/rooms/{room_b}/residents", json={"student_ids": ids[2:]}, headers=h)
+    client.put(f"/api/dorm/rooms/{room_a}/check", json={"marks": {str(ids[0]): "sick"}}, headers=h)
+
+    overview = client.get("/api/dorm", headers=h).json()
+    buildings = {item["name"]: item for item in overview["buildings"]}
+    assert set(buildings) == {"A bino", "B bino"}, buildings
+    assert (buildings["A bino"]["occupied"], buildings["A bino"]["free"], buildings["A bino"]["sick"]) == (2, 0, 1)
+    assert (buildings["B bino"]["free"], buildings["B bino"]["not_checked_students"]) == (3, 1)
+
+    # Bino ichida xona bo'lsa — o'chirilmaydi
+    assert client.delete(f"/api/dorm/buildings/{a['id']}", headers=h).status_code == 409
+
+    text = client.get("/api/dorm/report/text", headers=h).json()["text"]
+    for line in ("Jami o'quvchi: 3", "Bor: 1", "Kasal: 1", "Yo'qlama olinmagan: 1", "Bo'sh o'rin: 3",
+                 "Ali Valiyev — A bino, 201-xona", "B bino: 201-xona — 3 ta"):
+        assert line in text, (line, text)
+    for fmt, magic in (("image", b"\x89PNG"), ("pdf", b"%PDF")):
+        response = client.get("/api/dorm/report/file", params={"format": fmt}, headers=h)
+        assert response.status_code == 200 and response.content[:4] == magic, fmt
+
+    # Binosiz xona (binolardan oldin ochilgan) — alohida guruhda, keyin binoga o'tkaziladi
+    old = client.post("/api/dorm/rooms", json={"name": "Eski 5", "capacity": 2}, headers=h).json()["id"]
+    groups = [item["name"] for item in client.get("/api/dorm", headers=h).json()["buildings"]]
+    assert groups[-1] == "Binoga biriktirilmagan", groups
+    client.put(f"/api/dorm/rooms/{old}", json={"name": "Eski 5", "capacity": 2, "building_id": b["id"]}, headers=h)
+    groups = [item["name"] for item in client.get("/api/dorm", headers=h).json()["buildings"]]
+    assert groups == ["A bino", "B bino"], groups

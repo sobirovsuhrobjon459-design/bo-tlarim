@@ -881,6 +881,18 @@ class ClassSubjectPlan(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(default=None)
 
 
+class DormBuilding(Base):
+    """Yotoqxona binosi (A bino, B bino, "Qizlar binosi" ...) — nomini rahbariyat xohlagancha qo'yadi."""
+
+    __tablename__ = "dorm_buildings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    name: Mapped[str] = mapped_column(String(60))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
 class DormRoom(Base):
     """
     Yotoqxona xonasi (maktab yoki o'quv markazi). Rahbariyat (admin, direktor)
@@ -894,6 +906,8 @@ class DormRoom(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
     name: Mapped[str] = mapped_column(String(40))  # "201", "3-xona", "Qizlar 12"
+    # Qaysi binoda (bo'sh — binoga biriktirilmagan, binolar qo'shilishidan oldin ochilgan xona)
+    building_id: Mapped[int | None] = mapped_column(ForeignKey("dorm_buildings.id"), index=True, default=None)
     floor: Mapped[int | None] = mapped_column(default=None)
     capacity: Mapped[int] = mapped_column(default=4)
     warden_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
@@ -1099,6 +1113,17 @@ class AutoTimetableIn(BaseModel):
     apply: bool = False
 
 
+class DormBuildingIn(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+
+    @model_validator(mode="after")
+    def _clean(self):
+        self.name = " ".join(self.name.split())
+        if not self.name:
+            raise ValueError("Bino nomini kiriting")
+        return self
+
+
 class DormRoomIn(BaseModel):
     """Yotoqxona xonasi: nomi/raqami, qavati, necha o'rinli, tarbiyachisi (bo'sh — tayinlanmagan)."""
 
@@ -1106,6 +1131,7 @@ class DormRoomIn(BaseModel):
     floor: int | None = Field(default=None, ge=-5, le=100)
     capacity: int = Field(default=4, ge=1, le=50)
     warden_user_id: int | None = None
+    building_id: int | None = None
 
     @model_validator(mode="after")
     def _clean(self):

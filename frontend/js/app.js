@@ -4185,15 +4185,95 @@ function dormCountsHtml(counts) {
     </div>`;
 }
 
+let dormBuildingsCache = []; // xona sozlamalarida "Bino" tanlovi uchun
+
+function dormStatsHtml(totals) {
+  return `
+    <div class="stats-grid">
+      <div class="stat-tile"><span class="stat-value">${totals.rooms}</span>Xonalar</div>
+      <div class="stat-tile"><span class="stat-value">${totals.occupied} / ${totals.capacity}</span>Band o'rinlar</div>
+      <div class="stat-tile"><span class="stat-value">${totals.free}</span>Bo'sh o'rinlar</div>
+      <div class="stat-tile"><span class="stat-value">${totals.checked_rooms} / ${totals.rooms_with_residents}</span>Bugun yo'qlama</div>
+    </div>
+    ${totals.checked_rooms ? dormCountsHtml(totals) : ""}`;
+}
+
+// Yotoqxona: binolar (A bino, B bino ...) — "+" bilan bino qo'shiladi; bino ichida — xonalar
 async function renderDorm() {
   const dorm = await api("/api/dorm");
+  dormBuildingsCache = dorm.buildings.filter((building) => building.id !== null);
   const totals = dorm.totals;
+  const buildingCard = (building) => `
+    <div class="card card-entrance" data-dorm-building="${building.id ?? "none"}">
+      <div class="card-body" style="width:100%">
+        <div class="row-between" style="align-items:flex-start">
+          <div style="min-width:0">
+            <h3 style="margin-bottom:6px">🏢 ${escapeHtml(building.name)}</h3>
+            <p style="margin:0">${building.rooms} ta xona · 🛏 <b>${building.occupied} / ${building.capacity}</b> o'rin${
+              building.free ? ` · ${building.free} ta bo'sh` : ""
+            }</p>
+            <p class="subtitle" style="margin:0">${
+              building.rooms_with_residents
+                ? `Bugun yo'qlama: ${building.checked_rooms} / ${building.rooms_with_residents} xona${
+                    building.absent ? ` · ❌ ${building.absent} yo'q` : ""
+                  }${building.sick ? ` · 🤒 ${building.sick}` : ""}`
+                : building.rooms
+                ? "Xonalarda hali o'quvchi yo'q"
+                : "Hali xona qo'shilmagan"
+            }</p>
+          </div>
+          <span style="color:var(--color-text-muted);font-size:22px">›</span>
+        </div>
+      </div>
+    </div>`;
+
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-school-home" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">Yotoqxona</h2>
+      ${dorm.can_manage ? `<button type="button" class="icon-button" id="dorm-add-building" aria-label="Bino qo'shish" title="Bino qo'shish" style="font-size:24px;font-weight:700">+</button>` : ""}
+    </div>
+    ${dormStatsHtml(totals)}
+    ${dorm.rooms.length ? `<button class="btn btn-ghost" id="dorm-share" style="margin-top:12px">📤 Hisobotni yuborish (rasm, matn, PDF)</button>` : ""}
+    <p class="section-label" style="margin-top:18px">BINOLAR</p>
+    ${
+      dorm.buildings.length
+        ? dorm.buildings.map(buildingCard).join("")
+        : `<div class="empty-state"><div style="font-size:42px">🏢</div><p>Hali bino yo'q.${
+            dorm.can_manage ? " Tepadagi «+» bilan birinchi binoni qo'shing (masalan: A bino)." : ""
+          }</p></div>`
+    }
+  `);
+  wireSchoolSubPage();
+  document.getElementById("dorm-share")?.addEventListener("click", () => openDormShareSheet(totals));
+  document.getElementById("dorm-add-building")?.addEventListener("click", () =>
+    openDormBuildingSheet(null, (building) => renderDormBuilding(building.id))
+  );
+  document.querySelectorAll("[data-dorm-building]").forEach((card) =>
+    card.addEventListener(
+      "click",
+      guarded(() => renderDormBuilding(card.dataset.dormBuilding === "none" ? null : Number(card.dataset.dormBuilding)))
+    )
+  );
+}
+
+// Bino: xonalari qavatlar bo'yicha; "+ Xona qo'shish", ⚙️ — nomini o'zgartirish yoki (bo'sh binoni) o'chirish
+async function renderDormBuilding(buildingId) {
+  const dorm = await api("/api/dorm");
+  dormBuildingsCache = dorm.buildings.filter((item) => item.id !== null);
+  const building = dorm.buildings.find((item) => item.id === buildingId);
+  if (!building) {
+    showToast("Bino topilmadi");
+    return renderDorm();
+  }
+  const rooms = dorm.rooms.filter((room) => room.building_id === buildingId);
   const floors = new Map();
-  dorm.rooms.forEach((room) => {
+  rooms.forEach((room) => {
     const key = room.floor ?? "none";
     if (!floors.has(key)) floors.set(key, []);
     floors.get(key).push(room);
   });
+  const manage = dorm.can_manage && buildingId !== null;
 
   const roomCard = (room) => `
     <div class="card card-entrance" data-dorm-room="${room.id}">
@@ -4212,36 +4292,78 @@ async function renderDorm() {
     </div>`;
 
   showPage(`
-    ${schoolSubHeader("Yotoqxona")}
-    <div class="stats-grid">
-      <div class="stat-tile"><span class="stat-value">${totals.rooms}</span>Xonalar</div>
-      <div class="stat-tile"><span class="stat-value">${totals.occupied} / ${totals.capacity}</span>Band o'rinlar</div>
-      <div class="stat-tile"><span class="stat-value">${totals.free}</span>Bo'sh o'rinlar</div>
-      <div class="stat-tile"><span class="stat-value">${totals.checked_rooms} / ${totals.rooms_with_residents}</span>Bugun yo'qlama</div>
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-dorm" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">${escapeHtml(building.name)}</h2>
+      ${manage ? `<button type="button" class="icon-button" id="dorm-building-settings" aria-label="Bino sozlamalari">⚙️</button>` : ""}
     </div>
-    ${totals.checked_rooms ? dormCountsHtml(totals) : ""}
-    ${dorm.rooms.length ? `<button class="btn btn-ghost" id="dorm-share" style="margin-top:12px">📤 Hisobotni yuborish (rasm, matn, PDF)</button>` : ""}
-    ${dorm.can_manage ? `<button class="btn" id="dorm-add-room" style="margin-top:8px">+ Xona qo'shish</button>` : ""}
+    ${dormStatsHtml(building)}
+    ${manage ? `<button class="btn" id="dorm-add-room" style="margin-top:12px">+ Xona qo'shish</button>` : ""}
     ${
-      dorm.rooms.length
+      buildingId === null
+        ? `<p class="subtitle" style="margin:10px 0 0">Bu xonalar binolar qo'shilishidan oldin ochilgan. Xona sozlamalarida (⚙️) ularni binoga o'tkazing.</p>`
+        : ""
+    }
+    ${
+      rooms.length
         ? [...floors.entries()]
             .sort(([a], [b]) => (a === "none" ? 1 : b === "none" ? -1 : a - b))
             .map(
-              ([floor, rooms]) => `
+              ([floor, list]) => `
                 <p class="section-label" style="margin-top:18px">${floor === "none" ? "QAVAT KO'RSATILMAGAN" : `${floor}-QAVAT`}</p>
-                ${rooms.map(roomCard).join("")}`
+                ${list.map(roomCard).join("")}`
             )
             .join("")
-        : `<div class="empty-state"><div style="font-size:42px">🏠</div><p>Hali xona yo'q.${
-            dorm.can_manage ? " «+ Xona qo'shish» bilan birinchi xonani oching." : ""
+        : `<div class="empty-state"><div style="font-size:42px">🚪</div><p>Bu binoda hali xona yo'q.${
+            manage ? " «+ Xona qo'shish» bilan birinchi xonani oching." : ""
           }</p></div>`
     }
   `);
-  wireSchoolSubPage();
-  document.getElementById("dorm-share")?.addEventListener("click", () => openDormShareSheet(totals));
-  document.getElementById("dorm-add-room")?.addEventListener("click", () => openDormRoomSheet(null, (id) => renderDormRoom(id)));
+  document.querySelector('[data-action="back-dorm"]').addEventListener("click", guarded(renderDorm));
+  document.getElementById("dorm-building-settings")?.addEventListener("click", () =>
+    openDormBuildingSheet(building, (saved) => (saved ? renderDormBuilding(building.id) : renderDorm()))
+  );
+  document.getElementById("dorm-add-room")?.addEventListener("click", () =>
+    openDormRoomSheet(null, (id) => renderDormRoom(id), buildingId)
+  );
   document.querySelectorAll("[data-dorm-room]").forEach((card) =>
     card.addEventListener("click", guarded(() => renderDormRoom(Number(card.dataset.dormRoom))))
+  );
+}
+
+// Bino qo'shish / nomini o'zgartirish (nomi — xohlagancha: "A bino", "Qizlar binosi"); bo'sh binoni o'chirish
+function openDormBuildingSheet(building, onSaved) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 10px">${building ? "⚙️ Bino sozlamalari" : "🏢 Yangi bino"}</h3>
+    <label class="field-label" for="dorm-building-name">Bino nomi</label>
+    <input class="input" id="dorm-building-name" maxlength="60" value="${escapeHtml(building?.name || "")}" placeholder="Masalan: A bino" />
+    <button class="btn" id="dorm-building-save" style="margin-top:14px">💾 Saqlash</button>
+    ${building && !building.rooms ? `<button class="btn btn-ghost" id="dorm-building-delete" style="margin-top:8px">🗑 Binoni o'chirish</button>` : ""}
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+  sheet.querySelector("#dorm-building-name").focus();
+  sheet.querySelector("#dorm-building-save").addEventListener(
+    "click",
+    guarded(async () => {
+      const name = sheet.querySelector("#dorm-building-name").value.trim();
+      if (!name) throw new Error("Bino nomini kiriting");
+      const saved = building
+        ? await api(`/api/dorm/buildings/${building.id}`, { method: "PUT", body: { name } })
+        : await api("/api/dorm/buildings", { method: "POST", body: { name } });
+      close();
+      showToast(building ? "✅ Bino nomi saqlandi" : `✅ «${saved.name}» qo'shildi`);
+      await onSaved(saved);
+    })
+  );
+  sheet.querySelector("#dorm-building-delete")?.addEventListener(
+    "click",
+    guarded(async () => {
+      if (!(await askConfirm(`«${building.name}» o'chirilsinmi?`))) return;
+      await api(`/api/dorm/buildings/${building.id}`, { method: "DELETE" });
+      close();
+      showToast("🗑 Bino o'chirildi");
+      await onSaved(null);
+    })
   );
 }
 
@@ -4254,7 +4376,7 @@ async function renderDormRoom(roomId) {
       <h2 style="margin:0;flex:1">${escapeHtml(dormRoomTitle(room))}</h2>
       ${manage ? `<button type="button" class="icon-button" id="dorm-room-settings" aria-label="Xona sozlamalari">⚙️</button>` : ""}
     </div>
-    <p class="subtitle" style="margin:0 0 12px">${room.floor != null ? `${room.floor}-qavat · ` : ""}🛏 ${room.occupied} / ${room.capacity} o'rin · ${
+    <p class="subtitle" style="margin:0 0 12px">🏢 ${escapeHtml(room.building_name)} · ${room.floor != null ? `${room.floor}-qavat · ` : ""}🛏 ${room.occupied} / ${room.capacity} o'rin · ${
       room.warden ? `👤 ${escapeHtml(room.warden.name)}` : "tarbiyachi tayinlanmagan"
     }</p>
     ${
@@ -4302,9 +4424,9 @@ async function renderDormRoom(roomId) {
     }
   `);
 
-  document.querySelector('[data-action="back-dorm"]').addEventListener("click", guarded(renderDorm));
+  document.querySelector('[data-action="back-dorm"]').addEventListener("click", guarded(() => renderDormBuilding(room.building_id)));
   document.getElementById("dorm-room-settings")?.addEventListener("click", () =>
-    openDormRoomSheet(room, (id) => (id ? renderDormRoom(id) : renderDorm()))
+    openDormRoomSheet(room, (id) => (id ? renderDormRoom(id) : renderDormBuilding(room.building_id)))
   );
   document.getElementById("dorm-check-button")?.addEventListener("click", guarded(() => renderDormCheckForm(room)));
   document.getElementById("dorm-place-button")?.addEventListener("click", guarded(() => openDormPlaceSheet(room)));
@@ -4371,8 +4493,11 @@ function openDormShareSheet(totals) {
 }
 
 // Xona qo'shish / sozlash: nomi, qavati, o'rinlar soni, tarbiyachisi; bo'sh xonani o'chirish
-function openDormRoomSheet(room, onSaved) {
+async function openDormRoomSheet(room, onSaved, buildingId = room ? room.building_id : null) {
   const members = currentSchool?.members || [];
+  if (!dormBuildingsCache.length) {
+    dormBuildingsCache = (await api("/api/dorm").catch(() => ({ buildings: [] }))).buildings.filter((item) => item.id !== null);
+  }
   const { sheet, close } = openSheet(`
     <h3 style="margin:0 0 10px">${room ? "⚙️ Xona sozlamalari" : "🏠 Yangi xona"}</h3>
     <label class="field-label" for="dorm-room-name">Xona raqami yoki nomi</label>
@@ -4387,6 +4512,13 @@ function openDormRoomSheet(room, onSaved) {
         <input class="input" id="dorm-room-capacity" type="number" inputmode="numeric" min="1" max="50" value="${room?.capacity ?? 4}" />
       </div>
     </div>
+    <label class="field-label" for="dorm-room-building">🏢 Bino</label>
+    <select id="dorm-room-building">
+      ${buildingId === null ? `<option value="">— Binoga biriktirilmagan —</option>` : ""}
+      ${dormBuildingsCache
+        .map((item) => `<option value="${item.id}" ${item.id === buildingId ? "selected" : ""}>${escapeHtml(item.name)}</option>`)
+        .join("")}
+    </select>
     <label class="field-label" for="dorm-room-warden">👤 Tarbiyachi (kechki yo'qlamani oladi)</label>
     <select id="dorm-room-warden">
       <option value="">— Tayinlanmagan —</option>
@@ -4406,7 +4538,9 @@ function openDormRoomSheet(room, onSaved) {
     guarded(async () => {
       const floorRaw = sheet.querySelector("#dorm-room-floor").value.trim();
       const warden = sheet.querySelector("#dorm-room-warden").value;
+      const building = sheet.querySelector("#dorm-room-building").value;
       const body = {
+        building_id: building ? Number(building) : null,
         name: sheet.querySelector("#dorm-room-name").value.trim(),
         floor: floorRaw === "" ? null : Number(floorRaw),
         capacity: Number(sheet.querySelector("#dorm-room-capacity").value) || 0,
