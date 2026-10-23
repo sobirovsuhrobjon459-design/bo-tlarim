@@ -12922,6 +12922,11 @@ async function renderAttachClasses(testId) {
   );
 }
 
+// Test sahifasidagi ixcham amal tugmasi: faqat ikonka, nomi — title va aria-label'da
+function actionTile(id, emoji, label) {
+  return `<button class="btn btn-ghost action-tile" id="${id}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${emoji}</button>`;
+}
+
 async function renderTestDetail(testId) {
   const test = await api(`/api/teacher/tests/${testId}`);
   const isClosedTest = test.enrollment_type === "closed";
@@ -12978,36 +12983,35 @@ async function renderTestDetail(testId) {
           : ""
       }
     </section>
-    <button class="btn btn-ghost" id="edit-test-button">✏️ Tahrirlash (nomi, vaqti)</button>
-    ${test.mode === "key" ? `<button class="btn btn-ghost" id="edit-key-button">🔑 Javoblar kalitini tahrirlash</button>` : ""}
-
     ${
-      // Titul (javoblar varaqasi) faqat oflayn (yopiq) testda — onlayn testda o'quvchi ilovada belgilaydi
-      isClosedTest
-        ? `<button class="btn btn-ghost" id="answer-sheet-button">📄 Javoblar varaqasini olish</button>
-           <button class="btn btn-ghost" id="answer-key-button">🔑 To'g'ri javoblar (kalit)</button>
-           ${
-             test.sheet_version >= 2
-               ? `<button class="btn btn-ghost" id="personal-sheets-button">🧾 Ismli titullar (har o'quvchiga, ID bo'yalgan)</button>
-                  <button class="btn btn-ghost" id="named-sheets-button">👥 O'quvchilar ro'yxati (ism va ID)</button>`
-               : ""
-           }
-           ${test.mode === "key" ? `<button class="btn btn-ghost" id="variants-button">🔀 Variantlar${test.variants.length ? ` (${test.variants.join(", ")})` : " (A/B/C/D)"}</button>` : ""}
-           ${!isFinished ? `<button class="btn" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""}`
-        : ""
+      // Skaner — asosiy amal: katta yashil tugma. Qolganlari — ixcham ikonkalar (nomi bosib turilganda/title'da)
+      isClosedTest && !isFinished ? `<button class="btn scan-main-button" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""
     }
-    ${isClosedTest && !isFinished ? `<button class="btn" id="add-students-button">👥 O'quvchilarni qo'shish</button>` : ""}
-    ${isClosedTest && !isFinished ? `<button class="btn btn-ghost" id="attach-classes-button-open">🏫 Sinfni biriktirish</button>` : ""}
     ${isClosedTest ? `<div id="scan-queue-slot"></div>` : ""}
-    ${!isFinished && !isClosedTest && !test.broadcast_at
-      ? `<button class="btn" id="broadcast-button">📢 Hammaga e'lon qilish</button>`
-      : ""}
+    <div class="action-grid">
+      ${actionTile("edit-test-button", "⚙️", "Tahrirlash (nomi, vaqti)")}
+      ${test.mode === "key" ? actionTile("edit-key-button", "📝", "Javoblar kalitini tahrirlash") : ""}
+      ${
+        // Titul (javoblar varaqasi) faqat oflayn (yopiq) testda — onlayn testda o'quvchi ilovada belgilaydi
+        isClosedTest
+          ? `${actionTile("answer-sheet-button", "📄", "Javoblar varaqasini olish")}
+             ${actionTile("answer-key-button", "🔑", "To'g'ri javoblar (kalit)")}
+             ${
+               test.sheet_version >= 2
+                 ? `${actionTile("personal-sheets-button", "🧾", "Ismli titullar (har o'quvchiga, ID bo'yalgan)")}
+                    ${actionTile("named-sheets-button", "🆔", "O'quvchilar ro'yxati (ism va ID)")}`
+                 : ""
+             }
+             ${test.mode === "key" ? actionTile("variants-button", "🔀", `Variantlar${test.variants.length ? ` (${test.variants.join(", ")})` : " (A/B/C/D)"}`) : ""}`
+          : ""
+      }
+      ${isClosedTest && !isFinished ? actionTile("add-students-button", "👥", "O'quvchilarni qo'shish") : ""}
+      ${isClosedTest && !isFinished ? actionTile("attach-classes-button-open", "🏫", "Sinfni biriktirish") : ""}
+      ${!isFinished && !isClosedTest && !test.broadcast_at ? actionTile("broadcast-button", "📢", "Hammaga e'lon qilish") : ""}
+      ${actionTile("results-button", "📊", "Natijalarni ko'rish")}
+      ${isFinished ? actionTile("reopen-button", "🔓", "Testni qayta ochish") : actionTile("finish-button", "🏁", "Yakunlash va natijalarni olish")}
+    </div>
     ${test.broadcast_at ? `<p class="subtitle" style="margin:4px 4px 10px">📢 E'lon qilingan: ${formatDateTime(test.broadcast_at)}</p>` : ""}
-    <button class="btn btn-ghost" id="results-button">📊 Natijalarni ko'rish</button>
-    ${isFinished
-      ? `<button class="btn btn-ghost" id="reopen-button">🔓 Testni qayta ochish</button>`
-      : `<button class="btn" id="finish-button">🏁 Yakunlash va natijalarni olish</button>`
-    }
 
     ${test.missing > 0 && !isFinished
       ? `<div class="notice">Yakunlash uchun barcha o'quvchilar uchun javoblarni kiriting.
