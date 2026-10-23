@@ -12425,7 +12425,7 @@ async function renderVariantsPage(testId, test) {
             </div>
             <div style="display:flex;gap:8px;flex-shrink:0">
               <button class="icon-button" data-variant-key="${variant.name}" title="Kalit PDF">🔑</button>
-              ${variant.main ? "" : `<button class="icon-button" data-variant-edit="${variant.name}" title="Tahrirlash">✏️</button>`}
+              <button class="icon-button" data-variant-edit="${variant.name}" title="Tahrirlash">✏️</button>
               ${variant.main || variant.students ? "" : deleteButton("data-variant-delete", variant.name)}
             </div>
           </div>`
@@ -12438,7 +12438,14 @@ async function renderVariantsPage(testId, test) {
   document.getElementById("add-variant-button")?.addEventListener("click", guarded(() => renderVariantEditor(testId, test, nextName, {})));
   document.querySelectorAll("[data-variant-edit]").forEach((button) => {
     const variant = variants.find((item) => item.name === button.dataset.variantEdit);
-    button.addEventListener("click", guarded(() => renderVariantEditor(testId, test, variant.name, variant.answers)));
+    button.addEventListener(
+      "click",
+      guarded(() =>
+        variant.main
+          ? renderMainKeyEditor(testId, test, () => renderVariantsPage(testId, test))
+          : renderVariantEditor(testId, test, variant.name, variant.answers)
+      )
+    );
   });
   document.querySelectorAll("[data-variant-key]").forEach((button) => {
     const name = button.dataset.variantKey;
@@ -12542,6 +12549,115 @@ async function renderVariantEditor(testId, test, name, saved) {
       unsavedChanges = false;
       showToast(result.regraded ? `✅ Saqlandi, ${result.regraded} ta natija qayta hisoblandi` : `✅ ${name} variant saqlandi`);
       await renderVariantsPage(testId, test);
+    })
+  );
+}
+
+/*
+  Asosiy kalitni (A) tahrirlash — test yaratilgandan keyin ham to'g'ri javoblarni tuzatish mumkin.
+  Savollar soni va turi o'zgarmaydi. Saqlanganda tayyor natijalar yangi kalit bilan qayta hisoblanadi.
+*/
+async function renderMainKeyEditor(testId, test, back) {
+  const structure = await api(`/api/teacher/tests/${testId}/questions`);
+  answerKeyboard = structure.keyboard || "math";
+  const answers = Object.fromEntries(structure.questions.map((question) => [question.ref, question.correct || ""]));
+
+  const letterRow = (question) => {
+    const chosen = new Set(answers[question.ref].split(",").filter(Boolean));
+    return `
+      <div class="scan-row" data-key-ref="${question.ref}">
+        <span class="scan-label">${escapeHtml(question.label.replace(/-savol$/, ""))}.</span>
+        <div class="scan-options">
+          ${Array.from({ length: question.option_count }, (_, index) => String.fromCharCode(65 + index))
+            .map((letter) => `<button type="button" class="scan-option${chosen.has(letter) ? " selected" : ""}" data-letter="${letter}">${letter}</button>`)
+            .join("")}
+        </div>
+      </div>`;
+  };
+  const textRow = (question) => `
+      <div class="written-row">
+        <span class="written-number">${escapeHtml(question.label.replace(/-savol$/, ""))}</span>
+        <div class="written-cell key-row" data-key-text="${question.ref}">
+          ${answers[question.ref].split("|").map((variant) => mathFieldHtml(variant, 'placeholder="javob"')).join("")}
+        </div>
+      </div>`;
+
+  const letterQuestions = structure.questions.filter((question) => question.question_type !== "text");
+  const textQuestions = structure.questions.filter((question) => question.question_type === "text");
+
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-key-editor" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">🔑 Javoblar kaliti</h2>
+    </div>
+    <p class="subtitle">To'g'ri javobni o'zgartirish uchun kerakli harfni bosing.${
+      test.variants?.length ? " Bu — asosiy (A) variant kaliti." : ""
+    }</p>
+    ${letterQuestions.length ? `<div class="panel scan-grid">${letterQuestions.map(letterRow).join("")}</div>` : ""}
+    ${
+      textQuestions.length
+        ? `<p class="section-label">YOZMA JAVOBLAR</p>
+           <div class="panel" id="key-text-panel">
+             ${textQuestions.map(textRow).join("")}
+             <p class="subtitle answer-hint">${answerInputHint()}</p>
+             <p class="subtitle" style="margin:4px 0 0">Bir nechta to'g'ri javob bo'lsa, | belgisi bilan ajrating: <b>0,5|1/2</b></p>
+           </div>`
+        : ""
+    }
+    <div class="notice is-info" style="margin:12px 0 0">Saqlanganda tayyor natijalar yangi kalit bilan qayta hisoblanadi — o'quvchilar javoblari o'zgarmaydi.</div>
+    <button class="btn" id="save-key-button" style="margin-top:14px">💾 Saqlash</button>
+  `);
+
+  document.querySelectorAll("[data-key-ref]").forEach((rowElement) => {
+    const question = structure.questions.find((item) => item.ref === rowElement.dataset.keyRef);
+    rowElement.addEventListener("click", (event) => {
+      const button = event.target.closest(".scan-option");
+      if (!button) return;
+      const chosen = new Set(answers[question.ref].split(",").filter(Boolean));
+      const letter = button.dataset.letter;
+      if (question.question_type === "multi") {
+        if (chosen.has(letter)) chosen.delete(letter);
+        else chosen.add(letter);
+      } else {
+        chosen.clear();
+        chosen.add(letter);
+      }
+      answers[question.ref] = [...chosen].sort().join(",");
+      rowElement.querySelectorAll(".scan-option").forEach((item) => item.classList.toggle("selected", chosen.has(item.dataset.letter)));
+      markUnsaved();
+      telegram?.HapticFeedback?.selectionChanged?.();
+    });
+  });
+  const textPanel = document.getElementById("key-text-panel");
+  if (textPanel) {
+    setupMathFields(textPanel, (field) => {
+      const cell = field.closest("[data-key-text]");
+      answers[cell.dataset.keyText] = [...cell.querySelectorAll(".math-input")].map(readMathValue).filter(Boolean).join("|");
+      markUnsaved();
+    });
+  }
+
+  document.querySelector('[data-action="back-key-editor"]').addEventListener(
+    "click",
+    guarded(async () => {
+      if (await confirmLeave()) await back();
+    })
+  );
+  document.getElementById("save-key-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const missing = structure.questions.find((question) => !answers[question.ref].trim());
+      if (missing) throw new Error(`${missing.label}: to'g'ri javobni belgilang`);
+      const result = await api(`/api/teacher/tests/${testId}/key`, { method: "PUT", body: { answers } });
+      unsavedChanges = false;
+      showToast(
+        !result.changed
+          ? "Kalit o'zgarmadi"
+          : result.regraded
+            ? `✅ Kalit saqlandi, ${result.regraded} ta natija qayta hisoblandi`
+            : "✅ Kalit saqlandi"
+      );
+      await back();
     })
   );
 }
@@ -12863,6 +12979,7 @@ async function renderTestDetail(testId) {
       }
     </section>
     <button class="btn btn-ghost" id="edit-test-button">✏️ Tahrirlash (nomi, vaqti)</button>
+    ${test.mode === "key" ? `<button class="btn btn-ghost" id="edit-key-button">🔑 Javoblar kalitini tahrirlash</button>` : ""}
 
     ${
       // Titul (javoblar varaqasi) faqat oflayn (yopiq) testda — onlayn testda o'quvchi ilovada belgilaydi
@@ -12909,6 +13026,9 @@ async function renderTestDetail(testId) {
 
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
   document.getElementById("edit-test-button").addEventListener("click", () => openTestEditSheet(test));
+  document
+    .getElementById("edit-key-button")
+    ?.addEventListener("click", guarded(() => renderMainKeyEditor(testId, test, () => renderTestDetail(testId))));
 
   document.getElementById("answer-sheet-button")?.addEventListener(
     "click",

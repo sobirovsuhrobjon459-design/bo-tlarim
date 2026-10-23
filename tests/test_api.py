@@ -5114,6 +5114,40 @@ def test_variantlar_alohida_kalit_bilan_tekshiriladi():
                        headers=headers).status_code == 422
 
 
+def test_asosiy_kalitni_tahrirlash_natijalarni_qayta_hisoblaydi():
+    reset_database()
+    register_teacher()
+    created = create_test(enrollment_type="closed")
+    base = f"/api/teacher/tests/{created['id']}"
+    headers = as_user(555)
+    client.post(f"{base}/students", json={"names": ["Birinchi"]}, headers=headers)
+    student = client.get(base, headers=headers).json()["students"][0]
+    saved = client.post(f"{base}/students/{student['id']}/answers",
+                        json={"answers": {"1": "B", "2": "D", "3": "A,C", "4": "5"}}, headers=headers).json()
+    assert saved["correct"] == 2, saved
+
+    questions = client.get(f"{base}/questions", headers=headers).json()["questions"]
+    assert [q["correct"] for q in questions] == ["B", "C", "A,C", r"2\sqrt{3}"]
+
+    assert client.put(f"{base}/key", json={"answers": {"1": "B"}}, headers=headers).status_code == 422
+    assert client.put(f"{base}/key", json={"answers": {"1": "B,C", "2": "D", "3": "A,C", "4": "5"}},
+                      headers=headers).status_code == 422  # bitta javobli savolga ikki harf
+    assert client.put(f"{base}/key", json={"answers": {"1": "B", "2": "D", "3": "A,C", "4": "5"}},
+                      headers=as_user(777)).status_code in (403, 404)
+
+    result = client.put(f"{base}/key", json={"answers": {"1": "b", "2": "D", "3": "c, a", "4": " 5 | besh "}},
+                        headers=headers).json()
+    assert result == {"ok": True, "changed": 2, "regraded": 1}, result
+    review = client.get(f"{base}/students/{student['id']}/detail", headers=headers).json()
+    assert review["correct"] == 4, review
+    questions = client.get(f"{base}/questions", headers=headers).json()["questions"]
+    assert [q["correct"] for q in questions] == ["B", "D", "A,C", "5|besh"]
+
+    unchanged = client.put(f"{base}/key", json={"answers": {"1": "B", "2": "D", "3": "A,C", "4": "5|besh"}},
+                           headers=headers).json()
+    assert unchanged["changed"] == 0
+
+
 def test_offline_testga_excel_dan_oquvchilar():
     from openpyxl import Workbook
 

@@ -5741,8 +5741,10 @@ def _check_variant(db: Session, test: Test, variant: str | None) -> None:
 def _regrade_variant(db: Session, test: Test, variant: str) -> int:
     """Variant kaliti o'zgardi — shu variantdagi natijalar saqlangan javoblardan qayta tekshiriladi."""
 
+    # A — asosiy kalit: varianti yozilmagan (bo'sh) natijalar ham shu kalit bilan tekshirilgan
+    same_variant = or_(Attempt.variant.is_(None), Attempt.variant == "A") if variant == "A" else Attempt.variant == variant
     attempts = db.scalars(
-        select(Attempt).where(Attempt.test_id == test.id, Attempt.status == "done", Attempt.variant == variant)
+        select(Attempt).where(Attempt.test_id == test.id, Attempt.status == "done", same_variant)
     ).all()
     for attempt in attempts:
         answers = {
@@ -5812,6 +5814,50 @@ def save_variant(
     regraded = _regrade_variant(db, test, name)
     db.commit()
     return {"ok": True, "regraded": regraded}
+
+
+@app.put("/api/teacher/tests/{test_id}/key")
+def save_main_key(
+    test_id: int, body: VariantKeyIn,
+    teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db),
+):
+    """Asosiy kalitni (A) tahrirlash: savollar soni va turi o'zgarmaydi, faqat to'g'ri javoblar.
+    Tayyor natijalar yangi kalit bilan qayta tekshiriladi (o'quvchi javoblari saqlanib qoladi)."""
+
+    test = _get_own_test(db, teacher, test_id)
+    if test.mode != "key":
+        raise HTTPException(status_code=400, detail="Kalitni faqat javoblar kaliti bilan yaratilgan testda tahrirlash mumkin")
+
+    key: dict[int, str] = {}
+    for kq in test.key_questions:
+        value = (body.answers.get(str(kq.number)) or "").strip()
+        label = _key_question_label(kq)
+        if kq.question_type == "text":
+            # Bir nechta to'g'ri javob "|" bilan: "0,5|1/2"
+            value = "|".join(part.strip() for part in value.split("|") if part.strip())
+            if not value:
+                raise HTTPException(status_code=422, detail=f"{label}: to'g'ri javobni yozing")
+            key[kq.number] = value[:300]
+            continue
+        letters = sorted({part.strip().upper() for part in value.split(",") if part.strip()})
+        allowed = {chr(65 + index) for index in range(kq.option_count)}
+        if not letters:
+            raise HTTPException(status_code=422, detail=f"{label}: to'g'ri javobni belgilang")
+        if not set(letters) <= allowed or (kq.question_type == "single" and len(letters) != 1):
+            raise HTTPException(status_code=422, detail=f"{label}: javob noto'g'ri")
+        key[kq.number] = ",".join(letters)
+
+    changed = 0
+    for kq in test.key_questions:
+        if kq.correct != key[kq.number]:
+            kq.correct = key[kq.number]
+            changed += 1
+    if not changed:
+        return {"ok": True, "changed": 0, "regraded": 0}
+    db.flush()
+    regraded = _regrade_variant(db, test, "A")
+    db.commit()
+    return {"ok": True, "changed": changed, "regraded": regraded}
 
 
 @app.delete("/api/teacher/tests/{test_id}/variants/{name}")
@@ -6246,7 +6292,7 @@ def teacher_test_questions(test_id: int, teacher: Teacher = Depends(get_current_
     if test.mode == "key":
         questions = [
             {"ref": str(kq.number), "label": _key_question_label(kq), "question_type": kq.question_type,
-             "option_count": kq.option_count}
+             "option_count": kq.option_count, "correct": kq.correct}
             for kq in test.key_questions
         ]
     else:
