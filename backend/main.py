@@ -2580,9 +2580,12 @@ SHEET8_STYLE = {"edge_marks": 9, "row": 13, "header": 9, "radius": 5.5, "gap": 1
 SHEET9 = {"column": 120, "step": 78, "row": 13, "header": 9, "radius": 5.5, "gap": 19, "label": 24}
 SHEET_LOGO = FRONTEND_DIR / "img" / "chittak-logo-wide.png"  # qush + "Chittak" yozuvi, shaffof fon
 SHEET_LOGO_RATIO = 600 / 149
+SHEET_NAME_MIN_ROOM = 220  # ism-familiyaga kamida shuncha joy qolsagina ism qatorida logo bo'ladi
 SHEET9_BASE = SHEET9
 DTM_TITLE_BAND = 20  # DTM titulida blok sarlavhasi shuncha balandroq — fan nomi (ikki qator) A B C D ustida sig'adi
-SHEET9_MAX_SCALE = 1.3   # savol kam bo'lsa doirachalar shuncha kattalashadi
+SHEET9_MAX_SCALE = 1.3   # savol kam bo'lsa doirachalar shuncha kattalashadi (varaqning to'liq balandligida)
+SHEET9_FILL_SCALE = 2.0  # undan ham katta — varaqni to'ldirguncha, faqat titul ostidagi Chittak belgisiga joy qolsa
+SHEET_BRAND_SPACE = 58   # titul ostidagi Chittak belgisi uchun joy (_draw_sheet_brand: kartochkadan 28 pt past, chetdan 30)
 SHEET9_MIN_SCALE = 0.7
 
 
@@ -2597,8 +2600,14 @@ def _adaptive_style(cells: int, reserved: int = 2, title_band: float = 0.0) -> d
         for rows in range(max(2, reserved), 12):
             if columns * rows < cells:
                 continue
-            scale = min((A4[0] - 2 * SHEET_CORNER) / (columns * SHEET9_BASE["column"]),
-                        (A4[1] - 2 * SHEET_CORNER) / ((rows + 2) * SHEET9_BASE["step"]), SHEET9_MAX_SCALE)
+            by_width = (A4[0] - 2 * SHEET_CORNER) / (columns * SHEET9_BASE["column"])
+            by_height = (A4[1] - 2 * SHEET_CORNER) / ((rows + 2) * SHEET9_BASE["step"])
+            scale = min(by_width, by_height, SHEET9_MAX_SCALE)
+            if scale >= SHEET9_MAX_SCALE:
+                # Savol kam — titul A4 ni to'ldiradi (yonlarda va pastda bo'sh joy qolmasin), lekin ostidagi
+                # Chittak belgisiga joy qoladi. Har titul baribir alohida varaqda chop etiladi (qog'oz ko'paymaydi)
+                by_brand = (A4[1] - SHEET_BRAND_SPACE - 2 * SHEET_CORNER) / ((rows + 2) * SHEET9_BASE["step"])
+                scale = max(SHEET9_MAX_SCALE, min(by_width, by_brand, SHEET9_FILL_SCALE))
             width = 2 * SHEET_CORNER + columns * SHEET9_BASE["column"] * scale
             height = 2 * SHEET_CORNER + (rows + 2) * SHEET9_BASE["step"] * scale
             key = (round(scale, 2), -columns * rows, -abs(height / width - 1.4))
@@ -2610,6 +2619,12 @@ def _adaptive_style(cells: int, reserved: int = 2, title_band: float = 0.0) -> d
         width = 2 * SHEET_CORNER + columns * SHEET9_BASE["column"]
         height = 2 * SHEET_CORNER + (rows + 2) * SHEET9_BASE["step"]
     step = SHEET9_BASE["step"] * scale
+    column_width, gap = SHEET9_BASE["column"] * scale, SHEET9_BASE["gap"] * scale
+    if scale >= SHEET9_MIN_SCALE and width < A4[0] - 1:
+        # Tor titul (2–3 ustun) varaq kengligigacha cho'ziladi — yonlarda bo'sh joy qolmaydi;
+        # doirachalar orasi o'zgarmaydi (zich, qatorni adashtirmaydi), qo'shimcha joy ustunlar orasiga ketadi
+        column_width = (A4[0] - 2 * SHEET_CORNER) / columns
+        width = A4[0]
     font = min(scale, 1.2)
     box_top, box_bottom = SHEET_CORNER + 12, SHEET_CORNER + step - max(8.0, 0.12 * step)
     box_middle = (box_top + box_bottom) / 2
@@ -2617,17 +2632,21 @@ def _adaptive_style(cells: int, reserved: int = 2, title_band: float = 0.0) -> d
     # Ism-familiya qatorining o'ng tomonidagi Chittak logosi (qush + yozuv), qator balandligiga moslab
     logo_height = max(8.0, ((box_middle - box_top) - 9) * 0.7)
     logo_width = logo_height * SHEET_LOGO_RATIO
+    # Tor titulda (savollar kam — 2 ustun) ism uchun joy kam: logo ism qatoriga qo'yilmaydi
+    # (titul ostidagi Chittak belgisi baribir bor) — uzun ism logoning ustiga chiqmasin
+    name_left, name_right = SHEET_CORNER + 16 + 7.2 * box_font, width - SHEET_CORNER - 16
+    show_logo = (name_right - name_left) - logo_width - 10 >= SHEET_NAME_MIN_ROOM
     return {
         "edge_marks": rows + 1, "step": step, "row": SHEET9_BASE["row"] * scale,
         "header": SHEET9_BASE["header"] * scale, "radius": SHEET9_BASE["radius"] * scale,
-        "gap": SHEET9_BASE["gap"] * scale, "label": SHEET9_BASE["label"] * scale,
+        "gap": gap, "label": SHEET9_BASE["label"] * scale,
         "number_font": 8.5 * scale, "letter_font": 7 * scale, "digit_font": 8 * scale,
         "box": (box_top, box_middle, box_bottom), "box_font": box_font,
         "sana_width": min(120 * font, (width - 2 * SHEET_CORNER - 32) * 0.3),
-        "name_area": (SHEET_CORNER + 16 + 7.2 * box_font, box_top + 2, width - SHEET_CORNER - 16 - logo_width - 10, box_middle),
-        "logo": (logo_width, logo_height),
+        "name_area": (name_left, box_top + 2, name_right - (logo_width + 10 if show_logo else 0), box_middle),
+        "logo": (logo_width, logo_height) if show_logo else None,
         "instructions": True, "sparse": True, "columns": columns, "title_band": title_band * scale,
-        "column_width": SHEET9_BASE["column"] * scale, "width": width, "height": height, "scale": scale,
+        "column_width": column_width, "width": width, "height": height, "scale": scale,
     }
 
 
@@ -2817,14 +2836,29 @@ def _draw_evalbee_card(sheet, test: Test, plan: dict, page: int, with_answers: b
             logging.getLogger("backend").warning("Titul logosi chizilmadi", exc_info=True)
     sheet.setFont(REPORT_FONT_BOLD, font)
     if student:
-        sheet.drawString(box_left + 8 * font, name_y, student[1][:60])
+        # Ism o'z joyiga sig'adi: avval shrift kichrayadi (70% gacha), baribir uzun bo'lsa — "…" bilan
+        name, name_x = student[1][:60], box_left + 8 * font
+        limit = (box_right - style["logo"][0] - 12 if style.get("logo") else box_right - 6) - name_x
+        size = font
+        while size > font * 0.7 and sheet.stringWidth(name, REPORT_FONT_BOLD, size) > limit:
+            size -= 0.25
+        while len(name) > 3 and sheet.stringWidth(name, REPORT_FONT_BOLD, size) > limit:
+            name = name[:-2].rstrip() + "…"
+        sheet.setFont(REPORT_FONT_BOLD, size)
+        sheet.drawString(name_x, name_y, name)
+        sheet.setFont(REPORT_FONT_BOLD, font)
     title = test.title + (f" — {page}-sahifa" if page > 1 else "")
     code = f"  ·  Kod {test.code}" if style["instructions"] else ""
     exam_left = box_left + 5.6 * font
-    # Tor titulda nom qisqartiriladi — imtihon kodi doim ko'rinsin
-    while len(title) > 4 and sheet.stringWidth(title + code, REPORT_FONT_BOLD, font) > box_right - sana - exam_left - 6:
+    # Tor titulda avval shrift kichrayadi (70% gacha), keyin nom qisqartiriladi — imtihon kodi doim ko'rinsin
+    room, size = box_right - sana - exam_left - 6, font
+    while size > font * 0.7 and sheet.stringWidth(title + code, REPORT_FONT_BOLD, size) > room:
+        size -= 0.25
+    while len(title) > 4 and sheet.stringWidth(title + code, REPORT_FONT_BOLD, size) > room:
         title = title[:-2].rstrip() + "…" if not title.endswith("…") else title[:-2] + "…"
+    sheet.setFont(REPORT_FONT_BOLD, size)
     sheet.drawString(exam_left, exam_y, title + code)
+    sheet.setFont(REPORT_FONT_BOLD, font)
     bottom_line = SHEET_CORNER + style["edge_marks"] * style["step"]  # oxirgi kvadratlar qatori (tepadan)
     corner_note = f"JAVOBLAR KALITI{f' — {key_variant}' if key_variant else ''} · " if with_answers else ""
     if style["instructions"]:

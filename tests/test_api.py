@@ -4762,7 +4762,10 @@ def test_skanerlash_yakunlansa_natijalar_botga_yuboriladi():
 
 
 def test_titul_savollar_soniga_moslashadi():
-    """9-versiya: savol kam — titul kichik va tik, doirachalar katta; ko'p (120 gacha) — titul katta, doirachalar kichik."""
+    """
+    9-versiya: titul har doim tik; savol kam — doirachalar katta va titul varaqni to'ldiradi (yonlarda bo'sh joy
+    qolmaydi, ostida Chittak belgisiga joy qoladi); ko'p (120 gacha) — doirachalar kichikroq, titul butun A4.
+    """
 
     reset_database()
     register_teacher()
@@ -4786,7 +4789,8 @@ def test_titul_savollar_soniga_moslashadi():
         assert scanned.status_code == 200, (count, scanned.text)
         assert scanned.json()["answers"] == {"1": "A", str(count): "C"} and scanned.json()["sheet_number"] == int(number), (
             count, scanned.json()["sheet_number"])
-    assert sizes[10][:2] == (376, 470) and sizes[120][:2] == (595, 841), sizes
+    assert sizes[10][0] == 595 and sizes[120][:2] == (595, 841), sizes  # hammasi varaq kengligida
+    assert sizes[10][1] <= 842 - main.SHEET_BRAND_SPACE, sizes  # kam savolda ostida belgiga joy qoladi
     assert sizes[10][2] > sizes[120][2], sizes  # kam savolda doiracha kattaroq
     assert sizes[10][3] < sizes[45][3] < sizes[120][3], sizes  # kvadratlar faqat ishlatilgan bloklarda
 
@@ -4879,7 +4883,8 @@ def test_ilovada_oqilgan_varaq_natijasi_qabul_qilinadi():
     assert {"mark", "code", "id", "single"} <= kinds, kinds
     assert layout["page_count"] == 1 and isinstance(layout["sheet_code"], int)
     # Yangi test — EvalBee uslubidagi titul (8-versiya): to'liq A4, ism qatori bor, eski ID tuzilishi kerak emas
-    assert layout["old_bubbles"] is None and layout["sheet_page"]["height"] < 600, layout["sheet_page"]  # 3 savol — kichik titul
+    # 3 savol — titul varaqni to'ldiradi, lekin to'liq A4 dan past (ostida Chittak belgisi)
+    assert layout["old_bubbles"] is None and layout["sheet_page"]["height"] <= 842 - main.SHEET_BRAND_SPACE, layout["sheet_page"]
     assert layout["sheet_page"]["name_box"] is True and len(layout["sheet_page"]["name_area"]) == 4
     # Natija ekranida ranglash uchun kalit (yozma savol yo'q — u titulda bo'yalmaydi)
     assert layout["keys"] == {"A": {"1": "B", "2": "C", "3": "A,C"}}, layout["keys"]
