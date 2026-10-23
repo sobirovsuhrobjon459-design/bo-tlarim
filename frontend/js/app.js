@@ -4231,7 +4231,6 @@ async function renderDorm() {
     <div class="page-header">
       <button class="back-button" type="button" data-action="back-school-home" style="margin:0">←</button>
       <h2 style="margin:0;flex:1">Yotoqxona</h2>
-      ${dorm.can_manage ? `<button type="button" class="icon-button" id="dorm-add-building" aria-label="Bino qo'shish" title="Bino qo'shish" style="font-size:24px;font-weight:700">+</button>` : ""}
     </div>
     ${dormStatsHtml(totals)}
     ${dorm.rooms.length ? `<button class="btn btn-ghost" id="dorm-share" style="margin-top:12px">📤 Hisobotni yuborish (rasm, matn, PDF)</button>` : ""}
@@ -4240,9 +4239,10 @@ async function renderDorm() {
       dorm.buildings.length
         ? dorm.buildings.map(buildingCard).join("")
         : `<div class="empty-state"><div style="font-size:42px">🏢</div><p>Hali bino yo'q.${
-            dorm.can_manage ? " Tepadagi «+» bilan birinchi binoni qo'shing (masalan: A bino)." : ""
+            dorm.can_manage ? " Pastdagi «+ Bino qo'shish» bilan birinchi binoni qo'shing (masalan: A bino)." : ""
           }</p></div>`
     }
+    ${dorm.can_manage ? `<button class="btn" id="dorm-add-building" style="margin-top:12px">+ Bino qo'shish</button>` : ""}
   `);
   wireSchoolSubPage();
   document.getElementById("dorm-share")?.addEventListener("click", () => openDormShareSheet(totals));
