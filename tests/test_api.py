@@ -5842,10 +5842,26 @@ def test_yotoqxona_binolar_va_hisobot_statistikasi():
         response = client.get("/api/dorm/report/file", params={"format": fmt}, headers=h)
         assert response.status_code == 200 and response.content[:4] == magic, fmt
 
-    # Binosiz xona (binolardan oldin ochilgan) — alohida guruhda, keyin binoga o'tkaziladi
+    # Binosiz xona (masalan, eski) — alohida guruhda, keyin binoga o'tkaziladi
     old = client.post("/api/dorm/rooms", json={"name": "Eski 5", "capacity": 2}, headers=h).json()["id"]
     groups = [item["name"] for item in client.get("/api/dorm", headers=h).json()["buildings"]]
     assert groups[-1] == "Binoga biriktirilmagan", groups
     client.put(f"/api/dorm/rooms/{old}", json={"name": "Eski 5", "capacity": 2, "building_id": b["id"]}, headers=h)
     groups = [item["name"] for item in client.get("/api/dorm", headers=h).json()["buildings"]]
     assert groups == ["A bino", "B bino"], groups
+
+
+def test_yotoqxona_birinchi_bino_eski_xonalarni_oladi():
+    """Binolardan oldin ochilgan xonalar birinchi bino yaratilganda unga o'tadi — "Binoga biriktirilmagan" qolmaydi."""
+    reset_database()
+    _school_with_class(701)
+    h = as_user(701)
+    for name in ("101", "102"):
+        client.post("/api/dorm/rooms", json={"name": name, "capacity": 4}, headers=h)
+    assert [b["name"] for b in client.get("/api/dorm", headers=h).json()["buildings"]] == ["Binoga biriktirilmagan"]
+    first = client.post("/api/dorm/buildings", json={"name": "A bino"}, headers=h).json()
+    assert first["moved_rooms"] == 2, first
+    second = client.post("/api/dorm/buildings", json={"name": "B bino"}, headers=h).json()
+    assert second["moved_rooms"] == 0, second
+    buildings = {b["name"]: b["rooms"] for b in client.get("/api/dorm", headers=h).json()["buildings"]}
+    assert buildings == {"A bino": 2, "B bino": 0}, buildings

@@ -11183,10 +11183,21 @@ def create_dorm_building(body: DormBuildingIn, user: User = Depends(get_current_
                                                    func.lower(DormBuilding.name) == body.name.lower()))
     if same:
         raise HTTPException(status_code=409, detail=f"«{body.name}» binosi allaqachon bor")
+    first = not db.scalar(select(DormBuilding.id).where(DormBuilding.school_id == member.school_id,
+                                                        DormBuilding.deleted_at.is_(None)))
     building = DormBuilding(school_id=member.school_id, name=body.name)
     db.add(building)
+    db.flush()
+    moved = 0
+    if first:
+        # Birinchi bino: binolar qo'shilishidan oldin ochilgan xonalar shu binoga o'tadi
+        # ("Binoga biriktirilmagan" guruhi qolmaydi; keyingi binolarni rahbariyat o'zi to'ldiradi)
+        for room in db.scalars(select(DormRoom).where(DormRoom.school_id == member.school_id, DormRoom.deleted_at.is_(None),
+                                                      DormRoom.building_id.is_(None))):
+            room.building_id = building.id
+            moved += 1
     db.commit()
-    return {"id": building.id, "name": building.name}
+    return {"id": building.id, "name": building.name, "moved_rooms": moved}
 
 
 @app.put("/api/dorm/buildings/{building_id}")

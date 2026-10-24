@@ -323,12 +323,43 @@ async function api(path, { method = "GET", body, keepalive = false } = {}) {
       setAppSession("");
       renderAppLogin();
     }
+    // Telegram'da Mini App 24 soatdan ko'p ochiq turgan — kirish ma'lumoti eskirgan, qayta ochish kerak
+    if (response.status === 401 && telegram?.initData && message.includes("eskirgan")) {
+      renderInitDataExpired();
+    }
     const error = new Error(message);
     error.status = response.status;
     throw error;
   }
 
   return response.status === 204 ? null : response.json();
+}
+
+/*
+  Telegram kirish ma'lumoti (initData) 24 soat amal qiladi. Mini App uzoq ochiq qolsa
+  (masalan, Telegram Desktop'da kechadan beri), server so'rovlarni rad etadi. Sahifani
+  yangilash yordam bermaydi — Telegram o'sha eski ma'lumotni beradi; Mini App'ni yopib,
+  botdan qayta ochish kerak.
+*/
+let initDataExpired = false;
+
+function renderInitDataExpired() {
+  if (initDataExpired) return;
+  initDataExpired = true;
+  showPage(`
+    <div class="result-number">🔄</div>
+    <h2 style="text-align:center">Sessiya eskirdi</h2>
+    <div class="card" style="cursor:default">
+      <div class="card-body">
+        <p style="margin:0">Ilova uzoq vaqt (bir kundan ko'p) ochiq turdi. Xavfsizlik uchun uni yopib, bot orqali qayta oching — ma'lumotlaringiz joyida.</p>
+      </div>
+    </div>
+    <button class="btn" id="reopen-mini-app">🔄 Qayta ochish</button>
+  `);
+  document.getElementById("reopen-mini-app").addEventListener("click", () => {
+    if (telegram?.close) telegram.close();
+    else window.location.reload();
+  });
 }
 
 function escapeHtml(value) {
@@ -4351,7 +4382,11 @@ function openDormBuildingSheet(building, onSaved) {
         ? await api(`/api/dorm/buildings/${building.id}`, { method: "PUT", body: { name } })
         : await api("/api/dorm/buildings", { method: "POST", body: { name } });
       close();
-      showToast(building ? "✅ Bino nomi saqlandi" : `✅ «${saved.name}» qo'shildi`);
+      showToast(
+        building
+          ? "✅ Bino nomi saqlandi"
+          : `✅ «${saved.name}» qo'shildi${saved.moved_rooms ? ` — ${saved.moved_rooms} ta xona shu binoga o'tkazildi` : ""}`
+      );
       await onSaved(saved);
     })
   );
@@ -7365,6 +7400,8 @@ async function loadHome() {
     isTeacher = false;
     // Ilovada seans tugagan bo'lsa — kirish sahifasi allaqachon chiqqan
     if (NEEDS_LOGIN && !appSession) return;
+    // Telegram kirish ma'lumoti eskirgan — "Sessiya eskirdi" sahifasi allaqachon chiqqan
+    if (initDataExpired) return;
     renderHome(null, false);
   }
 }
