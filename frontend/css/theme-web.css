@@ -1066,24 +1066,114 @@ html.web-mode body:has(.lp) {
 }
 
 .lp-footer {
-  padding: 28px 0;
+  padding: 64px 0 24px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   background: #0b1f2a;
-  color: rgba(255, 255, 255, 0.75);
-  font-size: 14px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 15px;
 }
 
-.lp-footer .lp-wrap {
+.lp-footer-grid {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr 1fr 1.2fr;
+  gap: 40px;
+}
+
+.lp-footer-about p {
+  max-width: 420px;
+  margin: 18px 0 16px;
+  line-height: 1.65;
+}
+
+.lp-footer-about strong {
+  color: #ffffff;
+  font-size: 16px;
+}
+
+.lp-footer-about em,
+.lp-footer-bottom em {
+  color: #00c853;
+  font-style: normal;
+}
+
+.lp-footer-col {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.lp-footer-col h4 {
+  margin: 6px 0 6px;
+  color: #ffffff;
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.lp-footer-col a,
+.lp-footer-col button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgba(255, 255, 255, 0.7);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.lp-footer-col a:hover,
+.lp-footer-col button:hover {
+  color: #00c853;
+}
+
+.lp-footer-contact a {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #00c853;
+  font-weight: 700;
+  word-break: break-all;
+}
+
+.lp-footer-contact a:hover {
+  color: #ffffff;
+}
+
+.lp-footer-contact svg {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+}
+
+.lp-footer-bottom {
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  margin-top: 48px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 14px;
 }
 
-.lp-footer span:nth-child(2) {
-  color: #ffffff;
-  font-weight: 700;
+.lp-footer-top {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: #00c853;
+  color: #0b1f2a;
+  font-size: 20px;
+  font-weight: 800;
+  text-decoration: none;
+  transition: transform 0.15s;
+}
+
+.lp-footer-top:hover {
+  transform: translateY(-2px);
 }
 
 /* Kirish oynasi */
@@ -1132,6 +1222,14 @@ html.web-mode body:has(.lp) {
   .lp-quote {
     padding: 64px 0;
   }
+
+  .lp-footer-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .lp-footer-about {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 600px) {
@@ -1174,8 +1272,17 @@ html.web-mode body:has(.lp) {
     padding: 24px;
   }
 
-  .lp-footer .lp-wrap {
-    flex-direction: column;
-    text-align: center;
+  .lp-footer {
+    padding-top: 48px;
+  }
+
+  .lp-footer-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 32px 20px;
+  }
+
+  .lp-footer-about,
+  .lp-footer-contact {
+    grid-column: 1 / -1;
   }
 }

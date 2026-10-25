@@ -14554,10 +14554,45 @@ function renderWebLogin(errorText = "") {
       </section>
 
       <footer class="lp-footer">
-        <div class="lp-wrap">
-          ${brand("is-small")}
-          <span>Ilg'or ta'lim, <em>tezkor natija</em></span>
-          <span>© ${new Date().getFullYear()} Chittak</span>
+        <div class="lp-wrap lp-footer-grid">
+          <div class="lp-footer-about">
+            ${brand()}
+            <p>Chittak — maktablar, o'quv markazlari va repetitorlar uchun ta'lim boshqaruvi va aqlli test tahlili platformasi.
+              Titul varaqlarini skaner orqali tekshirish, Rasch modeli va mandat hisobotlari — bitta tizimda.</p>
+            <strong>Ilg'or ta'lim, <em>tezkor natija</em></strong>
+          </div>
+          <div class="lp-footer-col">
+            <h4>Sahifalar</h4>
+            <a href="#lp-features">Imkoniyatlar</a>
+            <a href="#lp-how">Qanday ishlaydi</a>
+            <button type="button" data-lp-login>Kirish</button>
+          </div>
+          <div class="lp-footer-col">
+            <h4>Hujjatlar</h4>
+            <a href="/oferta" target="_blank" rel="noopener">Ommaviy oferta</a>
+            <a href="/maxfiylik" target="_blank" rel="noopener">Maxfiylik siyosati</a>
+            <a href="/delete-account" target="_blank" rel="noopener">Akkauntni o'chirish</a>
+          </div>
+          <div class="lp-footer-col lp-footer-contact">
+            <h4>Aloqa</h4>
+            <a href="https://t.me/Sukhrobjonmath_bot" target="_blank" rel="noopener">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m21 4-18 7 6 2 2 6 3-4 5 4 2-15Z"/><path d="m9 13 8-6"/></svg>
+              @Sukhrobjonmath_bot
+            </a>
+            <a href="tel:+998905370738">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2Z"/></svg>
+              +998 90 537 07 38
+            </a>
+            <a href="https://chittak.uz">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 3 2.5 15 0 18M12 3c-2.5 3-2.5 15 0 18"/></svg>
+              chittak.uz
+            </a>
+            <span>O'zbekiston</span>
+          </div>
+        </div>
+        <div class="lp-wrap lp-footer-bottom">
+          <span>© ${new Date().getFullYear()} Chittak. Barcha huquqlar himoyalangan.</span>
+          <a href="#" class="lp-footer-top" data-lp-top aria-label="Yuqoriga">↑</a>
         </div>
       </footer>
 
@@ -14592,6 +14627,10 @@ function renderWebLogin(errorText = "") {
       document.querySelector(link.getAttribute("href"))?.scrollIntoView({ behavior: "smooth" });
     })
   );
+  document.querySelector("[data-lp-top]")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
   document.getElementById("web-login-button").addEventListener("click", guarded(startWebLogin));
 }
 
