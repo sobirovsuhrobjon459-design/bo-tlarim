@@ -4109,6 +4109,12 @@ function renderMySchool(school, { refresh = true } = {}) {
         </div>
         <div class="hero-stats" id="school-stats">${schoolStatsHtml(schoolOverviewCache)}</div>
       </section>
+
+      <div class="student-search">
+        <input class="input" id="student-search-input" type="search" autocomplete="off" enterkeyhint="search"
+               placeholder="🔍 O'quvchini qidirish — ism yoki ID" />
+        <div id="student-search-results"></div>
+      </div>
       ${
         school.my_subjects.length || isOwner(school)
           ? ""
@@ -4168,9 +4174,63 @@ function renderMySchool(school, { refresh = true } = {}) {
       await openSchoolMenu(item.dataset.schoolMenu, item.dataset.classId);
     })
   );
+  wireStudentSearch();
   fillClassCounts();
   loadSchoolOverview();
   if (refresh) refreshSchoolInBackground("school");
+}
+
+/*
+  🔍 O'quvchini qidirish (maktab sahifasining tepasida): butun muassasa bo'yicha
+  ism-familiya bo'lagi yoki ID. Har so'z alohida ("ali val" → "Valiyev Ali").
+  Natija bosilsa — o'quvchi profili (davomat, tahrirlash) ochiladi.
+*/
+function wireStudentSearch() {
+  const input = document.getElementById("student-search-input");
+  const box = document.getElementById("student-search-results");
+  if (!input || !box) return;
+  let timer = null;
+  let lastQuery = "";
+
+  const run = async () => {
+    const query = input.value.trim();
+    if (query === lastQuery) return;
+    lastQuery = query;
+    if (query.length < 2 && !/^\d+$/.test(query)) {
+      box.innerHTML = "";
+      return;
+    }
+    const { students } = await api(`/api/schools/students/search?q=${encodeURIComponent(query)}`);
+    if (input.value.trim() !== query) return; // shu orada boshqa narsa yozildi
+    box.innerHTML = students.length
+      ? `<div class="panel student-search-list">${students
+          .map(
+            (student) => `
+              <button type="button" class="student-search-row" data-search-student="${student.id}" data-search-class="${student.class_id}">
+                <span class="student-avatar">${initials(student.full_name)}</span>
+                <span class="student-search-name">${escapeHtml(student.full_name)}
+                  <small>📚 ${escapeHtml(student.class_name)}${student.code ? ` · 🆔 ${student.code}` : ""}</small>
+                </span>
+                <span class="student-search-go">›</span>
+              </button>`
+          )
+          .join("")}</div>`
+      : `<p class="subtitle student-search-empty">Hech kim topilmadi</p>`;
+  };
+
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => run().catch(() => {}), 250);
+  });
+  box.addEventListener(
+    "click",
+    guarded(async (event) => {
+      const row = event.target.closest("[data-search-student]");
+      if (!row) return;
+      const schoolClass = await api(`/api/classes/${row.dataset.searchClass}`);
+      await renderStudentProfile(schoolClass, Number(row.dataset.searchStudent));
+    })
+  );
 }
 
 /* ---------- Maktab bosh sahifasi: holat, tezkor amallar, diqqat, grafik ---------- */

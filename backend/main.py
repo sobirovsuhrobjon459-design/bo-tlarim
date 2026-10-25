@@ -10080,6 +10080,57 @@ def payments_summary(month: str | None = None, user: User = Depends(get_current_
 SHORT_MONTH_NAMES = ["Yan", "Fev", "Mar", "Apr", "May", "Iyun", "Iyul", "Avg", "Sen", "Okt", "Noy", "Dek"]
 
 
+_SEARCH_INVISIBLE = dict.fromkeys(map(ord, "​‌‍⁠﻿"))
+_SEARCH_APOSTROPHES = str.maketrans({ch: "" for ch in "'`ʻʼ‘’´"})
+
+
+def _search_key(text: str) -> str:
+    """Qidiruv uchun: kichik harf, ko'rinmas belgilar va har xil apostroflar olib tashlanadi (Noʻmonov = nomonov)."""
+
+    return " ".join(text.translate(_SEARCH_INVISIBLE).translate(_SEARCH_APOSTROPHES).lower().split())
+
+
+@app.get("/api/schools/students/search")
+def search_school_students(q: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Butun muassasa bo'yicha o'quvchi qidirish: ism-familiya bo'lagi yoki ID (student_code).
+    Har bir so'z alohida tekshiriladi ("ali val" → "Valiyev Ali"). Ko'pi bilan 30 ta natija.
+    """
+
+    member = _require_school_member(db, user)
+    words = _search_key(q).split()
+    if not words or (len(words) == 1 and len(words[0]) < 2 and not words[0].isdigit()):
+        return {"students": []}
+
+    rows = db.execute(
+        select(ClassStudent, SchoolClass)
+        .join(SchoolClass, ClassStudent.class_id == SchoolClass.id)
+        .where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None),
+               ClassStudent.removed_at.is_(None))
+    ).all()
+
+    code = q.strip() if q.strip().isdigit() else None
+    found = []
+    for student, school_class in rows:
+        if code and student.student_code is not None and str(student.student_code) == code:
+            rank = 0
+        else:
+            name = _search_key(student.full_name)
+            if not all(word in name for word in words):
+                continue
+            rank = 1 if name.startswith(words[0]) or f" {words[0]}" in name else 2
+        found.append((rank, _search_key(student.full_name), student, school_class))
+
+    found.sort(key=lambda item: (item[0], item[1]))
+    return {
+        "students": [
+            {"id": student.id, "full_name": student.full_name.translate(_SEARCH_INVISIBLE).strip(),
+             "code": student.student_code, "class_id": school_class.id, "class_name": school_class.name}
+            for _, _, student, school_class in found[:30]
+        ]
+    }
+
+
 @app.get("/api/schools/overview")
 def school_overview(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """

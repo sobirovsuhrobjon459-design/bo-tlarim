@@ -6002,3 +6002,39 @@ def test_yotoqxona_bir_nechta_xonani_birdan_ochish():
     assert client.post("/api/dorm/rooms/bulk", json={"start": 5, "end": 2}, headers=h).status_code == 422
     assert client.post("/api/dorm/rooms/bulk", json={"start": 1, "end": 101}, headers=h).status_code == 422
     assert client.post("/api/dorm/rooms/bulk", json={"start": 1, "end": 2}, headers=as_user(703)).status_code == 403
+
+
+def test_oquvchini_qidirish_butun_maktab_boyicha():
+    """Ism bo'lagi (apostrof va ko'rinmas belgilarga sezgir emas), bir necha so'z, ID; boshqa maktab va chiqarilganlar chiqmaydi."""
+    from backend.database import ClassStudent
+
+    reset_database()
+    first = _school_with_class(701)
+    h = as_user(701)
+    second = client.post("/api/classes", json={"name": "9-A"}, headers=h).json()
+    with SessionLocal() as session:
+        session.add_all([
+            ClassStudent(class_id=first["id"], full_name="\u200bNo\u02bbmonov Asqatbek", student_code=1001),
+            ClassStudent(class_id=first["id"], full_name="Valiyev Ali"),
+            ClassStudent(class_id=second["id"], full_name="Alimova Zuhra"),
+            ClassStudent(class_id=second["id"], full_name="Aliyev Chiqqan", removed_at=utcnow()),
+        ])
+        session.commit()
+    other = _school_with_class(702)
+    with SessionLocal() as session:
+        session.add(ClassStudent(class_id=other["id"], full_name="Aliyev Begona"))
+        session.commit()
+
+    def search(q, headers=h):
+        response = client.get("/api/schools/students/search", params={"q": q}, headers=headers)
+        assert response.status_code == 200, response.text
+        return [(s["full_name"], s["class_name"]) for s in response.json()["students"]]
+
+    assert search("nomonov") == [("No\u02bbmonov Asqatbek", "10/2")]
+    assert search("No'monov asq") == [("No\u02bbmonov Asqatbek", "10/2")]
+    assert search("1001") == [("No\u02bbmonov Asqatbek", "10/2")]
+    assert search("ali") == [("Alimova Zuhra", "9-A"), ("Valiyev Ali", "10/2")]  # chiqarilgan va boshqa maktab yo'q
+    assert search("ali val") == [("Valiyev Ali", "10/2")]
+    assert search("a") == []
+    assert search("Begona", as_user(702)) == [("Aliyev Begona", "10/2")]
+    assert client.get("/api/schools/students/search", params={"q": "ali"}, headers=as_user(799)).status_code == 403

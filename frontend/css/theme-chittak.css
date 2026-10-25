@@ -1813,3 +1813,72 @@ button.tt-cell {
   margin-top: 8px;
   font-size: 13px;
 }
+
+/* ---------- 🔍 O'quvchini qidirish (maktab sahifasi) ---------- */
+
+.student-search {
+  margin-top: 14px;
+}
+
+.student-search .input {
+  margin: 0;
+}
+
+.student-search-list {
+  margin-top: 8px;
+  padding: 4px 0;
+  overflow: hidden;
+}
+
+.student-search-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.student-search-row:last-child {
+  border-bottom: 0;
+}
+
+.student-search-row:active {
+  background: rgba(0, 200, 83, 0.08);
+}
+
+.student-search-row .student-avatar {
+  width: 36px;
+  height: 36px;
+  font-size: 13px;
+}
+
+.student-search-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.student-search-name small {
+  display: block;
+  margin-top: 2px;
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.student-search-go {
+  font-size: 22px;
+  color: var(--color-text-muted);
+}
+
+.student-search-empty {
+  margin: 8px 4px 0;
+}
