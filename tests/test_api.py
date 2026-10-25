@@ -273,6 +273,110 @@ def test_admin_faqat_admin_id_bilan():
     assert client.get("/api/admin/stats", headers=as_user(1111)).status_code == 403
 
 
+def test_admin_odamlar_muassasalar_va_kredit():
+    """Admin odamni topadi, kartochkasini ko'radi, kredit beradi/ayiradi, xabar yozadi; muassasalar ro'yxati."""
+    reset_database()
+    register_teacher(555, "Ali", "Valiyev")
+    client.get("/api/me", headers=as_user(901))  # oddiy foydalanuvchi
+    admin = as_user(4242)
+
+    stats = client.get("/api/admin/stats", headers=admin).json()
+    assert stats["periods"]["new_users"]["today"] >= 2 and stats["pending"] == {"card_topups": 0, "withdrawals": 0}
+
+    # Begona odam yangi bo'limlarga kira olmaydi
+    for url in ("/api/admin/users", "/api/admin/schools", "/api/admin/payments"):
+        assert client.get(url, headers=as_user(555)).status_code == 403, url
+
+    found = client.get("/api/admin/users?q=valiy", headers=admin).json()
+    assert [user["name"] for user in found] == ["Ali Valiyev"] and found[0]["is_teacher"], found
+    teacher_user_id = found[0]["id"]
+    assert client.get("/api/admin/users?q=555", headers=admin).json()[0]["id"] == teacher_user_id  # Telegram ID bo'yicha
+    only_teachers = client.get("/api/admin/users?only=teachers", headers=admin).json()
+    assert [user["id"] for user in only_teachers] == [teacher_user_id]
+
+    before = client.get(f"/api/admin/users/{teacher_user_id}", headers=admin).json()["credits"]
+    sent = []
+    original_send, original_status = main._telegram_send_message, main._telegram_send_status
+    main._telegram_send_message = lambda chat_id, text, markup=None, parse_mode=None: sent.append((chat_id, text)) or True
+    main._telegram_send_status = lambda chat_id, text, markup=None, parse_mode=None: sent.append((chat_id, text)) or (200, "")
+    try:
+        url = f"/api/admin/users/{teacher_user_id}/credits"
+        response = client.post(url, json={"delta": 1000, "reason": "Sovg'a"}, headers=admin)
+        assert response.status_code == 200 and response.json()["credits"] == before + 1000, response.text
+        assert sent and sent[-1][0] == 555 and "1 000 kredit" in sent[-1][1] and "Sovg'a" in sent[-1][1], sent
+        # Ayirishda noldan pastga tushmaydi
+        assert client.post(url, json={"delta": -10**6, "notify": False}, headers=admin).json()["credits"] == 0
+        assert client.post(url, json={"delta": 0}, headers=admin).status_code == 422
+        # Faqat admin; o'qituvchi bo'lmagan odamga kredit berilmaydi
+        assert client.post(url, json={"delta": 5}, headers=as_user(555)).status_code == 403
+        plain_id = client.get("/api/admin/users?q=901", headers=admin).json()[0]["id"]
+        assert client.post(f"/api/admin/users/{plain_id}/credits", json={"delta": 5}, headers=admin).status_code == 404
+
+        assert client.post(f"/api/admin/users/{plain_id}/message", json={"text": "Salom"}, headers=admin).status_code == 200
+        assert sent[-1][0] == 901 and "Salom" in sent[-1][1]
+    finally:
+        main._telegram_send_message, main._telegram_send_status = original_send, original_status
+
+    # Qo'lda berilgan kredit daromadga qo'shilmaydi
+    assert client.get("/api/admin/stats", headers=admin).json()["credits_sold"] == 0
+
+    # Muassasalar ro'yxati
+    school = client.post("/api/schools", json={"name": "Ilm Maktabi", "region": "Toshkent shahri",
+                                               "district": "Chilonzor tumani"}, headers=as_user(555))
+    assert school.status_code == 200, school.text
+    schools = client.get("/api/admin/schools", headers=admin).json()
+    assert len(schools) == 1 and schools[0]["name"] == "Ilm Maktabi" and schools[0]["staff"] >= 1, schools
+    assert client.get("/api/admin/schools?q=Chilonzor", headers=admin).json()[0]["owner_user_id"] == teacher_user_id
+    assert client.get("/api/admin/schools?q=Samarqand", headers=admin).json() == []
+    detail = client.get(f"/api/admin/users/{teacher_user_id}", headers=admin).json()
+    assert detail["schools"][0]["role"] == "owner", detail
+    assert client.get("/api/admin/payments", headers=admin).json() == []
+
+
+def test_admin_elon_guruhga_va_tasdiq_soni_bilan():
+    """Admin e'loni: faqat admin; guruh soni mos kelmasa ketmaydi; o'qituvchilar guruhiga faqat o'qituvchilar."""
+    reset_database()
+    register_teacher(555, "Ali", "Valiyev")
+    register_teacher(556, "Vali", "Aliyev")
+    client.get("/api/me", headers=as_user(901))
+    admin = as_user(4242)
+
+    assert client.get("/api/admin/broadcast", headers=as_user(555)).status_code == 403
+    counts = {item["id"]: item["count"] for item in client.get("/api/admin/broadcast", headers=admin).json()["audiences"]}
+    assert counts["teachers"] == 2 and counts["all"] >= 3 and counts["school_staff"] == 0, counts
+
+    started, sent = [], []
+    original_start, original_status = main._start_admin_broadcast, main._telegram_send_status
+    main._start_admin_broadcast = lambda admin_tg, chat_ids, text, title: started.append((chat_ids, text))
+    main._telegram_send_status = lambda chat_id, text, markup=None, parse_mode=None: sent.append((chat_id, text)) or (200, "")
+    try:
+        body = {"text": "Salom ustozlar", "audience": "teachers"}
+        # Ekrandagi son eskirgan bo'lsa — yuborilmaydi
+        assert client.post("/api/admin/broadcast", json={**body, "confirm_count": 5}, headers=admin).status_code == 409
+        assert client.post("/api/admin/broadcast", json={**body, "audience": "hech", "confirm_count": 0},
+                           headers=admin).status_code == 422
+        assert client.post("/api/admin/broadcast", json={**body, "confirm_count": 2}, headers=as_user(555)).status_code == 403
+        assert started == []
+
+        response = client.post("/api/admin/broadcast", json={**body, "confirm_count": 2}, headers=admin)
+        assert response.status_code == 200 and response.json()["recipients"] == 2, response.text
+        assert sorted(started[0][0]) == [555, 556] and started[0][1] == "Salom ustozlar"
+        # Birinchisi tugamaguncha ikkinchisi ketmaydi
+        assert client.post("/api/admin/broadcast", json={**body, "confirm_count": 2}, headers=admin).status_code == 409
+
+        # Haqiqiy yuborish: hammasiga yetadi, oxirida qulf ochiladi
+        main._run_admin_broadcast(4242, [555, 556], "Salom", "O'qituvchilar")
+        assert [chat for chat, _ in sent] == [555, 556, 4242], sent  # oxirida adminga hisobot
+        assert "2 / 2" in sent[-1][1]
+        assert main._admin_broadcast_running is False
+
+        assert client.post("/api/admin/broadcast/test", json={"text": "Sinov"}, headers=admin).status_code == 200
+        assert sent[-1] == (4242, "Sinov")
+    finally:
+        main._start_admin_broadcast, main._telegram_send_status = original_start, original_status
+        main._admin_broadcast_running = False
+
+
 # ========== 2) Test yaratish va javoblar kaliti ==========
 
 

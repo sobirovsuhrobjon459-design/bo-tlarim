@@ -52,6 +52,7 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import CondPageBreak, HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import String, case, cast, delete, distinct, func, inspect, or_, select, text, update
 from sqlalchemy.orm import Session, object_session, selectinload
@@ -12563,7 +12564,54 @@ def admin_overview(admin: User = Depends(get_current_admin), db: Session = Depen
     # paytda yechib olishni so'rashi mumkin, shuning uchun "sof" daromad emas.
     teachers_owed = db.scalar(select(func.sum(Teacher.balance))) or 0
 
+    # Davr bo'yicha o'sish: bugun (UTC sutka), oxirgi 7 va 30 kun
+    now = utcnow()
+    since = {
+        "today": now.replace(hour=0, minute=0, second=0, microsecond=0),
+        "week": now - timedelta(days=7),
+        "month": now - timedelta(days=30),
+    }
+
+    def _count_since(model, column, extra=()):
+        return {
+            key: db.scalar(select(func.count()).select_from(model).where(column >= moment, *extra)) or 0
+            for key, moment in since.items()
+        }
+
+    def _credit_revenue_since():
+        return {
+            key: db.scalar(
+                select(func.sum(CreditPurchase.amount)).where(
+                    CreditPurchase.status == "paid",
+                    func.coalesce(CreditPurchase.performed_at, CreditPurchase.created_at) >= moment,
+                )
+            ) or 0
+            for key, moment in since.items()
+        }
+
+    periods = {
+        "new_users": _count_since(User, User.created_at),
+        "new_tests": _count_since(Test, Test.created_at),
+        "new_schools": _count_since(PrivateSchool, PrivateSchool.created_at),
+        "attempts": _count_since(Attempt, Attempt.finished_at, (Attempt.status == "done",)),
+        "credits_revenue": _credit_revenue_since(),
+    }
+
+    pending = {
+        "card_topups": db.scalar(
+            select(func.count()).select_from(CreditPurchase).where(
+                CreditPurchase.method == "card", CreditPurchase.status == "pending"
+            )
+        ) or 0,
+        "withdrawals": db.scalar(
+            select(func.count()).select_from(WithdrawalRequest).where(WithdrawalRequest.status == "pending")
+        ) or 0,
+    }
+
     return {
+        "periods": periods,
+        "pending": pending,
+        "schools": db.scalar(select(func.count()).select_from(PrivateSchool)),
         "users": db.scalar(select(func.count()).select_from(User)),
         "teachers": db.scalar(select(func.count()).select_from(Teacher)),
         "tests": db.scalar(select(func.count()).select_from(Test)),
@@ -12664,6 +12712,7 @@ def admin_list_teachers(admin: User = Depends(get_current_admin), db: Session = 
     return [
         {
             "id": teacher.id,
+            "user_id": teacher.user_id,
             "name": full_name,
             "credits": teacher.credits,
             "balance": teacher.balance,
@@ -12850,6 +12899,397 @@ def admin_reject_card_topup(purchase_id: int, admin: User = Depends(get_current_
     if not ok:
         raise HTTPException(status_code=409, detail=message)
     return {"ok": True, "message": message}
+
+
+class AdminCreditsIn(BaseModel):
+    """Admin o'qituvchiga kredit qo'shadi (musbat) yoki ayiradi (manfiy). Sabab xabarda ko'rsatiladi."""
+
+    delta: int = Field(ge=-1_000_000, le=1_000_000)
+    reason: str = Field(default="", max_length=300)
+    notify: bool = True
+
+
+class AdminMessageIn(BaseModel):
+    """Admin bot orqali bitta foydalanuvchiga xabar yuboradi."""
+
+    text: str = Field(min_length=1, max_length=3500)
+
+
+def _admin_user_row(user: User, teacher: Teacher | None, school_name: str | None) -> dict:
+    return {
+        "id": user.id,
+        "tg_id": user.tg_id,
+        "name": user.full_name or "—",
+        "username": user.username,
+        "created_at": user.created_at,
+        "is_teacher": teacher is not None,
+        "credits": teacher.credits if teacher else None,
+        "balance": teacher.balance if teacher else None,
+        "school": school_name,
+    }
+
+
+@app.get("/api/admin/users")
+def admin_search_users(
+    q: str = "",
+    only: str = "all",
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Foydalanuvchilarni qidirish: ism, @username, Telegram ID yoki ichki ID bo'yicha.
+    only=teachers — faqat o'qituvchilar. Eng yangi ro'yxatdan o'tganlar birinchi, ko'pi bilan 50 ta.
+    """
+
+    active_school = (
+        select(SchoolMember.user_id.label("user_id"), func.min(PrivateSchool.name).label("school_name"))
+        .join(PrivateSchool, PrivateSchool.id == SchoolMember.school_id)
+        .where(SchoolMember.left_at.is_(None))
+        .group_by(SchoolMember.user_id)
+        .subquery()
+    )
+    query = (
+        select(User, Teacher, active_school.c.school_name)
+        .outerjoin(Teacher, Teacher.user_id == User.id)
+        .outerjoin(active_school, active_school.c.user_id == User.id)
+    )
+    if only == "teachers":
+        query = query.where(Teacher.id.is_not(None))
+
+    text_query = q.strip().lstrip("@")
+    if text_query:
+        conditions = [
+            User.full_name.ilike(f"%{text_query}%"),
+            User.username.ilike(f"%{text_query}%"),
+        ]
+        if text_query.isdigit():
+            conditions += [User.tg_id == int(text_query), User.id == int(text_query)]
+        query = query.where(or_(*conditions))
+
+    rows = db.execute(query.order_by(User.id.desc()).limit(50)).all()
+    return [_admin_user_row(user, teacher, school_name) for user, teacher, school_name in rows]
+
+
+@app.get("/api/admin/users/{user_id}")
+def admin_user_detail(user_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Bitta foydalanuvchi haqida hammasi: o'qituvchilik, muassasalari, testlari, to'lovlari, natijalari."""
+
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Foydalanuvchi topilmadi")
+    teacher = db.scalar(select(Teacher).where(Teacher.user_id == user.id))
+
+    memberships = db.execute(
+        select(SchoolMember, PrivateSchool)
+        .join(PrivateSchool, PrivateSchool.id == SchoolMember.school_id)
+        .where(SchoolMember.user_id == user.id)
+        .order_by(SchoolMember.id.desc())
+    ).all()
+
+    attempts_done, avg_percent = db.execute(
+        select(func.count(Attempt.id), func.avg(Attempt.percent)).where(
+            Attempt.user_id == user.id, Attempt.status == "done"
+        )
+    ).one()
+
+    data = {
+        **_admin_user_row(user, teacher, None),
+        "attempts": attempts_done or 0,
+        "avg_percent": round(avg_percent, 1) if avg_percent is not None else None,
+        "schools": [
+            {
+                "id": school.id,
+                "name": school.name,
+                "kind": school.kind,
+                "region": school.region,
+                "district": school.district,
+                "role": "owner" if member.role == "owner" else (member.position or "teacher"),
+                "joined_at": member.joined_at,
+                "left_at": member.left_at,
+            }
+            for member, school in memberships
+        ],
+        "tests": 0,
+        "paid_total": 0,
+        "purchases": [],
+    }
+    if teacher:
+        data["tests"] = db.scalar(select(func.count()).select_from(Test).where(Test.teacher_id == teacher.id)) or 0
+        data["paid_total"] = db.scalar(
+            select(func.sum(CreditPurchase.amount)).where(
+                CreditPurchase.teacher_id == teacher.id, CreditPurchase.status == "paid"
+            )
+        ) or 0
+        purchases = db.scalars(
+            select(CreditPurchase)
+            .where(CreditPurchase.teacher_id == teacher.id)
+            .order_by(CreditPurchase.id.desc())
+            .limit(10)
+        ).all()
+        data["purchases"] = [
+            {
+                "id": purchase.id,
+                "credits": purchase.credits,
+                "amount": purchase.amount,
+                "status": purchase.status,
+                "method": purchase.method,
+                "created_at": purchase.created_at,
+            }
+            for purchase in purchases
+        ]
+    return data
+
+
+@app.post("/api/admin/users/{user_id}/credits")
+def admin_adjust_credits(
+    user_id: int, body: AdminCreditsIn, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)
+):
+    """
+    O'qituvchiga qo'lda kredit qo'shish yoki ayirish (masalan, sovg'a yoki xato
+    to'lovni tuzatish). Sotuv hisobiga kirmaydi — daromad statistikasi o'zgarmaydi.
+    """
+
+    if body.delta == 0:
+        raise HTTPException(status_code=422, detail="Kredit soni 0 bo'lmasin")
+    teacher = db.scalar(select(Teacher).where(Teacher.user_id == user_id))
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Bu foydalanuvchi o'qituvchi emas — kredit faqat o'qituvchiga beriladi")
+
+    add_credits(teacher, body.delta)
+    db.commit()
+    logging.getLogger("backend").info(
+        "Admin %s kredit o'zgartirdi: user=%s delta=%s sabab=%r", admin.id, user_id, body.delta, body.reason
+    )
+
+    notified = False
+    if body.notify:
+        reason = f"\nSabab: {body.reason.strip()}" if body.reason.strip() else ""
+        amount = f"{abs(body.delta):,}".replace(",", " ")
+        total = f"{teacher.credits:,}".replace(",", " ")
+        if body.delta > 0:
+            text = f"🎁 Hisobingizga {amount} kredit qo'shildi.{reason}\nJami: {total} kredit"
+        else:
+            text = f"ℹ️ Hisobingizdan {amount} kredit yechildi.{reason}\nQoldi: {total} kredit"
+        notified = _telegram_send_message(teacher.user.tg_id, text)
+    return {"ok": True, "credits": teacher.credits, "notified": notified}
+
+
+@app.post("/api/admin/users/{user_id}/message")
+def admin_message_user(
+    user_id: int, body: AdminMessageIn, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)
+):
+    """Bot nomidan bitta foydalanuvchiga xabar. Botni bloklagan bo'lsa — xato qaytadi."""
+
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Foydalanuvchi topilmadi")
+    status, _ = _telegram_send_status(user.tg_id, f"📩 Chittak ma'muriyatidan:\n\n{body.text.strip()}")
+    if status != 200:
+        raise HTTPException(
+            status_code=502, detail="Xabar yetmadi — foydalanuvchi botni ishga tushirmagan yoki bloklagan"
+        )
+    return {"ok": True}
+
+
+@app.get("/api/admin/schools")
+def admin_list_schools(q: str = "", admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Barcha ta'lim muassasalari: turi, joyi, egasi, xodimlar, guruhlar va o'quvchilar soni."""
+
+    staff = (
+        select(SchoolMember.school_id.label("school_id"), func.count().label("staff"))
+        .where(SchoolMember.left_at.is_(None))
+        .group_by(SchoolMember.school_id)
+        .subquery()
+    )
+    classes = (
+        select(SchoolClass.school_id.label("school_id"), func.count().label("classes"))
+        .where(SchoolClass.deleted_at.is_(None))
+        .group_by(SchoolClass.school_id)
+        .subquery()
+    )
+    students = (
+        select(SchoolClass.school_id.label("school_id"), func.count(ClassStudent.id).label("students"))
+        .join(ClassStudent, ClassStudent.class_id == SchoolClass.id)
+        .where(SchoolClass.deleted_at.is_(None), ClassStudent.removed_at.is_(None))
+        .group_by(SchoolClass.school_id)
+        .subquery()
+    )
+    query = (
+        select(PrivateSchool, User, staff.c.staff, classes.c.classes, students.c.students)
+        .join(User, User.id == PrivateSchool.owner_user_id)
+        .outerjoin(staff, staff.c.school_id == PrivateSchool.id)
+        .outerjoin(classes, classes.c.school_id == PrivateSchool.id)
+        .outerjoin(students, students.c.school_id == PrivateSchool.id)
+    )
+    text_query = q.strip()
+    if text_query:
+        query = query.where(
+            or_(
+                PrivateSchool.name.ilike(f"%{text_query}%"),
+                PrivateSchool.region.ilike(f"%{text_query}%"),
+                PrivateSchool.district.ilike(f"%{text_query}%"),
+            )
+        )
+    rows = db.execute(query.order_by(PrivateSchool.id.desc()).limit(200)).all()
+    return [
+        {
+            "id": school.id,
+            "name": school.name,
+            "kind": school.kind,
+            "region": school.region,
+            "district": school.district,
+            "owner": owner.full_name,
+            "owner_user_id": owner.id,
+            "created_at": school.created_at,
+            "staff": staff_count or 0,
+            "classes": class_count or 0,
+            "students": student_count or 0,
+        }
+        for school, owner, staff_count, class_count, student_count in rows
+    ]
+
+
+@app.get("/api/admin/payments")
+def admin_payment_history(
+    status: str = "all", admin: User = Depends(get_current_admin), db: Session = Depends(get_db)
+):
+    """Kredit xaridlari tarixi (oxirgi 100 ta): Payme, Click va karta orqali, har qanday holatda."""
+
+    query = select(CreditPurchase).options(selectinload(CreditPurchase.teacher).selectinload(Teacher.user))
+    if status != "all":
+        query = query.where(CreditPurchase.status == status)
+    purchases = db.scalars(query.order_by(CreditPurchase.id.desc()).limit(100)).all()
+    return [
+        {
+            "id": purchase.id,
+            "teacher": purchase.teacher.user.full_name,
+            "user_id": purchase.teacher.user_id,
+            "credits": purchase.credits,
+            "amount": purchase.amount,
+            "status": purchase.status,
+            "method": purchase.method,
+            "created_at": purchase.created_at,
+        }
+        for purchase in purchases
+    ]
+
+
+ADMIN_BROADCAST_AUDIENCES = {
+    "all": "Barcha foydalanuvchilar",
+    "teachers": "O'qituvchilar",
+    "school_staff": "Muassasa xodimlari",
+    "school_leaders": "Muassasa rahbarlari",
+}
+_admin_broadcast_lock = threading.Lock()
+_admin_broadcast_running = False
+
+
+class AdminBroadcastIn(BaseModel):
+    """
+    Hammaga e'lon. confirm_count — admin ekranda ko'rgan qabul qiluvchilar soni:
+    u hozirgi son bilan mos kelmasa, yuborilmaydi (adashib boshqa guruhga ketmasin).
+    """
+
+    text: str = Field(min_length=1, max_length=3500)
+    audience: str
+    confirm_count: int = Field(ge=0)
+
+
+def _admin_audience_chat_ids(db: Session, audience: str) -> list[int]:
+    if audience == "all":
+        query = select(User.tg_id)
+    elif audience == "teachers":
+        query = select(User.tg_id).join(Teacher, Teacher.user_id == User.id)
+    elif audience in ("school_staff", "school_leaders"):
+        query = (
+            select(User.tg_id)
+            .join(SchoolMember, SchoolMember.user_id == User.id)
+            .where(SchoolMember.left_at.is_(None))
+        )
+        if audience == "school_leaders":
+            query = query.where(or_(SchoolMember.role == "owner", SchoolMember.position.in_(("director", "deputy"))))
+    else:
+        raise HTTPException(status_code=422, detail="Bunday guruh yo'q")
+    return list(dict.fromkeys(db.scalars(query.order_by(User.id)).all()))
+
+
+def _run_admin_broadcast(admin_tg_id: int, chat_ids: list[int], text: str, title: str) -> None:
+    """Fonda: xabarni ro'yxatdagilarga birma-bir yuboradi, oxirida adminga hisobot."""
+
+    global _admin_broadcast_running
+    delivered = 0
+    try:
+        for chat_id in chat_ids:
+            if _telegram_send_status(chat_id, text)[0] == 200:
+                delivered += 1
+            time.sleep(BROADCAST_INTERVAL)
+        logging.getLogger("backend").info("Admin e'loni (%s): %s/%s", title, delivered, len(chat_ids))
+        _telegram_send_message(
+            admin_tg_id,
+            f"📢 E'lon yuborildi — «{title}»: {delivered} / {len(chat_ids)} kishiga yetdi."
+            + (f"\n{len(chat_ids) - delivered} kishi botni bloklagan yoki ishga tushirmagan." if delivered < len(chat_ids) else ""),
+        )
+    finally:
+        with _admin_broadcast_lock:
+            _admin_broadcast_running = False
+
+
+def _start_admin_broadcast(admin_tg_id: int, chat_ids: list[int], text: str, title: str) -> None:
+    threading.Thread(
+        target=_run_admin_broadcast, args=(admin_tg_id, chat_ids, text, title), name="admin-broadcast", daemon=True
+    ).start()
+
+
+@app.get("/api/admin/broadcast")
+def admin_broadcast_audiences(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Har bir guruhda necha kishi bor — admin kimga yuborayotganini aniq ko'rsin."""
+
+    return {
+        "running": _admin_broadcast_running,
+        "audiences": [
+            {"id": key, "label": label, "count": len(_admin_audience_chat_ids(db, key))}
+            for key, label in ADMIN_BROADCAST_AUDIENCES.items()
+        ],
+    }
+
+
+@app.post("/api/admin/broadcast/test")
+def admin_broadcast_test(body: AdminMessageIn, admin: User = Depends(get_current_admin)):
+    """E'lonni avval faqat adminning o'ziga yuborib ko'rish — qanday ko'rinishini tekshirish uchun."""
+
+    if _telegram_send_status(admin.tg_id, body.text.strip())[0] != 200:
+        raise HTTPException(status_code=502, detail="Xabar yetmadi — botga /start bosganmisiz?")
+    return {"ok": True}
+
+
+@app.post("/api/admin/broadcast")
+def admin_broadcast(body: AdminBroadcastIn, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Tanlangan guruhga e'lon. Fonda yuboriladi; bir vaqtda faqat bitta e'lon ketadi."""
+
+    global _admin_broadcast_running
+    if body.audience not in ADMIN_BROADCAST_AUDIENCES:
+        raise HTTPException(status_code=422, detail="Bunday guruh yo'q")
+    if not BOT_TOKEN:
+        raise HTTPException(status_code=503, detail="Bot ulanmagan")
+    chat_ids = _admin_audience_chat_ids(db, body.audience)
+    if not chat_ids:
+        raise HTTPException(status_code=409, detail="Bu guruhda hech kim yo'q")
+    if len(chat_ids) != body.confirm_count:
+        raise HTTPException(
+            status_code=409, detail=f"Qabul qiluvchilar soni o'zgardi (endi {len(chat_ids)} ta) — sahifani yangilab, qayta tasdiqlang"
+        )
+    with _admin_broadcast_lock:
+        if _admin_broadcast_running:
+            raise HTTPException(status_code=409, detail="Oldingi e'lon hali yuborilmoqda — tugashini kuting")
+        _admin_broadcast_running = True
+    title = ADMIN_BROADCAST_AUDIENCES[body.audience]
+    try:
+        _start_admin_broadcast(admin.tg_id, chat_ids, body.text.strip(), title)
+    except Exception:
+        with _admin_broadcast_lock:
+            _admin_broadcast_running = False
+        raise
+    return {"ok": True, "recipients": len(chat_ids), "seconds": math.ceil(len(chat_ids) * (BROADCAST_INTERVAL + 0.05))}
 
 
 # Barcha boshqa manzillarni frontend papkasidan beradi (index.html, css, js)

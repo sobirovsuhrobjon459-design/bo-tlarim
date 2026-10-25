@@ -1731,3 +1731,85 @@ button.tt-cell {
   height: 1.4em;
   vertical-align: -0.32em;
 }
+
+/* ---------- 👑 Admin panel ---------- */
+
+.admin-tabs {
+  margin: 4px 0 14px;
+}
+
+.admin-chips {
+  margin: 4px 0 12px;
+}
+
+.admin-count {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.admin-hint {
+  margin: -4px 0 10px;
+  font-size: 13px;
+}
+
+.admin-todo {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.admin-line {
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  margin-bottom: 14px;
+}
+
+.admin-search {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.admin-search .input {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.admin-search .btn {
+  width: auto;
+  flex: none;
+  margin: 0;
+  padding: 0 16px;
+}
+
+.admin-facts .row-between {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-border);
+  gap: 10px;
+}
+
+.admin-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 14px;
+}
+
+.admin-mini-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 8px;
+  font-size: 13px;
+}

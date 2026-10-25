@@ -7520,36 +7520,241 @@ async function refreshHomeInBackground() {
   }
 }
 
-async function renderAdminDashboard() {
-  const [stats, topStudents, withdrawalRequests, teachers, cardTopUps, promoCodes] = await Promise.all([
-    api("/api/admin/stats"),
-    api("/api/admin/top-students"),
-    api("/api/admin/withdrawal-requests"),
-    api("/api/admin/teachers"),
-    api("/api/admin/card-topups"),
-    api("/api/admin/promo-codes"),
-  ]);
+/*
+  👑 Admin panel — bo'limlarga ajratilgan:
+    Umumiy      — kutilayotgan ishlar, davr bo'yicha o'sish, daromad, reytinglar
+    To'lovlar   — karta to'lovlarini tasdiqlash, pul yechish, xaridlar tarixi
+    Odamlar     — foydalanuvchini topish, kredit berish, xabar yozish
+    Muassasalar — barcha maktab/kurs/to'garaklar
+    Promo       — promo kodlar
+    Tizim       — zaxira nusxa
+*/
+const ADMIN_TABS = [
+  { id: "home", label: "📊 Umumiy" },
+  { id: "payments", label: "💳 To'lovlar" },
+  { id: "users", label: "👥 Odamlar" },
+  { id: "schools", label: "🏫 Muassasalar" },
+  { id: "broadcast", label: "📢 E'lon" },
+  { id: "promo", label: "🎁 Promo" },
+  { id: "system", label: "⚙️ Tizim" },
+];
 
-  const promoRows =
-    promoCodes
+const ADMIN_PERIODS = [
+  { id: "today", label: "Bugun" },
+  { id: "week", label: "7 kun" },
+  { id: "month", label: "30 kun" },
+];
+
+const PURCHASE_STATUS = {
+  paid: { label: "To'langan", badge: "badge-green" },
+  pending: { label: "Kutilmoqda", badge: "badge-blue" },
+  cancelled: { label: "Bekor qilingan", badge: "badge-gray" },
+};
+
+const PURCHASE_METHOD = { payme: "Payme", click: "Click", card: "Karta" };
+
+const adminState = { tab: "home", period: "week", userQuery: "", userFilter: "all", schoolQuery: "", paymentStatus: "all", audience: "teachers" };
+
+function adminHint(text) {
+  return `<p class="subtitle admin-hint">${text}</p>`;
+}
+
+function adminChips(items, active, dataName) {
+  return `<div class="class-chips admin-chips">${items
+    .map(
+      (item) =>
+        `<button type="button" class="class-chip${item.id === active ? " active" : ""}" data-${dataName}="${item.id}">${item.label}</button>`
+    )
+    .join("")}</div>`;
+}
+
+async function renderAdminDashboard(tab = adminState.tab) {
+  adminState.tab = tab;
+  const stats = await api("/api/admin/stats");
+  const pendingTotal = (stats.pending?.card_topups || 0) + (stats.pending?.withdrawals || 0);
+
+  const tabsHtml = `<div class="class-chips admin-tabs">${ADMIN_TABS.map(
+    (item) =>
+      `<button type="button" class="class-chip${item.id === tab ? " active" : ""}" data-admin-tab="${item.id}">${item.label}${
+        item.id === "payments" && pendingTotal ? `<span class="admin-count">${pendingTotal}</span>` : ""
+      }</button>`
+  ).join("")}</div>`;
+
+  const view = await ADMIN_VIEWS[tab](stats);
+
+  showPage(`
+    <div data-admin-page>
+      ${pageHeader("👑 Admin panel")}
+      ${tabsHtml}
+      ${view.html}
+    </div>
+  `);
+
+  document.querySelector('[data-action="back"]')?.addEventListener("click", loadHome);
+  document.querySelectorAll("[data-admin-tab]").forEach((button) =>
+    button.addEventListener(
+      "click",
+      guarded(async () => renderAdminDashboard(button.dataset.adminTab))
+    )
+  );
+  // Ism bosilsa — o'sha odamning kartochkasi ochiladi (istalgan bo'limda)
+  document.querySelector("[data-admin-page]").addEventListener("click", (event) => {
+    const link = event.target.closest("[data-admin-user]");
+    if (link) guarded(() => openAdminUserSheet(Number(link.dataset.adminUser)))();
+  });
+  view.wire?.();
+}
+
+/* ---------- 📊 Umumiy ---------- */
+
+function adminPeriodTiles(stats) {
+  const period = adminState.period;
+  const p = stats.periods || {};
+  const value = (key) => formatNumber(p[key]?.[period] ?? 0);
+  return `
+    <div class="stats-grid">
+      <div class="stat-tile">🆕<span class="stat-value">${value("new_users")}</span>Yangi foydalanuvchi</div>
+      <div class="stat-tile">✅<span class="stat-value">${value("attempts")}</span>Yechilgan test</div>
+      <div class="stat-tile">📚<span class="stat-value">${value("new_tests")}</span>Yangi test</div>
+      <div class="stat-tile">🏫<span class="stat-value">${value("new_schools")}</span>Yangi muassasa</div>
+    </div>
+    <div class="row-between admin-line">
+      <span>🎟️ Kredit sotuvidan tushum</span>
+      <b style="color:var(--color-primary)">${value("credits_revenue")} so'm</b>
+    </div>`;
+}
+
+async function adminHomeView(stats) {
+  const [topStudents, teachers] = await Promise.all([api("/api/admin/top-students"), api("/api/admin/teachers")]);
+  const cardCount = stats.pending?.card_topups || 0;
+  const withdrawCount = stats.pending?.withdrawals || 0;
+
+  const todo =
+    cardCount || withdrawCount
+      ? `<div class="card admin-todo" style="cursor:default">
+           <div class="card-body" style="width:100%">
+             <h3 style="margin:0 0 6px">⏳ Sizni kutmoqda</h3>
+             ${cardCount ? `<p style="margin:2px 0">💳 <b>${cardCount}</b> ta karta to'lovi — pul tushganini tekshirib, kredit yozing</p>` : ""}
+             ${withdrawCount ? `<p style="margin:2px 0">💸 <b>${withdrawCount}</b> ta pul yechish so'rovi — o'qituvchiga pul o'tkazing</p>` : ""}
+             <button class="btn" data-goto-tab="payments" style="margin-top:10px">Ko'rib chiqish →</button>
+           </div>
+         </div>`
+      : `<div class="card" style="cursor:default"><div class="card-body">✅ Hamma to'lov va so'rovlar ko'rib chiqilgan — kutayotgan ish yo'q.</div></div>`;
+
+  const topTeachers = teachers
+    .filter((teacher) => teacher.paid_total > 0)
+    .slice(0, 10)
+    .map(
+      (teacher, index) => `
+        <div class="card row-between" style="cursor:pointer" data-admin-user="${teacher.user_id}">
+          <span>${index + 1}. ${escapeHtml(teacher.name)}</span>
+          <b>${formatNumber(teacher.paid_total)} so'm</b>
+        </div>`
+    )
+    .join("");
+
+  const topRows =
+    topStudents
+      .slice(0, 10)
       .map(
-        (promo) => `
-          <div class="card" style="cursor:default">
-            <div class="card-body" style="width:100%">
-              <div class="row-between">
-                <b>🎁 ${escapeHtml(promo.hint)}</b>
-                <b>+${formatNumber(promo.credits)} kredit</b>
-              </div>
-              <p class="subtitle" style="margin:4px 0 0">
-                ${promo.used}${promo.max_uses ? ` / ${promo.max_uses}` : ""} marta ishlatildi • har kim ${promo.per_teacher_limit} martagacha
-                ${promo.expires_on ? ` • ${formatDate(promo.expires_on)} gacha` : ""}
-                • ${promo.active ? "✅ faol" : "⛔ to'xtatilgan"}
-              </p>
-              <button class="btn btn-ghost" data-promo-toggle="${promo.id}" style="padding:8px">${promo.active ? "⛔ To'xtatish" : "▶️ Qayta yoqish"}</button>
-            </div>
+        (row, index) => `
+          <div class="card row-between" style="cursor:default">
+            <span>${index + 1}. ${escapeHtml(row.name)}</span>
+            <b>${row.avg_percent}% <span style="color:var(--color-text-muted);font-weight:400">(${row.attempts} ta)</span></b>
           </div>`
       )
-      .join("") || "<p>Hali promo kod yo'q</p>";
+      .join("") || "<p>Hali ma'lumot yo'q</p>";
+
+  return {
+    html: `
+      ${todo}
+
+      <h3>📈 O'sish</h3>
+      ${adminChips(ADMIN_PERIODS, adminState.period, "admin-period")}
+      <div data-admin-period-body>${adminPeriodTiles(stats)}</div>
+
+      <h3>🌐 Butun davr bo'yicha</h3>
+      <div class="stats-grid">
+        <div class="stat-tile">👥<span class="stat-value">${formatNumber(stats.users)}</span>Foydalanuvchi</div>
+        <div class="stat-tile">🧑‍🏫<span class="stat-value">${formatNumber(stats.teachers)}</span>O'qituvchi</div>
+        <div class="stat-tile">🏫<span class="stat-value">${formatNumber(stats.schools ?? 0)}</span>Muassasa</div>
+        <div class="stat-tile">📚<span class="stat-value">${formatNumber(stats.tests)}</span>Test</div>
+      </div>
+
+      <div class="card" style="cursor:default">
+        <div class="card-body" style="width:100%">
+          <h3>💰 Platforma daromadi</h3>
+          <div class="row-between" style="margin-top:6px">
+            <span>🎟️ Kredit sotuvi <span class="subtitle">(${formatNumber(stats.credits_sold)} dona)</span></span>
+            <b>${formatNumber(stats.credits_revenue)} so'm</b>
+          </div>
+          <div class="row-between" style="margin-top:6px">
+            <span>📝 Pullik testlardan ulush <span class="subtitle">(${stats.commission_percent}%)</span></span>
+            <b>${formatNumber(stats.tests_commission)} so'm</b>
+          </div>
+          <div class="row-between" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-border)">
+            <b>Jami daromad</b>
+            <b style="color:var(--color-primary)">${formatNumber(stats.revenue)} so'm</b>
+          </div>
+          ${
+            stats.teachers_owed
+              ? `<p class="subtitle" style="margin:10px 0 0">
+                   ⚠️ O'qituvchilar balansida ${formatNumber(stats.teachers_owed)} so'm turibdi —
+                   bu ular yechib olishi mumkin bo'lgan pul, sizniki emas.
+                 </p>`
+              : ""
+          }
+        </div>
+      </div>
+
+      ${topTeachers ? `<h3>🧑‍🏫 Eng ko'p to'lov qilgan o'qituvchilar</h3>${adminHint("Ismni bossangiz — o'qituvchi kartochkasi ochiladi.")}${topTeachers}` : ""}
+
+      <h3>🏆 Eng yaxshi o'quvchilar</h3>
+      ${adminHint("Barcha testlar bo'yicha o'rtacha natija. Qavsda — nechta test yechgani.")}
+      ${topRows}
+    `,
+    wire() {
+      document.querySelector("[data-goto-tab]")?.addEventListener(
+        "click",
+        guarded(async (event) => renderAdminDashboard(event.currentTarget.dataset.gotoTab))
+      );
+      document.querySelectorAll("[data-admin-period]").forEach((chip) =>
+        chip.addEventListener("click", () => {
+          adminState.period = chip.dataset.adminPeriod;
+          document.querySelectorAll("[data-admin-period]").forEach((other) => other.classList.toggle("active", other === chip));
+          document.querySelector("[data-admin-period-body]").innerHTML = adminPeriodTiles(stats);
+        })
+      );
+    },
+  };
+}
+
+/* ---------- 💳 To'lovlar ---------- */
+
+function adminPurchaseRow(purchase) {
+  const status = PURCHASE_STATUS[purchase.status] || { label: purchase.status, badge: "badge-gray" };
+  return `
+    <div class="card" style="cursor:pointer" data-admin-user="${purchase.user_id}">
+      <div class="card-body" style="width:100%">
+        <div class="row-between">
+          <span>${escapeHtml(purchase.teacher)}</span>
+          <b>${formatNumber(purchase.amount)} so'm</b>
+        </div>
+        <p class="subtitle" style="margin:4px 0 0">
+          ${formatNumber(purchase.credits)} kredit • ${PURCHASE_METHOD[purchase.method] || escapeHtml(purchase.method)} •
+          ${formatDateTime(purchase.created_at)}
+          <span class="badge ${status.badge}">${status.label}</span>
+        </p>
+      </div>
+    </div>`;
+}
+
+async function adminPaymentsView() {
+  const [cardTopUps, withdrawalRequests, history] = await Promise.all([
+    api("/api/admin/card-topups"),
+    api("/api/admin/withdrawal-requests"),
+    api(`/api/admin/payments?status=${encodeURIComponent(adminState.paymentStatus)}`),
+  ]);
 
   // Karta orqali kredit so'rovlari. Asosan admin ularni Telegram'dagi chek
   // ostidagi tugma bilan tasdiqlaydi — bu yerdagisi zaxira yo'l.
@@ -7574,45 +7779,14 @@ async function renderAdminDashboard() {
             </div>
           </div>`
       )
-      .join("") || "<p>Tekshirilishi kerak bo'lgan to'lov yo'q</p>";
-
-  // O'qituvchilar ro'yxati: eng ko'p to'lov qilgani birinchi
-  const teacherRows =
-    teachers
-      .map(
-        (teacher) => `
-          <div class="card" style="cursor:default">
-            <div class="card-body">
-              <div class="row-between">
-                <span>${escapeHtml(teacher.name)}</span>
-                <b>${formatNumber(teacher.paid_total)} so'm</b>
-              </div>
-              <p class="subtitle" style="margin:4px 0 0">
-                ${teacher.tests} ta test • ${formatNumber(teacher.credits)} kredit
-                ${teacher.balance ? ` • balansi ${formatNumber(teacher.balance)} so'm` : ""}
-              </p>
-            </div>
-          </div>`
-      )
-      .join("") || "<p>Hali o'qituvchi yo'q</p>";
-
-  const topRows =
-    topStudents
-      .map(
-        (row, index) => `
-          <div class="card row-between" style="cursor:default">
-            <span>${index + 1}. ${escapeHtml(row.name)}</span>
-            <b>${row.avg_percent}% <span style="color:var(--color-text-muted);font-weight:400">(${row.attempts} ta)</span></b>
-          </div>`
-      )
-      .join("") || "<p>Hali ma'lumot yo'q</p>";
+      .join("") || `<p class="subtitle">✅ Tekshirilishi kerak bo'lgan to'lov yo'q</p>`;
 
   const withdrawalRows =
     withdrawalRequests
       .map(
         (request) => `
           <div class="card" style="cursor:default" data-withdrawal-id="${request.id}">
-            <div class="card-body">
+            <div class="card-body" style="width:100%">
               <div class="row-between">
                 <span>${escapeHtml(request.teacher)}</span>
                 <b>${formatNumber(request.amount)} so'm</b>
@@ -7625,177 +7799,559 @@ async function renderAdminDashboard() {
             </div>
           </div>`
       )
-      .join("") || "<p>Kutilayotgan so'rovlar yo'q</p>";
+      .join("") || `<p class="subtitle">✅ Kutilayotgan so'rov yo'q</p>`;
 
-  showPage(`
-    ${pageHeader("👑 Admin")}
-    <div class="stats-grid">
-      <div class="stat-tile">👥<span class="stat-value">${stats.users}</span>Foydalanuvchilar</div>
-      <div class="stat-tile">🧑‍🏫<span class="stat-value">${stats.teachers}</span>O'qituvchilar</div>
-      <div class="stat-tile">📚<span class="stat-value">${stats.tests}</span>Testlar</div>
-      <div class="stat-tile">✅<span class="stat-value">${stats.attempts}</span>Yakunlangan urinishlar</div>
-    </div>
-    <div class="card" style="cursor:default">
-      <div class="card-body">
-        <h3>💰 Platforma daromadi</h3>
-        <div class="row-between" style="margin-top:6px">
-          <span>🎟️ Kredit sotuvi <span class="subtitle">(${formatNumber(stats.credits_sold)} dona)</span></span>
-          <b>${formatNumber(stats.credits_revenue)} so'm</b>
-        </div>
-        <div class="row-between" style="margin-top:6px">
-          <span>📝 Testlardan komissiya <span class="subtitle">(${stats.commission_percent}%)</span></span>
-          <b>${formatNumber(stats.tests_commission)} so'm</b>
-        </div>
-        <div class="row-between" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-border)">
-          <b>Jami</b>
-          <b style="color:var(--color-primary)">${formatNumber(stats.revenue)} so'm</b>
-        </div>
-        ${
-          stats.teachers_owed
-            ? `<p class="subtitle" style="margin:10px 0 0">
-                 ⚠️ O'qituvchilar balansida ${formatNumber(stats.teachers_owed)} so'm turibdi —
-                 bu ular yechib olishi mumkin bo'lgan pul, sizniki emas.
-               </p>`
-            : ""
-        }
-      </div>
-    </div>
-    <div class="card" style="cursor:default">
-      <div class="card-body">
-        <h3>💾 Zaxira nusxa</h3>
-        <p>
-          Butun baza JSON fayl bo'lib Telegram chatingizga keladi.
-          Har kuni avtomatik yuboriladi — bu tugma esa hoziroq olish uchun.
-        </p>
-        <button class="btn btn-ghost" id="backup-button">💾 Hozir zaxira olish</button>
-      </div>
-    </div>
-    <h3>🎁 Promo kodlar</h3>
-    <div class="card" style="cursor:default">
+  const statusChips = [
+    { id: "all", label: "Hammasi" },
+    { id: "paid", label: "To'langan" },
+    { id: "pending", label: "Kutilmoqda" },
+    { id: "cancelled", label: "Bekor qilingan" },
+  ];
+
+  return {
+    html: `
+      <h3>💳 Karta orqali to'lovlar</h3>
+      ${adminHint("O'qituvchi kredit uchun kartangizga pul o'tkazib, chek yuborgan. Kartangizga pul kelganini tekshiring va «Pul tushdi» ni bosing — kredit darhol yoziladi.")}
+      ${cardTopUpRows}
+
+      <h3>💸 Pul yechish so'rovlari</h3>
+      ${adminHint("O'qituvchi pullik testlardan yig'ilgan balansini kartasiga so'ramoqda. Avval pulni o'tkazing, keyin «To'landi» ni bosing.")}
+      ${withdrawalRows}
+
+      <h3>🧾 Kredit xaridlari tarixi</h3>
+      ${adminHint("Oxirgi 100 ta xarid. Ismni bossangiz — o'qituvchi kartochkasi ochiladi.")}
+      ${adminChips(statusChips, adminState.paymentStatus, "payment-status")}
+      ${history.map(adminPurchaseRow).join("") || "<p class='subtitle'>Bu holatda xarid yo'q</p>"}
+    `,
+    wire() {
+      document.querySelectorAll("[data-payment-status]").forEach((chip) =>
+        chip.addEventListener(
+          "click",
+          guarded(async () => {
+            adminState.paymentStatus = chip.dataset.paymentStatus;
+            await renderAdminDashboard("payments");
+          })
+        )
+      );
+
+      document.querySelectorAll("[data-withdrawal-id]").forEach((card) => {
+        const requestId = card.dataset.withdrawalId;
+        card.querySelector('[data-action="approve"]').addEventListener(
+          "click",
+          guarded(async () => {
+            if (!(await askConfirm("Pulni o'qituvchining kartasiga o'tkazdingizmi? \"To'landi\" deb belgilanadi."))) return;
+            await api(`/api/admin/withdrawal-requests/${requestId}/approve`, { method: "POST", body: {} });
+            showToast("✅ To'landi deb belgilandi");
+            await renderAdminDashboard("payments");
+          })
+        );
+        card.querySelector('[data-action="reject"]').addEventListener(
+          "click",
+          guarded(async () => {
+            if (!(await askConfirm("Pul yechish so'rovini rad etasizmi?"))) return;
+            await api(`/api/admin/withdrawal-requests/${requestId}/reject`, { method: "POST", body: {} });
+            showToast("❌ Rad etildi");
+            await renderAdminDashboard("payments");
+          })
+        );
+      });
+
+      document.querySelectorAll("[data-topup-id]").forEach((card) => {
+        const topUpId = card.dataset.topupId;
+
+        card.querySelector('[data-action="receipt"]')?.addEventListener(
+          "click",
+          guarded(async () => {
+            // Chek himoyalangan manzilda — oddiy <img src> header yubora olmaydi,
+            // shuning uchun rasm so'rov bilan olinib, ekranga qo'yiladi.
+            const button = card.querySelector('[data-action="receipt"]');
+            const image = card.querySelector("[data-receipt-image]");
+            button.disabled = true;
+            image.src = await fetchProtectedImage(`/api/admin/card-topups/${topUpId}/receipt`);
+            image.hidden = false;
+            button.hidden = true;
+          })
+        );
+
+        card.querySelector('[data-action="approve"]').addEventListener(
+          "click",
+          guarded(async () => {
+            if (!(await askConfirm("Kartangizga pul tushganini tekshirdingizmi? Kredit darhol yoziladi."))) return;
+            await api(`/api/admin/card-topups/${topUpId}/approve`, { method: "POST", body: {} });
+            showToast("✅ Kredit yozildi, o'qituvchiga xabar ketdi");
+            await renderAdminDashboard("payments");
+          })
+        );
+
+        card.querySelector('[data-action="reject"]').addEventListener(
+          "click",
+          guarded(async () => {
+            if (!(await askConfirm("To'lovni rad etasizmi? O'qituvchiga xabar boradi."))) return;
+            await api(`/api/admin/card-topups/${topUpId}/reject`, { method: "POST", body: {} });
+            showToast("❌ Rad etildi");
+            await renderAdminDashboard("payments");
+          })
+        );
+      });
+    },
+  };
+}
+
+/* ---------- 👥 Odamlar ---------- */
+
+function adminUserRow(user) {
+  const extra = [
+    user.username ? `@${escapeHtml(user.username)}` : "",
+    `ID ${user.tg_id}`,
+    `${formatDate(user.created_at)} dan beri`,
+  ].filter(Boolean);
+  return `
+    <div class="card" style="cursor:pointer" data-admin-user="${user.id}">
       <div class="card-body" style="width:100%">
-        <p style="margin:0 0 8px">Kod yarating — o'qituvchi kiritsa, kredit oladi.</p>
-        <input class="input" id="promo-new-code" placeholder="Kod, masalan BAHOR2026" maxlength="40" style="text-transform:uppercase" />
-        <p class="subtitle" style="margin:4px 0 8px">O'qituvchi kodni «Kredit sotib olish» dagi son maydoniga yozadi. Faqat raqamli kod kamida 7 xonali bo'lsin.</p>
-        <div class="two-fields">
-          <input class="input" id="promo-new-credits" type="number" min="1" value="3000" placeholder="Kredit" />
-          <input class="input" id="promo-new-per-teacher" type="number" min="1" max="100" value="3" placeholder="Har kim necha marta" />
+        <div class="row-between">
+          <span><b>${escapeHtml(user.name)}</b>${user.is_teacher ? ` <span class="badge badge-purple">O'qituvchi</span>` : ""}</span>
+          ${user.is_teacher ? `<b>${formatNumber(user.credits)} kr</b>` : ""}
         </div>
-        <input class="input" id="promo-new-limit" type="number" min="1" placeholder="Jami necha marta (bo'sh — cheksiz)" />
-        <label class="field-label" for="promo-new-expires">Amal qilish muddati (ixtiyoriy)</label>
-        <input class="input" id="promo-new-expires" type="date" />
-        <button class="btn" id="promo-create-button" style="margin-top:10px">+ Promo kod yaratish</button>
-        <p class="subtitle" style="margin:8px 0 0">🔒 Kod bazada yashirin saqlanadi — uni o'zingiz eslab qoling.</p>
+        <p class="subtitle" style="margin:4px 0 0">${extra.join(" • ")}${user.school ? `<br>🏫 ${escapeHtml(user.school)}` : ""}</p>
       </div>
+    </div>`;
+}
+
+async function adminUsersView() {
+  const params = new URLSearchParams({ q: adminState.userQuery, only: adminState.userFilter });
+  const users = await api(`/api/admin/users?${params}`);
+  const filterChips = [
+    { id: "all", label: "Hammasi" },
+    { id: "teachers", label: "🧑‍🏫 O'qituvchilar" },
+  ];
+
+  return {
+    html: `
+      ${adminHint("Ism, @username yoki Telegram ID bo'yicha qidiring. Odamni bossangiz — uning kartochkasi ochiladi: u yerdan kredit berish yoki xabar yozish mumkin.")}
+      <form id="admin-user-search" class="admin-search">
+        <input class="input" id="admin-user-query" type="search" placeholder="🔍 Ism, @username yoki ID" value="${escapeHtml(adminState.userQuery)}" />
+        <button class="btn" type="submit">Qidirish</button>
+      </form>
+      ${adminChips(filterChips, adminState.userFilter, "user-filter")}
+      <p class="subtitle" style="margin:0 0 6px">${
+        adminState.userQuery ? `Topildi: ${users.length}${users.length === 50 ? "+ (aniqroq yozing)" : ""}` : "Eng yangi 50 ta foydalanuvchi"
+      }</p>
+      ${users.map(adminUserRow).join("") || "<p class='subtitle'>Hech kim topilmadi</p>"}
+    `,
+    wire() {
+      document.getElementById("admin-user-search").addEventListener(
+        "submit",
+        guarded(async (event) => {
+          event.preventDefault();
+          adminState.userQuery = document.getElementById("admin-user-query").value.trim();
+          await renderAdminDashboard("users");
+        })
+      );
+      document.querySelectorAll("[data-user-filter]").forEach((chip) =>
+        chip.addEventListener(
+          "click",
+          guarded(async () => {
+            adminState.userFilter = chip.dataset.userFilter;
+            await renderAdminDashboard("users");
+          })
+        )
+      );
+    },
+  };
+}
+
+const ADMIN_ROLE_LABELS = { owner: "Asoschi", director: "Direktor", deputy: "Zam direktor", teacher: "O'qituvchi" };
+
+async function openAdminUserSheet(userId) {
+  const user = await api(`/api/admin/users/${userId}`);
+
+  const facts = [
+    ["Telegram ID", user.tg_id],
+    ["Ro'yxatdan o'tgan", formatDate(user.created_at)],
+    ["Yechgan testlari", `${user.attempts} ta${user.avg_percent !== null ? ` • o'rtacha ${user.avg_percent}%` : ""}`],
+  ];
+  if (user.is_teacher) {
+    facts.push(
+      ["Kredit", `${formatNumber(user.credits)} dona`],
+      ["Pul balansi", `${formatNumber(user.balance)} so'm`],
+      ["Yaratgan testlari", `${user.tests} ta`],
+      ["Jami to'lagan", `${formatNumber(user.paid_total)} so'm`]
+    );
+  }
+
+  const schools = user.schools
+    .map(
+      (school) => `
+        <p style="margin:4px 0">🏫 <b>${escapeHtml(school.name)}</b> — ${ADMIN_ROLE_LABELS[school.role] || school.role}
+          <span class="subtitle">(${escapeHtml(school.region)}, ${escapeHtml(school.district)}${school.left_at ? ` • ${formatDate(school.left_at)} da chiqqan` : ""})</span>
+        </p>`
+    )
+    .join("");
+
+  const purchases = user.purchases
+    .map((purchase) => {
+      const status = PURCHASE_STATUS[purchase.status] || { label: purchase.status, badge: "badge-gray" };
+      return `<p style="margin:4px 0">${formatDate(purchase.created_at)} — ${formatNumber(purchase.credits)} kr / ${formatNumber(purchase.amount)} so'm
+        <span class="badge ${status.badge}">${status.label}</span></p>`;
+    })
+    .join("");
+
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0">${escapeHtml(user.name)} ${user.is_teacher ? `<span class="badge badge-purple">O'qituvchi</span>` : ""}</h3>
+    ${user.username ? `<p class="subtitle" style="margin:2px 0 8px">@${escapeHtml(user.username)}</p>` : ""}
+    <div class="admin-facts">
+      ${facts.map(([label, value]) => `<div class="row-between"><span class="subtitle">${label}</span><b>${value}</b></div>`).join("")}
     </div>
-    ${promoRows}
-    <h3>💳 Karta orqali to'lovlar (tasdiq kutmoqda)</h3>
-    ${cardTopUpRows}
-    <h3>💸 Pul yechish so'rovlari</h3>
-    ${withdrawalRows}
-    <h3>🧑‍🏫 O'qituvchilar (eng ko'p to'lov qilgani birinchi)</h3>
-    ${teacherRows}
-    <h3>🏆 Eng yaxshi o'quvchilar (barcha testlar bo'yicha)</h3>
-    ${topRows}
+    ${schools ? `<h4 style="margin:14px 0 4px">Muassasalari</h4>${schools}` : ""}
+    ${purchases ? `<h4 style="margin:14px 0 4px">Oxirgi xaridlari</h4>${purchases}` : ""}
+
+    ${
+      user.is_teacher
+        ? `<h4 style="margin:16px 0 4px">🎁 Kredit berish yoki ayirish</h4>
+           <p class="subtitle" style="margin:0 0 6px">Sovg'a, kompensatsiya yoki xatoni tuzatish uchun. Ayirish uchun minus bilan yozing (masalan −500). Daromad hisobiga kirmaydi.</p>
+           <div class="two-fields">
+             <input class="input" id="admin-credit-delta" type="number" placeholder="Masalan 1000" />
+             <input class="input" id="admin-credit-reason" maxlength="300" placeholder="Sabab (ixtiyoriy)" />
+           </div>
+           <label class="admin-check"><input type="checkbox" id="admin-credit-notify" checked /> O'qituvchiga Telegramda xabar borsin</label>
+           <button class="btn" id="admin-credit-save" style="margin-top:8px">Kreditni o'zgartirish</button>`
+        : ""
+    }
+
+    <h4 style="margin:16px 0 4px">✉️ Xabar yuborish</h4>
+    <p class="subtitle" style="margin:0 0 6px">Bot nomidan shu odamga boradi («Chittak ma'muriyatidan» sarlavhasi bilan).</p>
+    <textarea class="input" id="admin-message-text" rows="3" maxlength="3500" placeholder="Xabar matni"></textarea>
+    <button class="btn btn-ghost" id="admin-message-send" style="margin-top:8px">✉️ Yuborish</button>
+    ${user.username ? `<button class="btn btn-ghost" id="admin-open-tg" style="margin-top:8px">💬 Telegramda yozish (@${escapeHtml(user.username)})</button>` : ""}
+
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:12px">Yopish</button>
   `);
 
-  document.querySelector('[data-action="back"]')?.addEventListener("click", loadHome);
+  sheet.querySelector("#admin-open-tg")?.addEventListener("click", () => openExternalLink(`https://t.me/${user.username}`));
 
-  document.getElementById("promo-create-button").addEventListener(
+  sheet.querySelector("#admin-credit-save")?.addEventListener(
     "click",
     guarded(async () => {
-      const code = document.getElementById("promo-new-code").value.trim();
-      if (code.length < 4) throw new Error("Kod kamida 4 belgidan iborat bo'lsin");
-      const credits = Number(document.getElementById("promo-new-credits").value) || 3000;
-      const limit = Number(document.getElementById("promo-new-limit").value) || null;
-      const perTeacher = Number(document.getElementById("promo-new-per-teacher").value) || 3;
-      const expires = document.getElementById("promo-new-expires").value || null;
-      await api("/api/admin/promo-codes", { method: "POST", body: { code, credits, max_uses: limit, per_teacher_limit: perTeacher, expires_on: expires } });
-      showToast(`✅ Promo kod yaratildi: +${formatNumber(credits)} kredit`);
-      renderAdminDashboard();
-    })
-  );
-  document.querySelectorAll("[data-promo-toggle]").forEach((button) => {
-    button.addEventListener(
-      "click",
-      guarded(async () => {
-        await api(`/api/admin/promo-codes/${button.dataset.promoToggle}/toggle`, { method: "POST", body: {} });
-        renderAdminDashboard();
-      })
-    );
-  });
-
-  document.getElementById("backup-button").addEventListener(
-    "click",
-    guarded(async () => {
-      if (sendsViaBot()) {
-        await api("/api/admin/backup", { method: "POST", body: {} });
-        showToast("💾 Zaxira nusxa Telegramga yuborildi");
-      } else {
-        window.open("/api/admin/backup", "_blank");
-      }
+      const delta = Math.trunc(Number(sheet.querySelector("#admin-credit-delta").value.replace("−", "-")));
+      if (!delta) throw new Error("Kredit sonini yozing (masalan 1000 yoki -500)");
+      const reason = sheet.querySelector("#admin-credit-reason").value.trim();
+      const notify = sheet.querySelector("#admin-credit-notify").checked;
+      const action = delta > 0 ? `${formatNumber(delta)} kredit QO'SHILADI` : `${formatNumber(-delta)} kredit AYIRILADI`;
+      if (!(await askConfirm(`${user.name}: ${action}. Davom etasizmi?`))) return;
+      const result = await api(`/api/admin/users/${user.id}/credits`, { method: "POST", body: { delta, reason, notify } });
+      showToast(`✅ Endi ${formatNumber(result.credits)} kredit${notify && !result.notified ? " (xabar yetmadi)" : ""}`);
+      close();
+      if (adminState.tab === "users") await renderAdminDashboard("users");
     })
   );
 
-  document.querySelectorAll("[data-withdrawal-id]").forEach((card) => {
-    const requestId = card.dataset.withdrawalId;
-    card.querySelector('[data-action="approve"]').addEventListener(
-      "click",
-      guarded(async () => {
-        if (!(await askConfirm("Pulni o'qituvchining kartasiga o'tkazdingizmi? \"To'landi\" deb belgilanadi."))) return;
-        await api(`/api/admin/withdrawal-requests/${requestId}/approve`, { method: "POST", body: {} });
-        showToast("✅ To'landi deb belgilandi");
-        await renderAdminDashboard();
-      })
-    );
-    card.querySelector('[data-action="reject"]').addEventListener(
-      "click",
-      guarded(async () => {
-        if (!(await askConfirm("Pul yechish so'rovini rad etasizmi?"))) return;
-        await api(`/api/admin/withdrawal-requests/${requestId}/reject`, { method: "POST", body: {} });
-        showToast("❌ Rad etildi");
-        await renderAdminDashboard();
-      })
-    );
-  });
-
-  document.querySelectorAll("[data-topup-id]").forEach((card) => {
-    const topUpId = card.dataset.topupId;
-
-    card.querySelector('[data-action="receipt"]')?.addEventListener(
-      "click",
-      guarded(async () => {
-        // Chek himoyalangan manzilda — oddiy <img src> header yubora olmaydi,
-        // shuning uchun rasm so'rov bilan olinib, ekranga qo'yiladi.
-        const button = card.querySelector('[data-action="receipt"]');
-        const image = card.querySelector("[data-receipt-image]");
-        button.disabled = true;
-        image.src = await fetchProtectedImage(`/api/admin/card-topups/${topUpId}/receipt`);
-        image.hidden = false;
-        button.hidden = true;
-      })
-    );
-
-    card.querySelector('[data-action="approve"]').addEventListener(
-      "click",
-      guarded(async () => {
-        if (!(await askConfirm("Kartangizga pul tushganini tekshirdingizmi? Kredit darhol yoziladi."))) return;
-        await api(`/api/admin/card-topups/${topUpId}/approve`, { method: "POST", body: {} });
-        showToast("✅ Kredit yozildi, o'qituvchiga xabar ketdi");
-        await renderAdminDashboard();
-      })
-    );
-
-    card.querySelector('[data-action="reject"]').addEventListener(
-      "click",
-      guarded(async () => {
-        if (!(await askConfirm("To'lovni rad etasizmi? O'qituvchiga xabar boradi."))) return;
-        await api(`/api/admin/card-topups/${topUpId}/reject`, { method: "POST", body: {} });
-        showToast("❌ Rad etildi");
-        await renderAdminDashboard();
-      })
-    );
-  });
+  sheet.querySelector("#admin-message-send").addEventListener(
+    "click",
+    guarded(async () => {
+      const text = sheet.querySelector("#admin-message-text").value.trim();
+      if (!text) throw new Error("Xabar matnini yozing");
+      await api(`/api/admin/users/${user.id}/message`, { method: "POST", body: { text } });
+      showToast("✉️ Xabar yuborildi");
+      sheet.querySelector("#admin-message-text").value = "";
+    })
+  );
 }
+
+/* ---------- 🏫 Muassasalar ---------- */
+
+async function adminSchoolsView() {
+  const schools = await api(`/api/admin/schools?q=${encodeURIComponent(adminState.schoolQuery)}`);
+  const byKind = schools.reduce((acc, school) => ({ ...acc, [school.kind]: (acc[school.kind] || 0) + 1 }), {});
+  const totals = schools.reduce(
+    (acc, school) => ({ staff: acc.staff + school.staff, students: acc.students + school.students }),
+    { staff: 0, students: 0 }
+  );
+
+  const rows = schools
+    .map(
+      (school) => `
+        <div class="card" style="cursor:default">
+          <div class="card-body" style="width:100%">
+            <div class="row-between">
+              <b>${escapeHtml(school.name)}</b>
+              <span class="badge badge-blue">${instTerms(school.kind).title}</span>
+            </div>
+            <p class="subtitle" style="margin:4px 0 0">
+              📍 ${escapeHtml(school.region)}, ${escapeHtml(school.district)} • ${formatDate(school.created_at)} dan beri<br>
+              👤 Asoschi: <a href="#" data-admin-user="${school.owner_user_id}">${escapeHtml(school.owner || "—")}</a>
+            </p>
+            <div class="admin-mini-stats">
+              <span>🧑‍🏫 <b>${school.staff}</b> xodim</span>
+              <span>👥 <b>${school.classes}</b> ${instTerms(school.kind).group}</span>
+              <span>🎒 <b>${formatNumber(school.students)}</b> o'quvchi</span>
+            </div>
+          </div>
+        </div>`
+    )
+    .join("");
+
+  return {
+    html: `
+      ${adminHint("Platformadagi barcha xususiy maktab, o'quv markazi va to'garaklar. Asoschi ismini bossangiz — uning kartochkasi ochiladi.")}
+      <div class="stats-grid">
+        <div class="stat-tile">🏫<span class="stat-value">${byKind.school || 0}</span>Maktab</div>
+        <div class="stat-tile">📘<span class="stat-value">${byKind.course || 0}</span>O'quv markazi</div>
+        <div class="stat-tile">🎨<span class="stat-value">${byKind.club || 0}</span>To'garak</div>
+        <div class="stat-tile">🎒<span class="stat-value">${formatNumber(totals.students)}</span>O'quvchi</div>
+      </div>
+      <form id="admin-school-search" class="admin-search">
+        <input class="input" id="admin-school-query" type="search" placeholder="🔍 Nomi, viloyat yoki tuman" value="${escapeHtml(adminState.schoolQuery)}" />
+        <button class="btn" type="submit">Qidirish</button>
+      </form>
+      ${rows || "<p class='subtitle'>Muassasa topilmadi</p>"}
+    `,
+    wire() {
+      document.getElementById("admin-school-search").addEventListener(
+        "submit",
+        guarded(async (event) => {
+          event.preventDefault();
+          adminState.schoolQuery = document.getElementById("admin-school-query").value.trim();
+          await renderAdminDashboard("schools");
+        })
+      );
+      document.querySelectorAll("a[data-admin-user]").forEach((link) => link.addEventListener("click", (event) => event.preventDefault()));
+    },
+  };
+}
+
+/* ---------- 🎁 Promo ---------- */
+
+async function adminPromoView() {
+  const promoCodes = await api("/api/admin/promo-codes");
+  const promoRows =
+    promoCodes
+      .map(
+        (promo) => `
+          <div class="card" style="cursor:default">
+            <div class="card-body" style="width:100%">
+              <div class="row-between">
+                <b>🎁 ${escapeHtml(promo.hint)}</b>
+                <b>+${formatNumber(promo.credits)} kredit</b>
+              </div>
+              <p class="subtitle" style="margin:4px 0 0">
+                ${promo.used}${promo.max_uses ? ` / ${promo.max_uses}` : ""} marta ishlatildi • har kim ${promo.per_teacher_limit} martagacha
+                ${promo.expires_on ? ` • ${formatDate(promo.expires_on)} gacha` : ""}
+                • ${promo.active ? "✅ faol" : "⛔ to'xtatilgan"}
+              </p>
+              <button class="btn btn-ghost" data-promo-toggle="${promo.id}" style="padding:8px">${promo.active ? "⛔ To'xtatish" : "▶️ Qayta yoqish"}</button>
+            </div>
+          </div>`
+      )
+      .join("") || "<p class='subtitle'>Hali promo kod yo'q</p>";
+
+  return {
+    html: `
+      ${adminHint("Promo kod — o'qituvchiga bepul kredit berish usuli. O'qituvchi kodni «Kredit sotib olish» oynasidagi son maydoniga yozadi va kredit oladi.")}
+      <div class="card" style="cursor:default">
+        <div class="card-body" style="width:100%">
+          <h3 style="margin:0 0 8px">+ Yangi promo kod</h3>
+          <label class="field-label" for="promo-new-code">Kod</label>
+          <input class="input" id="promo-new-code" placeholder="Masalan BAHOR2026" maxlength="40" style="text-transform:uppercase" />
+          <p class="subtitle" style="margin:4px 0 8px">Faqat raqamdan iborat kod kamida 7 xonali bo'lsin.</p>
+          <div class="two-fields">
+            <div>
+              <label class="field-label" for="promo-new-credits">Necha kredit beradi</label>
+              <input class="input" id="promo-new-credits" type="number" min="1" value="3000" />
+            </div>
+            <div>
+              <label class="field-label" for="promo-new-per-teacher">Bir kishi necha marta</label>
+              <input class="input" id="promo-new-per-teacher" type="number" min="1" max="100" value="3" />
+            </div>
+          </div>
+          <label class="field-label" for="promo-new-limit">Jami necha marta ishlatiladi</label>
+          <input class="input" id="promo-new-limit" type="number" min="1" placeholder="Bo'sh — cheksiz" />
+          <label class="field-label" for="promo-new-expires">Amal qilish muddati (ixtiyoriy)</label>
+          <input class="input" id="promo-new-expires" type="date" />
+          <button class="btn" id="promo-create-button" style="margin-top:10px">+ Promo kod yaratish</button>
+          <p class="subtitle" style="margin:8px 0 0">🔒 Kod bazada yashirin saqlanadi — uni o'zingiz eslab qoling.</p>
+        </div>
+      </div>
+      <h3>Mavjud kodlar</h3>
+      ${promoRows}
+    `,
+    wire() {
+      document.getElementById("promo-create-button").addEventListener(
+        "click",
+        guarded(async () => {
+          const code = document.getElementById("promo-new-code").value.trim();
+          if (code.length < 4) throw new Error("Kod kamida 4 belgidan iborat bo'lsin");
+          const credits = Number(document.getElementById("promo-new-credits").value) || 3000;
+          const limit = Number(document.getElementById("promo-new-limit").value) || null;
+          const perTeacher = Number(document.getElementById("promo-new-per-teacher").value) || 3;
+          const expires = document.getElementById("promo-new-expires").value || null;
+          await api("/api/admin/promo-codes", { method: "POST", body: { code, credits, max_uses: limit, per_teacher_limit: perTeacher, expires_on: expires } });
+          showToast(`✅ Promo kod yaratildi: +${formatNumber(credits)} kredit`);
+          await renderAdminDashboard("promo");
+        })
+      );
+      document.querySelectorAll("[data-promo-toggle]").forEach((button) => {
+        button.addEventListener(
+          "click",
+          guarded(async () => {
+            await api(`/api/admin/promo-codes/${button.dataset.promoToggle}/toggle`, { method: "POST", body: {} });
+            await renderAdminDashboard("promo");
+          })
+        );
+      });
+    },
+  };
+}
+
+/* ---------- ⚙️ Tizim ---------- */
+
+async function adminSystemView() {
+  return {
+    html: `
+      <div class="card" style="cursor:default">
+        <div class="card-body">
+          <h3>💾 Zaxira nusxa</h3>
+          <p>
+            Butun baza JSON fayl bo'lib Telegram chatingizga keladi.
+            Har kuni avtomatik yuboriladi — bu tugma esa hoziroq olish uchun.
+          </p>
+          <button class="btn btn-ghost" id="backup-button">💾 Hozir zaxira olish</button>
+        </div>
+      </div>
+      <div class="card" style="cursor:default">
+        <div class="card-body">
+          <h3>❓ Qaysi bo'limda nima bor</h3>
+          <p style="margin:6px 0"><b>📊 Umumiy</b> — kutayotgan ishlar, bugun/hafta/oy bo'yicha o'sish, daromad va reytinglar.</p>
+          <p style="margin:6px 0"><b>💳 To'lovlar</b> — karta to'lovlarini tasdiqlash, pul yechish so'rovlari, barcha xaridlar tarixi. Qizil raqam — nechta ish kutayotgani.</p>
+          <p style="margin:6px 0"><b>👥 Odamlar</b> — istalgan foydalanuvchini topish; o'qituvchiga kredit berish yoki ayirish; bot orqali xabar yozish.</p>
+          <p style="margin:6px 0"><b>🏫 Muassasalar</b> — barcha maktab, o'quv markazi va to'garaklar: qayerda, kimniki, nechta o'quvchi.</p>
+          <p style="margin:6px 0"><b>📢 E'lon</b> — o'qituvchilar, xodimlar yoki hammaga bot orqali xabar. Avval o'zingizga sinab ko'ring.</p>
+          <p style="margin:6px 0"><b>🎁 Promo</b> — o'qituvchilarga bepul kredit beruvchi kodlar.</p>
+        </div>
+      </div>
+    `,
+    wire() {
+      document.getElementById("backup-button").addEventListener(
+        "click",
+        guarded(async () => {
+          if (sendsViaBot()) {
+            await api("/api/admin/backup", { method: "POST", body: {} });
+            showToast("💾 Zaxira nusxa Telegramga yuborildi");
+          } else {
+            window.open("/api/admin/backup", "_blank");
+          }
+        })
+      );
+    },
+  };
+}
+
+/* ---------- 📢 E'lon ---------- */
+
+let adminBroadcastDraft = "";
+
+async function adminBroadcastView() {
+  const info = await api("/api/admin/broadcast");
+  const audiences = info.audiences;
+  if (!audiences.some((item) => item.id === adminState.audience)) adminState.audience = "teachers";
+  const selected = () => audiences.find((item) => item.id === adminState.audience);
+
+  return {
+    html: `
+      ${adminHint("Tanlangan guruhdagi hammaga bot nomidan xabar yuboriladi. Yuborilgan xabarni qaytarib bo'lmaydi — avval «O'zimga sinab ko'rish» bilan tekshiring.")}
+      ${
+        info.running
+          ? `<div class="card admin-todo" style="cursor:default"><div class="card-body">⏳ Oldingi e'lon hali yuborilmoqda. Tugagach, Telegramda hisobot keladi.</div></div>`
+          : ""
+      }
+      <h3>1. Kimga?</h3>
+      ${adminChips(
+        audiences.map((item) => ({ id: item.id, label: `${item.label} · ${formatNumber(item.count)}` })),
+        adminState.audience,
+        "audience"
+      )}
+      <p class="subtitle admin-hint" data-audience-note></p>
+
+      <h3>2. Xabar matni</h3>
+      <textarea class="input" id="admin-broadcast-text" rows="6" maxlength="3500"
+        placeholder="Masalan: Hurmatli ustozlar! Ertadan yangi imkoniyat ishga tushadi...">${escapeHtml(adminBroadcastDraft)}</textarea>
+      <p class="subtitle" style="margin:4px 0 0"><span data-broadcast-length>0</span> / 3500 belgi</p>
+
+      <h3>3. Yuborish</h3>
+      <button class="btn btn-ghost" id="admin-broadcast-test">👀 O'zimga sinab ko'rish</button>
+      <button class="btn" id="admin-broadcast-send" style="margin-top:8px" ${info.running ? "disabled" : ""}></button>
+    `,
+    wire() {
+      const textarea = document.getElementById("admin-broadcast-text");
+      const sendButton = document.getElementById("admin-broadcast-send");
+      const notes = {
+        all: "Botga kirgan har bir odam: o'quvchilar ham, o'qituvchilar ham.",
+        teachers: "O'qituvchi sifatida ro'yxatdan o'tganlar.",
+        school_staff: "Hozir biror maktab, o'quv markazi yoki to'garakda ishlayotgan xodimlar.",
+        school_leaders: "Muassasa asoschilari, direktorlar va zam direktorlar.",
+      };
+      const refresh = () => {
+        const audience = selected();
+        document.querySelector("[data-audience-note]").textContent = notes[audience.id] || "";
+        document.querySelector("[data-broadcast-length]").textContent = textarea.value.length;
+        if (!info.running) sendButton.textContent = `📢 ${formatNumber(audience.count)} kishiga yuborish`;
+      };
+      refresh();
+      textarea.addEventListener("input", () => {
+        adminBroadcastDraft = textarea.value;
+        refresh();
+      });
+      document.querySelectorAll("[data-audience]").forEach((chip) =>
+        chip.addEventListener("click", () => {
+          adminState.audience = chip.dataset.audience;
+          document.querySelectorAll("[data-audience]").forEach((other) => other.classList.toggle("active", other === chip));
+          refresh();
+        })
+      );
+
+      document.getElementById("admin-broadcast-test").addEventListener(
+        "click",
+        guarded(async () => {
+          const text = textarea.value.trim();
+          if (!text) throw new Error("Xabar matnini yozing");
+          await api("/api/admin/broadcast/test", { method: "POST", body: { text } });
+          showToast("👀 Telegramingizga yuborildi — qanday ko'rinishini tekshiring");
+        })
+      );
+
+      sendButton.addEventListener(
+        "click",
+        guarded(async () => {
+          const text = textarea.value.trim();
+          const audience = selected();
+          if (!text) throw new Error("Xabar matnini yozing");
+          if (!audience.count) throw new Error("Bu guruhda hech kim yo'q");
+          const question =
+            `«${audience.label}» guruhidagi ${formatNumber(audience.count)} kishiga xabar yuboriladi.\n\n` +
+            `Yuborilgan xabarni qaytarib bo'lmaydi. Davom etasizmi?`;
+          if (!(await askConfirm(question))) return;
+          const result = await api("/api/admin/broadcast", {
+            method: "POST",
+            body: { text, audience: audience.id, confirm_count: audience.count },
+          });
+          adminBroadcastDraft = "";
+          const minutes = Math.ceil(result.seconds / 60);
+          showToast(`📢 Yuborilmoqda: ${formatNumber(result.recipients)} kishi (~${minutes} daqiqa). Tugagach hisobot keladi.`);
+          await renderAdminDashboard("broadcast");
+        })
+      );
+    },
+  };
+}
+
+const ADMIN_VIEWS = {
+  home: adminHomeView,
+  payments: adminPaymentsView,
+  users: adminUsersView,
+  schools: adminSchoolsView,
+  promo: adminPromoView,
+  broadcast: adminBroadcastView,
+  system: adminSystemView,
+};
 
 async function fetchProtectedImage(path) {
   // api() bilan bir xil autentifikatsiya header'lari, lekin javob JSON emas, rasm
