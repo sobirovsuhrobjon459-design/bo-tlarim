@@ -793,7 +793,7 @@ table td {
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none; /* translateY(0) emas: iPhone'da ichidagi maydonlarda kursor yo'qolardi */
   }
 }
 
@@ -815,7 +815,7 @@ table td {
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none; /* translateY(0) emas: iPhone'da ichidagi maydonlarda kursor yo'qolardi */
   }
 }
 
@@ -834,7 +834,7 @@ table td {
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none; /* translateY(0) emas: iPhone'da ichidagi maydonlarda kursor yo'qolardi */
   }
 }
 
@@ -1868,8 +1868,13 @@ select option {
   transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/*
+  Ochilgandan keyin transform butunlay olinadi ("none", translateY(0) emas):
+  iOS WebView transform'li va ichi aylanadigan blokdagi maydonlarda kursorni
+  chizmaydi — "Yangi xona", "O'quvchi qo'shish" kabi oynalarda kursor ko'rinmasdi.
+*/
 .sheet-backdrop.open .sheet {
-  transform: translateY(0);
+  transform: none;
 }
 
 .sheet-handle {
