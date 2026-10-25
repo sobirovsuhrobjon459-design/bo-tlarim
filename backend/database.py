@@ -956,6 +956,25 @@ class DormCheckMark(Base):
     status: Mapped[str] = mapped_column(String(10), default="present")
 
 
+class StudentStatus(Base):
+    """
+    O'quvchining hozirgi holati: maktabda, uyda, ruxsat berilgan (javob), kasal.
+    Har o'zgarish yangi qator — tarix saqlanadi; hozirgisi — eng oxirgi qator.
+    until — qachongacha (shu kun ham kiradi); o'tib ketsa, o'quvchi yana "maktabda" hisoblanadi.
+    """
+
+    __tablename__ = "student_statuses"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("class_students.id"), index=True)
+    status: Mapped[str] = mapped_column(String(12), default="at_school")
+    note: Mapped[str] = mapped_column(String(300), default="")
+    until: Mapped[date | None] = mapped_column(default=None)
+    set_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
 class SchoolAnnouncement(Base):
     """
     Maktab yoki sinf e'loni. Xodimlarga bot orqali yuborilishi mumkin; ota-onalarga
@@ -1172,6 +1191,21 @@ class DormCheckIn(BaseModel):
 
     marks: dict[int, Literal["present", "absent", "sick", "excused"]]
     check_date: date | None = None
+
+
+class StudentStatusIn(BaseModel):
+    """O'quvchi holati: maktabda / uyda / ruxsat berilgan / kasal; izoh va qachongacha (ixtiyoriy)."""
+
+    status: Literal["at_school", "home", "leave", "sick"]
+    note: str = Field(default="", max_length=300)
+    until: date | None = None
+
+    @model_validator(mode="after")
+    def _clean(self):
+        self.note = " ".join(self.note.split())
+        if self.status == "at_school":
+            self.until = None
+        return self
 
 
 class AnnouncementIn(BaseModel):

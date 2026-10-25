@@ -2273,6 +2273,13 @@ function renderClassStudentsTab(schoolClass) {
               <span class="student-info">
                 <b>${student.code ? `<span class="student-number">${student.code}</span> ` : ""}${escapeHtml(student.full_name)}</b>
                 <small>${studentStatsLine(student.stats)}</small>
+                ${
+                  student.away
+                    ? `<span class="status-chip is-${student.away}" style="margin-top:4px">${
+                        STUDENT_STATUS_OPTIONS.find((item) => item.id === student.away).icon
+                      } ${STUDENT_STATUS_OPTIONS.find((item) => item.id === student.away).label}</span>`
+                    : ""
+                }
               </span>
               ${rateBadge(student.stats)}
             </div>`
@@ -2474,6 +2481,82 @@ function showImportPreview(schoolClass, preview, sourceLabel) {
   );
 }
 
+/*
+  O'quvchi markazi: holati (maktabda / uyda / ruxsat / kasal), sinfi va kuratori,
+  yotoqxonasi, natijalari, to'lovi, davomati — bir sahifada; har bo'limdan
+  to'liq sahifaga o'tiladi. Holatni rahbariyat, kurator yoki tarbiyachi o'zgartiradi.
+*/
+const STUDENT_STATUS_OPTIONS = [
+  { id: "at_school", label: "Maktabda", icon: "🏫" },
+  { id: "home", label: "Uyda", icon: "🏠" },
+  { id: "leave", label: "Ruxsat berilgan", icon: "📝" },
+  { id: "sick", label: "Kasal", icon: "🤒" },
+];
+
+// "2026-10-25" → "25.10.2026" (sana — vaqtsiz, mahalliy)
+function plainDate(value) {
+  if (!value) return "";
+  const [year, month, day] = String(value).slice(0, 10).split("-");
+  return `${day}.${month}.${year}`;
+}
+
+function studentStatusChip(status) {
+  if (!status) return "";
+  const until = status.until ? ` · ${plainDate(status.until)} gacha` : "";
+  return `<span class="status-chip is-${status.status}">${status.icon} ${escapeHtml(status.label)}${until}</span>`;
+}
+
+function openStudentStatusSheet(schoolClass, student, onSaved) {
+  let picked = student.status.status;
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 10px">🔄 ${escapeHtml(student.full_name)} — holati</h3>
+    <div class="status-picker">
+      ${STUDENT_STATUS_OPTIONS.map(
+        (item) => `<button type="button" class="status-option is-${item.id}${item.id === picked ? " active" : ""}" data-status-pick="${item.id}">
+                     <span>${item.icon}</span>${item.label}</button>`
+      ).join("")}
+    </div>
+    <div id="status-extra">
+      <label class="field-label" for="status-until">Qachongacha (ixtiyoriy)</label>
+      <input class="input" id="status-until" type="date" value="${student.status.until || ""}" />
+      <label class="field-label" for="status-note">Izoh (ixtiyoriy)</label>
+      <input class="input" id="status-note" maxlength="300" placeholder="Masalan: shamollagan, ota-onasi olib ketdi"
+             value="${escapeHtml(student.status.note || "")}" />
+    </div>
+    <button class="btn" id="status-save" style="margin-top:14px">💾 Saqlash</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+  const sync = () => {
+    sheet.querySelectorAll("[data-status-pick]").forEach((item) => item.classList.toggle("active", item.dataset.statusPick === picked));
+    sheet.querySelector("#status-extra").hidden = picked === "at_school";
+  };
+  sync();
+  sheet.querySelectorAll("[data-status-pick]").forEach((item) =>
+    item.addEventListener("click", () => {
+      picked = item.dataset.statusPick;
+      sync();
+    })
+  );
+  sheet.querySelector("#status-save").addEventListener(
+    "click",
+    guarded(async () => {
+      const away = picked !== "at_school";
+      await api(`/api/classes/${schoolClass.id}/students/${student.id}/status`, {
+        method: "PUT",
+        body: {
+          status: picked,
+          note: away ? sheet.querySelector("#status-note").value.trim() : "",
+          until: away ? sheet.querySelector("#status-until").value || null : null,
+        },
+      });
+      close();
+      myClassesCache = null;
+      showToast("✅ Holat saqlandi");
+      await onSaved();
+    })
+  );
+}
+
 async function renderStudentProfile(schoolClass, studentId) {
   const student = await api(`/api/classes/${schoolClass.id}/students/${studentId}`);
   const stats = student.stats;
@@ -2492,43 +2575,138 @@ async function renderStudentProfile(schoolClass, studentId) {
         .join("")
     : `<p class="subtitle" style="padding:12px 14px;margin:0">Hali davomat olinmagan.</p>`;
 
+  const dorm = student.dorm;
+  const dormBody = dorm
+    ? `<b>${dorm.building ? `${escapeHtml(dorm.building)} · ` : ""}${escapeHtml(dorm.room)}-xona</b>
+       <small>${dorm.floor !== null && dorm.floor !== undefined ? `${dorm.floor}-qavat · ` : ""}${
+         dorm.warden ? `Tarbiyachi: ${escapeHtml(dorm.warden)}` : "Tarbiyachi tayinlanmagan"
+       }</small>
+       ${dorm.last_check ? `<small>Oxirgi yo'qlama (${plainDate(dorm.last_check.date)}): <b>${escapeHtml(dorm.last_check.label)}</b></small>` : ""}`
+    : `<b>Yotoqxonada emas</b><small>Xonaga joylashtirilmagan</small>`;
+
+  const pay = student.payments;
+  const payTone = pay && pay.total_debt > 0 ? "is-debt" : "is-ok";
+  const payBody = pay
+    ? pay.monthly_fee
+      ? `<b class="${payTone}">${pay.total_debt > 0 ? `Qarz: ${money(pay.total_debt)}` : "Qarzi yo'q ✅"}</b>
+         <small>${pay.current ? `${escapeHtml(pay.current.label)}: ${
+           pay.current.status === "paid" ? "to'langan" : pay.current.status === "partial" ? `qisman, qoldi ${money(pay.current.remaining)}` : `to'lanmagan (${money(pay.current.due)})`
+         }` : ""}${pay.discount ? ` · chegirma ${pay.discount}%` : ""}</small>`
+      : `<b>Oylik to'lov belgilanmagan</b><small>Admin yoki direktor belgilaydi</small>`
+    : "";
+
+  const resultsHtml = student.results.length
+    ? student.results
+        .slice(0, 10)
+        .map(
+          (item) => `
+            <div class="att-row" style="cursor:default">
+              <span class="att-name">${escapeHtml(item.title)}
+                <small class="subtitle" style="display:block;margin:0">${plainDate(item.date)}${item.subject ? ` · ${escapeHtml(item.subject)}` : ""}${
+                  item.source === "center" ? " · Test markazi" : ""
+                }</small>
+              </span>
+              <span class="result-score"><b>${formatNumber(item.score)}/${formatNumber(item.max_score)}</b>${
+                item.percent !== null ? `<small>${item.percent}%</small>` : ""
+              }</span>
+            </div>`
+        )
+        .join("")
+    : `<p class="subtitle" style="padding:12px 14px;margin:0">Siz ko'ra oladigan natijalar hali yo'q.</p>`;
+
+  const statusHistoryHtml = student.status_history.length
+    ? student.status_history
+        .map(
+          (item) => `
+            <div class="att-row" style="cursor:default">
+              <span class="att-name">${item.icon} ${escapeHtml(item.label)}${item.until ? ` · ${plainDate(item.until)} gacha` : ""}
+                <small class="subtitle" style="display:block;margin:0">${dayLabel(item.set_at)} · ${timeLabel(item.set_at)}${
+                  item.set_by ? ` · ${escapeHtml(item.set_by)}` : ""
+                }${item.note ? ` — ${escapeHtml(item.note)}` : ""}</small>
+              </span>
+            </div>`
+        )
+        .join("")
+    : "";
+
   showPage(`
     ${schoolPageHeader(student.full_name, "back-students")}
-    <div class="card" style="cursor:default">
+    <div class="card student-hero" style="cursor:default">
       <span class="student-avatar" style="width:56px;height:56px;font-size:20px">${initials(student.full_name)}</span>
       <div class="card-body" style="width:100%">
         <h3 style="margin:0">${escapeHtml(student.full_name)}</h3>
         <p style="margin:4px 0 0">📚 ${escapeHtml(student.class_name)}${student.code ? ` · 🆔 ID: <b>${student.code}</b>` : ""}</p>
-        <p class="subtitle" style="margin:2px 0 0">${stats.total ? `${stats.total} ta darsda davomat olingan` : "Hali davomat olinmagan"}</p>
+        <div style="margin-top:6px">${studentStatusChip(student.status)}</div>
+        ${student.status.note ? `<p class="subtitle" style="margin:4px 0 0">💬 ${escapeHtml(student.status.note)}</p>` : ""}
       </div>
       ${rateBadge(stats)}
     </div>
+    ${student.can_set_status ? `<button class="btn" id="student-status-button" style="margin-top:10px">🔄 Holatni o'zgartirish</button>` : ""}
 
-    <div class="stats-grid" style="margin-top:12px">
+    <div class="student-hub">
+      <button type="button" class="hub-card" data-hub="class">
+        <span class="hub-icon">📚</span>
+        <span class="hub-text"><small class="hub-kicker">SINF</small><b>${escapeHtml(student.class_name)}</b>
+          <small>${student.curator ? `Kurator: ${escapeHtml(student.curator)}` : "Kurator tayinlanmagan"}</small></span>
+        <span class="hub-go">›</span>
+      </button>
+      <button type="button" class="hub-card" data-hub="dorm" ${dorm ? "" : "disabled"}>
+        <span class="hub-icon">🛏</span>
+        <span class="hub-text"><small class="hub-kicker">YOTOQXONA</small>${dormBody}</span>
+        ${dorm ? `<span class="hub-go">›</span>` : ""}
+      </button>
+      ${
+        pay
+          ? `<button type="button" class="hub-card" data-hub="payments">
+               <span class="hub-icon">💳</span>
+               <span class="hub-text"><small class="hub-kicker">TO'LOV</small>${payBody}</span>
+               <span class="hub-go">›</span>
+             </button>`
+          : ""
+      }
+    </div>
+
+    <p class="section-label" style="margin-top:18px">NATIJALAR (${student.results.length})</p>
+    <div class="panel" style="padding:4px 0">${resultsHtml}</div>
+
+    <p class="section-label" style="margin-top:18px">DAVOMAT</p>
+    <div class="stats-grid">
       <div class="stat-tile"><span class="stat-value" style="color:#1e9e4a">${stats.present}</span>Bor</div>
       <div class="stat-tile"><span class="stat-value" style="color:#d93636">${stats.absent}</span>Yo'q</div>
       <div class="stat-tile"><span class="stat-value" style="color:#e0a800">${stats.excused}</span>Sababli</div>
       <div class="stat-tile"><span class="stat-value" style="color:#2e75b6">${stats.late}</span>Kechikdi</div>
     </div>
+    <p class="section-label" style="margin-top:14px">DARSLAR TARIXI (${stats.total})</p>
+    <div class="panel" style="padding:4px 0">${historyHtml}</div>
+
+    ${statusHistoryHtml ? `<p class="section-label" style="margin-top:18px">HOLAT TARIXI</p><div class="panel" style="padding:4px 0">${statusHistoryHtml}</div>` : ""}
 
     ${
-      schoolClass.can_manage
-        ? `<div class="row-between" style="gap:8px;margin-top:12px">
+      student.can_manage
+        ? `<div class="row-between" style="gap:8px;margin-top:16px">
              <button class="btn btn-ghost" id="edit-student-button" style="margin:0">✏️ Tahrirlash</button>
              <button class="btn btn-ghost" id="remove-student-button" style="margin:0">🚪 Sinfdan chiqarish</button>
            </div>`
         : ""
     }
-
-    <p class="section-label" style="margin-top:18px">DARSLAR TARIXI (${stats.total})</p>
-    <div class="panel" style="padding:4px 0">${historyHtml}</div>
   `);
 
+  const reload = () => renderStudentProfile(schoolClass, student.id);
   document.querySelector('[data-action="back-students"]').addEventListener("click", guarded(() => renderClass(schoolClass.id, "students")));
+  document.getElementById("student-status-button")?.addEventListener("click", () => openStudentStatusSheet(schoolClass, student, reload));
 
-  document.getElementById("edit-student-button")?.addEventListener("click", () =>
-    openEditStudentSheet(schoolClass, student, () => renderStudentProfile(schoolClass, student.id))
+  document.querySelector(".student-hub").addEventListener(
+    "click",
+    guarded(async (event) => {
+      const card = event.target.closest("[data-hub]");
+      if (!card || card.disabled) return;
+      if (card.dataset.hub === "class") await renderClass(schoolClass.id, "students");
+      else if (card.dataset.hub === "dorm") await renderDormRoom(dorm.room_id);
+      else if (card.dataset.hub === "payments") await renderStudentPayments(schoolClass.id, student.id);
+    })
   );
+
+  document.getElementById("edit-student-button")?.addEventListener("click", () => openEditStudentSheet(schoolClass, student, reload));
 
   document.getElementById("remove-student-button")?.addEventListener(
     "click",
@@ -3046,7 +3224,12 @@ function defaultLessonTime() {
 function renderAttendanceForm(schoolClass, existing = null) {
   const rows = existing
     ? existing.marks.map((mark) => ({ id: mark.student_id, name: mark.name, status: mark.status }))
-    : schoolClass.students.map((student) => ({ id: student.id, name: student.full_name, status: "present" }));
+    : schoolClass.students.map((student) => ({
+        id: student.id,
+        name: student.full_name,
+        // Uyda, ruxsatda yoki kasal (o'quvchi holati) — oldindan "Sababli"
+        status: student.away ? "excused" : "present",
+      }));
 
   const counts = () =>
     rows.reduce((result, row) => ({ ...result, [row.status]: (result[row.status] || 0) + 1 }), {});

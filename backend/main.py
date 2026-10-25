@@ -144,6 +144,8 @@ from .database import (
     WorkloadIn,
     AutoTimetableIn,
     SchoolAnnouncement,
+    StudentStatus,
+    StudentStatusIn,
     AnnouncementIn,
     SchoolMember,
     SchoolClass,
@@ -8638,6 +8640,7 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
         if any(not student.student_code for student in students):
             _assign_student_codes(db, school_class.school_id)  # avval qo'shilganlarga ham ID
         stats = _student_attendance_stats(db, [student.id for student in students], _attendance_filter(school_class, member))
+        away = _active_status_codes(db, [student.id for student in students])
         view["students"] = [
             {
                 "id": student.id,
@@ -8645,6 +8648,7 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
                 "full_name": student.full_name,
                 "birth_date": student.birth_date,
                 "stats": stats[student.id],
+                "away": away.get(student.id),  # "home" | "leave" | "sick" | None (maktabda)
             }
             for student in students
         ]
@@ -8909,6 +8913,164 @@ def edit_student(
     return _class_view(db, school_class, with_details=True, member=_active_membership(db, user))
 
 
+# O'quvchi holati: maktabda / uyda / ruxsat berilgan (javob) / kasal
+STUDENT_STATUSES = {
+    "at_school": ("Maktabda", "🏫"),
+    "home": ("Uyda", "🏠"),
+    "leave": ("Ruxsat berilgan", "📝"),
+    "sick": ("Kasal", "🤒"),
+}
+# Holat sinf davomati va kechki yo'qlamaga oldindan qanday tushadi
+STATUS_TO_ATTENDANCE = {"sick": "excused", "leave": "excused", "home": "excused"}
+STATUS_TO_DORM = {"sick": "sick", "leave": "excused", "home": "excused"}
+
+
+def _status_view(db: Session, row: StudentStatus | None) -> dict:
+    """Holat ko'rinishi. until o'tib ketgan bo'lsa — yana "maktabda" (expired belgisi bilan)."""
+
+    if row is None:
+        return {"status": "at_school", "label": "Maktabda", "icon": "🏫", "note": "", "until": None,
+                "set_at": None, "set_by": "", "expired": False}
+    expired = row.until is not None and row.until < _dorm_today()
+    status = "at_school" if expired else row.status
+    label, icon = STUDENT_STATUSES[status]
+    setter = db.get(User, row.set_by)
+    return {"status": status, "label": label, "icon": icon, "note": "" if expired else row.note,
+            "until": None if expired else row.until, "set_at": row.created_at,
+            "set_by": setter.full_name if setter else "", "expired": expired}
+
+
+def _current_statuses(db: Session, student_ids: list[int]) -> dict[int, StudentStatus]:
+    """Har o'quvchining eng oxirgi holat yozuvi (muddati o'tganini _status_view hal qiladi)."""
+
+    if not student_ids:
+        return {}
+    latest = (
+        select(func.max(StudentStatus.id))
+        .where(StudentStatus.student_id.in_(student_ids))
+        .group_by(StudentStatus.student_id)
+    )
+    rows = db.scalars(select(StudentStatus).where(StudentStatus.id.in_(latest))).all()
+    return {row.student_id: row for row in rows}
+
+
+def _active_status_codes(db: Session, student_ids: list[int]) -> dict[int, str]:
+    """Hozir maktabda bo'lmaganlar: {o'quvchi_id: "home"|"leave"|"sick"} (muddati o'tganlar kirmaydi)."""
+
+    today = _dorm_today()
+    return {
+        student_id: row.status
+        for student_id, row in _current_statuses(db, student_ids).items()
+        if row.status != "at_school" and (row.until is None or row.until >= today)
+    }
+
+
+def _student_dorm_room(db: Session, student_id: int) -> DormRoom | None:
+    return db.scalar(
+        select(DormRoom)
+        .join(DormResident, DormResident.room_id == DormRoom.id)
+        .where(DormResident.student_id == student_id, DormResident.left_at.is_(None), DormRoom.deleted_at.is_(None))
+    )
+
+
+def _can_set_student_status(db: Session, member: SchoolMember, school_class: SchoolClass, student: ClassStudent) -> bool:
+    """Holatni o'zgartiradi: rahbariyat, sinf kuratori yoki o'quvchi yashaydigan xonaning tarbiyachisi."""
+
+    if _is_director(member) or school_class.curator_user_id == member.user_id:
+        return True
+    room = _student_dorm_room(db, student.id)
+    return bool(room and room.warden_user_id == member.user_id)
+
+
+def _student_results(db: Session, member: SchoolMember, student: ClassStudent) -> list[dict]:
+    """Sinf natijalari (o'qituvchi kiritgan) va Test markazidagi natijalar — ko'rish huquqi bo'yicha."""
+
+    results = []
+    class_tests = db.execute(
+        select(ClassTestScore, ClassTest)
+        .join(ClassTest, ClassTest.id == ClassTestScore.test_id)
+        .where(ClassTestScore.student_id == student.id, ClassTest.deleted_at.is_(None))
+    ).all()
+    linked = set()
+    for score, test in class_tests:
+        if test.source_test_id:
+            linked.add(test.source_test_id)
+        if not _can_see_class_test(test, member) or score.score is None:
+            continue
+        results.append({
+            "title": test.title, "subject": test.subject, "date": test.taken_on,
+            "score": score.score, "max_score": test.max_score,
+            "percent": round(score.score / test.max_score * 100, 1) if test.max_score else None,
+            "source": "class",
+        })
+
+    attempts = db.execute(
+        select(Attempt, Test, Teacher)
+        .join(Test, Test.id == Attempt.test_id)
+        .join(Teacher, Teacher.id == Test.teacher_id)
+        .where(Attempt.class_student_id == student.id, Attempt.status == "done", Test.deleted_at.is_(None))
+    ).all()
+    for attempt, test, teacher in attempts:
+        if test.id in linked or not (_is_director(member) or teacher.user_id == member.user_id):
+            continue
+        finished = attempt.finished_at or attempt.started_at
+        results.append({
+            "title": test.title, "subject": test.subject, "date": (finished + TASHKENT_OFFSET).date(),
+            "score": attempt.correct, "max_score": attempt.correct + attempt.wrong,
+            "percent": attempt.percent, "source": "center",
+        })
+    results.sort(key=lambda item: item["date"], reverse=True)
+    return results[:30]
+
+
+def _student_dorm_view(db: Session, student: ClassStudent) -> dict | None:
+    room = _student_dorm_room(db, student.id)
+    if not room:
+        return None
+    building = db.get(DormBuilding, room.building_id) if room.building_id else None
+    warden = db.get(User, room.warden_user_id) if room.warden_user_id else None
+    last = db.execute(
+        select(DormCheck.check_date, DormCheckMark.status)
+        .join(DormCheckMark, DormCheckMark.check_id == DormCheck.id)
+        .where(DormCheckMark.student_id == student.id, DormCheck.room_id == room.id)
+        .order_by(DormCheck.check_date.desc())
+        .limit(1)
+    ).first()
+    return {
+        "room_id": room.id, "room": room.name, "floor": room.floor,
+        "building": building.name if building else None,
+        "warden": warden.full_name if warden else None,
+        "last_check": {"date": last[0], "status": last[1], "label": DORM_STATUSES.get(last[1], last[1])} if last else None,
+    }
+
+
+def _student_payment_summary(db: Session, school_class: SchoolClass, student: ClassStudent) -> dict:
+    school = db.get(PrivateSchool, school_class.school_id)
+    paid = _paid_sums(db, [student.id])
+    rows = [{"month": month, **_month_status(_student_due(school, student, month), paid.get((student.id, month), 0))}
+            for month in _student_months(student)]
+    current = rows[0] if rows else None
+    return {
+        "total_debt": sum(row["remaining"] for row in rows),
+        "debt_months": sum(1 for row in rows if row["remaining"] > 0),
+        "current": {**current, "label": _month_label(current["month"])} if current else None,
+        "monthly_fee": _class_fee(school, school_class),
+        "discount": student.discount_percent or 0,
+    }
+
+
+def _status_history(db: Session, student_id: int) -> list[dict]:
+    rows = db.scalars(select(StudentStatus).where(StudentStatus.student_id == student_id)
+                      .order_by(StudentStatus.id.desc()).limit(20)).all()
+    result = []
+    for row in rows:
+        setter = db.get(User, row.set_by)
+        label, icon = STUDENT_STATUSES[row.status]
+        result.append({"status": row.status, "label": label, "icon": icon, "note": row.note, "until": row.until,
+                       "set_at": row.created_at, "set_by": setter.full_name if setter else ""})
+    return result
+
+
 @app.get("/api/classes/{class_id}/students/{student_id}")
 def student_profile(class_id: int, student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """O'quvchi haqida: ma'lumotlari, davomat statistikasi va har darsdagi holati."""
@@ -8932,6 +9094,7 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
 
     if not student.student_code:
         _assign_student_codes(db, school_class.school_id)
+    curator = db.get(User, school_class.curator_user_id) if school_class.curator_user_id else None
     return {
         "id": student.id,
         "code": student.student_code,
@@ -8946,7 +9109,36 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
             {"attendance_id": aid, "taken_at": taken_at, "subject": subject, "status": status}
             for aid, taken_at, subject, status in history
         ],
+        # O'quvchi markazi: holat, sinf, yotoqxona, natijalar, to'lov
+        "status": _status_view(db, _current_statuses(db, [student.id]).get(student.id)),
+        "status_history": _status_history(db, student.id),
+        "can_set_status": _can_set_student_status(db, member, school_class, student),
+        "can_manage": _can_manage_class(school_class, member),
+        "curator": curator.full_name if curator else None,
+        "dorm": _student_dorm_view(db, student),
+        "results": _student_results(db, member, student),
+        "payments": _student_payment_summary(db, school_class, student) if _can_manage_class(school_class, member) else None,
     }
+
+
+@app.put("/api/classes/{class_id}/students/{student_id}/status")
+def set_student_status(class_id: int, student_id: int, body: StudentStatusIn, user: User = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    """Holatni yozadi (yangi qator — tarix saqlanadi). Rahbariyat, kurator yoki xona tarbiyachisi."""
+
+    school_class, member = _school_class(db, user, class_id)
+    student = db.get(ClassStudent, student_id)
+    if not student or student.class_id != school_class.id or student.removed_at is not None:
+        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    if not _can_set_student_status(db, member, school_class, student):
+        raise HTTPException(status_code=403, detail="Holatni rahbariyat, sinf kuratori yoki tarbiyachi o'zgartiradi")
+    if body.until is not None and body.until < _dorm_today():
+        raise HTTPException(status_code=422, detail="Sana o'tib ketgan — bugungi yoki keyingi kunni tanlang")
+    row = StudentStatus(school_id=school_class.school_id, student_id=student.id, status=body.status,
+                        note=body.note, until=body.until, set_by=user.id)
+    db.add(row)
+    db.commit()
+    return _status_view(db, row)
 
 
 @app.delete("/api/classes/{class_id}/students/{student_id}")
@@ -11509,8 +11701,11 @@ def dorm_check(room_id: int, check_date: date | None = None, user: User = Depend
     check = db.scalar(select(DormCheck).where(DormCheck.room_id == room.id, DormCheck.check_date == day))
     marks = {mark.student_id: mark.status for mark in check.marks} if check else {}
     residents = _dorm_residents(db, [room.id])[room.id]
+    # Yo'qlama olinmagan o'quvchi uchun — holatidan (kasal → "Kasal", uyda/ruxsatda → "Ruxsat bilan")
+    away = _active_status_codes(db, [student.id for _, student, _ in residents]) if day == _dorm_today() else {}
     rows = [{"id": student.id, "name": student.full_name, "class_name": school_class.name,
-             "status": marks.get(student.id, "present")} for _, student, school_class in residents]
+             "status": marks.get(student.id, STATUS_TO_DORM.get(away.get(student.id), "present")),
+             "away": away.get(student.id)} for _, student, school_class in residents]
     if check:  # yo'qlamadan keyin xonadan chiqqanlar ham tarixda ko'rinadi
         known = {row["id"] for row in rows}
         rows += [{"id": mark.student_id, "name": mark.student_name, "class_name": "", "status": mark.status}

@@ -6038,3 +6038,65 @@ def test_oquvchini_qidirish_butun_maktab_boyicha():
     assert search("a") == []
     assert search("Begona", as_user(702)) == [("Aliyev Begona", "10/2")]
     assert client.get("/api/schools/students/search", params={"q": "ali"}, headers=as_user(799)).status_code == 403
+
+
+def test_oquvchi_holati_va_profil_markazi():
+    """Holat (maktabda/uyda/ruxsat/kasal): kim o'rnatadi, muddat o'tishi, sinf ro'yxati va profil bo'limlari."""
+    from datetime import timedelta
+
+    from backend.database import ClassStudent, StudentStatus
+
+    reset_database()
+    created = _school_with_class(701)
+    cid = created["id"]
+    h = as_user(701)
+    school = client.get("/api/schools/me", headers=h).json()["school"]
+    _set_name(702, "Oddiy", "Ustoz")
+    joined = client.post("/api/schools/join", json={"code": current_code(school), "subjects": ["Fizika"], "phone": "93 444 55 66"},
+                         headers=as_user(702))
+    assert joined.status_code == 200, joined.text
+    with SessionLocal() as session:
+        student = ClassStudent(class_id=cid, full_name="Valiyev Ali")
+        session.add(student)
+        session.commit()
+        sid = student.id
+    url = f"/api/classes/{cid}/students/{sid}"
+
+    profile = client.get(url, headers=h).json()
+    assert profile["status"]["status"] == "at_school" and profile["can_set_status"] is True, profile["status"]
+    assert profile["payments"] is not None and profile["dorm"] is None and profile["results"] == []
+
+    tomorrow = (main._dorm_today() + timedelta(days=1)).isoformat()
+    yesterday = (main._dorm_today() - timedelta(days=1)).isoformat()
+    # Oddiy o'qituvchi holatni o'zgartira olmaydi, to'lovni ko'rmaydi
+    assert client.put(f"{url}/status", json={"status": "sick"}, headers=as_user(702)).status_code == 403
+    teacher_view = client.get(url, headers=as_user(702)).json()
+    assert teacher_view["can_set_status"] is False and teacher_view["payments"] is None
+    # O'tgan sana bo'lmaydi
+    assert client.put(f"{url}/status", json={"status": "sick", "until": yesterday}, headers=h).status_code == 422
+
+    saved = client.put(f"{url}/status", json={"status": "sick", "until": tomorrow, "note": "  Shamollagan  "}, headers=h)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["status"] == "sick" and saved.json()["note"] == "Shamollagan"
+    profile = client.get(url, headers=h).json()
+    assert profile["status"]["label"] == "Kasal" and profile["status"]["until"] == tomorrow
+    assert [row["status"] for row in profile["status_history"]] == ["sick"]
+    students = client.get(f"/api/classes/{cid}", headers=h).json()["students"]
+    assert students[0]["away"] == "sick", students
+
+    # Muddat o'tsa — yana maktabda
+    with SessionLocal() as session:
+        row = session.scalar(main.select(StudentStatus).where(StudentStatus.student_id == sid))
+        row.until = main._dorm_today() - timedelta(days=1)
+        session.commit()
+    profile = client.get(url, headers=h).json()
+    assert profile["status"]["status"] == "at_school" and profile["status"]["expired"] is True
+    assert client.get(f"/api/classes/{cid}", headers=h).json()["students"][0]["away"] is None
+
+    # Maktabga qaytdi — tarix saqlanadi
+    client.put(f"{url}/status", json={"status": "home"}, headers=h)
+    client.put(f"{url}/status", json={"status": "at_school", "until": tomorrow}, headers=h)
+    profile = client.get(url, headers=h).json()
+    assert profile["status"]["status"] == "at_school" and profile["status"]["until"] is None
+    assert [row["status"] for row in profile["status_history"]] == ["at_school", "home", "sick"]
+    assert client.put(f"{url}/status", json={"status": "bad"}, headers=h).status_code == 422
