@@ -104,6 +104,7 @@ from .database import (
     DormPlaceIn,
     DormResident,
     DormRoom,
+    DormRoomBulkIn,
     DormRoomIn,
     FeeChange,
     FeeIn,
@@ -11303,6 +11304,36 @@ def create_dorm_room(body: DormRoomIn, user: User = Depends(get_current_user), d
     db.add(room)
     db.commit()
     return {"id": room.id}
+
+
+@app.post("/api/dorm/rooms/bulk")
+def create_dorm_rooms_bulk(body: DormRoomBulkIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Raqamlar oralig'idagi xonalarni birdan ochadi (101–110). Binoda allaqachon
+    bor raqamlar o'tkazib yuboriladi. Qavat berilmasa — raqamdan: 101 → 1, 1203 → 12;
+    100 dan kichik raqamlarda qavat bo'sh qoladi.
+    """
+
+    member = _dorm_member(db, user)
+    if not _can_delete_classes(member):
+        raise HTTPException(status_code=403, detail="Xonalarni admin yoki direktor ochadi")
+    building_id = _dorm_building(db, member, body.building_id)
+    warden = _dorm_warden(db, member, body.warden_user_id)
+
+    created, skipped = [], []
+    for number in range(body.start, body.end + 1):
+        name = str(number)
+        if _dorm_same_room(db, member, name, building_id):
+            skipped.append(name)
+            continue
+        floor = body.floor if body.floor is not None else (number // 100 if number >= 100 else None)
+        if floor is not None and floor > 100:
+            floor = None
+        db.add(DormRoom(school_id=member.school_id, name=name, floor=floor, capacity=body.capacity,
+                        warden_user_id=warden, building_id=building_id))
+        created.append(name)
+    db.commit()
+    return {"created": created, "skipped": skipped}
 
 
 @app.put("/api/dorm/rooms/{room_id}")

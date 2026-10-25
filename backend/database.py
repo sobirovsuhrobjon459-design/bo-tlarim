@@ -1124,6 +1124,28 @@ class DormBuildingIn(BaseModel):
         return self
 
 
+class DormRoomBulkIn(BaseModel):
+    """
+    Bir nechta xonani birdan ochish: raqamlar oralig'i (101–110), hammasiga bir xil
+    o'rinlar soni, bino va tarbiyachi. floor bo'sh bo'lsa — raqamdan (101 → 1-qavat).
+    """
+
+    start: int = Field(ge=1, le=99999)
+    end: int = Field(ge=1, le=99999)
+    floor: int | None = Field(default=None, ge=-5, le=100)
+    capacity: int = Field(default=4, ge=1, le=50)
+    warden_user_id: int | None = None
+    building_id: int | None = None
+
+    @model_validator(mode="after")
+    def _check_range(self):
+        if self.end < self.start:
+            raise ValueError("Oxirgi raqam birinchisidan kichik bo'lmasin")
+        if self.end - self.start + 1 > 100:
+            raise ValueError("Bir martada ko'pi bilan 100 ta xona ochiladi")
+        return self
+
+
 class DormRoomIn(BaseModel):
     """Yotoqxona xonasi: nomi/raqami, qavati, necha o'rinli, tarbiyachisi (bo'sh — tayinlanmagan)."""
 

@@ -4372,7 +4372,8 @@ async function renderDormBuilding(buildingId) {
     openDormBuildingSheet(building, (saved) => (saved ? renderDormBuilding(building.id) : renderDorm()))
   );
   document.getElementById("dorm-add-room")?.addEventListener("click", () =>
-    openDormRoomSheet(null, (id) => renderDormRoom(id), buildingId)
+    // Bitta xona — o'sha xona ochiladi; bir nechta — bino ro'yxatiga qaytiladi
+    openDormRoomSheet(null, (id) => (id ? renderDormRoom(id) : renderDormBuilding(buildingId)), buildingId)
   );
   document.querySelectorAll("[data-dorm-room]").forEach((card) =>
     card.addEventListener("click", guarded(() => renderDormRoom(Number(card.dataset.dormRoom))))
@@ -4551,9 +4552,29 @@ async function openDormRoomSheet(room, onSaved, buildingId = room ? room.buildin
     dormBuildingsCache = (await api("/api/dorm").catch(() => ({ buildings: [] }))).buildings.filter((item) => item.id !== null);
   }
   const { sheet, close } = openSheet(`
-    <h3 style="margin:0 0 10px">${room ? "⚙️ Xona sozlamalari" : "🏠 Yangi xona"}</h3>
-    <label class="field-label" for="dorm-room-name">Xona raqami yoki nomi</label>
-    <input class="input" id="dorm-room-name" maxlength="40" value="${escapeHtml(room?.name || "")}" placeholder="Masalan: 201" />
+    <h3 style="margin:0 0 10px" id="dorm-room-title">${room ? "⚙️ Xona sozlamalari" : "🏠 Yangi xona"}</h3>
+    ${
+      room
+        ? ""
+        : `<div class="tabs" style="margin-bottom:6px">
+            <button type="button" class="tab active" data-room-mode="one">Bitta xona</button>
+            <button type="button" class="tab" data-room-mode="many">Bir nechta xona</button>
+          </div>`
+    }
+    <div data-room-one>
+      <label class="field-label" for="dorm-room-name">Xona raqami yoki nomi</label>
+      <input class="input" id="dorm-room-name" maxlength="40" value="${escapeHtml(room?.name || "")}" placeholder="Masalan: 201" />
+    </div>
+    <div data-room-many hidden>
+      <label class="field-label">Xona raqamlari</label>
+      <div class="row-between" style="gap:8px;align-items:center">
+        <input class="input" id="dorm-room-from" type="number" inputmode="numeric" min="1" placeholder="101" style="flex:1" />
+        <span class="muted">dan</span>
+        <input class="input" id="dorm-room-to" type="number" inputmode="numeric" min="1" placeholder="110" style="flex:1" />
+        <span class="muted">gacha</span>
+      </div>
+      <p class="muted" id="dorm-room-range-hint" style="margin:2px 0 4px;font-size:13px">Binoda bor raqamlar o'tkazib yuboriladi</p>
+    </div>
     <div class="row-between" style="gap:8px">
       <div style="flex:1">
         <label class="field-label" for="dorm-room-floor">Qavat</label>
@@ -4585,9 +4606,65 @@ async function openDormRoomSheet(room, onSaved, buildingId = room ? room.buildin
     ${room && !room.occupied ? `<button class="btn btn-ghost" id="dorm-room-delete" style="margin-top:8px">🗑 Xonani o'chirish</button>` : ""}
     <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
   `);
+  // "Bir nechta xona": oraliq (101–110) bitta so'rov bilan ochiladi
+  let manyMode = false;
+  const rangeCount = () => {
+    const from = Number(sheet.querySelector("#dorm-room-from").value);
+    const to = Number(sheet.querySelector("#dorm-room-to").value);
+    return from >= 1 && to >= from ? to - from + 1 : 0;
+  };
+  const refreshMany = () => {
+    if (!manyMode) return;
+    const count = rangeCount();
+    sheet.querySelector("#dorm-room-save").textContent = count ? `💾 ${count} ta xona qo'shish` : "💾 Xonalarni qo'shish";
+  };
+  sheet.querySelectorAll("[data-room-mode]").forEach((tab) =>
+    tab.addEventListener("click", () => {
+      manyMode = tab.dataset.roomMode === "many";
+      sheet.querySelectorAll("[data-room-mode]").forEach((item) => item.classList.toggle("active", item === tab));
+      sheet.querySelector("[data-room-one]").hidden = manyMode;
+      sheet.querySelector("[data-room-many]").hidden = !manyMode;
+      sheet.querySelector("#dorm-room-title").textContent = manyMode ? "🏠 Yangi xonalar" : "🏠 Yangi xona";
+      const floor = sheet.querySelector("#dorm-room-floor");
+      floor.placeholder = manyMode ? "avtomatik" : "2";
+      sheet.querySelector("#dorm-room-save").textContent = "💾 Saqlash";
+      refreshMany();
+      sheet.querySelector(manyMode ? "#dorm-room-from" : "#dorm-room-name").focus();
+    })
+  );
+  ["#dorm-room-from", "#dorm-room-to"].forEach((id) => sheet.querySelector(id).addEventListener("input", refreshMany));
+
   sheet.querySelector("#dorm-room-save").addEventListener(
     "click",
     guarded(async () => {
+      if (manyMode) {
+        const floorText = sheet.querySelector("#dorm-room-floor").value.trim();
+        const wardenId = sheet.querySelector("#dorm-room-warden").value;
+        const buildingValue = sheet.querySelector("#dorm-room-building").value;
+        const start = Number(sheet.querySelector("#dorm-room-from").value);
+        const end = Number(sheet.querySelector("#dorm-room-to").value);
+        if (!start || !end) throw new Error("Birinchi va oxirgi xona raqamini kiriting");
+        if (end < start) throw new Error("Oxirgi raqam birinchisidan kichik bo'lmasin");
+        if (end - start + 1 > 100) throw new Error("Bir martada ko'pi bilan 100 ta xona qo'shiladi");
+        const capacity = Number(sheet.querySelector("#dorm-room-capacity").value) || 0;
+        if (capacity < 1) throw new Error("O'rinlar sonini kiriting");
+        const result = await api("/api/dorm/rooms/bulk", {
+          method: "POST",
+          body: {
+            start,
+            end,
+            floor: floorText === "" ? null : Number(floorText),
+            capacity,
+            building_id: buildingValue ? Number(buildingValue) : null,
+            warden_user_id: wardenId ? Number(wardenId) : null,
+          },
+        });
+        close();
+        const skippedNote = result.skipped.length ? ` (${result.skipped.length} tasi oldin bor edi)` : "";
+        showToast(result.created.length ? `✅ ${result.created.length} ta xona ochildi${skippedNote}` : "Bu raqamli xonalar binoda allaqachon bor");
+        await onSaved(null);
+        return;
+      }
       const floorRaw = sheet.querySelector("#dorm-room-floor").value.trim();
       const warden = sheet.querySelector("#dorm-room-warden").value;
       const building = sheet.querySelector("#dorm-room-building").value;

@@ -5865,3 +5865,36 @@ def test_yotoqxona_birinchi_bino_eski_xonalarni_oladi():
     assert second["moved_rooms"] == 0, second
     buildings = {b["name"]: b["rooms"] for b in client.get("/api/dorm", headers=h).json()["buildings"]}
     assert buildings == {"A bino": 2, "B bino": 0}, buildings
+
+
+def test_yotoqxona_bir_nechta_xonani_birdan_ochish():
+    """101–110 bitta so'rovda: qavat raqamdan, bor raqamlar o'tkaziladi, faqat rahbariyat, 100 tadan ortiq emas."""
+    reset_database()
+    _school_with_class(701)
+    h = as_user(701)
+    a = client.post("/api/dorm/buildings", json={"name": "A bino"}, headers=h).json()
+    b = client.post("/api/dorm/buildings", json={"name": "B bino"}, headers=h).json()
+    client.post("/api/dorm/rooms", json={"name": "103", "capacity": 2, "building_id": a["id"]}, headers=h)
+
+    result = client.post("/api/dorm/rooms/bulk", json={"start": 101, "end": 110, "capacity": 6, "building_id": a["id"]},
+                         headers=h)
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert body["skipped"] == ["103"] and len(body["created"]) == 9, body
+    rooms = {r["name"]: r for r in client.get("/api/dorm", headers=h).json()["rooms"] if r["building_id"] == a["id"]}
+    assert len(rooms) == 10 and rooms["110"]["floor"] == 1 and rooms["105"]["capacity"] == 6, rooms["110"]
+    assert rooms["103"]["capacity"] == 2  # oldingi xona o'zgarmadi
+
+    # Boshqa binoda o'sha raqamlar bemalol; qavat qo'lda berilsa — o'sha
+    other = client.post("/api/dorm/rooms/bulk", json={"start": 1203, "end": 1204, "floor": 7, "building_id": b["id"]},
+                        headers=h).json()
+    assert other["created"] == ["1203", "1204"], other
+    floors = {r["name"]: r["floor"] for r in client.get("/api/dorm", headers=h).json()["rooms"] if r["building_id"] == b["id"]}
+    assert floors == {"1203": 7, "1204": 7}, floors
+    auto = client.post("/api/dorm/rooms/bulk", json={"start": 1205, "end": 1205, "building_id": b["id"]}, headers=h).json()
+    assert auto["created"] == ["1205"]
+    assert {r["name"]: r["floor"] for r in client.get("/api/dorm", headers=h).json()["rooms"]}["1205"] == 12
+
+    assert client.post("/api/dorm/rooms/bulk", json={"start": 5, "end": 2}, headers=h).status_code == 422
+    assert client.post("/api/dorm/rooms/bulk", json={"start": 1, "end": 101}, headers=h).status_code == 422
+    assert client.post("/api/dorm/rooms/bulk", json={"start": 1, "end": 2}, headers=as_user(703)).status_code == 403
