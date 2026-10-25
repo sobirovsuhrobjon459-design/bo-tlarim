@@ -775,6 +775,21 @@ function isMathLiveReady() {
   return Boolean(window.customElements?.get("math-field") && window.mathVirtualKeyboard);
 }
 
+// MathLive faqat matematik yozma maydon birinchi marta chizilganda yuklanadi
+// (ilova har ochilganda ~230 KB yuklamasin). Kelguncha maydon oddiy matn
+// maydoni bo'lib turadi, keyin pastdagi whenDefined bloki uni almashtiradi.
+const MATHLIVE_SCRIPT_URL = "https://cdn.jsdelivr.net/npm/mathlive@0.111.0/mathlive.min.js";
+let mathLiveRequested = false;
+
+function loadMathLive() {
+  if (mathLiveRequested || isMathLiveReady()) return;
+  mathLiveRequested = true;
+  const script = document.createElement("script");
+  script.src = MATHLIVE_SCRIPT_URL;
+  script.async = true;
+  document.head.appendChild(script);
+}
+
 function answerInputHint() {
   if (answerKeyboard === "text") return "Javobni oddiy yozing (so'z yoki son)";
   return isMathLiveReady()
@@ -826,8 +841,10 @@ function mathFieldHtml(initialValue, extraAttributes = "") {
     )}</math-field>`;
   }
 
-  // Zaxira: oddiy matn maydoni. autocapitalize/autocorrect o'chiriladi —
-  // telefon "sqrt" ni boshqa so'zga "tuzatib" yubormasligi uchun.
+  // MathLive hali yuklanmagan: yuklashni boshlaymiz, kelguncha oddiy maydon.
+  // autocapitalize/autocorrect o'chiriladi — telefon "sqrt" ni boshqa so'zga
+  // "tuzatib" yubormasligi uchun.
+  loadMathLive();
   return `<input class="input math-input" type="text" autocomplete="off" autocorrect="off"
                  autocapitalize="off" spellcheck="false" enterkeyhint="done"
                  value="${escapeHtml(latexToPlain(initialValue))}" ${extraAttributes} />`;

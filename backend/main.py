@@ -480,6 +480,47 @@ class InstitutionKindMiddleware:
 app.add_middleware(InstitutionKindMiddleware)
 
 
+class StaticCacheHeaders:
+    """
+    Statik fayllar uchun brauzer keshi.
+
+    index.html ichidagi js/css havolalari versiyalangan ("?v=abc123", qarang:
+    _asset_version): fayl o'zgarsa, havola ham o'zgaradi. Shuning uchun ular
+    bir yilga saqlanadi va ilova qayta ochilganda serverdan umuman so'ralmaydi.
+    Rasmlar — bir hafta. sw.js hech qachon keshlanmaydi (yangisi darhol kelsin).
+    Javobda Cache-Control allaqachon bo'lsa (masalan, index.html), tegilmaydi.
+    """
+
+    def __init__(self, asgi_app):
+        self.app = asgi_app
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "") if scope["type"] == "http" else ""
+        if not path or path.startswith("/api/") or scope.get("method") not in ("GET", "HEAD"):
+            await self.app(scope, receive, send)
+            return
+
+        if path == "/sw.js":
+            policy = b"no-cache"
+        elif b"v=" in scope.get("query_string", b""):
+            policy = b"public, max-age=31536000, immutable"
+        elif path.startswith("/img/"):
+            policy = b"public, max-age=604800"
+        else:
+            policy = None
+
+        async def send_with_cache(message):
+            if (policy and message["type"] == "http.response.start" and message.get("status") == 200
+                    and not any(name.lower() == b"cache-control" for name, _ in message.get("headers", []))):
+                message = {**message, "headers": [*message.get("headers", []), (b"cache-control", policy)]}
+            await send(message)
+
+        await self.app(scope, receive, send_with_cache)
+
+
+app.add_middleware(StaticCacheHeaders)
+
+
 @app.get("/api/health")
 def health():
     """Server tirikligini tekshirish (uyg'oq tutish uchun ham)."""
@@ -12792,7 +12833,7 @@ def _asset_version() -> str:
     """
 
     latest = 0.0
-    for path in (FRONTEND_DIR / "js" / "app.js", FRONTEND_DIR / "js" / "icons.js", FRONTEND_DIR / "css" / "style.css", FRONTEND_DIR / "css" / "theme-pastel.css", FRONTEND_DIR / "css" / "theme-chittak.css"):
+    for path in (FRONTEND_DIR / "js" / "app.js", FRONTEND_DIR / "js" / "icons.js", FRONTEND_DIR / "css" / "style.css", FRONTEND_DIR / "css" / "theme-pastel.css", FRONTEND_DIR / "css" / "theme-chittak.css", FRONTEND_DIR / "css" / "theme-web.css"):
         if path.exists():
             latest = max(latest, path.stat().st_mtime)
     return format(int(latest), "x")

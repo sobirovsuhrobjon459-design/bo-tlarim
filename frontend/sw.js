@@ -9,8 +9,11 @@
   akkaunt bo'lsa, bir-birining ma'lumotini ko'rmaydi). Faqat GET va faqat JSON.
 */
 
-const CACHE = "testway-v5";
-const SHELL = ["/", "/css/style.css", "/css/theme-pastel.css", "/css/theme-chittak.css", "/css/theme-web.css", "/js/icons.js", "/js/app.js"];
+const CACHE = "chittak-v6";
+// Faqat bosh sahifa oldindan saqlanadi. js/css esa sahifa so'ragan versiyali
+// manzil bilan ("?v=...") birinchi ochilishda keshga tushadi — versiyasiz
+// nusxalarni alohida yuklash keraksiz trafik edi.
+const SHELL = ["/"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -60,6 +63,30 @@ async function networkFirst(request, cacheKey, shouldStore) {
   }
 }
 
+async function cacheFirst(request) {
+  const cache = await caches.open(CACHE);
+  const cached = await cache.match(request);
+  if (cached) return cached;
+  const response = await fetch(request);
+  if (response.ok || response.type === "opaque") {
+    const url = new URL(request.url);
+    if (url.searchParams.has("v")) {
+      // Yangi versiya keldi — shu faylning eski versiyalari keshda to'planib qolmasin
+      const old = await cache.keys();
+      await Promise.all(
+        old
+          .filter((item) => {
+            const oldUrl = new URL(item.url);
+            return oldUrl.origin === url.origin && oldUrl.pathname === url.pathname && oldUrl.search !== url.search;
+          })
+          .map((item) => cache.delete(item))
+      );
+    }
+    cache.put(request, response.clone()).catch(() => {});
+  }
+  return response;
+}
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET") return;
@@ -70,6 +97,18 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       networkFirst(request, key, (response) => response.ok && (response.headers.get("content-type") || "").includes("json"))
     );
+    return;
+  }
+
+  // O'zgarmas fayllar: versiyali js/css ("?v=...") va versiyasi manzilda
+  // yozilgan tashqi kutubxonalar (MathLive, Google shriftlari) — avval keshdan.
+  // Ilova qayta ochilganda ular tarmoqdan umuman so'ralmaydi.
+  const immutable =
+    (url.origin === self.location.origin && url.searchParams.has("v")) ||
+    url.hostname === "cdn.jsdelivr.net" ||
+    url.hostname === "fonts.gstatic.com";
+  if (immutable) {
+    event.respondWith(cacheFirst(request));
     return;
   }
 
