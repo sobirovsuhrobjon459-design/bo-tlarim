@@ -6332,7 +6332,7 @@ function openGridSlotSheet(schoolClass, schedule, weekday, number, slot, onSaved
   sheet.querySelector("#grid-delete-button")?.addEventListener(
     "click",
     guarded(async () => {
-      if (!(await askConfirm("Bu darsni jadvaldan olib tashlaysizmi?"))) return;
+      // So'ramasdan o'chiradi: tugmaning o'zi aniq ("Darsni olib tashlash"), xato bo'lsa qayta qo'yish oson
       await api(`/api/schedule/${slot.id}`, { method: "DELETE" });
       schoolOverviewCache = null;
       close();
