@@ -23,6 +23,8 @@ const IN_APP = /TestWayApp/i.test(navigator.userAgent);
   kiriladi (botda "Tasdiqlash"). Lokal sinovda (localhost) avvalgidek X-Dev-User ishlaydi.
 */
 const ON_WEB = !IN_APP && !telegram?.initData && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+// Sayt bosh ekranga qo'shilib, alohida ilova bo'lib ochilgan (iPhone: Safari → Ulashish → "Bosh ekranga")
+const AS_PWA = window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
 // Seans bilan kiriladi (Telegram initData yo'q): ilova yoki web sayt
 const NEEDS_LOGIN = (IN_APP || ON_WEB) && !telegram?.initData;
 if (ON_WEB) document.documentElement.classList.add("web-mode");
@@ -15221,7 +15223,8 @@ let appLoginPoll = null;
 
 function renderAppLogin(errorText = "") {
   clearInterval(appLoginPoll);
-  if (ON_WEB) {
+  // Bosh ekrandagi ilovada reklama sahifasi emas — ilovadagidek oddiy kirish oynasi
+  if (ON_WEB && !AS_PWA) {
     renderWebLogin(errorText);
     return;
   }
