@@ -10655,14 +10655,20 @@ function renderNewTestForm(testType, draft = {}) {
 
     <input class="input" id="field-title" placeholder="Test nomini kiriting" value="${escapeHtml(draft.title || "")}" />
 
-    <div style="display:${offline ? "none" : "block"}">
+    <div>
       <label class="field-label" for="field-type">Test turi</label>
       <select class="input" id="field-type">
         ${Object.entries(TEST_TYPES)
           .map(([value, item]) => selectOption(value, item.label, type))
           .join("")}
       </select>
-      <p class="subtitle" style="margin:-6px 0 0">${preset.hint}</p>
+      <p class="subtitle" style="margin:-6px 0 0">${
+        offline
+          ? `Offline: barcha savollar A/B/C/D, sonini o'zingiz kiritasiz. ${
+              type === "rash" ? "Milliy sertifikat fanlari va DTM testi." : "Barcha fanlar."
+            }`
+          : preset.hint
+      }</p>
     </div>
 
     <label class="field-label" for="field-subject">Fanni tanlang</label>
