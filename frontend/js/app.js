@@ -13020,18 +13020,12 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
       // Varaq shu yerning o'zida o'qiladi; ketma-ket ikki kadr bir xil natija bersa — qabul
       if (!read) return;
       const { result } = read;
-      if (result.sheet_code !== null && result.sheet_code !== layout.sheet_code) {
-        lastRead = null;
-        status.textContent = "⚠️ Bu titul boshqa imtihonniki — shu imtihonning varag'ini qo'ying";
-        return;
-      }
       const signature = JSON.stringify([result.answers, result.sheet_number, result.variant, result.sheet_code]);
-      // Ishonchli o'qilgan bo'lsa (imtihon kodi mos, shubhali doiracha yo'q, ID aniq) — birinchi kadrning
+      // Ishonchli o'qilgan bo'lsa (kod kataklari o'qildi, shubhali doiracha yo'q, ID aniq) — birinchi kadrning
       // o'zi qabul qilinadi; aks holda ikkinchi kadr ham xuddi shuni berishi kutiladi. Natija baribir
       // tekshiruv ekranida ko'rsatiladi — o'qituvchi tasdiqlamaguncha saqlanmaydi
       const confident =
         result.sheet_code !== null &&
-        result.sheet_code === layout.sheet_code &&
         ["ok", "none"].includes(result.sheet_number_status) &&
         result.questions.every((question) => question.status === "ok" || question.status === "empty");
       if (signature !== lastRead && !confident) {

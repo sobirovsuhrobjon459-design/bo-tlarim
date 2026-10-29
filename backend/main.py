@@ -1944,9 +1944,18 @@ SHEET_CODE_BITS = 12        # pastki chetdagi imtihon kodi kataklari
 SHEET_CODE_SIZE = 9
 
 
+SHEET_SHARED_CODE = 0b101101011010  # hamma testda bir xil (2906)
+
+
 def sheet_code(test: Test) -> int:
-    """Imtihon kodi (12 bit) — titul boshqa imtihonniki emasligini tekshirish uchun."""
-    return (test.id * 2654435761) % (1 << SHEET_CODE_BITS) or 1
+    """
+    Titulning pastki chetidagi kod — HAMMA testda bir xil. Test o'chib ketsa, xuddi shunday
+    yangi test yaratib, tarqatilgan varaqlarni unga skanerlash mumkin. Kod endi varaq qaysi
+    imtihonniki ekanini tekshirmaydi — faqat varaq kadrda to'liq ko'ringanini bildiradi
+    (kataklar o'qilmasa, surat qayta olinadi). Oldin chop etilgan (test raqamiga bog'liq kodli)
+    titullar ham shu sababli istalgan testga o'qiladi.
+    """
+    return SHEET_SHARED_CODE
 
 
 def _draw_sheet_marks(sheet, test: Test, width: float, height: float, bubbles: list | None, page: int,
@@ -6037,12 +6046,6 @@ def _attempt_by_sheet_number(db: Session, teacher: Teacher, test: Test, number: 
 def _scan_response(db: Session, teacher: Teacher, test: Test, result: dict, page: int,
                    variants: list[str], page_count: int) -> dict:
     """O'qilgan varaq (serverda yoki telefonda) → imtihon kodi tekshiruvi, ID bo'yicha o'quvchi, ro'yxat."""
-
-    if result.get("sheet_code") is not None and result["sheet_code"] != sheet_code(test):
-        raise HTTPException(
-            status_code=422,
-            detail="Bu titul boshqa imtihonniki — shu imtihonning varag'ini skanerlang",
-        )
 
     # Varaqdagi raqam bo'yicha o'quvchi topiladi (ro'yxatda bo'lsa)
     _ensure_sheet_numbers(db, test)

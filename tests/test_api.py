@@ -5005,10 +5005,11 @@ def test_ilovada_oqilgan_varaq_natijasi_qabul_qilinadi():
                         headers=as_user(555))
     assert saved.status_code == 200 and saved.json()["correct"] == 1, saved.text
 
-    # Boshqa imtihonning titul kodi — rad etiladi
+    # Kod hamma testda bir xil; oldin chop etilgan (boshqa kodli) titul ham qabul qilinadi
+    assert layout["sheet_code"] == main.SHEET_SHARED_CODE
     other = client.post(f"{base}/scan/result", json={**result, "sheet_code": (layout["sheet_code"] + 1) % 4096},
                         headers=as_user(555))
-    assert other.status_code == 422, other.text
+    assert other.status_code == 200, other.text
 
 
 def test_varaq_atrofidagi_qora_narsalar_skanerni_adashtirmaydi():
@@ -5058,10 +5059,10 @@ def test_javoblar_varaqasi_skanerlanadi():
     first = next(q for q in double["questions"] if q["ref"] == 1)
     assert first["status"] == "multiple" and first["chosen"] == "" and "1" not in double["answers"], first
 
-    # Boshqa imtihonning tituli (kodi boshqacha) — qabul qilinmaydi
-    other = client.post(url, json={"image_base64": _sheet_photo(test_id, {1: "B"}, code_of=main.sheet_code(SimpleNamespace(id=test_id + 1)))},
-                        headers=as_user(555))
-    assert other.status_code == 422 and "boshqa imtihon" in other.json()["detail"], other.text
+    # Eski (test raqamiga bog'liq kodli) titul ham o'qiladi — test o'chsa, xuddi shunday yangi testga skanerlanadi
+    old_code = (test_id * 2654435761) % 4096 or 1
+    other = client.post(url, json={"image_base64": _sheet_photo(test_id, {1: "B"}, code_of=old_code)}, headers=as_user(555))
+    assert other.status_code == 200 and other.json()["answers"].get("1") == "B", other.text
 
     blank = io.BytesIO()
     from PIL import Image
@@ -6159,3 +6160,18 @@ def test_moliyaviy_malumotlar_faqat_rahbariyat_va_kuratorga():
     assert overview(704)["stats"]["debtors"] is None and overview(704)["can"]["payments"] is False
     assert overview(702)["stats"]["debtors"] == 1
     assert overview(703)["stats"]["debtors"] == 2
+
+
+def test_ochgan_test_varaqlari_xuddi_shunday_yangi_testga_skanerlanadi():
+    """Titul tarqatildi, test adashib o'chdi — xuddi shunday yangi test yaratiladi va eski varaqlar unga o'qiladi."""
+    reset_database()
+    register_teacher()
+    old_id = create_test(enrollment_type="closed")["id"]
+    photo = _sheet_photo(old_id, {1: "B", 2: "A"})  # o'quvchi eski testning varag'ini belgiladi
+    assert client.delete(f"/api/teacher/tests/{old_id}", headers=as_user(555)).status_code == 200
+
+    new_id = create_test(enrollment_type="closed")["id"]
+    assert new_id != old_id
+    scanned = client.post(f"/api/teacher/tests/{new_id}/scan", json={"image_base64": photo}, headers=as_user(555))
+    assert scanned.status_code == 200, scanned.text
+    assert scanned.json()["answers"] == {"1": "B", "2": "A"}, scanned.json()["questions"]
