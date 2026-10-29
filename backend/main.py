@@ -64,6 +64,7 @@ from .regions import REGIONS, is_valid_location
 from .student_import import names_from_rows, parse_student_file, rows_from_text
 from .auth import (
     app_session_hash,
+    ensure_school_teacher,
     get_current_admin,
     get_current_teacher,
     get_current_user,
@@ -4253,7 +4254,8 @@ def ping() -> dict:
 def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
     """Mini App ochilganda chaqiriladi — Telegram orqali aniqlangan foydalanuvchini qaytaradi."""
 
-    is_teacher = db.scalar(select(Teacher.id).where(Teacher.user_id == user.id)) is not None
+    # Maktabga qo'shilgan o'qituvchi Test markazida ham o'qituvchi (yozuv avtomatik ochiladi)
+    is_teacher = ensure_school_teacher(db, user) is not None
     if is_teacher:
         reward_referral(db, user)  # ro'yxatdan o'tganda obuna bo'lmagan bo'lsa — keyinroq beriladi
 

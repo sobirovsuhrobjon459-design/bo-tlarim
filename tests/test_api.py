@@ -6293,3 +6293,26 @@ def test_sinf_ochilganda_bazaga_yozilmaydi():
         event.remove(engine, "before_cursor_execute", count)
     assert writes == [], writes
     assert sorted((s["code"] or 0) for s in view["students"]) == [0, 1001]
+
+
+def test_maktabga_qoshilgan_oqituvchi_avtomatik_test_markazida_royxatdan_otadi():
+    """Havola/kod orqali maktabga qo'shilgan odam sinfda sinov yaratishi uchun alohida ro'yxatdan o'tmaydi."""
+    reset_database()
+    _school_with_class(701)
+    school = client.get("/api/schools/me", headers=as_user(701)).json()["school"]
+    _set_name(704, "Yangi", "Ustoz")
+    _set_name(705, "Begona", "Odam")
+
+    # Maktabga qo'shilmagan odam — o'qituvchi emas
+    assert client.get("/api/me", headers=as_user(705)).json()["is_teacher"] is False
+    assert client.get("/api/teacher/tests", headers=as_user(705)).status_code == 403
+
+    joined = client.post("/api/schools/join", json={"code": current_code(school), "subjects": ["Fizika"], "phone": "93 444 55 04"},
+                         headers=as_user(704))
+    assert joined.status_code == 200, joined.text
+    me = client.get("/api/me", headers=as_user(704)).json()
+    assert me["is_teacher"] is True, me
+    # Test yarata oladi (sinovni sinfga biriktirib)
+    assert create_test(704, enrollment_type="closed")["id"]
+    # Maktab egasi ham — ro'yxatdan o'tmagan bo'lsa ham o'qituvchi
+    assert client.get("/api/me", headers=as_user(701)).json()["is_teacher"] is True

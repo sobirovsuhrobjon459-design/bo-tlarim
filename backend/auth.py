@@ -20,7 +20,17 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .database import ADMIN_ID, BOT_TOKEN, DEV_MODE, AppSession, SessionLocal, Teacher, User
+from .database import (
+    ADMIN_ID,
+    BOT_TOKEN,
+    DEV_MODE,
+    WELCOME_CREDITS,
+    AppSession,
+    SchoolMember,
+    SessionLocal,
+    Teacher,
+    User,
+)
 
 INIT_DATA_MAX_AGE_SECONDS = 24 * 60 * 60  # 1 kun
 
@@ -165,10 +175,34 @@ def get_current_user(
     return user
 
 
-def get_current_teacher(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> Teacher:
-    """Joriy foydalanuvchiga tegishli Teacher yozuvi borligini tekshiradi (login/parolsiz)."""
+def ensure_school_teacher(db: Session, user: User) -> Teacher | None:
+    """
+    Ta'lim muassasasi a'zosi (havola yoki kod orqali qo'shilgan o'qituvchi, maktab egasi) Test
+    markazida ham o'qituvchi bo'ladi — alohida ro'yxatdan o'tish shart emas (sinfda sinov
+    yaratish shunga tayanadi). Teacher yozuvi bo'lmasa, avtomatik ochiladi.
+    """
 
     teacher = db.scalar(select(Teacher).where(Teacher.user_id == user.id))
+    if teacher:
+        return teacher
+    member = db.scalar(select(SchoolMember.id).where(SchoolMember.user_id == user.id, SchoolMember.left_at.is_(None)))
+    if not member:
+        return None
+    teacher = Teacher(user_id=user.id, credits=WELCOME_CREDITS)
+    db.add(teacher)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()  # shu payt boshqa so'rov ochib qo'ydi
+        teacher = db.scalar(select(Teacher).where(Teacher.user_id == user.id))
+    return teacher
+
+
+def get_current_teacher(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> Teacher:
+    """Joriy foydalanuvchiga tegishli Teacher yozuvi borligini tekshiradi (login/parolsiz).
+    Muassasa a'zosiga yozuv avtomatik ochiladi."""
+
+    teacher = ensure_school_teacher(db, user)
     if not teacher:
         raise HTTPException(status_code=403, detail="Siz hali o'qituvchi sifatida ro'yxatdan o'tmagansiz")
 
