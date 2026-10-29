@@ -10434,6 +10434,7 @@ const SUBJECTS = [
   "Kimyo",
   "Biologiya",
   "Ona tili va adabiyot",
+  "Ingliz tili",
   "Rus tili",
   "Tarix",
   "Geografiya",
