@@ -6826,8 +6826,23 @@ def _sheet_variant_options(db: Session, test: Test, answers: bool, variant: str 
     return {"variants": variants or None}
 
 
-def _named_sheet_students(db: Session, test: Test, named: bool) -> list[tuple] | None:
-    """Ismli varaqlar uchun: o'qituvchi qo'shgan o'quvchilar (raqam, ism) — raqam tartibida."""
+def _parse_sheet_numbers(numbers: str | None) -> set[int] | None:
+    """"1,2,5" → {1, 2, 5}. Bo'sh — hammasi (None)."""
+
+    if not numbers:
+        return None
+    try:
+        parsed = {int(item) for item in numbers.split(",") if item.strip()}
+    except ValueError:
+        raise HTTPException(status_code=422, detail="O'quvchilar ro'yxati noto'g'ri")
+    if not parsed:
+        raise HTTPException(status_code=422, detail="Birorta ham o'quvchi tanlanmadi")
+    return parsed
+
+
+def _named_sheet_students(db: Session, test: Test, named: bool, numbers: set[int] | None = None) -> list[tuple] | None:
+    """Ismli varaqlar uchun: o'qituvchi qo'shgan o'quvchilar (raqam, ism) — raqam tartibida.
+    numbers berilsa — faqat shu raqamdagilar (masalan, bugun darsda borlar)."""
 
     if not named:
         return None
@@ -6847,16 +6862,59 @@ def _named_sheet_students(db: Session, test: Test, named: bool) -> list[tuple] |
             if not attempt.variant and attempt.status == "pending":
                 attempt.variant = variants[(attempt.sheet_number - 1) % len(variants)]
         db.commit()
-    students = [(attempt.sheet_number, attempt.offline_name or "", attempt.variant or "A") for attempt in attempts]
+    students = [(attempt.sheet_number, attempt.offline_name or "", attempt.variant or "A") for attempt in attempts
+                if numbers is None or attempt.sheet_number in numbers]
     if not students:
-        raise HTTPException(status_code=400, detail="Avval o'quvchilarni qo'shing — har biriga ismli varaq chiqadi")
+        raise HTTPException(status_code=400, detail="Avval o'quvchilarni qo'shing — har biriga ismli varaq chiqadi"
+                            if numbers is None else "Tanlangan o'quvchilar topilmadi")
     return students
 
 
-def _personal_sheets_pdf(db: Session, test: Test) -> tuple[bytes, int]:
+def _personal_sheets_pdf(db: Session, test: Test, numbers: set[int] | None = None) -> tuple[bytes, int]:
     """Har o'quvchiga alohida titul (ismi yozilgan, ID'si bo'yalgan) — hammasi bitta PDF'da."""
-    students = _named_sheet_students(db, test, True)
+    students = _named_sheet_students(db, test, True, numbers)
     return generate_answer_sheet_pdf(test, students=students, variants=_variant_names(db, test) or None), len(students)
+
+
+@app.get("/api/teacher/tests/{test_id}/sheet-students")
+def sheet_students(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """
+    Ismli titul kimlarga chiqarilishini tanlash uchun: o'quvchilar va bugungi davomatdagi holati.
+    present: True — bugun darsda (bor yoki kechikdi), False — yo'q/sababli, None — bugun davomat olinmagan.
+    """
+
+    test = _get_own_test(db, teacher, test_id)
+    if (test.sheet_version or 1) < 2:
+        raise HTTPException(status_code=400, detail="Bu eski test — ismli varaqlar yangi testlarda bor")
+    _ensure_sheet_numbers(db, test)
+    attempts = db.scalars(
+        select(Attempt)
+        .where(Attempt.test_id == test.id, Attempt.user_id.is_(None), Attempt.status.in_(("pending", "done")),
+               Attempt.sheet_number.is_not(None))
+        .order_by(Attempt.sheet_number)
+    ).all()
+
+    # Bugungi (Toshkent vaqti) davomat: har o'quvchining eng oxirgi belgisi
+    student_ids = [attempt.class_student_id for attempt in attempts if attempt.class_student_id]
+    local_now = utcnow() + TASHKENT_OFFSET
+    day_start = datetime(local_now.year, local_now.month, local_now.day) - TASHKENT_OFFSET
+    today: dict[int, str] = {}
+    if student_ids:
+        for student_id, status in db.execute(
+            select(AttendanceMark.student_id, AttendanceMark.status)
+            .join(Attendance, Attendance.id == AttendanceMark.attendance_id)
+            .where(AttendanceMark.student_id.in_(student_ids), Attendance.deleted_at.is_(None),
+                   Attendance.taken_at >= day_start)
+            .order_by(Attendance.taken_at, Attendance.id)
+        ).all():
+            today[student_id] = status
+    rows = []
+    for attempt in attempts:
+        status = today.get(attempt.class_student_id) if attempt.class_student_id else None
+        rows.append({"number": attempt.sheet_number, "name": attempt.offline_name or "",
+                     "done": attempt.status == "done",
+                     "present": None if status is None else status in ("present", "late")})
+    return {"students": rows, "has_attendance": bool(today)}
 
 
 @app.get("/api/teacher/tests/{test_id}/answer-sheet")
@@ -6866,6 +6924,7 @@ def download_answer_sheet(
     named: bool = False,
     personal: bool = False,
     variant: str | None = None,
+    numbers: str | None = None,
     teacher: Teacher = Depends(get_current_teacher),
     db: Session = Depends(get_db),
 ):
@@ -6876,7 +6935,7 @@ def download_answer_sheet(
 
     test = _get_own_test(db, teacher, test_id)
     if personal and not answers:
-        pdf_bytes, _ = _personal_sheets_pdf(db, test)
+        pdf_bytes, _ = _personal_sheets_pdf(db, test, _parse_sheet_numbers(numbers))
         return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf",
                                  headers={"Content-Disposition": f'attachment; filename="{test.code}_ismli_titullar.pdf"'})
     students = _named_sheet_students(db, test, named and not answers)
@@ -6900,6 +6959,7 @@ def send_answer_sheet_to_telegram(
     named: bool = False,
     personal: bool = False,
     variant: str | None = None,
+    numbers: str | None = None,
     teacher: Teacher = Depends(get_current_teacher),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -6909,7 +6969,7 @@ def send_answer_sheet_to_telegram(
     test = _get_own_test(db, teacher, test_id)
 
     if personal and not answers:
-        pdf_bytes, count = _personal_sheets_pdf(db, test)
+        pdf_bytes, count = _personal_sheets_pdf(db, test, _parse_sheet_numbers(numbers))
         _send_pdf_to_telegram(
             user.tg_id, f"{test.code}_ismli_titullar.pdf", pdf_bytes,
             caption=(f"🧾 Ismli titullar — {count} ta\n📝 {test.title} ({test.code})\n\n"

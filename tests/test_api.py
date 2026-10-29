@@ -6217,3 +6217,45 @@ def test_davomatda_royxatda_yoq_oquvchini_qoshish():
                         headers=teacher)
     assert edited.status_code == 200, edited.text
     assert {mark["name"]: mark["status"] for mark in edited.json()["marks"]}["Kech Keldi"] == "absent"
+
+
+def test_ismli_titul_faqat_bugun_darsda_borlarga():
+    """Ismli titul: bugungi davomat bo'yicha kim bor-yo'qligi ko'rinadi, tanlanganlargagina chiqariladi."""
+    reset_database()
+    cid = _school_with_class(701)["id"]
+    register_teacher(701, "Aziza", "Karimova")
+    h = as_user(701)
+    client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Ali Valiyev", "Zuhra Karimova", "Bek Umarov"]}, headers=h)
+    client.put(f"/api/classes/{cid}/student-codes", json={"start": 1001, "end": 1038}, headers=h)
+    test = create_test(701, enrollment_type="closed")
+    base = f"/api/teacher/tests/{test['id']}"
+    client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=h)
+
+    # Davomat hali olinmagan — hammasi "noma'lum"
+    before = client.get(f"{base}/sheet-students", headers=h).json()
+    assert before["has_attendance"] is False and {s["present"] for s in before["students"]} == {None}, before
+
+    students = {s["full_name"]: s["id"] for s in client.get(f"/api/classes/{cid}", headers=h).json()["students"]}
+    marks = {str(students["Zuhra Karimova"]): "absent", str(students["Bek Umarov"]): "late"}
+    assert client.post(f"/api/classes/{cid}/attendance", json={"subject": "Matematika", "marks": marks,
+                                                               "lesson_start": "08:00", "lesson_end": "08:45"},
+                       headers=h).status_code == 200
+    data = client.get(f"{base}/sheet-students", headers=h).json()
+    assert data["has_attendance"] is True
+    present = {s["name"]: s["present"] for s in data["students"]}
+    assert present == {"Ali Valiyev": True, "Zuhra Karimova": False, "Bek Umarov": True}, present
+
+    numbers = ",".join(str(s["number"]) for s in data["students"] if s["present"])
+    import fitz
+    picked = client.get(f"{base}/answer-sheet", params={"personal": "true", "numbers": numbers}, headers=h)
+    everyone = client.get(f"{base}/answer-sheet", params={"personal": "true"}, headers=h)
+    assert picked.status_code == 200 and everyone.status_code == 200, picked.text
+
+    def names_in(pdf):
+        text = "".join(page.get_text() for page in fitz.open(stream=pdf, filetype="pdf"))
+        return {name for name in present if name in text}
+
+    assert names_in(picked.content) == {"Ali Valiyev", "Bek Umarov"}
+    assert names_in(everyone.content) == set(present)
+    assert client.get(f"{base}/answer-sheet", params={"personal": "true", "numbers": "9999"}, headers=h).status_code == 400
+    assert client.get(f"{base}/answer-sheet", params={"personal": "true", "numbers": "a,b"}, headers=h).status_code == 422

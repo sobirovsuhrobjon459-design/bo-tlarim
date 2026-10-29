@@ -14061,15 +14061,11 @@ async function renderTestDetail(testId) {
   // Har o'quvchiga alohida titul: ism-familiyasi yozilgan, ID raqami bo'yalgan — hammasi bitta PDF'da
   document.getElementById("personal-sheets-button")?.addEventListener(
     "click",
-    guarded(() => {
+    guarded(async () => {
       if (!test.students.some((student) => student.editable)) {
         throw new Error("O'quvchi yo'q — sinfni biriktiring yoki «O'quvchilarni qo'shish» orqali qo'shing");
       }
-      return deliverPdf(
-        `/api/teacher/tests/${testId}/answer-sheet?personal=true`,
-        `${test.code}_ismli_titullar.pdf`,
-        "🧾 Ismli titullar Telegramga yuborildi"
-      );
+      openPersonalSheetsChoice(testId, test, await api(`/api/teacher/tests/${testId}/sheet-students`));
     })
   );
 
@@ -14975,6 +14971,105 @@ async function downloadOrSendPdf(testId) {
 // Excel: natijalar, har o'quvchining javoblari va savollar tahlili
 async function downloadOrSendExcel(testId) {
   await deliverPdf(`/api/teacher/tests/${testId}/excel`, "natijalar.xlsx", "📊 Excel Telegram chatga yuborildi");
+}
+
+/*
+  Ismli titullar kimlarga chiqarilsin: bugun darsda borlarga (davomat bo'yicha), hammaga yoki tanlab.
+  Titul olmaganlar testdan o'chmaydi — keyin kelsa, unga alohida chiqarib beriladi.
+*/
+function openPersonalSheetsChoice(testId, test, data) {
+  const students = data.students;
+  const present = students.filter((student) => student.present === true);
+  const send = (numbers) =>
+    deliverPdf(
+      `/api/teacher/tests/${testId}/answer-sheet?personal=true${numbers ? `&numbers=${numbers.join(",")}` : ""}`,
+      `${test.code}_ismli_titullar.pdf`,
+      `🧾 Ismli titullar (${numbers ? numbers.length : students.length} ta) Telegramga yuborildi`
+    );
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 4px">🧾 Ismli titullar — kimlarga?</h3>
+    <p class="subtitle" style="margin:0 0 12px">${
+      data.has_attendance ? "Bugungi davomat bo'yicha." : "Bugun bu o'quvchilardan davomat olinmagan."
+    }</p>
+    ${
+      present.length
+        ? `<button class="btn" data-sheets="present">✅ Bugun darsda borlarga (${present.length} ta)</button>`
+        : ""
+    }
+    <button class="btn ${present.length ? "btn-ghost" : ""}" data-sheets="all" style="margin-top:8px">👥 Hammaga (${students.length} ta)</button>
+    <button class="btn btn-ghost" data-sheets="pick" style="margin-top:8px">☑️ Tanlab chiqarish</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+  sheet.querySelector('[data-sheets="present"]')?.addEventListener(
+    "click",
+    guarded(async () => {
+      close();
+      await send(present.map((student) => student.number));
+    })
+  );
+  sheet.querySelector('[data-sheets="all"]').addEventListener(
+    "click",
+    guarded(async () => {
+      close();
+      await send(null);
+    })
+  );
+  sheet.querySelector('[data-sheets="pick"]').addEventListener("click", () => {
+    close();
+    openPersonalSheetsPicker(students, data.has_attendance, send);
+  });
+}
+
+function openPersonalSheetsPicker(students, hasAttendance, send) {
+  // Oldindan belgilangan: bugun darsda borlar (davomat bo'lsa), aks holda hamma
+  const checked = (student) => (hasAttendance ? student.present === true : true);
+  const mark = (student) =>
+    student.present === true ? "" : student.present === false ? " · bugun yo'q" : "";
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 4px">☑️ Kimlarga chiqarilsin?</h3>
+    <div class="row-between" style="margin:0 0 8px">
+      <span class="subtitle" id="pick-count" style="margin:0"></span>
+      <button type="button" class="share-pill" id="pick-toggle">Hammasi</button>
+    </div>
+    <div class="panel" style="padding:4px 0;max-height:50vh;overflow-y:auto">
+      ${students
+        .map(
+          (student) => `
+            <label class="att-row" style="cursor:pointer">
+              <input type="checkbox" data-pick="${student.number}" ${checked(student) ? "checked" : ""} />
+              <span class="att-number">${student.number}</span>
+              <span class="att-name">${escapeHtml(student.name)}<small class="subtitle">${mark(student)}${
+                student.done ? " · ishlagan" : ""
+              }</small></span>
+            </label>`
+        )
+        .join("")}
+    </div>
+    <button class="btn" id="pick-send" style="margin-top:12px">🧾 Titullarni chiqarish</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+  const boxes = [...sheet.querySelectorAll("[data-pick]")];
+  const picked = () => boxes.filter((box) => box.checked).map((box) => Number(box.dataset.pick));
+  const sync = () => {
+    sheet.querySelector("#pick-count").textContent = `Tanlandi: ${picked().length} / ${boxes.length}`;
+    sheet.querySelector("#pick-toggle").textContent = picked().length === boxes.length ? "Hech kim" : "Hammasi";
+  };
+  sync();
+  boxes.forEach((box) => box.addEventListener("change", sync));
+  sheet.querySelector("#pick-toggle").addEventListener("click", () => {
+    const all = picked().length !== boxes.length;
+    boxes.forEach((box) => (box.checked = all));
+    sync();
+  });
+  sheet.querySelector("#pick-send").addEventListener(
+    "click",
+    guarded(async () => {
+      const numbers = picked();
+      if (!numbers.length) throw new Error("Kamida bitta o'quvchini belgilang");
+      close();
+      await send(numbers.length === boxes.length ? null : numbers);
+    })
+  );
 }
 
 async function deliverPdf(basePath, fileName, sentMessage) {
