@@ -8622,7 +8622,9 @@ def _assign_student_codes(db: Session, school_id: int) -> None:
             changed = True
     taken = {student.student_code for student, _ in rows if student.student_code}
     for student, school_class in rows:
-        if student.student_code or student.removed_at or school_class.code_start is None:
+        # O'chirilgan sinf o'quvchisiga ID berilmaydi — aks holda har chaqiruvda yuqorida olinib, bu yerda
+        # qayta berilardi (har sinf ochilishida bazaga o'nlab yozish va sekinlik)
+        if student.student_code or student.removed_at or school_class.deleted_at or school_class.code_start is None:
             continue
         code = next((value for value in range(school_class.code_start, school_class.code_end + 1) if value not in taken), None)
         if code is None:
@@ -8708,8 +8710,10 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
         "monthly_fee": school_class.monthly_fee if member and _can_see_payments(school_class, member) else None,
     }
     if with_details:
-        if any(not student.student_code for student in students):
-            _assign_student_codes(db, school_class.school_id)  # avval qo'shilganlarga ham ID
+        # ID oralig'i bor sinfda ID'siz o'quvchi bo'lsa (avval qo'shilganlar) — ID beriladi.
+        # Oraliqsiz sinfda ID baribir berilmaydi — butun maktabni har safar aylanib chiqish shart emas
+        if school_class.code_start is not None and any(not student.student_code for student in students):
+            _assign_student_codes(db, school_class.school_id)
         stats = _student_attendance_stats(db, [student.id for student in students], _attendance_filter(school_class, member))
         away = _active_status_codes(db, [student.id for student in students])
         view["students"] = [

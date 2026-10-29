@@ -6259,3 +6259,37 @@ def test_ismli_titul_faqat_bugun_darsda_borlarga():
     assert names_in(everyone.content) == set(present)
     assert client.get(f"{base}/answer-sheet", params={"personal": "true", "numbers": "9999"}, headers=h).status_code == 400
     assert client.get(f"{base}/answer-sheet", params={"personal": "true", "numbers": "a,b"}, headers=h).status_code == 422
+
+
+def test_sinf_ochilganda_bazaga_yozilmaydi():
+    """O'chirilgan sinf o'quvchilarining ID'si har safar olinib-qaytarilmasin (sinf ochilishi sekinlashardi)."""
+    from sqlalchemy import event
+
+    from backend.database import engine
+
+    reset_database()
+    h = as_user(701)
+    cid = _school_with_class(701)["id"]
+    # Oraliq to'lgan: ikkinchi o'quvchi ID'siz qoladi — sinf har ochilganda ID berish tekshiriladi
+    client.put(f"/api/classes/{cid}/student-codes", json={"start": 1001, "end": 1001}, headers=h)
+    client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Ali Valiyev", "Zuhra Karimova"]}, headers=h)
+    gone = client.post("/api/classes", json={"name": "Yopilgan"}, headers=h).json()["id"]
+    client.put(f"/api/classes/{gone}/student-codes", json={"start": 1101, "end": 1110}, headers=h)
+    client.post(f"/api/classes/{gone}/students/bulk", json={"names": ["Eski Bola", "Eski Qiz"]}, headers=h)
+    assert client.delete(f"/api/classes/{gone}", headers=h).status_code == 200
+    client.get(f"/api/classes/{cid}", headers=h)  # birinchi ochilish — kerakli tozalash bo'lishi mumkin
+
+    writes = []
+
+    def count(conn, cursor, statement, *args):
+        if statement.lstrip().upper().startswith(("UPDATE", "INSERT", "DELETE")):
+            writes.append(statement)
+
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        for _ in range(3):
+            view = client.get(f"/api/classes/{cid}", headers=h).json()
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+    assert writes == [], writes
+    assert sorted((s["code"] or 0) for s in view["students"]) == [0, 1001]

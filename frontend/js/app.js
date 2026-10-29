@@ -1809,15 +1809,18 @@ async function renderClass(classOrId, tab = "attendance") {
 }
 
 // Ro'yxatdagi sinflar fonda oldindan yuklanadi — bosilganda darhol ochiladi
-function prefetchClassDetails(classes) {
-  classes
-    .filter((item) => !classDetailCache.has(item.id))
-    .slice(0, 12)
-    .forEach((item) => {
-      api(`/api/classes/${item.id}`)
-        .then((detail) => classDetailCache.set(detail.id, detail))
-        .catch(() => {});
-    });
+// Birma-bir (bir vaqtda bittadan): 12 tasi birdan so'ralsa, kuchsiz serverda bosilgan sinf ularning navbatida qolardi
+async function prefetchClassDetails(classes) {
+  const queue = classes.filter((item) => !classDetailCache.has(item.id)).slice(0, 12);
+  for (const item of queue) {
+    if (classDetailCache.has(item.id)) continue;
+    try {
+      const detail = await api(`/api/classes/${item.id}`);
+      classDetailCache.set(detail.id, detail);
+    } catch (_) {
+      return;
+    }
+  }
 }
 
 function classHeader(schoolClass, action = "") {
@@ -10735,14 +10738,17 @@ function renderNewTestForm(testType, draft = {}) {
       }
     </p>
 
-    <label class="field-label" for="field-start-time">Boshlanish vaqti (ixtiyoriy)</label>
-    <input class="input" id="field-start-time" type="datetime-local" value="${draft.startTime || ""}" />
+    <!-- Offline (titulli) testda vaqt kerak emas — o'quvchilar sinfda qog'ozda ishlaydi -->
+    <div style="display:${offline ? "none" : "block"}">
+      <label class="field-label" for="field-start-time">Boshlanish vaqti (ixtiyoriy)</label>
+      <input class="input" id="field-start-time" type="datetime-local" value="${offline ? "" : draft.startTime || ""}" />
 
-    <label class="field-label" for="field-end-time">Tugash vaqti (ixtiyoriy)</label>
-    <input class="input" id="field-end-time" type="datetime-local" value="${draft.endTime || ""}" />
+      <label class="field-label" for="field-end-time">Tugash vaqti (ixtiyoriy)</label>
+      <input class="input" id="field-end-time" type="datetime-local" value="${offline ? "" : draft.endTime || ""}" />
 
-    <label class="field-label" for="field-duration">Davomiyligi (daqiqa)</label>
-    <input class="input" id="field-duration" type="number" min="1" value="${draft.duration ?? (offline ? 60 : preset.duration)}" />
+      <label class="field-label" for="field-duration">Davomiyligi (daqiqa)</label>
+      <input class="input" id="field-duration" type="number" min="1" value="${draft.duration ?? (offline ? 60 : preset.duration)}" />
+    </div>
   `;
 
   const channelSettings = `
