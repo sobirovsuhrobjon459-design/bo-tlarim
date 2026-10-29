@@ -28,8 +28,9 @@ const AS_PWA = window.matchMedia?.("(display-mode: standalone)").matches || navi
 // Seans bilan kiriladi (Telegram initData yo'q): ilova yoki web sayt
 const NEEDS_LOGIN = (IN_APP || ON_WEB) && !telegram?.initData;
 if (ON_WEB) document.documentElement.classList.add("web-mode");
-// Chittak ilovasining Play Market havolasi — ilova chiqqach shu yerga yoziladi (bo'sh bo'lsa — "tez orada")
-const APP_DOWNLOAD_URL = "";
+// Chittak ilovasining Play Market havolasi
+const APP_DOWNLOAD_URL = "https://play.google.com/store/apps/details?id=uz.bato.chittak";
+const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const APP_SESSION_KEY = "app-session";
 let appSession = "";
 try {
@@ -1848,19 +1849,30 @@ function wireClassTab(schoolClass, tab) {
 
 // Botda "Varaqni skanerlash" bosilganda: skaner faqat ilovada — yuklab olish taklifi
 function showScannerAppOffer() {
-  const { sheet, close } = openSheet(`
+  // iPhone'da Play Market yo'q — sayt Safari orqali bosh ekranga ilova bo'lib o'rnatiladi
+  const { sheet, close } = openSheet(
+    IS_IOS
+      ? `
+    <h3 style="margin:0 0 10px">📷 Skaner — Chittak ilovasida</h3>
+    <p class="subtitle" style="margin:0 0 12px">iPhone'da skanerlash uchun Chittak'ni bosh ekranga o'rnating —
+      testlar, o'quvchilar va natijalar bot bilan bir xil.</p>
+    <div class="card" style="cursor:default;display:block;margin:0 0 12px">
+      <p style="margin:0"><b>1.</b> <b>Safari</b>'da <b>www.chittak.uz</b> ni oching.</p>
+      <p style="margin:8px 0 0"><b>2.</b> Pastdagi <b>Ulashish</b> tugmasini bosing (strelkali kvadrat).</p>
+      <p style="margin:8px 0 0"><b>3.</b> <b>«Bosh ekranga qo'shish»</b> → <b>Qo'shish</b>.</p>
+      <p style="margin:8px 0 0"><b>4.</b> Bosh ekrandagi Chittak'ni ochib, Telegram orqali kiring.</p>
+    </div>
+    <button class="btn" id="app-download-button">🌐 www.chittak.uz ni ochish</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Yopish</button>`
+      : `
     <h3 style="margin:0 0 10px">📷 Skaner — Chittak ilovasida</h3>
     <p class="subtitle" style="margin:0 0 12px">Varaqlarni skanerlash uchun Chittak ilovasini (Android) yuklab oling.
       Ilova orqali skaner qila olasiz — testlar, o'quvchilar va natijalar bot bilan bir xil.</p>
-    ${
-      APP_DOWNLOAD_URL
-        ? `<button class="btn" id="app-download-button">⬇️ Ilovani yuklab olish</button>`
-        : `<div class="notice" style="margin:0 0 10px">Ilova tez orada Play Market'da chiqadi.</div>`
-    }
-    <button class="btn btn-ghost" data-sheet-close>Yopish</button>
-  `);
-  sheet.querySelector("#app-download-button")?.addEventListener("click", () => {
-    openExternalLink(APP_DOWNLOAD_URL);
+    <button class="btn" id="app-download-button">⬇️ Play Market'dan yuklab olish</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Yopish</button>`
+  );
+  sheet.querySelector("#app-download-button").addEventListener("click", () => {
+    openExternalLink(IS_IOS ? "https://www.chittak.uz/" : APP_DOWNLOAD_URL);
     close();
   });
 }
