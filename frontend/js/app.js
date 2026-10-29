@@ -5395,7 +5395,7 @@ function loadFeeHistoryInto(holder, classId = null) {
 
 // "💰 To'lovlar" bo'limi: rahbariyat — umumiy hisobot, kurator — o'z sinfi
 async function openPaymentsEntry() {
-  if (currentSchool?.can_set_fee) {
+  if (currentSchool?.can_see_all_payments) {
     await renderPaymentsSummary();
     return;
   }
@@ -5464,6 +5464,7 @@ function monthSwitchHtml(month, label) {
 // Rahbariyat uchun: maktab bo'yicha oylik hisobot
 async function renderPaymentsSummary(month = null) {
   const summary = await api(`/api/schools/payments/summary${month ? `?month=${month}` : ""}`);
+  const canSetFee = Boolean(currentSchool?.can_set_fee);
   const rows = summary.classes.length
     ? summary.classes
         .map(
@@ -5493,14 +5494,22 @@ async function renderPaymentsSummary(month = null) {
       ${
         summary.monthly_fee || summary.classes.some((row) => row.monthly_fee)
           ? paymentTotalsHtml(summary.totals)
-          : `<div class="card warning-card" data-action="set-fee"><div class="card-icon">💰</div><div class="card-body">
+          : `<div class="card warning-card" ${canSetFee ? 'data-action="set-fee"' : ""}><div class="card-icon">💰</div><div class="card-body">
                <h3 style="margin:0">Oylik to'lov summasi belgilanmagan</h3>
-               <p style="margin:4px 0 0">Avval summani belgilang — keyin qarzdorlar hisoblanadi.</p></div></div>`
+               <p style="margin:4px 0 0">${
+                 canSetFee ? "Avval summani belgilang — keyin qarzdorlar hisoblanadi." : "Summani admin yoki direktor belgilaydi."
+               }</p></div></div>`
       }
-      <button type="button" class="btn btn-ghost" data-action="set-fee" style="margin:0 0 4px">⚙️ Umumiy oylik summa: ${
-        summary.monthly_fee ? money(summary.monthly_fee) : "belgilanmagan"
-      }</button>
-      <p class="subtitle" style="margin:0 0 14px">Sinfning o'z narxi bo'lsa — sinf sozlamalarida (⚙️) belgilanadi.</p>
+      ${
+        canSetFee
+          ? `<button type="button" class="btn btn-ghost" data-action="set-fee" style="margin:0 0 4px">⚙️ Umumiy oylik summa: ${
+              summary.monthly_fee ? money(summary.monthly_fee) : "belgilanmagan"
+            }</button>
+            <p class="subtitle" style="margin:0 0 14px">Sinfning o'z narxi bo'lsa — sinf sozlamalarida (⚙️) belgilanadi.</p>`
+          : `<p class="subtitle" style="margin:0 0 14px">Umumiy oylik summa: <b>${
+              summary.monthly_fee ? money(summary.monthly_fee) : "belgilanmagan"
+            }</b></p>`
+      }
       <p class="section-label">SINFLAR BO'YICHA</p>
       <div class="student-list">${rows}</div>
     </div>
@@ -5565,7 +5574,7 @@ async function renderClassPayments(classId, month = null) {
   document.querySelector('[data-action="back-payments"]').addEventListener(
     "click",
     guarded(async () => {
-      if (currentSchool?.can_set_fee) await renderPaymentsSummary(info.month);
+      if (currentSchool?.can_see_all_payments) await renderPaymentsSummary(info.month);
       else renderMySchool(currentSchool);
     })
   );

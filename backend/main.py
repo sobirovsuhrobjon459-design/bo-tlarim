@@ -7785,8 +7785,11 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         "can_create_classes": _can_delete_classes(member),
         "my_subjects": _read_subjects(member),
         "invite_link": school_invite_link(school.code) if member.role == "owner" else None,
-        # Oylik to'lov — summani admin/direktor belgilaydi; to'lovlarni ular va kuratorlar kiritadi
-        "monthly_fee": school.monthly_fee,
+        # Oylik to'lov — summani admin/direktor belgilaydi; ko'radi rahbariyat va kuratorlar (o'z sinfi)
+        "monthly_fee": school.monthly_fee if leader or db.scalar(
+            select(SchoolClass.id).where(SchoolClass.school_id == school.id, SchoolClass.deleted_at.is_(None),
+                                         SchoolClass.curator_user_id == user.id).limit(1)) else None,
+        "can_see_all_payments": leader,
         # Yotoqxona: rahbariyat va tarbiyachilar ochadi (to'garakda yo'q)
         "dorm": (school.kind or "school") != "club" and (
             _can_delete_classes(member)
@@ -8459,6 +8462,11 @@ def _can_manage_class(school_class: SchoolClass, member: SchoolMember) -> bool:
     return _can_delete_classes(member) or school_class.curator_user_id == member.user_id
 
 
+def _can_see_payments(school_class: SchoolClass, member: SchoolMember) -> bool:
+    """Moliyaviy ma'lumotlar (to'lov, qarz, narx): rahbariyat — hamma sinf, kurator — faqat o'z sinfi."""
+    return _is_director(member) or school_class.curator_user_id == member.user_id
+
+
 def _require_director(member: SchoolMember) -> None:
     if not _is_director(member):
         raise HTTPException(status_code=403, detail="Buni faqat maktab admini, direktor yoki zam direktor qila oladi")
@@ -8633,8 +8641,8 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
         "code_start": school_class.code_start,
         "code_end": school_class.code_end,
         "can_delete": bool(member and _can_delete_classes(member)),
-        # Guruhning o'z narxi (bo'sh — muassasaning umumiy summasi)
-        "monthly_fee": school_class.monthly_fee,
+        # Guruhning o'z narxi (bo'sh — muassasaning umumiy summasi) — faqat to'lovni ko'ra oladiganlarga
+        "monthly_fee": school_class.monthly_fee if member and _can_see_payments(school_class, member) else None,
     }
     if with_details:
         if any(not student.student_code for student in students):
@@ -9117,7 +9125,7 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
         "curator": curator.full_name if curator else None,
         "dorm": _student_dorm_view(db, student),
         "results": _student_results(db, member, student),
-        "payments": _student_payment_summary(db, school_class, student) if _can_manage_class(school_class, member) else None,
+        "payments": _student_payment_summary(db, school_class, student) if _can_see_payments(school_class, member) else None,
     }
 
 
@@ -9913,10 +9921,10 @@ def _month_status(due: int, paid: int) -> dict:
 
 
 def _payments_class(db: Session, user: User, class_id: int) -> tuple[SchoolClass, SchoolMember, PrivateSchool]:
-    """To'lovlar bilan ishlash — admin, direktor yoki shu sinfning kuratori."""
+    """To'lovlar bilan ishlash — rahbariyat yoki shu sinfning kuratori."""
     school_class, member = _school_class(db, user, class_id)
-    if not _can_manage_class(school_class, member):
-        raise HTTPException(status_code=403, detail="To'lovlarni admin, direktor yoki sinf kuratori ko'radi")
+    if not _can_see_payments(school_class, member):
+        raise HTTPException(status_code=403, detail="To'lovlarni rahbariyat yoki sinf kuratori ko'radi")
     return school_class, member, db.get(PrivateSchool, school_class.school_id)
 
 
@@ -10247,10 +10255,10 @@ def class_debtors_text(class_id: int, month: str | None = None, user: User = Dep
 
 @app.get("/api/schools/payments/summary")
 def payments_summary(month: str | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Oylik hisobot (admin va direktor): har sinf bo'yicha kutilgan, tushgan va qarz."""
+    """Oylik hisobot (rahbariyat): har sinf bo'yicha kutilgan, tushgan va qarz."""
     member = _require_school_member(db, user)
-    if not _can_delete_classes(member):
-        raise HTTPException(status_code=403, detail="Umumiy hisobotni admin yoki direktor ko'radi")
+    if not _is_director(member):
+        raise HTTPException(status_code=403, detail="Umumiy hisobotni rahbariyat ko'radi")
     month = month if month and re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month) else _current_month()
     classes = db.scalars(
         select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None)).order_by(SchoolClass.name)
@@ -10370,8 +10378,8 @@ def school_overview(user: User = Depends(get_current_user), db: Session = Depend
         if item.id not in taken_ids and _active_students(item)
     ]
 
-    # Qarzdorlar (joriy oy): admin/direktor — butun maktab, kurator — o'z sinflari
-    payment_classes = classes if head else curated
+    # Qarzdorlar (joriy oy): rahbariyat — butun maktab, kurator — o'z sinflari
+    payment_classes = classes if leader else curated
     debtors = debt_sum = None
     if payment_classes and any(_class_fee(school, item) > 0 for item in payment_classes):
         month = _current_month()

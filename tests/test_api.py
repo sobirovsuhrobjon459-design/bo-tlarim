@@ -6100,3 +6100,62 @@ def test_oquvchi_holati_va_profil_markazi():
     assert profile["status"]["status"] == "at_school" and profile["status"]["until"] is None
     assert [row["status"] for row in profile["status_history"]] == ["at_school", "home", "sick"]
     assert client.put(f"{url}/status", json={"status": "bad"}, headers=h).status_code == 422
+
+
+def test_moliyaviy_malumotlar_faqat_rahbariyat_va_kuratorga():
+    """To'lov, qarz va narx: rahbariyat (admin, direktor, zam direktor) — hammasi, kurator — o'z sinfi, o'qituvchi — hech narsa."""
+    from backend.database import ClassStudent, User
+
+    reset_database()
+    first = _school_with_class(701)
+    h = as_user(701)
+    second = client.post("/api/classes", json={"name": "9-A"}, headers=h).json()
+    school = client.get("/api/schools/me", headers=h).json()["school"]
+    for tg, name in ((702, "Kurator"), (703, "Zam"), (704, "Oddiy")):
+        _set_name(tg, name, "Ustoz")
+        joined = client.post("/api/schools/join", json={"code": current_code(school), "subjects": ["Fizika"], "phone": f"93 444 55 0{tg % 10}"},
+                             headers=as_user(tg))
+        assert joined.status_code == 200, joined.text
+    with SessionLocal() as session:
+        uid = {tg: session.scalar(main.select(User.id).where(User.tg_id == tg)) for tg in (702, 703, 704)}
+        student = ClassStudent(class_id=first["id"], full_name="Valiyev Ali")
+        other = ClassStudent(class_id=second["id"], full_name="Karimov Bek")
+        session.add_all([student, other])
+        session.commit()
+        sid, oid = student.id, other.id
+    assert client.put(f"/api/classes/{first['id']}/curator", json={"user_id": uid[702]}, headers=h).status_code == 200
+    assert client.put(f"/api/schools/members/{uid[703]}/position", json={"position": "deputy"}, headers=h).status_code == 200
+    assert client.put("/api/schools/fee", json={"monthly_fee": 500000}, headers=h).status_code == 200
+
+    def status(path, tg):
+        return client.get(path, headers=as_user(tg)).status_code
+
+    first_pay, second_pay = f"/api/classes/{first['id']}/payments", f"/api/classes/{second['id']}/payments"
+    # Kurator — faqat o'z sinfi
+    assert status(first_pay, 702) == 200 and status(second_pay, 702) == 403
+    assert status(f"/api/classes/{first['id']}/students/{sid}/payments", 702) == 200
+    assert status(f"/api/classes/{second['id']}/students/{oid}/payments", 702) == 403
+    assert status("/api/schools/payments/summary", 702) == 403
+    # Zam direktor — hamma sinf va umumiy hisobot, lekin narxni belgilamaydi
+    assert status(first_pay, 703) == 200 and status(second_pay, 703) == 200
+    assert status("/api/schools/payments/summary", 703) == 200
+    assert client.put("/api/schools/fee", json={"monthly_fee": 1}, headers=as_user(703)).status_code == 403
+    # Oddiy o'qituvchi — hech narsa
+    assert status(first_pay, 704) == 403 and status("/api/schools/payments/summary", 704) == 403
+    assert status(f"/api/classes/{first['id']}/students/{sid}/payments", 704) == 403
+
+    # Summa ham faqat ko'ra oladiganlarga keladi
+    assert client.get("/api/schools/me", headers=as_user(704)).json()["school"]["monthly_fee"] is None
+    assert client.get("/api/schools/me", headers=as_user(702)).json()["school"]["monthly_fee"] == 500000
+    me_deputy = client.get("/api/schools/me", headers=as_user(703)).json()["school"]
+    assert me_deputy["monthly_fee"] == 500000 and me_deputy["can_see_all_payments"] is True
+    assert client.get(f"/api/classes/{first['id']}/students/{sid}", headers=as_user(704)).json()["payments"] is None
+    assert client.get(f"/api/classes/{first['id']}/students/{sid}", headers=as_user(702)).json()["payments"]["total_debt"] > 0
+
+    # Bosh sahifadagi qarzdorlar: o'qituvchida yo'q, kuratorda o'z sinfi, zam direktorda hamma
+    def overview(tg):
+        return client.get("/api/schools/overview", headers=as_user(tg)).json()
+
+    assert overview(704)["stats"]["debtors"] is None and overview(704)["can"]["payments"] is False
+    assert overview(702)["stats"]["debtors"] == 1
+    assert overview(703)["stats"]["debtors"] == 2
