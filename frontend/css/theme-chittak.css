@@ -880,6 +880,14 @@ button.announce-card {
   display: none;
 }
 
+/* Kompyuterda (sichqoncha) yonga surib bo'lmaydi — chiplar keyingi qatorga o'tadi */
+@media (hover: hover) and (pointer: fine) {
+  .class-chips {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+}
+
 .class-chip {
   flex: none;
   padding: 8px 14px;

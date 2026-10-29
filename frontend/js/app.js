@@ -618,6 +618,11 @@ let navReplayScroll = 0; // "←" bilan qaytilayotgan sahifa qayerda qoldirilgan
 function navScrollTarget() {
   if (navReplaying) return navReplayScroll;
   if (!navIntent && !navFresh && navHistory.length) return window.scrollY;
+  // Shu sahifaning o'zi qayta chizilyapti (saqlash, tanlov, sinf almashtirish) — joyida qoladi
+  const top = navHistory[navHistory.length - 1];
+  const sameEntry =
+    navIntent?.name === top?.name && (!NAV_DISPATCHERS.includes(top?.name) || navIntent.args[0] === top.args[0]);
+  if (navIntent && top && (sameEntry || navLastRenderer === top.page)) return window.scrollY;
   return 0;
 }
 
