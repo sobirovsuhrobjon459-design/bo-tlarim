@@ -1,4 +1,4 @@
-// Chittak — Android ilova. chittak.uz saytidagi Mini App'ni WebView ichida ochadi.
+// Chittak — Android va iOS ilova. chittak.uz saytidagi Mini App'ni WebView ichida ochadi.
 //
 // Telegram ichida bo'lmagani uchun kirish bot orqali tasdiqlanadi (sayt o'zi
 // "Telegram orqali kirish" sahifasini ko'rsatadi). Ilova faqat:
@@ -9,6 +9,7 @@
 //  - jonli skaner uchun kameraga ruxsat beradi (sayt so'raganda).
 
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -157,11 +158,14 @@ class _WebShellState extends State<WebShell> {
                   if (uri != null) await _openExternal(uri);
                   return false;
                 },
-                // Jonli skaner kamerani so'raydi — Android ruxsati olinib, faqat o'z saytimizga beriladi
+                // Jonli skaner kamerani so'raydi — faqat o'z saytimizga beriladi. Android'da ruxsat shu yerda
+                // so'raladi; iOS'da tizimning o'zi so'raydi (Info.plist'dagi NSCameraUsageDescription matni bilan)
                 onPermissionRequest: (controller, request) async {
                   final wantsCamera = request.resources.contains(PermissionResourceType.CAMERA);
                   final ownSite = ownHosts.contains(request.origin.host);
-                  final granted = wantsCamera && ownSite && (await Permission.camera.request()).isGranted;
+                  final granted = wantsCamera &&
+                      ownSite &&
+                      (Platform.isIOS || (await Permission.camera.request()).isGranted);
                   return PermissionResponse(
                     resources: request.resources,
                     action: granted ? PermissionResponseAction.GRANT : PermissionResponseAction.DENY,

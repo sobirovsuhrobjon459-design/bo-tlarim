@@ -1,0 +1,41 @@
+# Codemagic — iOS ilovani bulutdagi Mac'da yig'ib, TestFlight'ga yuklaydi.
+# Ishga tushirish: Codemagic sahifasida "Start new build" → "ios-testflight" (qo'lda).
+# Sozlash bosqichlari: mobile/IOS.md
+
+workflows:
+  ios-testflight:
+    name: iOS — TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      # Codemagic → Team settings → Integrations → App Store Connect'da shu nom bilan qo'shilgan API kalit
+      app_store_connect: Chittak App Store Connect
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        # Sertifikat va profilni Codemagic o'zi yaratadi/oladi (API kalit orqali)
+        distribution_type: app_store
+        bundle_identifier: uz.bato.chittak
+    scripts:
+      - name: Paketlar
+        script: |
+          cd mobile
+          flutter pub get
+      - name: Imzolash sozlamalari
+        script: xcode-project use-profiles
+      - name: IPA yig'ish
+        script: |
+          cd mobile
+          # Versiya nomi pubspec.yaml'dan (1.3.0), raqami — Codemagic'ning yig'ish hisoblagichi (har safar oshadi)
+          flutter build ipa --release \
+            --build-number=$((BUILD_NUMBER + 100)) \
+            --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - mobile/build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
