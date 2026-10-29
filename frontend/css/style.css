@@ -65,7 +65,8 @@ body {
     radial-gradient(circle at 50% 95%, rgba(0, 168, 68, 0.26), transparent 58%);
   background-size: 200% 200%;
   background-attachment: fixed;
-  animation: drift-bg 18s ease-in-out infinite alternate;
+  /* Fon animatsiyasi o'chirildi: to'xtovsiz qayta chizish iPhone'da maydondagi
+     kursorni yo'qotardi va batareyani yerdi */
 }
 
 [data-theme="dark"] body {
@@ -1110,8 +1111,16 @@ table td {
 }
 
 /* Klaviatura ochiq paytda pastki menyu uning ostida chalkashtirmasin */
-body.keyboard-open .bottom-nav {
+body.keyboard-open .bottom-nav,
+body.typing .bottom-nav {
   visibility: hidden;
+}
+
+/* Kursor har doim aniq ko'rinsin (iPhone ba'zan rangini fon bilan aralashtiradi) */
+input,
+textarea,
+[contenteditable="true"] {
+  caret-color: var(--color-primary);
 }
 
 /* ========== Javoblar panjarasi ========== */

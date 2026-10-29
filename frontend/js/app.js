@@ -6675,6 +6675,18 @@ function normalizeTime(text) {
 document.addEventListener("focusin", (event) => {
   if (event.target.classList?.contains("time-input")) event.target.dataset.prev = event.target.value;
 });
+
+// Telefonda yozayotganda (klaviatura ochiq) pastki menyu maydonni yopib qo'ymasin
+const TYPING_FIELD = 'input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="file"]):not([type="range"]), textarea, [contenteditable="true"]';
+const isTouchDevice = window.matchMedia?.("(pointer: coarse)").matches;
+document.addEventListener("focusin", (event) => {
+  if (isTouchDevice && event.target.matches?.(TYPING_FIELD)) document.body.classList.add("typing");
+});
+document.addEventListener("focusout", () => {
+  setTimeout(() => {
+    if (!document.activeElement?.matches?.(TYPING_FIELD)) document.body.classList.remove("typing");
+  }, 50);
+});
 document.addEventListener("input", (event) => {
   const input = event.target;
   if (!input.classList?.contains("time-input")) return;

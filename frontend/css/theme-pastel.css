@@ -783,6 +783,12 @@ select:focus {
   transition-duration: 0.08s;
 }
 
+/* Ichida maydon bor kartochka bosilganda kichraymaydi: iPhone fokus paytidagi
+   transform tufayli kursorni chizmay qo'yardi */
+.card:has(input, textarea, select, [contenteditable="true"]):active {
+  transform: none;
+}
+
 /* Pastki menyu: tanlangan bo'lim ikonkasi bir sakraydi */
 .nav-item.active .nav-icon {
   animation: nav-pop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
