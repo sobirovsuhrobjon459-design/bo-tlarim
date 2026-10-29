@@ -6175,3 +6175,45 @@ def test_ochgan_test_varaqlari_xuddi_shunday_yangi_testga_skanerlanadi():
     scanned = client.post(f"/api/teacher/tests/{new_id}/scan", json={"image_base64": photo}, headers=as_user(555))
     assert scanned.status_code == 200, scanned.text
     assert scanned.json()["answers"] == {"1": "B", "2": "A"}, scanned.json()["questions"]
+
+
+def test_davomatda_royxatda_yoq_oquvchini_qoshish():
+    """Davomat paytida istalgan o'qituvchi ro'yxatda yo'q o'quvchini qo'shadi; tahrirlashda ham belgisi yoziladi."""
+    from backend.database import ClassStudent
+
+    reset_database()
+    cid = _school_with_class(701)["id"]
+    h = as_user(701)
+    school = client.get("/api/schools/me", headers=h).json()["school"]
+    _set_name(704, "Oddiy", "Ustoz")
+    client.post("/api/schools/join", json={"code": current_code(school), "subjects": ["Fizika"], "phone": "93 444 55 04"},
+                headers=as_user(704))
+    with SessionLocal() as session:
+        session.add(ClassStudent(class_id=cid, full_name="Valiyev Ali"))
+        session.commit()
+    teacher = as_user(704)
+
+    # Oddiy o'qituvchi odatdagi yo'l bilan qo'sha olmaydi, davomatdan esa qo'shadi
+    assert client.post(f"/api/classes/{cid}/students", json={"full_name": "Yangi Bola"}, headers=teacher).status_code == 403
+    added = client.post(f"/api/classes/{cid}/students/quick", json={"full_name": "  Yangi   Bola "}, headers=teacher)
+    assert added.status_code == 200, added.text
+    new = added.json()
+    assert new["full_name"] == "Yangi Bola" and "code" in new
+    # Takror — rad etiladi (katta-kichik harf va apostrof farqi hisobga olinmaydi)
+    assert client.post(f"/api/classes/{cid}/students/quick", json={"full_name": "yangi bola"}, headers=teacher).status_code == 409
+    # Boshqa maktab o'qituvchisi qo'sha olmaydi
+    _school_with_class(799)
+    assert client.post(f"/api/classes/{cid}/students/quick", json={"full_name": "Begona"}, headers=as_user(799)).status_code in (403, 404)
+
+    saved = client.post(f"/api/classes/{cid}/attendance", json={"subject": "Fizika", "marks": {str(new["id"]): "late"},
+                                                               "lesson_start": "08:00", "lesson_end": "08:45"}, headers=teacher)
+    assert saved.status_code == 200, saved.text
+    marks = {mark["name"]: mark["status"] for mark in saved.json()["marks"]}
+    assert marks == {"Valiyev Ali": "present", "Yangi Bola": "late"}, marks
+
+    # Tahrirlash paytida qo'shilgan o'quvchi ham davomatga yoziladi
+    later = client.post(f"/api/classes/{cid}/students/quick", json={"full_name": "Kech Keldi"}, headers=teacher).json()
+    edited = client.put(f"/api/attendance/{saved.json()['id']}", json={"subject": "Fizika", "marks": {str(later["id"]): "absent"}},
+                        headers=teacher)
+    assert edited.status_code == 200, edited.text
+    assert {mark["name"]: mark["status"] for mark in edited.json()["marks"]}["Kech Keldi"] == "absent"

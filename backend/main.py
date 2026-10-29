@@ -8851,6 +8851,28 @@ def add_student(class_id: int, body: StudentIn, user: User = Depends(get_current
     return _class_view(db, school_class, with_details=True, member=_active_membership(db, user))
 
 
+@app.post("/api/classes/{class_id}/students/quick")
+def add_student_from_attendance(class_id: int, body: StudentIn, user: User = Depends(get_current_user),
+                                db: Session = Depends(get_db)):
+    """
+    Davomat paytida ro'yxatda yo'q o'quvchini shu joyda qo'shish — maktabning istalgan
+    o'qituvchisi (davomatni ham har kim oladi). Tahrirlash va chiqarish avvalgidek rahbariyat va kuratorda.
+    """
+
+    school_class, _ = _school_class(db, user, class_id)
+    key = _search_key(body.full_name)
+    if any(_search_key(student.full_name) == key for student in _active_students(school_class)):
+        raise HTTPException(status_code=409, detail=f"«{body.full_name}» bu sinfda allaqachon bor")
+    student = ClassStudent(class_id=school_class.id, full_name=body.full_name, birth_date=body.birth_date)
+    db.add(student)
+    db.commit()
+    _assign_student_codes(db, school_class.school_id)
+    db.refresh(student)
+    logging.getLogger("backend").info("Davomatdan o'quvchi qo'shildi: class=%s student=%s user=%s",
+                                      school_class.id, student.id, user.id)
+    return {"id": student.id, "full_name": student.full_name, "code": student.student_code}
+
+
 @app.post("/api/classes/{class_id}/students/import/preview")
 def preview_student_import(
     class_id: int, body: StudentImportIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
@@ -9226,6 +9248,14 @@ def edit_attendance(
         new_status = body.marks.get(mark.student_id)
         if new_status and new_status != mark.status:
             mark.status = new_status
+            changed = True
+    # Tahrirlashda qo'shilgan yangi o'quvchi (davomat oynasida "+ O'quvchi qo'shish") — belgisi yoziladi
+    marked = {mark.student_id for mark in attendance.marks}
+    school_class = db.get(SchoolClass, attendance.class_id)
+    for student in _active_students(school_class):
+        if student.id not in marked and student.id in body.marks:
+            db.add(AttendanceMark(attendance_id=attendance.id, student_id=student.id, student_name=student.full_name,
+                                  status=body.marks[student.id]))
             changed = True
     if body.subject and body.subject != attendance.subject:
         attendance.subject = body.subject

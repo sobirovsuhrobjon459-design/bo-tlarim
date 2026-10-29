@@ -3238,6 +3238,17 @@ function renderAttendanceForm(schoolClass, existing = null) {
 
   const counts = () =>
     rows.reduce((result, row) => ({ ...result, [row.status]: (result[row.status] || 0) + 1 }), {});
+  const rowsHtml = () =>
+    rows
+      .map(
+        (row, index) => `
+          <button type="button" class="att-row" data-row="${index}">
+            <span class="att-number">${index + 1}</span>
+            <span class="att-name">${escapeHtml(row.name)}</span>
+            <span class="att-status ${row.status}">${ATTENDANCE_STATE_BY_ID[row.status].icon} ${ATTENDANCE_STATE_BY_ID[row.status].label}</span>
+          </button>`
+      )
+      .join("");
 
   const timesHtml = existing
     ? `<p class="subtitle" style="margin:0">📅 ${dateLabel(existing.taken_at)}${
@@ -3257,18 +3268,8 @@ function renderAttendanceForm(schoolClass, existing = null) {
     </div>
     <div id="att-counts-host">${attendanceCountsHtml(counts())}</div>
     <p class="subtitle" style="margin:4px 0 8px">O'quvchini bosing: Bor → Yo'q → Sababli → Kechikdi</p>
-    <div class="panel" style="padding:4px 0">
-      ${rows
-        .map(
-          (row, index) => `
-            <button type="button" class="att-row" data-row="${index}">
-              <span class="att-number">${index + 1}</span>
-              <span class="att-name">${escapeHtml(row.name)}</span>
-              <span class="att-status ${row.status}">${ATTENDANCE_STATE_BY_ID[row.status].icon} ${ATTENDANCE_STATE_BY_ID[row.status].label}</span>
-            </button>`
-        )
-        .join("")}
-    </div>
+    <div class="panel" style="padding:4px 0" id="att-rows">${rowsHtml()}</div>
+    <button type="button" class="btn btn-ghost" id="att-add-student" style="margin-top:10px">➕ Ro'yxatda yo'q o'quvchini qo'shish</button>
     <div class="att-save-bar">
       <button class="btn" id="save-attendance-button" style="margin:0">💾 Saqlash</button>
     </div>
@@ -3284,16 +3285,45 @@ function renderAttendanceForm(schoolClass, existing = null) {
     })
   );
 
-  document.querySelectorAll(".att-row").forEach((button) => {
-    button.addEventListener("click", () => {
-      const row = rows[Number(button.dataset.row)];
-      row.status = nextAttendanceState(row.status);
-      const state = ATTENDANCE_STATE_BY_ID[row.status];
-      const pill = button.querySelector(".att-status");
-      pill.className = `att-status ${row.status}`;
-      pill.textContent = `${state.icon} ${state.label}`;
+  document.getElementById("att-rows").addEventListener("click", (event) => {
+    const button = event.target.closest(".att-row");
+    if (!button) return;
+    const row = rows[Number(button.dataset.row)];
+    row.status = nextAttendanceState(row.status);
+    const state = ATTENDANCE_STATE_BY_ID[row.status];
+    const pill = button.querySelector(".att-status");
+    pill.className = `att-status ${row.status}`;
+    pill.textContent = `${state.icon} ${state.label}`;
+    document.getElementById("att-counts-host").innerHTML = attendanceCountsHtml(counts());
+    telegram?.HapticFeedback?.selectionChanged?.();
+  });
+
+  // Ro'yxatda yo'q o'quvchi — shu yerning o'zida sinfga qo'shiladi (har qanday o'qituvchi), belgilar saqlanib qoladi
+  document.getElementById("att-add-student").addEventListener("click", () => {
+    const { sheet, close } = openSheet(`
+      <h3 style="margin:0 0 6px">➕ O'quvchi qo'shish</h3>
+      <p class="subtitle" style="margin:0 0 10px">«${escapeHtml(schoolClass.name)}» sinfiga qo'shiladi va davomatda «Bor» bo'lib turadi.</p>
+      <input class="input" id="att-new-name" maxlength="200" placeholder="Familiya Ism" autocomplete="off" />
+      <button class="btn" id="att-new-save" style="margin-top:12px">💾 Qo'shish</button>
+      <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+    `);
+    const input = sheet.querySelector("#att-new-name");
+    setTimeout(() => input.focus(), 50);
+    const save = guarded(async () => {
+      const name = input.value.trim();
+      if (name.length < 2) throw new Error("O'quvchining ism-familiyasini kiriting");
+      const student = await api(`/api/classes/${schoolClass.id}/students/quick`, { method: "POST", body: { full_name: name } });
+      rows.push({ id: student.id, name: student.full_name, status: "present" });
+      schoolClass.students?.push({ id: student.id, full_name: student.full_name });
+      myClassesCache = null;
+      document.getElementById("att-rows").innerHTML = rowsHtml();
       document.getElementById("att-counts-host").innerHTML = attendanceCountsHtml(counts());
-      telegram?.HapticFeedback?.selectionChanged?.();
+      close();
+      showToast(`✅ ${student.full_name} qo'shildi`);
+    });
+    sheet.querySelector("#att-new-save").addEventListener("click", save);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") save();
     });
   });
 
