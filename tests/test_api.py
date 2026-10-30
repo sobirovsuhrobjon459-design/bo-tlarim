@@ -1954,6 +1954,56 @@ def test_davomatni_ochirish_tarix_va_statistikadan_olinadi():
         session.close()
 
 
+def test_sinf_reytingi_test_va_sinov_natijalaridan():
+    """
+    O'quvchilar ro'yxatidagi reyting: sinf testlari bo'yicha o'rtacha foiz, qatnashmagani hisobga olinmaydi,
+    teng natija — teng o'rin. Har kim faqat o'zi ko'ra oladigan testlar bo'yicha ko'radi.
+    """
+    reset_database()
+    cid = _school_with_class()["id"]
+    for name in ("Ali Valiyev", "Vali Aliyev", "Hasan Husanov", "Olim Karimov"):
+        detail = client.post(f"/api/classes/{cid}/students", json={"full_name": name}, headers=as_user(701)).json()
+    ids = {s["full_name"]: s["id"] for s in detail["students"]}
+    school = client.get("/api/schools/me", headers=as_user(701)).json()["school"]
+    for tg_id in (702, 703):
+        _set_name(tg_id, "Ustoz", f"N{tg_id}")
+        client.post("/api/schools/join", json={"phone": "901234567", "code": current_code(school), "subjects": ["Fizika"]},
+                    headers=as_user(tg_id))
+
+    def rating(tg_id):
+        view = client.get(f"/api/classes/{cid}", headers=as_user(tg_id))
+        assert view.status_code == 200, view.text
+        data = view.json()
+        return data["rating_tests"], {s["full_name"]: s["rating"] for s in data["students"]}
+
+    assert rating(701) == (0, {name: None for name in ids})
+
+    # 702 (fan o'qituvchisi): Ali 90%, Vali 60%, Hasan 90%, Olim — kelmagan
+    assert client.post(f"/api/classes/{cid}/tests", headers=as_user(702), json={
+        "title": "Nazorat", "subject": "Fizika", "taken_on": "2026-10-01", "max_score": 30,
+        "scores": {ids["Ali Valiyev"]: 27, ids["Vali Aliyev"]: 18, ids["Hasan Husanov"]: 27}}).status_code == 200
+    # 701 (rahbariyat): Ali 50%, Vali 100%
+    assert client.post(f"/api/classes/{cid}/tests", headers=as_user(701), json={
+        "title": "Sinov", "subject": "Matematika", "taken_on": "2026-10-02", "max_score": 10,
+        "scores": {ids["Ali Valiyev"]: 5, ids["Vali Aliyev"]: 10}}).status_code == 200
+
+    # Rahbariyat — ikkala test: Hasan 90 (1 test), Vali 80, Ali 70
+    tests, rows = rating(701)
+    assert tests == 2
+    assert rows["Hasan Husanov"] == {"rank": 1, "avg": 90.0, "tests": 1}
+    assert rows["Vali Aliyev"] == {"rank": 2, "avg": 80.0, "tests": 2}
+    assert rows["Ali Valiyev"] == {"rank": 3, "avg": 70.0, "tests": 2}
+    assert rows["Olim Karimov"] is None
+
+    # Fan o'qituvchisi — faqat o'z testi: Ali va Hasan teng (1, 1), Vali — 3
+    tests, rows = rating(702)
+    assert tests == 1
+    assert rows["Ali Valiyev"]["rank"] == rows["Hasan Husanov"]["rank"] == 1 and rows["Vali Aliyev"]["rank"] == 3
+
+    # Testi yo'q o'qituvchida reyting yo'q
+    assert rating(703) == (0, {name: None for name in ids})
+
+
 def test_sinf_test_natijalari():
     """O'qituvchi natija kiritadi: foiz, baho, o'rin. Ko'radi — kiritgan o'qituvchi va rahbariyat."""
     reset_database()

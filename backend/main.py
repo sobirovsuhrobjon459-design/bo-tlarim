@@ -8769,6 +8769,51 @@ def _student_attendance_stats(db: Session, student_ids: list[int], scope=None) -
     return stats
 
 
+def _class_rating(
+    db: Session, school_class: SchoolClass, member: SchoolMember | None, student_ids: list[int]
+) -> tuple[dict[int, dict], int]:
+    """
+    Sinf reytingi: sinf testlari va skanerlangan sinovlar (ClassTest) bo'yicha har o'quvchining
+    o'rtacha foizi. Qatnashmagan testi hisobga olinmaydi; teng natija — teng o'rin (1, 1, 3 ...).
+    Faqat ko'ruvchiga ochiq testlar olinadi (_can_see_class_test): rahbariyat — hammasi,
+    o'qituvchi — o'zi kiritganlari. Qaytaradi: ({o'quvchi: {"rank", "avg", "tests"}}, testlar soni).
+    """
+
+    if member is None or not student_ids:
+        return {}, 0
+    tests_query = select(ClassTest.id).where(
+        ClassTest.class_id == school_class.id, ClassTest.deleted_at.is_(None), ClassTest.max_score > 0
+    )
+    if not _is_director(member):
+        tests_query = tests_query.where(ClassTest.teacher_user_id == member.user_id)
+    test_ids = db.scalars(tests_query).all()
+    if not test_ids:
+        return {}, 0
+
+    percents: dict[int, list[float]] = {}
+    for student_id, score, max_score in db.execute(
+        select(ClassTestScore.student_id, ClassTestScore.score, ClassTest.max_score)
+        .join(ClassTest, ClassTest.id == ClassTestScore.test_id)
+        .where(
+            ClassTestScore.test_id.in_(test_ids),
+            ClassTestScore.student_id.in_(student_ids),
+            ClassTestScore.score.is_not(None),
+        )
+    ).all():
+        percents.setdefault(student_id, []).append(min(score / max_score * 100, 100.0))
+
+    averages = sorted(
+        ((student_id, round(sum(values) / len(values), 1), len(values)) for student_id, values in percents.items()),
+        key=lambda item: -item[1],
+    )
+    rating: dict[int, dict] = {}
+    for index, (student_id, average, count) in enumerate(averages):
+        same_as_previous = index and averages[index - 1][1] == average
+        rank = rating[averages[index - 1][0]]["rank"] if same_as_previous else index + 1
+        rating[student_id] = {"rank": rank, "avg": average, "tests": count}
+    return rating, len(test_ids)
+
+
 def _class_view(db: Session, school_class: SchoolClass, with_details: bool = False, member: SchoolMember | None = None) -> dict:
     students = _active_students(school_class)
     curator = db.get(User, school_class.curator_user_id) if school_class.curator_user_id else None
@@ -8795,6 +8840,8 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
             _assign_student_codes(db, school_class.school_id)
         stats = _student_attendance_stats(db, [student.id for student in students], _attendance_filter(school_class, member))
         away = _active_status_codes(db, [student.id for student in students])
+        rating, rating_tests = _class_rating(db, school_class, member, [student.id for student in students])
+        view["rating_tests"] = rating_tests
         view["students"] = [
             {
                 "id": student.id,
@@ -8803,6 +8850,7 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
                 "birth_date": student.birth_date,
                 "stats": stats[student.id],
                 "away": away.get(student.id),  # "home" | "leave" | "sick" | None (maktabda)
+                "rating": rating.get(student.id),  # {"rank", "avg", "tests"} | None — testda qatnashmagan
             }
             for student in students
         ]

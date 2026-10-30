@@ -1837,6 +1837,24 @@ select option {
   background: #d93636;
 }
 
+.rank-badge {
+  flex-shrink: 0;
+  min-width: 52px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+  border-radius: 999px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+.rank-badge.top-1 { background: #fff4c2; border-color: #f2c94c; color: #7a5a00; }
+.rank-badge.top-2 { background: #eef1f5; border-color: #c3cad4; color: #3d4654; }
+.rank-badge.top-3 { background: #fbe6d6; border-color: #e3a578; color: #7a3e12; }
+
 .rate-badge.none {
   color: var(--color-text-muted);
   background: var(--color-surface);

@@ -2278,10 +2278,33 @@ function openCodeRangeSheet(schoolClass) {
   );
 }
 
+// Sinf reytingi belgisi: 1–3 — medal, qolgani — o'rin. Testda qatnashmagan — belgisiz
+function ratingBadge(rating) {
+  if (!rating) return "";
+  const medal = ["🥇", "🥈", "🥉"][rating.rank - 1];
+  return `<span class="rank-badge ${medal ? `top-${rating.rank}` : ""}"
+                title="O'rtacha ${rating.avg}% · ${rating.tests} ta test">${medal ? `${medal} ${rating.rank}` : `${rating.rank}-o'rin`}</span>`;
+}
+
+// O'quvchilar tartibi: "code" — ID/ro'yxat bo'yicha, "rating" — reyting bo'yicha (telefonda eslab qolinadi)
+function classStudentsOrder() {
+  try {
+    return localStorage.getItem("class-students-order") === "rating" ? "rating" : "code";
+  } catch (_) {
+    return "code";
+  }
+}
+
 function renderClassStudentsTab(schoolClass) {
   currentClass = schoolClass;
-  const rows = schoolClass.students.length
-    ? schoolClass.students
+  const hasRating = schoolClass.rating_tests > 0;
+  const byRating = hasRating && classStudentsOrder() === "rating";
+  // Reyting bo'yicha: o'rni bor o'quvchilar yuqorida, testda qatnashmaganlar — oxirida (ro'yxat tartibida)
+  const students = byRating
+    ? [...schoolClass.students].sort((a, b) => (a.rating?.rank ?? Infinity) - (b.rating?.rank ?? Infinity))
+    : schoolClass.students;
+  const rows = students.length
+    ? students
         .map(
           (student) => `
             <div class="student-card" data-student-id="${student.id}" role="button" tabindex="0">
@@ -2296,7 +2319,7 @@ function renderClassStudentsTab(schoolClass) {
                     : ""
                 }
               </span>
-              ${rateBadge(student.stats)}
+              ${ratingBadge(student.rating)}
             </div>`
         )
         .join("")
@@ -2313,7 +2336,11 @@ function renderClassStudentsTab(schoolClass) {
   showPage(`
     <div data-class-tab="students">
       ${classHeader(schoolClass, schoolClass.can_manage ? `<button type="button" class="share-pill" id="add-student-pill">+ Qo'shish</button>` : "")}
-      <p class="subtitle" style="margin:0 0 10px">${schoolClass.students.length} ta o'quvchi · % — barcha darslar bo'yicha qatnashish (bugungi emas)</p>
+      <p class="subtitle" style="margin:0 0 10px">${schoolClass.students.length} ta o'quvchi${
+        hasRating
+          ? ` · 🏆 reyting — ${schoolClass.rating_tests} ta test va sinov natijasi bo'yicha (o'rtacha foiz)`
+          : " · reyting sinf testlari va sinov natijalaridan chiqadi"
+      }</p>
       ${
         schoolClass.is_director
           ? `<button type="button" class="btn btn-ghost" id="code-range-button" style="margin:0 0 12px">🆔 ${
@@ -2323,11 +2350,31 @@ function renderClassStudentsTab(schoolClass) {
             ? `<p class="subtitle" style="margin:0 0 10px">🆔 ID oralig'i: ${schoolClass.code_start}–${schoolClass.code_end}</p>`
             : ""
       }
+      ${
+        hasRating
+          ? `<div class="choice-toggle" id="students-order" style="margin:0 0 12px">
+               <button type="button" class="${byRating ? "" : "active"}" data-order="code">📋 Ro'yxat</button>
+               <button type="button" class="${byRating ? "active" : ""}" data-order="rating">🏆 Reyting</button>
+             </div>`
+          : ""
+      }
       <div class="student-list">${rows}</div>
     </div>
   `);
 
   wireClassTab(schoolClass, "students");
+  document.querySelectorAll("#students-order [data-order]").forEach((button) =>
+    button.addEventListener("click", () => {
+      try {
+        localStorage.setItem("class-students-order", button.dataset.order);
+      } catch (_) {
+        // xotira yopiq — tartib faqat shu safar o'zgaradi
+      }
+      telegram?.HapticFeedback?.selectionChanged?.();
+      if (button.dataset.order === "rating" && !byRating) renderClassStudentsTab(schoolClass);
+      if (button.dataset.order === "code" && byRating) renderClassStudentsTab(schoolClass);
+    })
+  );
   document.getElementById("add-student-pill")?.addEventListener("click", () => openAddStudentSheet(schoolClass));
   document.getElementById("code-range-button")?.addEventListener("click", () => openCodeRangeSheet(schoolClass));
   document.querySelectorAll("[data-student-id]").forEach((card) => {
