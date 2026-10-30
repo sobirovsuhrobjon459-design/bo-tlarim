@@ -2637,7 +2637,7 @@ body.keyboard-open .fab {
 
 .score-row {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 44px 52px 44px;
+  grid-template-columns: 26px minmax(0, 1fr) 50px 46px minmax(36px, 0.4fr);
   align-items: center;
   gap: 6px;
   padding: 10px 12px;
@@ -2670,23 +2670,29 @@ body.keyboard-open .fab {
   opacity: 0.55;
 }
 
-/* Sinf testi darajasi (A+ … NC) — kichik rangli belgi */
-.grade-chip {
-  display: inline-grid;
-  place-items: center;
-  min-width: 34px;
-  height: 28px;
-  padding: 0 6px;
-  font-size: 13px;
-  font-weight: 800;
-  color: #fff;
-  border-radius: 8px;
+.score-value {
+  font-weight: 700;
+  white-space: nowrap;
 }
 
-.grade-chip.none {
-  color: var(--color-text-muted);
-  background: none;
+/* Sinf testi natijasi — foiz chizig'i (diagramma) */
+.score-bar {
+  display: block;
+  height: 10px;
+  border-radius: 999px;
+  background: #ddefe2;
+  overflow: hidden;
 }
+
+.score-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.score-bar i.is-good { background: linear-gradient(90deg, #0e9f6e, #34d399); }
+.score-bar i.is-mid { background: linear-gradient(90deg, #c48a0a, #f2c94c); }
+.score-bar i.is-low { background: linear-gradient(90deg, #d9483b, #f59e8b); }
 
 /* Natija kiritish formasi */
 .two-fields {

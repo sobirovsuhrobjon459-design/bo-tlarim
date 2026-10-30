@@ -7920,7 +7920,6 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         "my_position": member.position,
         "my_phone": member.phone,
         "my_birth_date": member.birth_date,
-        "my_passport": member.passport,
         # Xodimlarning telefon raqamlarini faqat rahbariyat ko'radi
         "can_see_phones": _is_director(member),
         "is_leader": _is_director(member),
@@ -7951,7 +7950,6 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
                 # Shaxsiy ma'lumotlar — faqat rahbariyatga (va xodimning o'ziga)
                 "phone": item.phone if (leader or item.user_id == user.id) else None,
                 "birth_date": item.birth_date if (leader or item.user_id == user.id) else None,
-                "passport": item.passport if (leader or item.user_id == user.id) else None,
                 "photo_url": item.user.photo_url if item.user else None,
                 "username": item.user.username if item.user else None,
                 "curator_of": curator_of.get(item.user_id, []) if (leader or item.user_id == user.id) else [],
@@ -8194,7 +8192,6 @@ def create_school(body: SchoolCreateIn, user: User = Depends(get_current_user), 
         subjects="[]",
         phone=body.phone,
         birth_date=body.birth_date,
-        passport=body.passport,
     )
     db.add(member)
     db.commit()
@@ -8275,7 +8272,6 @@ def _join_as_teacher(db: Session, user: User, school: PrivateSchool, body) -> Sc
         subjects=json.dumps(body.subjects, ensure_ascii=False),
         phone=body.phone,
         birth_date=body.birth_date,
-        passport=body.passport,
     )
     db.add(member)
     if curator_class:
@@ -8480,8 +8476,6 @@ def update_school_profile(body: SchoolProfileIn, user: User = Depends(get_curren
     # Faqat yuborilgan maydonlar o'zgaradi (yuborilmagani o'chib ketmasin)
     if "birth_date" in body.model_fields_set:
         member.birth_date = body.birth_date
-    if "passport" in body.model_fields_set:
-        member.passport = body.passport
 
     member.subjects = json.dumps(body.subjects, ensure_ascii=False)
     db.commit()
@@ -9504,11 +9498,14 @@ def delete_attendance(attendance_id: int, user: User = Depends(get_current_user)
 
 
 # ---------- Sinf test natijalari (o'qituvchi kiritadi) ----------
+#
+# Hisoblash — boshlang'ich test rejimida: to'plangan ball / maksimal ball (21/25) va foiz (84%).
+# Milliy sertifikat darajalari (A+ … NC) ishlatilmaydi.
 
 
-def _grade(percent: float) -> str:
-    """Foizdan Milliy sertifikat darajasi: 70%+ — A+, 65 — A, 60 — B+, 55 — B, 50 — C+, 46 — C, qolgani — NC."""
-    return grade_for(percent)
+def _score_level(percent: float) -> str:
+    """Diagramma rangi: 71%+ — yashil, 56–70% — sariq, qolgani — qizil (5/4, 3, 2 baholar chegarasi)."""
+    return "good" if percent >= 71 else "mid" if percent >= 56 else "low"
 
 
 def _can_see_class_test(test: ClassTest, member: SchoolMember) -> bool:
@@ -9525,7 +9522,7 @@ def _class_test_view(db: Session, test: ClassTest, member: SchoolMember, with_sc
             "name": item.student_name,
             "score": item.score,
             "percent": percent,
-            "grade": _grade(percent) if percent is not None else None,
+            "level": _score_level(percent) if percent is not None else None,
         })
     # Eng ko'p yechganlar tepada; qatnashmaganlar — oxirida
     rows.sort(key=lambda row: (row["score"] is None, -(row["score"] or 0), row["name"].lower()))
@@ -9731,9 +9728,8 @@ def edit_class_test(test_id: int, body: ClassTestIn, user: User = Depends(get_cu
     return _class_test_view(db, test, member)
 
 
-GRADE_COLORS = {"A+": "#15803d", "A": "#16a34a", "B+": "#2563eb", "B": "#3b82f6", "C+": "#b45309", "C": "#d97706",
-                "NC": "#6b7280"}
-CLASS_GRADE_NOTE = "Daraja: 70% va yuqori — A+, 65% — A, 60% — B+, 55% — B, 50% — C+, 46% — C, qolgani — NC."
+# Diagramma ranglari (to'q, och): 71%+ — yashil, 56–70% — sariq, qolgani — qizil
+SCORE_LEVEL_COLORS = {"good": ("#0e9f6e", "#34d399"), "mid": ("#c48a0a", "#f2c94c"), "low": ("#d9483b", "#f59e8b")}
 
 
 def _class_test_context(db: Session, test: ClassTest, member: SchoolMember) -> dict:
@@ -9761,21 +9757,33 @@ def class_test_pdf(context: dict) -> bytes:
     summary = (f"O'qituvchi: {context['teacher_name']}   ·   Qatnashdi: {context['participants']} / {context['total']}   ·   "
                f"O'rtacha: {_fmt_number(context['average_percent'] or 0)}%")
 
-    header = ["№", "F.I.Sh.", "Ball", "%", "Daraja"]
+    header = ["№", "F.I.Sh.", "Natija", "%", "Diagramma"]
+    bar_width = width * 0.24 - 12
+
+    def bar(row: dict) -> Drawing:
+        """Foiz chizig'i: och fon ustida natija rangidagi to'ldirilgan qism."""
+        drawing = Drawing(bar_width, 10)
+        drawing.add(Rect(0, 0, bar_width, 10, rx=5, ry=5, fillColor=colors.HexColor("#DDEFE2"), strokeColor=None))
+        if row["score"] is not None:
+            filled = max(10.0, bar_width * min(100.0, max(0.0, float(row["percent"]))) / 100)
+            color = colors.HexColor(SCORE_LEVEL_COLORS[row["level"]][0])
+            drawing.add(Rect(0, 0, filled, 10, rx=5, ry=5, fillColor=color, strokeColor=None))
+        return drawing
+
     data = [[Paragraph(f"<font color='white'>{xml_escape(text)}</font>", styles["cell_bold"]) for text in header]]
     for row in context["scores"]:
         absent = row["score"] is None
-        grade = row["grade"]
         data.append([
             Paragraph(str(row.get("rank", "—")), styles["cell"]),
             Paragraph(xml_escape(row["name"]), styles["cell"]),
-            Paragraph("—" if absent else _fmt_number(row["score"]), styles["cell"]),
-            Paragraph("—" if absent else f"{_fmt_number(row['percent'])}%", styles["cell"]),
-            Paragraph("kelmadi" if absent else f"<font color='{GRADE_COLORS[grade]}'><b>{grade}</b></font>", styles["cell"]),
+            Paragraph("—" if absent else f"<b>{_fmt_number(row['score'])}/{_fmt_number(context['max_score'])}</b>", styles["cell"]),
+            Paragraph("kelmadi" if absent else f"{_fmt_number(row['percent'])}%", styles["cell"]),
+            bar(row),
         ])
-    table = Table(data, colWidths=[width * 0.08, width * 0.52, width * 0.12, width * 0.14, width * 0.14], repeatRows=1)
+    table = Table(data, colWidths=[width * 0.07, width * 0.43, width * 0.13, width * 0.13, width * 0.24], repeatRows=1)
     commands = [("BACKGROUND", (0, 0), (-1, 0), REPORT_TABLE_HEAD), ("LINEBELOW", (0, 0), (-1, -1), 0.4, REPORT_GRID),
-                ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]
+                ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE")]
     for index in range(2, len(data), 2):
         commands.append(("BACKGROUND", (0, index), (-1, index), REPORT_TILE_BG))
     table.setStyle(TableStyle(commands))
@@ -9787,8 +9795,6 @@ def class_test_pdf(context: dict) -> bytes:
         Paragraph(xml_escape(summary), styles["cell_bold"]),
         Spacer(1, 10),
         table,
-        Spacer(1, 8),
-        Paragraph(CLASS_GRADE_NOTE, styles["meta"]),
     ], canvasmaker=_brand_canvas(context["school_name"], f"{context['class_name']} · test natijalari"))
     return buffer.getvalue()
 
@@ -9826,7 +9832,7 @@ def class_test_image(context: dict) -> bytes:
     head_top = 290
     table_top = head_top + 100
     height = table_top + len(rows) * (row_height + gap) + 70
-    name_x, percent_x = 250, 1085
+    name_x, score_x, percent_x = 250, 935, 1100
     panel_left, panel_right = 1215, width - 50
     bar_left, bar_right = panel_left + 30, panel_right - 25
 
@@ -9862,7 +9868,8 @@ def class_test_image(context: dict) -> bytes:
     head_y = head_top + 38
     draw.text((120, head_y), "No.", font=head_font, fill="#0B1F2A", anchor="mm")
     draw.text((name_x + 160, head_y), "Ism", font=head_font, fill="#0B1F2A", anchor="mm")
-    draw.text((percent_x, head_y + 4), "Natija (%)", font=head_font, fill="#ffffff", anchor="mm")
+    draw.text((score_x, head_y + 4), "Natija", font=head_font, fill="#ffffff", anchor="mm")
+    draw.text((percent_x, head_y + 4), "%", font=head_font, fill="#ffffff", anchor="mm")
     draw.text(((panel_left + panel_right) // 2, head_y + 4), "Grafik", font=head_font, fill="#ffffff", anchor="mm")
 
     # Qator kartalarining yumshoq soyasi
@@ -9883,9 +9890,6 @@ def class_test_image(context: dict) -> bytes:
         draw.rounded_rectangle([panel_left, table_top - 6, panel_right, table_top + len(rows) * (row_height + gap) - gap + 6],
                                radius=18, fill="#EAF7EE")
 
-    # A+ … B — yashil, C+ va C — sariq, NC — qizil
-    green, gold = ("#0e9f6e", "#34d399"), ("#c48a0a", "#f2c94c")
-    bar_colors = {"A+": green, "A": green, "B+": green, "B": green, "C+": gold, "C": gold, "NC": ("#d9483b", "#f59e8b")}
     for index, row in enumerate(rows):
         top = table_top + index * (row_height + gap)
         middle = top + row_height // 2
@@ -9905,17 +9909,19 @@ def class_test_image(context: dict) -> bytes:
         draw.ellipse([cx - 10, middle - 19, cx + 10, middle + 1], fill=person)
         draw.chord([cx - 20, middle + 5, cx + 20, middle + 37], 180, 360, fill=person)
 
-        draw.text((name_x, middle), fit(row["name"], name_font, percent_x - 110 - name_x), font=name_font,
+        draw.text((name_x, middle), fit(row["name"], name_font, score_x - 90 - name_x), font=name_font,
                   fill="#9aa6b2" if absent else "#111c2b", anchor="lm")
 
         draw.rounded_rectangle([bar_left, middle - 15, bar_right, middle + 15], radius=15, fill="#DDEFE2")
         if absent:
-            draw.text((percent_x, middle), "kelmadi", font=small_font, fill="#9aa6b2", anchor="mm")
+            draw.text(((score_x + percent_x) // 2, middle), "kelmadi", font=small_font, fill="#9aa6b2", anchor="mm")
             continue
         percent = max(0.0, min(100.0, float(row["percent"])))
-        draw.text((percent_x, middle), f"{percent:.1f}%", font=name_font, fill="#111c2b", anchor="mm")
+        draw.text((score_x, middle), f"{_fmt_number(row['score'])}/{_fmt_number(context['max_score'])}",
+                  font=name_font, fill="#111c2b", anchor="mm")
+        draw.text((percent_x, middle), f"{_fmt_number(round(percent, 1))}%", font=head_font, fill="#4F6670", anchor="mm")
 
-        start, end = bar_colors.get(row["grade"], bar_colors["NC"])
+        start, end = SCORE_LEVEL_COLORS[row["level"]]
         length = max(30, int((bar_right - bar_left) * percent / 100))
         bar_mask = Image.new("L", (length, 30), 0)
         ImageDraw.Draw(bar_mask).rounded_rectangle([0, 0, length - 1, 29], radius=15, fill=255)

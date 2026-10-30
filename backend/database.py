@@ -532,7 +532,7 @@ class SchoolMember(Base):
     # Xodimning telefon raqami (+998XXXXXXXXX) — faqat rahbariyat ko'radi
     phone: Mapped[str | None] = mapped_column(String(20), default=None)
     birth_date: Mapped[date | None] = mapped_column(default=None)
-    # Pasport seriya va raqami (AA1234567) — ixtiyoriy, faqat rahbariyat ko'radi
+    # Pasport seriya va raqami — endi so'ralmaydi va ko'rsatilmaydi (avval kiritilgani bazada qoladi)
     passport: Mapped[str | None] = mapped_column(String(20), default=None)
     subjects: Mapped[str] = mapped_column(Text, default="[]")  # JSON ro'yxat: ["Matematika", ...]
     # Dars jadvali uchun: haftalik soat me'yori (stavka), ish kunlari (JSON [0..6]) va kun ichidagi ish vaqti.
@@ -1507,17 +1507,6 @@ def _clean_phone(value: str | None) -> str | None:
     return "+" + digits
 
 
-def _clean_passport(value: str | None) -> str | None:
-    """Pasport/ID-karta seriya va raqami: AA1234567 (bo'sh bo'lsa — None)."""
-
-    if not value or not value.strip():
-        return None
-    passport = re.sub(r"\s", "", value).upper()
-    if not re.fullmatch(r"[A-Z]{2}\d{7}", passport):
-        raise ValueError("Pasport seriya va raqami noto'g'ri. Masalan: AA1234567")
-    return passport
-
-
 def _check_birth_date(value: date | None) -> date | None:
     if value and not (date(1930, 1, 1) <= value <= date.today()):
         raise ValueError("Tug'ilgan sana noto'g'ri")
@@ -1543,7 +1532,6 @@ class SchoolCreateIn(BaseModel):
     subjects: list[str] = Field(default_factory=list, max_length=20)
     phone: str | None = Field(None, max_length=30)
     birth_date: date | None = None
-    passport: str | None = Field(None, max_length=30)
 
     @model_validator(mode="after")
     def normalize(self) -> "SchoolCreateIn":
@@ -1551,9 +1539,7 @@ class SchoolCreateIn(BaseModel):
         self.subjects = _clean_subjects(self.subjects)
         self.phone = _clean_phone(self.phone)
         # Faqat kelgan maydonga tegamiz — aks holda u "yuborilgan" deb belgilanib,
-        # profil saqlanganda yuborilmagan pasport/sana o'chib ketardi
-        if self.passport is not None:
-            self.passport = _clean_passport(self.passport)
+        # profil saqlanganda yuborilmagan sana o'chib ketardi
         if self.birth_date is not None:
             self.birth_date = _check_birth_date(self.birth_date)
         return self
@@ -1574,7 +1560,6 @@ class SchoolCodeIn(BaseModel):
     # Qo'shilayotgan xodimning telefon raqami (qo'shilishda majburiy)
     phone: str | None = Field(None, max_length=30)
     birth_date: date | None = None
-    passport: str | None = Field(None, max_length=30)
 
     @model_validator(mode="after")
     def normalize(self) -> "SchoolCodeIn":
@@ -1582,9 +1567,7 @@ class SchoolCodeIn(BaseModel):
         self.subjects = _clean_subjects(self.subjects)
         self.phone = _clean_phone(self.phone)
         # Faqat kelgan maydonga tegamiz — aks holda u "yuborilgan" deb belgilanib,
-        # profil saqlanganda yuborilmagan pasport/sana o'chib ketardi
-        if self.passport is not None:
-            self.passport = _clean_passport(self.passport)
+        # profil saqlanganda yuborilmagan sana o'chib ketardi
         if self.birth_date is not None:
             self.birth_date = _check_birth_date(self.birth_date)
         return self
@@ -1596,16 +1579,13 @@ class SchoolProfileIn(BaseModel):
     subjects: list[str] = Field(default_factory=list, max_length=20)
     phone: str | None = Field(None, max_length=30)
     birth_date: date | None = None
-    passport: str | None = Field(None, max_length=30)
 
     @model_validator(mode="after")
     def normalize(self) -> "SchoolProfileIn":
         self.subjects = _clean_subjects(self.subjects)
         self.phone = _clean_phone(self.phone)
         # Faqat kelgan maydonga tegamiz — aks holda u "yuborilgan" deb belgilanib,
-        # profil saqlanganda yuborilmagan pasport/sana o'chib ketardi
-        if self.passport is not None:
-            self.passport = _clean_passport(self.passport)
+        # profil saqlanganda yuborilmagan sana o'chib ketardi
         if self.birth_date is not None:
             self.birth_date = _check_birth_date(self.birth_date)
         return self
@@ -1784,16 +1764,13 @@ class InviteAcceptIn(BaseModel):
     curator_class_id: int | None = None
     phone: str | None = Field(None, max_length=30)
     birth_date: date | None = None
-    passport: str | None = Field(None, max_length=30)
 
     @model_validator(mode="after")
     def normalize(self) -> "InviteAcceptIn":
         self.subjects = _clean_subjects(self.subjects)
         self.phone = _clean_phone(self.phone)
         # Faqat kelgan maydonga tegamiz — aks holda u "yuborilgan" deb belgilanib,
-        # profil saqlanganda yuborilmagan pasport/sana o'chib ketardi
-        if self.passport is not None:
-            self.passport = _clean_passport(self.passport)
+        # profil saqlanganda yuborilmagan sana o'chib ketardi
         if self.birth_date is not None:
             self.birth_date = _check_birth_date(self.birth_date)
         return self

@@ -2980,9 +2980,11 @@ async function loadClassCenterTests(schoolClass) {
   }
 }
 
-function gradeBadge(grade) {
-  if (!grade) return `<span class="grade-chip none">—</span>`;
-  return `<span class="grade-chip" style="background:${GRADE_COLORS[grade] || GRADE_COLORS.NC}">${escapeHtml(grade)}</span>`;
+// Natija chizig'i (diagramma): 71%+ — yashil, 56–70% — sariq, qolgani — qizil
+function scoreBar(row) {
+  if (row.score === null) return `<span class="score-bar"></span>`;
+  const percent = Math.max(0, Math.min(100, Number(row.percent) || 0));
+  return `<span class="score-bar"><i class="is-${row.level}" style="width:${Math.max(6, percent)}%"></i></span>`;
 }
 
 async function sendClassTest(test, format) {
@@ -3014,21 +3016,20 @@ async function renderClassTestDetail(testId, schoolClass, onBack = null) {
     </div>
 
     <div class="panel score-table">
-      <div class="score-row score-head"><span>#</span><span>O'quvchi</span><span>Ball</span><span>%</span><span>Daraja</span></div>
+      <div class="score-row score-head"><span>#</span><span>O'quvchi</span><span>Natija</span><span>%</span><span>Diagramma</span></div>
       ${test.scores
         .map(
           (row) => `
             <div class="score-row${row.score === null ? " is-absent" : ""}">
               <span>${row.rank ? medal[row.rank] || row.rank : "—"}</span>
               <span class="score-name">${escapeHtml(row.name)}</span>
-              <span>${row.score === null ? "—" : row.score}</span>
-              <span>${row.percent === null ? "—" : `${row.percent}%`}</span>
-              <span>${row.score === null ? `<small>kelmadi</small>` : gradeBadge(row.grade)}</span>
+              <span class="score-value">${row.score === null ? "—" : `${formatNumber(row.score)}/${formatNumber(test.max_score)}`}</span>
+              <span>${row.score === null ? `<small>kelmadi</small>` : `${row.percent}%`}</span>
+              ${scoreBar(row)}
             </div>`
         )
         .join("")}
     </div>
-    <p class="subtitle" style="margin:8px 4px 0">Daraja: 70%+ — A+, 65%+ — A, 60%+ — B+, 55%+ — B, 50%+ — C+, 46%+ — C, qolgani — NC.</p>
 
     <p class="section-label" style="margin-top:18px">YUBORISH VA CHOP ETISH</p>
     <div class="contact-actions">
@@ -3893,7 +3894,7 @@ async function profileNameFieldsHtml() {
   Telefon raqam — har bir xodim uchun majburiy (rahbariyat ko'radi).
   Telegram'dan bitta bosishda olish ham mumkin.
 */
-function phoneFieldHtml(value = "", { birthDate = "", passport = "" } = {}) {
+function phoneFieldHtml(value = "", { birthDate = "" } = {}) {
   return `
     <label class="field-label" for="profile-phone">Telefon raqamingiz <span class="required-mark">*</span></label>
     <div class="phone-field">
@@ -3905,21 +3906,15 @@ function phoneFieldHtml(value = "", { birthDate = "", passport = "" } = {}) {
     <label class="field-label" for="profile-birth-date">Tug'ilgan sanangiz <span class="required-mark">*</span></label>
     <input class="input" id="profile-birth-date" type="date" min="1930-01-01" max="${new Date().toISOString().slice(0, 10)}"
            value="${escapeHtml(birthDate || "")}" />
-
-    <label class="field-label" for="profile-passport">Pasport seriya va raqami <span class="subtitle">(ixtiyoriy, lekin kerakli)</span></label>
-    <input class="input" id="profile-passport" placeholder="AA1234567" maxlength="11"
-           style="text-transform:uppercase;letter-spacing:1px" value="${escapeHtml(passport || "")}" />
-    <p class="subtitle" style="margin:4px 0 0">🔒 Telefon, tug'ilgan sana va pasportni faqat maktab rahbariyati ko'radi.</p>`;
+    <p class="subtitle" style="margin:4px 0 0">🔒 Telefon va tug'ilgan sanani faqat maktab rahbariyati ko'radi.</p>`;
 }
 
-// Telefon, tug'ilgan sana va pasport — formadan o'qib, tekshiradi
+// Telefon va tug'ilgan sana — formadan o'qib, tekshiradi
 function readStaffFieldsOrThrow() {
   const phone = readPhoneOrThrow();
   const birthDate = document.getElementById("profile-birth-date")?.value || "";
   if (!birthDate) throw new Error("Tug'ilgan sanangizni kiriting");
-  const passport = (document.getElementById("profile-passport")?.value || "").replace(/\s/g, "").toUpperCase();
-  if (passport && !/^[A-Z]{2}\d{7}$/.test(passport)) throw new Error("Pasport seriya va raqami noto'g'ri (masalan AA1234567)");
-  return { phone, birth_date: birthDate, passport };
+  return { phone, birth_date: birthDate };
 }
 
 // "+998 " o'chirib yuborilsa — qaytadan qo'yiladi
@@ -7328,7 +7323,7 @@ function renderSchoolTeachers(school) {
 
 /*
   Xodim haqida to'liq ma'lumot: rasm, lavozim, fanlar, kurator sinfi va
-  (rahbariyatga) telefon, tug'ilgan sana, pasport. Pastda — bog'lanish:
+  (rahbariyatga) telefon, tug'ilgan sana. Pastda — bog'lanish:
   qo'ng'iroq va Telegram. Admin/direktor shu yerdan lavozim beradi va chiqaradi.
 */
 function renderStaffDetail(member) {
@@ -7357,8 +7352,7 @@ function renderStaffDetail(member) {
       ${
         showPrivate
           ? `${row("Telefon", member.phone ? escapeHtml(formatPhone(member.phone)) : missing)}
-             ${row("Tug'ilgan sana", member.birth_date ? formatDate(member.birth_date) : missing)}
-             ${row("Pasport", member.passport ? escapeHtml(member.passport) : missing)}`
+             ${row("Tug'ilgan sana", member.birth_date ? formatDate(member.birth_date) : missing)}`
           : ""
       }
       ${row("Qo'shilgan", formatDate(member.joined_at))}
@@ -7619,7 +7613,6 @@ function renderSchoolProfile(school) {
         <div class="row-between"><span class="subtitle" style="margin:0">${isOwner(school) ? "Lavozim" : "Fanlar"}</span><b>${isOwner(school) ? "Maktab admini" : subjectsText(school.my_subjects)}</b></div>
         <div class="row-between"><span class="subtitle" style="margin:0">Telefon</span><b>${school.my_phone ? escapeHtml(formatPhone(school.my_phone)) : "⚠️ Kiritilmagan"}</b></div>
         <div class="row-between"><span class="subtitle" style="margin:0">Tug'ilgan sana</span><b>${school.my_birth_date ? formatDate(school.my_birth_date) : "⚠️ Kiritilmagan"}</b></div>
-        <div class="row-between"><span class="subtitle" style="margin:0">Pasport</span><b>${school.my_passport ? escapeHtml(school.my_passport) : "Kiritilmagan"}</b></div>
         <div class="row-between"><span class="subtitle" style="margin:0">Joylashuv</span><b>${escapeHtml(school.district)}</b></div>
       </div>
 
@@ -7655,7 +7648,7 @@ async function renderSchoolProfileEdit(school) {
   showPage(`
     ${schoolPageHeader("Profilim", "back-school")}
     ${nameFields}
-    ${phoneFieldHtml(school.my_phone || "", { birthDate: school.my_birth_date, passport: school.my_passport })}
+    ${phoneFieldHtml(school.my_phone || "", { birthDate: school.my_birth_date })}
     ${
       isOwner(school)
         ? ""

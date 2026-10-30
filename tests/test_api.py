@@ -1382,36 +1382,36 @@ def test_xodimlar_telefon_raqami():
     assert client.put("/api/schools/me/profile", json={"subjects": []}, headers=as_user(703)).status_code == 422
 
 
-def test_xodim_tugilgan_sana_va_pasport():
-    """Tug'ilgan sana va pasport saqlanadi; faqat rahbariyat ko'radi; yuborilmagan maydon o'chmaydi."""
+def test_xodim_tugilgan_sana_saqlanadi_pasport_soralmaydi():
+    """Tug'ilgan sana saqlanadi, faqat rahbariyat ko'radi, yuborilmagani o'chmaydi. Pasport so'ralmaydi va ko'rsatilmaydi."""
     reset_database()
     _set_name(701, "Maktab", "Admini")
     school = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
-                                               "name": "Pasport maktabi", "phone": "901112233"}, headers=as_user(701)).json()["school"]
+                                               "name": "Sana maktabi", "phone": "901112233"}, headers=as_user(701)).json()["school"]
     _set_name(702, "Ustoz", "Birinchi")
     _set_name(703, "Ustoz", "Ikkinchi")
-    bad = client.post("/api/schools/join", json={"phone": "901234567", "code": current_code(school), "subjects": ["Fizika"],
-                                                 "passport": "12345"}, headers=as_user(702))
-    assert bad.status_code == 422, bad.text
+    # Eski ilova pasport yuborsa ham (hatto noto'g'ri bo'lsa) — xato emas, saqlanmaydi
     joined = client.post("/api/schools/join", json={"phone": "901234567", "code": current_code(school), "subjects": ["Fizika"],
-                                                    "birth_date": "1990-05-17", "passport": "aa 1234567"}, headers=as_user(702))
+                                                    "birth_date": "1990-05-17", "passport": "12345"}, headers=as_user(702))
     assert joined.status_code == 200, joined.text
     me = joined.json()["school"]
-    assert me["my_birth_date"] == "1990-05-17" and me["my_passport"] == "AA1234567", me
+    assert me["my_birth_date"] == "1990-05-17" and "my_passport" not in me, me
+    from backend.database import SchoolMember
+
+    with SessionLocal() as session:
+        member = session.scalar(main.select(SchoolMember).where(SchoolMember.phone == "+998901234567"))
+        assert member.passport is None
     client.post("/api/schools/join", json={"phone": "901234568", "code": current_code(school), "subjects": ["Fizika"]}, headers=as_user(703))
 
-    # Oddiy o'qituvchi boshqaning sanasi/pasportini ko'rmaydi
+    # Oddiy o'qituvchi boshqaning sanasini ko'rmaydi; admin ko'radi; pasport hech kimga ko'rinmaydi
     others = {m["name"]: m for m in client.get("/api/schools/me", headers=as_user(703)).json()["school"]["members"]}
-    assert others["Ustoz Birinchi"]["passport"] is None and others["Ustoz Birinchi"]["birth_date"] is None
-    # Admin ko'radi
+    assert others["Ustoz Birinchi"]["birth_date"] is None and "passport" not in others["Ustoz Birinchi"]
     seen = {m["name"]: m for m in client.get("/api/schools/me", headers=as_user(701)).json()["school"]["members"]}
-    assert seen["Ustoz Birinchi"]["passport"] == "AA1234567" and seen["Ustoz Birinchi"]["birth_date"] == "1990-05-17"
+    assert seen["Ustoz Birinchi"]["birth_date"] == "1990-05-17" and "passport" not in seen["Ustoz Birinchi"]
 
-    # Profilni faqat fan bilan saqlash pasportni o'chirmaydi; aniq bo'sh yuborilsa — o'chadi
+    # Profilni faqat fan bilan saqlash sanani o'chirmaydi
     kept = client.put("/api/schools/me/profile", json={"subjects": ["Fizika"]}, headers=as_user(702)).json()["school"]
-    assert kept["my_passport"] == "AA1234567", kept
-    cleared = client.put("/api/schools/me/profile", json={"subjects": ["Fizika"], "passport": ""}, headers=as_user(702)).json()["school"]
-    assert cleared["my_passport"] is None, cleared
+    assert kept["my_birth_date"] == "1990-05-17", kept
     future = client.put("/api/schools/me/profile", json={"subjects": ["Fizika"], "birth_date": "2999-01-01"}, headers=as_user(702))
     assert future.status_code == 422
 
@@ -2054,8 +2054,10 @@ def test_sinf_test_natijalari():
     test = created.json()
     rows = test["scores"]
     assert [r["name"] for r in rows] == ["Ali Valiyev", "Hasan Husanov", "Vali Aliyev", "Olim Karimov"], rows
-    assert rows[0]["percent"] == 90 and rows[0]["grade"] == "A+" and rows[0]["rank"] == 1 and rows[1]["rank"] == 1
-    assert rows[2]["percent"] == 60 and rows[2]["grade"] == "B+" and rows[2]["rank"] == 3
+    # Boshlang'ich test rejimi: ball/maks va foiz, darajasiz (A+ … NC yo'q); diagramma rangi — foizdan
+    assert rows[0]["percent"] == 90 and rows[0]["level"] == "good" and rows[0]["rank"] == 1 and rows[1]["rank"] == 1
+    assert rows[2]["percent"] == 60 and rows[2]["level"] == "mid" and rows[2]["rank"] == 3
+    assert "grade" not in rows[0] and test["max_score"] == 30
     assert rows[3]["score"] is None and "rank" not in rows[3]
     assert test["participants"] == 3 and test["average_percent"] == 80, test
 
