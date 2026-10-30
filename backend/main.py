@@ -231,7 +231,7 @@ def _add_missing_columns() -> None:
             "monthly_fee": "INTEGER",
         },
         "private_schools": {"monthly_fee": "INTEGER DEFAULT 0", "kind": "VARCHAR(10) DEFAULT 'school'"},
-        "class_students": {"discount_percent": "INTEGER DEFAULT 0", "student_code": "INTEGER"},
+        "class_students": {"discount_percent": "INTEGER DEFAULT 0", "student_code": "INTEGER", "added_by_user_id": "INTEGER"},
         "class_tests": {"source_test_id": "INTEGER"},
         "promo_codes": {"per_teacher_limit": "INTEGER DEFAULT 3"},
         "school_members": {
@@ -9024,35 +9024,72 @@ def set_class_code_range(
     return _class_view(db, school_class, with_details=True, member=_active_membership(db, user))
 
 
-@app.post("/api/classes/{class_id}/students")
-def add_student(class_id: int, body: StudentIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    school_class = _managed_class(db, user, class_id)
-    db.add(ClassStudent(class_id=school_class.id, full_name=body.full_name, birth_date=body.birth_date))
+def _member_role_label(member: SchoolMember) -> str:
+    """Xabarlar uchun: "Fizika o'qituvchisi", "Direktor", "Maktab admini"."""
+    if member.role == "owner":
+        return "Maktab admini"
+    if member.position in POSITION_LABELS:
+        return POSITION_LABELS[member.position]
+    try:
+        subjects = json.loads(member.subjects or "[]")
+    except ValueError:
+        subjects = []
+    return f"{subjects[0]} o'qituvchisi" if subjects else "O'qituvchi"
+
+
+def _send_bot_text_in_background(chat_id: int, text: str) -> None:
+    """Bot xabari alohida oqimda — so'rov Telegram javobini kutib qolmasin."""
+    if not BOT_TOKEN:
+        return
+    threading.Thread(target=_notify_user, args=(chat_id, text), daemon=True).start()
+
+
+def _add_class_student(db: Session, school_class: SchoolClass, member: SchoolMember, user: User, body: StudentIn) -> ClassStudent:
+    """
+    O'quvchini bittalab qo'shish — maktabning istalgan o'qituvchisi, istalgan sinfga.
+    Sinfda shu ism bo'lsa — 409 (o'qituvchi tasdiqlasa, force bilan qayta yuboradi).
+    Kim qo'shgani saqlanadi; kuratordan boshqa odam qo'shsa — kuratorga bot orqali xabar boradi.
+    """
+
+    key = _search_key(body.full_name)
+    if not body.force and any(_search_key(student.full_name) == key for student in _active_students(school_class)):
+        raise HTTPException(status_code=409, detail=f"«{body.full_name}» bu sinfda allaqachon bor. Baribir qo'shilsinmi?")
+    student = ClassStudent(class_id=school_class.id, full_name=body.full_name, birth_date=body.birth_date,
+                           added_by_user_id=user.id)
+    db.add(student)
     db.commit()
     _assign_student_codes(db, school_class.school_id)
+    db.refresh(student)
+    logging.getLogger("backend").info("O'quvchi qo'shildi: class=%s student=%s user=%s", school_class.id, student.id, user.id)
+
+    curator = db.get(User, school_class.curator_user_id) if school_class.curator_user_id else None
+    if curator and curator.id != user.id and curator.tg_id:
+        school = db.get(PrivateSchool, school_class.school_id)
+        unit = "guruhingizga" if school and school.kind == "center" else "sinfingizga"
+        _send_bot_text_in_background(
+            curator.tg_id,
+            f"👤 {_member_role_label(member)} {user.full_name} «{school_class.name}» {unit} "
+            f"{student.full_name}ni qo'shdi.\n\nXato bo'lsa, o'quvchi profilidan o'chiring.",
+        )
+    return student
+
+
+@app.post("/api/classes/{class_id}/students")
+def add_student(class_id: int, body: StudentIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Bittalab qo'shish — har bir o'qituvchi. Excel'dan yuklash, tahrirlash, o'chirish — rahbariyat va kurator."""
+    school_class, member = _school_class(db, user, class_id)
+    _add_class_student(db, school_class, member, user, body)
     db.refresh(school_class)
-    return _class_view(db, school_class, with_details=True, member=_active_membership(db, user))
+    return _class_view(db, school_class, with_details=True, member=member)
 
 
 @app.post("/api/classes/{class_id}/students/quick")
 def add_student_from_attendance(class_id: int, body: StudentIn, user: User = Depends(get_current_user),
                                 db: Session = Depends(get_db)):
-    """
-    Davomat paytida ro'yxatda yo'q o'quvchini shu joyda qo'shish — maktabning istalgan
-    o'qituvchisi (davomatni ham har kim oladi). Tahrirlash va chiqarish avvalgidek rahbariyat va kuratorda.
-    """
+    """Davomat paytida ro'yxatda yo'q o'quvchini shu joyda qo'shish (qoidalari — _add_class_student)."""
 
-    school_class, _ = _school_class(db, user, class_id)
-    key = _search_key(body.full_name)
-    if any(_search_key(student.full_name) == key for student in _active_students(school_class)):
-        raise HTTPException(status_code=409, detail=f"«{body.full_name}» bu sinfda allaqachon bor")
-    student = ClassStudent(class_id=school_class.id, full_name=body.full_name, birth_date=body.birth_date)
-    db.add(student)
-    db.commit()
-    _assign_student_codes(db, school_class.school_id)
-    db.refresh(student)
-    logging.getLogger("backend").info("Davomatdan o'quvchi qo'shildi: class=%s student=%s user=%s",
-                                      school_class.id, student.id, user.id)
+    school_class, member = _school_class(db, user, class_id)
+    student = _add_class_student(db, school_class, member, user, body)
     return {"id": student.id, "full_name": student.full_name, "code": student.student_code}
 
 
@@ -9324,6 +9361,7 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
     if not student.student_code:
         _assign_student_codes(db, school_class.school_id)
     curator = db.get(User, school_class.curator_user_id) if school_class.curator_user_id else None
+    added_by = db.get(User, student.added_by_user_id) if student.added_by_user_id else None
     return {
         "id": student.id,
         "code": student.student_code,
@@ -9332,6 +9370,7 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
         "full_name": student.full_name,
         "birth_date": student.birth_date,
         "created_at": student.created_at,
+        "added_by": added_by.full_name if added_by else None,
         "removed": student.removed_at is not None,
         "stats": _student_attendance_stats(db, [student.id], scope)[student.id],
         "history": [

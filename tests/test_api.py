@@ -1483,8 +1483,8 @@ def test_lavozimlar_direktor_va_zam_direktor():
     assert created["is_director"] is True and created["can_delete"] is True, created
     as_deputy = client.get(f"/api/classes/{created['id']}", headers=as_user(703)).json()
     assert as_deputy["is_director"] is False and as_deputy["can_manage"] is False, as_deputy
-    # O'quvchilarni zam direktor emas — admin, direktor va kurator qo'shadi
-    assert client.post(f"/api/classes/{created['id']}/students", json={"full_name": "Ali Valiyev"},
+    # Excel'dan ommaviy yuklash zam direktorga emas — admin, direktor va kuratorga
+    assert client.post(f"/api/classes/{created['id']}/students/import/preview", json={"text": "Ali Valiyev"},
                        headers=as_user(703)).status_code == 403
     assert client.post(f"/api/classes/{created['id']}/students", json={"full_name": "Ali Valiyev"},
                        headers=as_user(702)).status_code == 200
@@ -1705,8 +1705,9 @@ def test_direktor_kurator_va_oqituvchi_huquqlari():
     cid = created["id"]
     assert created["curator"] is None and created["is_director"] is True
 
-    # Kurator tayinlanmaguncha o'qituvchi o'quvchi qo'sha olmaydi
-    assert client.post(f"/api/classes/{cid}/students", json={"full_name": "Ali Valiyev"}, headers=as_user(702)).status_code == 403
+    # Oddiy o'qituvchi ro'yxatni Excel'dan yuklay olmaydi (bittalab qo'shish — alohida testda)
+    assert client.post(f"/api/classes/{cid}/students/import/preview", json={"text": "Ali Valiyev"},
+                       headers=as_user(702)).status_code == 403
     # Kuratorni faqat direktor tayinlaydi; maktabda yo'q odamni bo'lmaydi
     assert client.put(f"/api/classes/{cid}/curator", json={"user_id": 1}, headers=as_user(702)).status_code == 403
     users = {u["name"]: u for u in client.get("/api/schools/me", headers=as_user(701)).json()["school"]["members"]}
@@ -1721,10 +1722,11 @@ def test_direktor_kurator_va_oqituvchi_huquqlari():
     assigned = client.put(f"/api/classes/{cid}/curator", json={"user_id": curator_id}, headers=as_user(701)).json()
     assert assigned["curator"]["name"] == "Kurator Aliyeva", assigned
 
-    # Kurator o'quvchi qo'shadi; boshqa o'qituvchi qo'sha olmaydi
+    # Kurator o'quvchi qo'shadi va Excel'dan yuklay oladi; boshqa o'qituvchi yuklay olmaydi
     detail = client.post(f"/api/classes/{cid}/students", json={"full_name": "Ali Valiyev"}, headers=as_user(702)).json()
     assert detail["can_manage"] and detail["is_curator"]
-    assert client.post(f"/api/classes/{cid}/students", json={"full_name": "Begona"}, headers=as_user(703)).status_code == 403
+    assert client.post(f"/api/classes/{cid}/students/import/preview", json={"text": "Begona"},
+                       headers=as_user(703)).status_code == 403
     assert client.put(f"/api/classes/{cid}", json={"name": "9-B"}, headers=as_user(702)).status_code == 403
 
     # Sinfi yo'q o'qituvchi sinfni ko'radi va davomat oladi
@@ -6358,6 +6360,63 @@ def test_ochgan_test_varaqlari_xuddi_shunday_yangi_testga_skanerlanadi():
     assert scanned.json()["answers"] == {"1": "B", "2": "A"}, scanned.json()["questions"]
 
 
+def test_har_bir_oqituvchi_oquvchini_bittalab_qoshadi():
+    """
+    Istalgan o'qituvchi istalgan sinfga o'quvchini bittalab qo'shadi: kim qo'shgani saqlanadi,
+    kuratorga xabar boradi, takroriy ismga ogohlantirish (tasdiqlansa — qo'shiladi).
+    Excel'dan yuklash, tahrirlash va o'chirish — rahbariyat va kuratorda.
+    """
+    from backend.database import User
+
+    reset_database()
+    cid = _school_with_class(701)["id"]
+    school = client.get("/api/schools/me", headers=as_user(701)).json()["school"]
+    for tg_id, first in ((702, "Kurator"), (704, "Fizik")):
+        _set_name(tg_id, first, "Ustoz")
+        client.post("/api/schools/join", json={"code": current_code(school), "subjects": ["Fizika"], "phone": f"93 444 55 {tg_id - 700:02d}"},
+                    headers=as_user(tg_id))
+    with SessionLocal() as session:
+        curator_id = session.scalar(main.select(User.id).where(User.tg_id == 702))
+    assert client.put(f"/api/classes/{cid}/curator", json={"user_id": curator_id}, headers=as_user(701)).status_code == 200
+
+    sent = []
+    original = main._send_bot_text_in_background
+    main._send_bot_text_in_background = lambda chat_id, text: sent.append((chat_id, text))
+    try:
+        teacher = as_user(704)
+        view = client.post(f"/api/classes/{cid}/students", json={"full_name": "Ali  Valiyev"}, headers=teacher)
+        assert view.status_code == 200, view.text
+        assert view.json()["can_manage"] is False
+        student_id = view.json()["students"][0]["id"]
+        # Kuratorga xabar: kim (fani bilan), qaysi sinfga, kimni
+        assert len(sent) == 1 and sent[0][0] == 702, sent
+        assert "Fizika o'qituvchisi Fizik Ustoz" in sent[0][1] and "Ali Valiyev" in sent[0][1] and "«10/2»" in sent[0][1], sent
+
+        # Takroriy ism — ogohlantirish (409); tasdiqlansa — qo'shiladi
+        duplicate = client.post(f"/api/classes/{cid}/students", json={"full_name": "ali valiyev"}, headers=teacher)
+        assert duplicate.status_code == 409 and "Baribir" in duplicate.json()["detail"], duplicate.text
+        forced = client.post(f"/api/classes/{cid}/students", json={"full_name": "ali valiyev", "force": True}, headers=teacher)
+        assert forced.status_code == 200 and len(forced.json()["students"]) == 2
+
+        # Kuratorning o'zi qo'shsa — xabar yo'q
+        sent.clear()
+        assert client.post(f"/api/classes/{cid}/students", json={"full_name": "Vali Aliyev"}, headers=as_user(702)).status_code == 200
+        assert sent == []
+    finally:
+        main._send_bot_text_in_background = original
+
+    # Profilda — kim qo'shgani
+    profile = client.get(f"/api/classes/{cid}/students/{student_id}", headers=as_user(701)).json()
+    assert profile["added_by"] == "Fizik Ustoz", profile["added_by"]
+
+    # Tahrirlash, o'chirish va Excel'dan yuklash — oddiy o'qituvchiga yopiq; kurator qila oladi
+    url = f"/api/classes/{cid}/students/{student_id}"
+    assert client.put(url, json={"full_name": "Boshqa Ism"}, headers=as_user(704)).status_code == 403
+    assert client.delete(url, headers=as_user(704)).status_code == 403
+    assert client.post(f"/api/classes/{cid}/students/import/preview", json={"text": "X Y"}, headers=as_user(704)).status_code == 403
+    assert client.delete(url, headers=as_user(702)).status_code == 200
+
+
 def test_davomatda_royxatda_yoq_oquvchini_qoshish():
     """Davomat paytida istalgan o'qituvchi ro'yxatda yo'q o'quvchini qo'shadi; tahrirlashda ham belgisi yoziladi."""
     from backend.database import ClassStudent
@@ -6374,8 +6433,8 @@ def test_davomatda_royxatda_yoq_oquvchini_qoshish():
         session.commit()
     teacher = as_user(704)
 
-    # Oddiy o'qituvchi odatdagi yo'l bilan qo'sha olmaydi, davomatdan esa qo'shadi
-    assert client.post(f"/api/classes/{cid}/students", json={"full_name": "Yangi Bola"}, headers=teacher).status_code == 403
+    # Oddiy o'qituvchi Excel'dan yuklay olmaydi, davomatdan esa bittalab qo'shadi
+    assert client.post(f"/api/classes/{cid}/students/import/preview", json={"text": "Yangi Bola"}, headers=teacher).status_code == 403
     added = client.post(f"/api/classes/{cid}/students/quick", json={"full_name": "  Yangi   Bola "}, headers=teacher)
     assert added.status_code == 200, added.text
     new = added.json()

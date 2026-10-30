@@ -2331,13 +2331,13 @@ function renderClassStudentsTab(schoolClass) {
          <p class="subtitle">${
            schoolClass.can_manage
              ? "Tepadagi \"+ Qo'shish\" bilan o'quvchilarni qo'shing — bittalab yoki Excel'dan bir yo'la. Ular davomatda va boshqa bo'limlarda o'zi chiqadi."
-             : "O'quvchilarni sinf kuratori qo'shadi."
+             : "Tepadagi \"+ Qo'shish\" bilan o'quvchilarni bittalab qo'shing."
          }</p>
        </div>`;
 
   showPage(`
     <div data-class-tab="students">
-      ${classHeader(schoolClass, schoolClass.can_manage ? `<button type="button" class="share-pill" id="add-student-pill">+ Qo'shish</button>` : "")}
+      ${classHeader(schoolClass, `<button type="button" class="share-pill" id="add-student-pill">+ Qo'shish</button>`)}
       <p class="subtitle" style="margin:0 0 10px">${schoolClass.students.length} ta o'quvchi${
         hasRating
           ? ` · 🏆 reyting — ${schoolClass.rating_tests} ta test va sinov natijasi bo'yicha (o'rtacha foiz)`
@@ -2390,19 +2390,37 @@ function renderClassStudentsTab(schoolClass) {
   });
 }
 
+// O'quvchi qo'shish: sinfda shu ism bo'lsa — so'raladi, tasdiqlansa baribir qo'shiladi (bekor qilinsa — null)
+async function postNewStudent(url, fullName) {
+  try {
+    return await api(url, { method: "POST", body: { full_name: fullName } });
+  } catch (error) {
+    if (error.status !== 409) throw error;
+    if (!(await askConfirm(`«${fullName}» bu sinfda allaqachon bor. Baribir qo'shilsinmi?`))) return null;
+    return api(url, { method: "POST", body: { full_name: fullName, force: true } });
+  }
+}
+
 function openAddStudentSheet(schoolClass) {
   let addedCount = 0;
+  // Excel'dan yuklash va ro'yxatni joylash — rahbariyat va kurator; boshqalar bittalab qo'shadi
+  const canImport = Boolean(schoolClass.can_manage);
   // Oyna yopilganda (Tayyor yoki orqa fonga bosilsa) ro'yxat yangilanadi
   const { sheet, close } = openSheet(`
     <h3 style="margin:0 0 8px">+ O'quvchi qo'shish</h3>
-    <div class="import-actions">
-      <label class="btn btn-ghost import-file-label">
-        📄 Excel'dan
-        <input type="file" id="import-file" accept=".xlsx,.csv,.txt" hidden />
-      </label>
-      <button type="button" class="btn btn-ghost" id="open-paste">📋 Ro'yxatni joylash</button>
-    </div>
-    <p class="subtitle" style="margin:8px 0 8px">yoki bittalab yozing — har biridan keyin maydon tozalanadi:</p>
+    ${
+      canImport
+        ? `<div class="import-actions">
+             <label class="btn btn-ghost import-file-label">
+               📄 Excel'dan
+               <input type="file" id="import-file" accept=".xlsx,.csv,.txt" hidden />
+             </label>
+             <button type="button" class="btn btn-ghost" id="open-paste">📋 Ro'yxatni joylash</button>
+           </div>
+           <p class="subtitle" style="margin:8px 0 8px">yoki bittalab yozing — har biridan keyin maydon tozalanadi:</p>`
+        : `<p class="subtitle" style="margin:0 0 8px">«${escapeHtml(schoolClass.name)}» sinfiga bittalab qo'shiladi.
+             ${schoolClass.curator ? "Kuratorga xabar boradi." : ""}</p>`
+    }
     <label class="field-label" for="sheet-student-name">Ism-familiya</label>
     <input class="input" id="sheet-student-name" maxlength="200" placeholder="Masalan: Islom Karimov" enterkeyhint="next" />
     <button class="btn" id="sheet-add-student" style="margin-top:10px">+ Qo'shish</button>
@@ -2420,10 +2438,8 @@ function openAddStudentSheet(schoolClass) {
   const add = guarded(async () => {
     const fullName = nameInput.value.trim();
     if (fullName.length < 2) throw new Error("O'quvchining ism-familiyasini kiriting");
-    const updated = await api(`/api/classes/${schoolClass.id}/students`, {
-      method: "POST",
-      body: { full_name: fullName },
-    });
+    const updated = await postNewStudent(`/api/classes/${schoolClass.id}/students`, fullName);
+    if (!updated) return;
     myClassesCache = null;
     addedCount += 1;
     currentClass = updated;
@@ -2435,7 +2451,7 @@ function openAddStudentSheet(schoolClass) {
   sheet.querySelector("#sheet-add-student").addEventListener("click", add);
 
   // Tayyor ro'yxat: Excel/CSV fayl yoki nusxalab joylash
-  sheet.querySelector("#import-file").addEventListener(
+  sheet.querySelector("#import-file")?.addEventListener(
     "change",
     guarded(async (event) => {
       const file = event.target.files?.[0];
@@ -2445,7 +2461,7 @@ function openAddStudentSheet(schoolClass) {
       await importStudentsFromFile(schoolClass, file);
     })
   );
-  sheet.querySelector("#open-paste").addEventListener("click", () => {
+  sheet.querySelector("#open-paste")?.addEventListener("click", () => {
     close();
     openPasteSheet(schoolClass);
   });
@@ -2700,6 +2716,7 @@ async function renderStudentProfile(schoolClass, studentId) {
       <div class="card-body" style="width:100%">
         <h3 style="margin:0">${escapeHtml(student.full_name)}</h3>
         <p style="margin:4px 0 0">📚 ${escapeHtml(student.class_name)}${student.code ? ` · 🆔 ID: <b>${student.code}</b>` : ""}</p>
+        ${student.added_by ? `<p class="subtitle" style="margin:4px 0 0">➕ Qo'shgan: <b>${escapeHtml(student.added_by)}</b> · ${formatDate(student.created_at)}</p>` : ""}
         <div style="margin-top:6px">${studentStatusChip(student.status)}</div>
         ${student.status.note ? `<p class="subtitle" style="margin:4px 0 0">💬 ${escapeHtml(student.status.note)}</p>` : ""}
       </div>
@@ -3372,7 +3389,8 @@ function renderAttendanceForm(schoolClass, existing = null) {
     const save = guarded(async () => {
       const name = input.value.trim();
       if (name.length < 2) throw new Error("O'quvchining ism-familiyasini kiriting");
-      const student = await api(`/api/classes/${schoolClass.id}/students/quick`, { method: "POST", body: { full_name: name } });
+      const student = await postNewStudent(`/api/classes/${schoolClass.id}/students/quick`, name);
+      if (!student) return;
       rows.push({ id: student.id, name: student.full_name, status: "present" });
       schoolClass.students?.push({ id: student.id, full_name: student.full_name });
       myClassesCache = null;

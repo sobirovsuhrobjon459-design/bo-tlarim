@@ -614,6 +614,8 @@ class ClassStudent(Base):
     # takrorlanmaydi. Titulga shu raqam bo'yaladi.
     student_code: Mapped[int | None] = mapped_column(default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    # Kim qo'shgan (o'quvchini maktabning istalgan o'qituvchisi bittalab qo'sha oladi). Eski yozuvlarda bo'sh
+    added_by_user_id: Mapped[int | None] = mapped_column(default=None)
     removed_at: Mapped[datetime | None] = mapped_column(default=None)
     # O'qish to'lovidan chegirma (foiz): 30 — oylik summaning 70% i to'lanadi
     discount_percent: Mapped[int] = mapped_column(default=0)
@@ -1608,6 +1610,8 @@ class ClassIn(BaseModel):
 class StudentIn(BaseModel):
     full_name: str = Field(min_length=2, max_length=200)
     birth_date: date | None = None
+    # Sinfda shu ism allaqachon bo'lsa ham qo'shilsin (o'qituvchi ogohlantirishni tasdiqlagan)
+    force: bool = False
 
     @model_validator(mode="after")
     def normalize(self) -> "StudentIn":
