@@ -2179,12 +2179,6 @@ function renderClassAttendanceTab(schoolClass) {
 
 /* --- 👨‍🎓 O'quvchilar tabi --- */
 
-// Jami (barcha darslar) — bugungi emasligi aniq yozilsin
-function studentStatsLine(stats) {
-  if (!stats || !stats.total) return "Hali davomat olinmagan";
-  return `${stats.total} ta darsda: ✅ ${stats.present} · ❌ ${stats.absent} · 🟡 ${stats.excused} · ⏰ ${stats.late}`;
-}
-
 // O'quvchini tahrirlash oynasi — ro'yxatdan ham, profildan ham ochiladi
 function openEditStudentSheet(schoolClass, student, onSaved) {
   const { sheet, close } = openSheet(`
@@ -2221,7 +2215,7 @@ function openEditStudentSheet(schoolClass, student, onSaved) {
 }
 
 function rateBadge(stats) {
-  // Davomat hali olinmagan — belgi ko'rsatilmaydi ("Hali davomat olinmagan" yozuvi yetarli)
+  // Davomat hali olinmagan — belgi ko'rsatilmaydi (batafsili o'quvchi profilida)
   if (!stats || stats.rate === null || stats.rate === undefined) return "";
   const level = stats.rate >= 90 ? "good" : stats.rate >= 70 ? "mid" : "low";
   return `<span class="rate-badge ${level}">${stats.rate}%</span>`;
@@ -2294,7 +2288,6 @@ function renderClassStudentsTab(schoolClass) {
               <span class="student-avatar">${initials(student.full_name)}</span>
               <span class="student-info">
                 <b>${student.code ? `<span class="student-number">${student.code}</span> ` : ""}${escapeHtml(student.full_name)}</b>
-                <small>${studentStatsLine(student.stats)}</small>
                 ${
                   student.away
                     ? `<span class="status-chip is-${student.away}" style="margin-top:4px">${
