@@ -3735,13 +3735,13 @@ def test_pullik_test_oquvchi_oqituvchi_kartasiga_tolaydi():
 
 def _subject_key(subject: str) -> list[dict]:
     """Fan pasporti bo'yicha to'liq javoblar kaliti (a/b qismlari bilan)."""
-    from backend.subjects import subject_config
+    from backend.subjects import part_count, subject_config
 
     config = subject_config(subject)
     key = [{"number": n, "question_type": "single", "option_count": config["options"].get(n, 4), "correct": "A"}
            for n in range(1, config["tests"] + 1)]
     for n in range(config["tests"] + 1, config["tests"] + config["written"] + 1):
-        bands = config.get("part_overrides", {}).get(n, config["parts"])
+        bands = part_count(config, n)
         if bands > 1:
             start = len(key) + 1
             key += [{"number": start + band, "label": f"{n}{chr(97 + band)}", "question_type": "text", "correct": str(band + 1)}
@@ -3749,6 +3749,28 @@ def _subject_key(subject: str) -> list[dict]:
         else:
             key.append({"number": len(key) + 1, "label": str(n), "question_type": "text", "correct": "1"})
     return key
+
+
+def test_ona_tili_milliy_sertifikat_tuzilishi():
+    """Ona tili: 1–32 — A–D, 33–35 — A–F, 36–39 — bitta yozma javob, 40–44 — a va b."""
+    from backend.subjects import SUBJECTS, frontend_config
+
+    key = _subject_key("Ona tili va adabiyot")
+    options = {item["label"] if "label" in item else str(item["number"]): item.get("option_count") for item in key}
+    assert all(options[str(n)] == 4 for n in range(1, 33))
+    assert all(options[str(n)] == 6 for n in (33, 34, 35))
+    written = [item["label"] for item in key if item["question_type"] == "text"]
+    assert written == ["36", "37", "38", "39"] + [f"{n}{part}" for n in range(40, 45) for part in "ab"]
+    assert frontend_config()["Ona tili va adabiyot"]["fixed_parts"] == {"36": 1, "37": 1, "38": 1, "39": 1}
+    assert "fixed_parts" not in frontend_config()["Matematika"] or not frontend_config()["Matematika"]["fixed_parts"]
+    assert SUBJECTS["Ona tili va adabiyot"]["written"] == 9
+
+    reset_database()
+    register_teacher()
+    created = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180)
+    started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(7300))
+    assert started.status_code == 200, started.text
+    assert len(started.json()["questions"]) == 44
 
 
 def test_yozma_ish_har_bandi_kalitga_solishtiriladi():

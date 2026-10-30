@@ -15,6 +15,8 @@ Maydonlar:
   parts     — har bir yozma savol nechta bandli (2 — a va b)
   part_overrides — boshqacha bandli yozma savollar: {savol: bandlar soni}
               (Kimyo, Biologiya 41–43 — yozma ish, 3–7 band; o'qituvchi [−]/[+] bilan o'zgartiradi)
+  fixed_parts — qismlari boshqacha, lekin o'zgarmaydigan yozma savollar: {savol: qismlar soni}
+              (Ona tili 36–39 — bitta javob, 40–44 — a va b)
   duration  — daqiqa
   keyboard  — yozma javob klaviaturasi: "math" (√, kasr, π) yoki "text" (oddiy harflar)
   sections  — bo'limlar: (nomi, "savollar") — None bo'lsa "qolgan barcha savollar"
@@ -96,6 +98,8 @@ SUBJECTS: dict[str, dict] = {
     },
     "Ona tili va adabiyot": {
         "tests": 35, "options": MATCHING, "written": 9, "parts": 2, "duration": 180, "keyboard": "text",
+        # 36–39 — bitta javob, 40–44 — ikki qismli (a, b)
+        "fixed_parts": {36: 1, 37: 1, 38: 1, 39: 1},
         "sections": [
             ("Til (imlo, lug'at, grammatika)", "1-12"),
             ("Adabiyot", "13-17"),
@@ -103,7 +107,8 @@ SUBJECTS: dict[str, dict] = {
             ("Moslashtirish", "33-35"),
             ("Lingvistik va badiiy tahlil", "36-44"),
         ],
-        "note": "Ona tili va adabiyot: 35 ta test (33–35 — moslashtirish), 9 ta yozma (a, b), 180 daqiqa. "
+        "note": "Ona tili va adabiyot: 32 ta test (A–D), 33–35 — moslashtirish (A–F), 36–39 — yozma (1 javob), "
+                "40–44 — yozma (a, b), 180 daqiqa. "
                 "45 (esse) imtihonchi baholaydi — ilovada tekshirilmaydi",
     },
     "Rus tili": {
@@ -190,13 +195,20 @@ def score_weights(subject: str | None, question_count: int) -> dict[int, float] 
     return {number: weight for ranges, weight in config["weights"] for number in _numbers(ranges)}
 
 
+def part_count(config: dict, number: int) -> int:
+    """Yozma savol nechta qismli: [−]/[+] bilan o'zgaradigan band, belgilangan qism yoki fanning odatiy soni."""
+    return config.get("part_overrides", {}).get(number) or config.get("fixed_parts", {}).get(number) or config["parts"]
+
+
 def frontend_config() -> dict:
     """Ilovaga beriladigan ko'rinish (JSON): savol raqamlari kalitlari matn bo'ladi."""
     return {
         name: {
-            **{key: value for key, value in config.items() if key not in ("sections", "part_overrides", "weights")},
+            **{key: value for key, value in config.items()
+               if key not in ("sections", "part_overrides", "fixed_parts", "weights")},
             "options": {str(number): count for number, count in config["options"].items()},
             "part_overrides": {str(number): count for number, count in config.get("part_overrides", {}).items()},
+            "fixed_parts": {str(number): count for number, count in config.get("fixed_parts", {}).items()},
             "sections": [{"name": name_, "ranges": ranges} for name_, ranges in config["sections"]],
         }
         for name, config in SUBJECTS.items()

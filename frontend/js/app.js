@@ -10556,6 +10556,7 @@ const SUBJECT_PRESETS = Object.fromEntries(
       textCount: config.written,
       textParts: config.parts,
       partOverrides: config.part_overrides || {},
+      fixedParts: config.fixed_parts || {},
       duration: config.duration,
       keyboard: config.keyboard,
       sections: config.sections || [],
@@ -10597,6 +10598,7 @@ function subjectStructure(subject, typePreset) {
     textCount: preset.textCount ?? typePreset.textCount,
     textParts: preset.textParts ?? typePreset.textParts,
     partOverrides: preset.partOverrides || {},
+    fixedParts: preset.fixedParts || {},
     options: preset.options || {},
     duration: preset.duration,
     keyboard: preset.keyboard || "math",
@@ -10677,7 +10679,7 @@ function renderNewTestForm(testType, draft = {}) {
   const offline = draft.enrollment === "closed" && !draft.paid;
   // Fan bo'yicha tuzilish faqat Rash testda (Milliy sertifikat mockida) qo'llanadi
   const structure = offline
-    ? { ...preset, testCount: subject === DTM_SUBJECT ? 90 : "", optionCount: 4, textCount: 0, textParts: 1, partOverrides: {}, options: {}, note: "" }
+    ? { ...preset, testCount: subject === DTM_SUBJECT ? 90 : "", optionCount: 4, textCount: 0, textParts: 1, partOverrides: {}, fixedParts: {}, options: {}, note: "" }
     : type === "rash"
       ? subjectStructure(subject, preset)
       : { ...preset, options: {}, note: "" };
@@ -10816,6 +10818,7 @@ function renderNewTestForm(testType, draft = {}) {
     </div>
     <div id="key-questions-container" data-default-parts="${structure.textParts}"
          data-part-overrides='${JSON.stringify(structure.partOverrides || {})}'
+         data-fixed-parts='${JSON.stringify(structure.fixedParts || {})}'
          data-option-overrides='${JSON.stringify(structure.options)}'></div>
     <div class="panel" style="margin-top:12px;padding:10px 14px">
       <div class="row-between" style="gap:10px">
@@ -10875,6 +10878,7 @@ function renderNewTestForm(testType, draft = {}) {
     document.getElementById("field-text-count").value = next.textCount;
     container.dataset.defaultParts = next.textParts;
     container.dataset.partOverrides = JSON.stringify(next.partOverrides);
+    container.dataset.fixedParts = JSON.stringify(next.fixedParts);
     container.dataset.optionOverrides = JSON.stringify(next.options);
     document.getElementById("subject-note").textContent = next.note;
 
@@ -11143,6 +11147,13 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
   } catch (_) {
     partOverrides = {};
   }
+  // Qismlari boshqacha, lekin o'zgarmaydigan savollar (Ona tili 36–39 — bitta javob)
+  let fixedParts = {};
+  try {
+    fixedParts = JSON.parse(container.dataset.fixedParts || "{}");
+  } catch (_) {
+    fixedParts = {};
+  }
 
   // Fan bo'yicha istisnolar: masalan matematikada 33-35 savollar A-F bo'ladi
   let optionOverrides = {};
@@ -11208,7 +11219,7 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
   const writtenRows = [];
   for (let index = 0; index < textCount; index += 1) {
     const questionNumber = testCount + index + 1;
-    const bandCount = Number(partOverrides[questionNumber]) || parts;
+    const bandCount = Number(partOverrides[questionNumber]) || Number(fixedParts[questionNumber]) || parts;
     const isBanded = partOverrides[questionNumber] !== undefined;
     if (isBanded) {
       writtenRows.push(`
