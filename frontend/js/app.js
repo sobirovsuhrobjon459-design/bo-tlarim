@@ -9711,9 +9711,8 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("pagehide", () => saveAnswersNow({ keepalive: true }));
 
 function renderQuizResult(result) {
-  // Natija (ball, foiz) hozir ko'rsatilmaydi — test yakunlangach "Yakunlangan
-  // testlar" bo'limida ochiladi (qarang: renderMyAttemptReview).
-  const { answered, total } = quizState ? updateAnsweredCounter() : { answered: 0, total: 0 };
+  // Natija (ball, foiz, nechta savolga javob berilgani) hozir ko'rsatilmaydi — test
+  // yakunlangach "Yakunlangan testlar" bo'limida ochiladi (qarang: renderMyAttemptReview).
   const title = result?.test_title ? `«${escapeHtml(result.test_title)}»` : "";
 
   showPage(`
@@ -9724,7 +9723,6 @@ function renderQuizResult(result) {
       </svg>
       <h2>Test yakunlandi!</h2>
       ${title ? `<p class="subtitle" style="margin:0">${title}</p>` : ""}
-      ${total ? `<div class="finish-stat"><b>${answered}</b> / ${total} savolga javob berdingiz</div>` : ""}
     </div>
     <div class="card" style="cursor:default">
       <div class="card-body">
