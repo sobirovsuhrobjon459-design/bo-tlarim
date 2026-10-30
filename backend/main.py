@@ -59,7 +59,7 @@ from sqlalchemy.orm import Session, object_session, selectinload
 
 from .rasch import grade_for, rasch_scores
 from .timetable import ClassInput, Period, TeacherInput, build_timetable
-from .subjects import default_sections, frontend_config, score_weights, subject_keyboard
+from .subjects import default_sections, essay_max, frontend_config, score_weights, subject_keyboard
 from .regions import REGIONS, is_valid_location
 from .student_import import names_from_rows, parse_student_file, rows_from_text
 from .auth import (
@@ -123,6 +123,7 @@ from .database import (
     CreditPurchase,
     CardTopUpIn,
     CreditPurchaseIn,
+    EssayScoreIn,
     FinishIn,
     IS_SQLITE,
     InviteAcceptIn,
@@ -217,10 +218,11 @@ def _add_missing_columns() -> None:
             "deleted_at": "TIMESTAMP",
             # Eski testlar — eski varaq ko'rinishi (raqamsiz), chop etilganlari to'g'ri skanerlansin
             "sheet_version": "INTEGER DEFAULT 1",
+            "essay_max": "INTEGER",
         },
         "test_attempts": {
             "offline_name": "VARCHAR(200)", "saved_answers": "TEXT", "sheet_number": "INTEGER", "variant": "VARCHAR(2)",
-            "class_student_id": "INTEGER",
+            "class_student_id": "INTEGER", "essay_text": "TEXT", "essay_score": "INTEGER",
         },
         "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)"},
         "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)"},
@@ -1015,6 +1017,21 @@ def build_test_stats(db: Session, test: Test) -> dict:
     }
 
 
+# Esse (Ona tili 45). UZBMB mezoni: 12 ta holat × 0–2 ball = 24 ball; mavzuga mos bo'lmasa,
+# 100 so'zdan kam yoki ko'chirilgan bo'lsa — 2 ball; yozilmagan bo'lsa — 0 ball.
+ESSAY_ITEMS = 12
+ESSAY_SECTION = "Esse"
+ESSAY_KEY = "essay"  # o'quvchi javoblaridagi kalit
+ESSAY_MIN_WORDS = 100
+ESSAY_MAX_CHARS = 10000
+
+
+def _essay_number(test: Test) -> int:
+    """Esse raqami — oxirgi savoldan keyingisi (Ona tili: 44 ta savol → 45)."""
+    numbers = [_item_number(label) or 0 for _, label in _rasch_items(test)]
+    return max(numbers, default=0) + 1
+
+
 def _rasch_items(test: Test) -> list[tuple[int, str]]:
     """
     Rasch modelidagi savollar: (javob havolasi, qisqa nomi).
@@ -1152,6 +1169,12 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             correct_refs[attempt_id].add(question_ref)
 
     matrix = [[1 if ref in correct_refs[attempt.id] else 0 for ref, _ in items] for attempt, _ in results]
+    # Esse — ESSAY_ITEMS ta mezon (UZBMB: 12 × 0–2 ball). Rasch'ga har mezon alohida savol bo'lib
+    # qo'shiladi (qiymati 0..1 — qisman ball): 24 dan 18 olgan o'quvchi 12 dan 9 "savol"ni yechgan bo'ladi.
+    # Matritsada savollardan keyin turadi — bo'limlar va savol statistikasi ularni ko'rmaydi.
+    if test.essay_max:
+        for row, (attempt, _) in zip(matrix, results):
+            row += [min(attempt.essay_score or 0, test.essay_max) / test.essay_max] * ESSAY_ITEMS
     rasch = rasch_scores(matrix) if uses_rasch else None
     scores = rasch["scores"] if uses_rasch else [None] * len(results)
 
@@ -1165,10 +1188,16 @@ def build_rasch_report(db: Session, test: Test) -> dict:
     if sections and any(name is None for name in item_section):
         section_names.append("Boshqa")
         item_section = [name or "Boshqa" for name in item_section]
-    def split_sections(row_matrix: list[int]) -> dict:
+    if test.essay_max:
+        section_names.append(ESSAY_SECTION)
+
+    def split_sections(row_matrix: list[int], attempt: Attempt) -> dict:
         """Har bo'lim bo'yicha to'g'ri yechilgan savollar foizi (Algebra 60%, Geometriya 35% ...)."""
         result = {}
         for name in section_names:
+            if name == ESSAY_SECTION:
+                result[name] = round((attempt.essay_score or 0) / test.essay_max * 100, 1)
+                continue
             in_section = [solved for solved, sec in zip(row_matrix, item_section) if sec == name]
             result[name] = round(sum(in_section) / len(in_section) * 100, 1) if in_section else 0.0
         return result
@@ -1201,7 +1230,8 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             "seconds": attempt.seconds,
             "ball": score,
             "grade": grade_for(score) if uses_rasch else _school_grade(attempt.percent),
-            "sections": split_sections(row_matrix),
+            "sections": split_sections(row_matrix, attempt),
+            "essay": attempt.essay_score,
             "dtm_ball": round(sum(w for solved, w in zip(row_matrix, item_weights) if solved), 1) if item_weights else None,
             "section_scores": section_scores(row_matrix) if item_weights else {},
             "variant": attempt.variant,
@@ -1240,6 +1270,8 @@ def build_rasch_report(db: Session, test: Test) -> dict:
         "items": item_stats,
         "uses_rasch": uses_rasch,
         "section_names": section_names,
+        "essay_max": test.essay_max,
+        "essay_pending": sum(1 for row in rows if test.essay_max and row["essay"] is None),
         "dtm_max": dtm_max,
         "summary": {
             "dtm_max": dtm_max,
@@ -4037,6 +4069,8 @@ def _finalize_attempt(db: Session, attempt: Attempt, test: Test, answers: dict[s
 
     total_questions = _grade_answers(db, attempt, test, answers)
     _calculate_attempt_score(db, attempt, test)
+    if test.essay_max:
+        attempt.essay_text = (answers.get(ESSAY_KEY) or "").strip()[:ESSAY_MAX_CHARS] or None
 
     attempt.finished_at = utcnow()
     attempt.status = "done"
@@ -5108,6 +5142,7 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         enrollment_type=body.enrollment_type,
         start_time=start_time,
         end_time=end_time,
+        essay_max=essay_max(body.subject) if body.essay else None,
         questions=[Question(**question.model_dump()) for question in body.questions] if body.mode == "full" else [],
         key_questions=(
             [KeyQuestion(**key_question.model_dump()) for key_question in body.key_questions]
@@ -5536,7 +5571,42 @@ def _attempt_review(db: Session, test: Test, attempt: Attempt) -> dict:
         "seconds": attempt.seconds,
         **splits,
         "questions": questions,
+        "essay": _essay_review(test, attempt),
     }
+
+
+def _essay_review(test: Test, attempt: Attempt) -> dict | None:
+    """Esse: raqami, maksimal bali, qo'yilgan ball (None — baholanmagan) va o'quvchi yozgan matn."""
+    if not test.essay_max:
+        return None
+    text_value = attempt.essay_text or ""
+    return {
+        "number": _essay_number(test),
+        "max": test.essay_max,
+        "score": attempt.essay_score,
+        "text": text_value,
+        "words": len(text_value.split()),
+    }
+
+
+@app.put("/api/teacher/tests/{test_id}/students/{attempt_id}/essay")
+def set_essay_score(
+    test_id: int, attempt_id: int, body: EssayScoreIn,
+    teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db),
+):
+    """O'qituvchi esseni baholaydi (0–24). Ball Rasch balliga darhol qo'shiladi."""
+
+    test = _get_own_test(db, teacher, test_id)
+    if not test.essay_max:
+        raise HTTPException(status_code=400, detail="Bu testda esse yo'q")
+    attempt = db.get(Attempt, attempt_id)
+    if not attempt or attempt.test_id != test.id:
+        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    if body.score is not None and body.score > test.essay_max:
+        raise HTTPException(status_code=422, detail=f"Esse bali 0–{test.essay_max} oralig'ida bo'ladi")
+    attempt.essay_score = body.score
+    db.commit()
+    return {"ok": True, "score": attempt.essay_score}
 
 
 @app.get("/api/teacher/tests/{test_id}/students/{attempt_id}/answers")
@@ -6311,6 +6381,8 @@ def test_results(test_id: int, teacher: Teacher = Depends(get_current_teacher), 
         "summary": report["summary"],
         "uses_rasch": report["uses_rasch"],
         "section_names": report["section_names"],
+        "essay_max": report["essay_max"],
+        "essay_pending": report["essay_pending"],
         "sections_text": sections_text(_test_sections(test)),
         "sections": _test_sections(test),
         # Bo'limlarni tugmachalar bilan belgilash uchun savol raqamlari (a/b qismlar — bitta raqam)
@@ -7587,6 +7659,8 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
         # Ilgari belgilangan javoblar — Mini App yopilib qayta ochilsa,
         # o'quvchi to'xtagan joyidan davom etadi.
         "answers": _read_saved_answers(attempt),
+        # Esse: o'quvchi ilovada yozadi (javoblarda "essay" kaliti), o'qituvchi baholaydi
+        "essay": {"number": _essay_number(test), "min_words": ESSAY_MIN_WORDS} if test.essay_max else None,
     }
 
 
@@ -7621,7 +7695,10 @@ def save_attempt_progress(
 
     # Javoblar o'lchami cheklanadi — buzilgan yoki ataylab kattalashtirilgan
     # so'rov bazani to'ldirib qo'ymasligi uchun.
-    cleaned = {str(ref)[:20]: str(value)[:300] for ref, value in list(body.answers.items())[:300]}
+    cleaned = {
+        str(ref)[:20]: str(value)[:ESSAY_MAX_CHARS if ref == ESSAY_KEY else 300]
+        for ref, value in list(body.answers.items())[:300]
+    }
     attempt.saved_answers = json.dumps(cleaned, ensure_ascii=False)
     db.commit()
 

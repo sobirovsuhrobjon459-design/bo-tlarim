@@ -20,11 +20,14 @@ Maydonlar:
   duration  — daqiqa
   keyboard  — yozma javob klaviaturasi: "math" (√, kasr, π) yoki "text" (oddiy harflar)
   sections  — bo'limlar: (nomi, "savollar") — None bo'lsa "qolgan barcha savollar"
+  essay     — esse (oxirgi savol) maksimal bali; o'qituvchi qo'lda baholaydi
+              (Ona tili: 12 mezon × 0–2 = 24 ball, UZBMB baholash mezoni)
   note      — test yaratishda ko'rinadigan izoh
 
 Yozma ish (Kimyo, Biologiya 41–43) — har bandning YAKUNIY javobi o'qituvchi
 kalitiga solishtiriladi; Rasch'da har band alohida baholanadi (qisman ball).
-Rus tili 45 (insho), Ona tili 45 (esse) — matn, kalit bilan solishtirib bo'lmaydi, testga kirmaydi.
+Rus tili 45 (insho) — matn, kalit bilan solishtirib bo'lmaydi, testga kirmaydi.
+Ona tili 45 (esse) — o'qituvchi 0–24 ball qo'yadi (essay), ball Rasch'ga qo'shiladi.
 """
 
 MATCHING = {33: 6, 34: 6, 35: 6}  # moslashtirish topshiriqlari — A–F
@@ -100,6 +103,7 @@ SUBJECTS: dict[str, dict] = {
         "tests": 35, "options": MATCHING, "written": 9, "parts": 2, "duration": 180, "keyboard": "text",
         # 36–39 — bitta javob, 40–44 — ikki qismli (a, b)
         "fixed_parts": {36: 1, 37: 1, 38: 1, 39: 1},
+        "essay": 24,
         "sections": [
             ("Til (imlo, lug'at, grammatika)", "1-12"),
             ("Adabiyot", "13-17"),
@@ -108,8 +112,7 @@ SUBJECTS: dict[str, dict] = {
             ("Lingvistik va badiiy tahlil", "36-44"),
         ],
         "note": "Ona tili va adabiyot: 32 ta test (A–D), 33–35 — moslashtirish (A–F), 36–39 — yozma (1 javob), "
-                "40–44 — yozma (a, b), 180 daqiqa. "
-                "45 (esse) imtihonchi baholaydi — ilovada tekshirilmaydi",
+                "40–44 — yozma (a, b), 45 — esse (o'qituvchi 0–24 ball qo'yadi), 180 daqiqa",
     },
     "Rus tili": {
         "tests": 35, "options": MATCHING, "written": 9, "parts": 2, "duration": 180, "keyboard": "text",
@@ -193,6 +196,12 @@ def score_weights(subject: str | None, question_count: int) -> dict[int, float] 
     if not config or not config.get("weights") or question_count != config["tests"] + config["written"]:
         return None
     return {number: weight for ranges, weight in config["weights"] for number in _numbers(ranges)}
+
+
+def essay_max(subject: str | None) -> int | None:
+    """Fanda esse bo'lsa — uning maksimal bali (Ona tili: 24), aks holda None."""
+    config = subject_config(subject)
+    return config.get("essay") if config else None
 
 
 def part_count(config: dict, number: int) -> int:

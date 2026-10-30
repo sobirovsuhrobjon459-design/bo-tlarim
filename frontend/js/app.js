@@ -9261,6 +9261,7 @@ async function startTest(code) {
     attemptId: data.attempt_id,
     mode: data.mode,
     questions: data.questions,
+    essay: data.essay || null, // {number, min_words} — esse bor testda
     index: 0,
     answers: { ...serverAnswers, ...localAnswers },
     endsAt: Date.now() + data.remaining * 1000,
@@ -9534,12 +9535,23 @@ function renderKeyQuizQuestion() {
     ${hasMulti ? `<p class="subtitle" style="margin-top:0">Bir nechta javobli savollarda keraklilarining hammasini belgilang.</p>` : ""}
     <div class="panel answer-sheet">${rowsHtml}</div>
     ${hasText ? `<p class="subtitle answer-hint">${answerInputHint()}</p>` : ""}
+    ${quizState.essay ? quizEssayHtml() : ""}
     <button class="btn" id="finish-quiz-button" style="margin-top:16px">🏁 TESTNI YAKUNLASH</button>
   `);
 
   updateAnsweredCounter();
   setExitProtection(true); // test paytida Mini App tasodifan yopilmasin
   document.getElementById("jump-unanswered").addEventListener("click", jumpToUnanswered);
+
+  const essayInput = document.getElementById("quiz-essay");
+  if (essayInput) {
+    updateEssayWordCount();
+    essayInput.addEventListener("input", () => {
+      quizState.answers[ESSAY_KEY] = essayInput.value;
+      updateEssayWordCount();
+      scheduleAnswerSave();
+    });
+  }
 
   // Bitta tinglovchi butun varaq uchun — 45 ta savolda ham tez ishlaydi
   appElement.querySelector(".answer-sheet").addEventListener("click", (event) => {
@@ -9585,10 +9597,13 @@ function renderKeyQuizQuestion() {
     guarded(async () => {
       // Har doim so'raladi — tasodifan bosib yuborilsa test yopilib qolmasin
       const { answered, total } = updateAnsweredCounter();
+      const essayMissing = quizState.essay && !String(quizState.answers[ESSAY_KEY] || "").trim();
       const question =
         answered < total
-          ? `${total - answered} ta savolga javob belgilanmagan. Baribir testni yakunlaysizmi?`
-          : "Testni yakunlaysizmi? Yakunlangach javoblarni o'zgartirib bo'lmaydi.";
+          ? `${total - answered} ta savolga javob belgilanmagan${essayMissing ? ", esse yozilmagan" : ""}. Baribir testni yakunlaysizmi?`
+          : essayMissing
+            ? "Esse yozilmagan. Baribir testni yakunlaysizmi?"
+            : "Testni yakunlaysizmi? Yakunlangach javoblarni o'zgartirib bo'lmaydi.";
       if (!(await askConfirm(question))) return;
       saveAnswersNow();
       await finishQuiz();
@@ -9596,6 +9611,35 @@ function renderKeyQuizQuestion() {
   );
 
   updateQuizTimer();
+}
+
+// Esse (Ona tili 45) — o'quvchi ilovada yozadi, o'qituvchi 0–24 ball qo'yadi
+const ESSAY_KEY = "essay";
+const ESSAY_SECTION = "Esse";
+
+function countWords(text) {
+  return String(text || "").trim().split(/\s+/).filter(Boolean).length;
+}
+
+function quizEssayHtml() {
+  const essay = quizState.essay;
+  return `
+    <p class="section-label" style="margin-top:16px">${essay.number}. ESSE</p>
+    <div class="panel">
+      <p class="subtitle" style="margin:0 0 8px">Berilgan mavzuda esse yozing: kirish, asosiy qism (kamida 3 xatboshi)
+        va xulosa. Kamida ${essay.min_words} so'z, lotin yozuvida. Esseni o'qituvchingiz baholaydi.</p>
+      <textarea class="input" id="quiz-essay" rows="12" maxlength="10000" placeholder="Esse matni..."
+                style="min-height:240px;line-height:1.5;resize:vertical">${escapeHtml(quizState.answers[ESSAY_KEY] || "")}</textarea>
+      <p class="subtitle" id="essay-word-count" style="margin:6px 0 0"></p>
+    </div>`;
+}
+
+function updateEssayWordCount() {
+  const label = document.getElementById("essay-word-count");
+  if (!label || !quizState?.essay) return;
+  const words = countWords(quizState.answers[ESSAY_KEY]);
+  const minimum = quizState.essay.min_words;
+  label.textContent = words >= minimum ? `✅ ${words} so'z` : `${words} so'z — kamida ${minimum} ta bo'lsin`;
 }
 
 async function updateQuizTimer() {
@@ -10557,6 +10601,7 @@ const SUBJECT_PRESETS = Object.fromEntries(
       textParts: config.parts,
       partOverrides: config.part_overrides || {},
       fixedParts: config.fixed_parts || {},
+      essay: config.essay || 0,
       duration: config.duration,
       keyboard: config.keyboard,
       sections: config.sections || [],
@@ -10740,6 +10785,19 @@ function renderNewTestForm(testType, draft = {}) {
       ${subjectOptions}
     </select>
     <p class="subtitle" id="subject-note" style="margin:-6px 0 0">${structure.note}</p>
+    <div class="setting-card" id="essay-card" style="margin-top:10px;${SUBJECT_PRESETS[subject]?.essay ? "" : "display:none"}">
+      <label class="setting-row">
+        <input type="checkbox" id="field-essay" ${offline ? "" : "checked"} />
+        <span>
+          <b>📝 Esse (o'qituvchi baholaydi)</b>
+          <p class="subtitle" style="margin:4px 0 0">${
+            offline
+              ? "O'quvchilar esseni qog'ozda yozadi. Siz har biriga"
+              : "O'quvchi esseni ilovada yozadi (kamida 100 so'z). Siz natijalarda o'qib,"
+          } 0–${SUBJECT_PRESETS[subject]?.essay || 24} ball qo'yasiz — ball umumiy natijaga qo'shiladi.</p>
+        </span>
+      </label>
+    </div>
 
     <p class="field-label" style="margin-top:14px">Testga qo'shilish turi</p>
     <div class="row-between" id="enrollment-toggle" data-value="${draft.enrollment || "open"}" style="gap:8px;margin-bottom:6px">
@@ -10860,6 +10918,7 @@ function renderNewTestForm(testType, draft = {}) {
 
   // Fan almashtirilganda, o'sha fandagi Milliy sertifikat tuzilishi qo'llanadi
   subjectSelect.addEventListener("change", () => {
+    document.getElementById("essay-card").style.display = SUBJECT_PRESETS[subjectSelect.value]?.essay ? "" : "none";
     // DTM testi — oflayn (titulli) testda ham savollar soni darhol 90 ta (titul shunga moslashadi)
     if (offline && subjectSelect.value === DTM_SUBJECT) {
       document.getElementById("field-test-count").value = 90;
@@ -11351,6 +11410,8 @@ async function saveNewTest() {
     end_time: localTimeToUtcIso(document.getElementById("field-end-time").value),
     questions: [],
     key_questions: [],
+    essay: Boolean(SUBJECT_PRESETS[document.getElementById("field-subject").value]?.essay) &&
+      document.getElementById("field-essay").checked,
   };
 
   const keyRows = [...document.querySelectorAll("#key-questions-container .key-row")];
@@ -14226,12 +14287,82 @@ async function renderStudentDetail(testId, attemptId) {
           : ""
       }
       <div class="stat-tile"><span class="stat-value">${detail.percent}%</span>Foiz</div>
+      ${
+        detail.essay
+          ? `<div class="stat-tile"><span class="stat-value">${detail.essay.score ?? "—"}/${detail.essay.max}</span>Esse</div>`
+          : ""
+      }
     </div>
+    ${detail.essay ? essayGradingHtml(detail.essay) : ""}
     <h3>Barcha javoblar</h3>
     ${rows}
   `);
 
   document.querySelector('[data-action="test"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
+  if (detail.essay) bindEssayGrading(testId, attemptId, detail.essay);
+}
+
+const ESSAY_PICK_STYLE = "margin:0;text-align:left;white-space:normal;padding:10px 14px;font-size:14px;font-weight:400;line-height:1.35";
+
+// Esse bahosi: UZBMB mezoni — 12 ta mezon, har biri 0–2 ball (jami 24)
+function essayGradingHtml(essay) {
+  return `
+    <h3>${essay.number}. Esse</h3>
+    <div class="panel">
+      ${
+        essay.text
+          ? `<p class="subtitle" style="margin:0 0 6px">${essay.words} so'z${essay.words < 100 ? " — 100 dan kam" : ""}</p>
+             <div style="white-space:pre-wrap;line-height:1.55;max-height:50vh;overflow:auto;padding:10px 12px;border-radius:12px;background:var(--color-bg)">${escapeHtml(essay.text)}</div>`
+          : `<p class="subtitle" style="margin:0">Esse ilovada yozilmagan — qog'ozdagi esseni o'qib baholang.</p>`
+      }
+      <p class="field-label" style="margin-top:12px">Ball (0–${essay.max})</p>
+      <div class="row-between" style="gap:8px">
+        <button type="button" class="btn btn-ghost" data-essay-step="-1" style="width:56px;margin:0" aria-label="Kamaytirish">−</button>
+        <input class="input" id="essay-score" type="number" inputmode="numeric" min="0" max="${essay.max}"
+               value="${essay.score ?? ""}" placeholder="baholanmagan" style="margin:0;text-align:center;font-weight:700" />
+        <button type="button" class="btn btn-ghost" data-essay-step="1" style="width:56px;margin:0" aria-label="Oshirish">+</button>
+      </div>
+      <div style="display:grid;gap:8px;margin-top:10px">
+        <button type="button" class="btn btn-ghost" data-essay-set="2" style="${ESSAY_PICK_STYLE}">
+          <b>2 ball</b> — mavzuga mos emas, 100 so'zdan kam yoki ko'chirilgan</button>
+        <button type="button" class="btn btn-ghost" data-essay-set="0" style="${ESSAY_PICK_STYLE}">
+          <b>0 ball</b> — yozilmagan, faqat kirish qismi yoki kirillda</button>
+      </div>
+      <p class="subtitle" style="margin:8px 0 0;font-size:12px">Milliy sertifikat mezoni: 12 ta mezon, har biri 0–2 ball (jami ${essay.max}).
+        Ball umumiy Rasch balliga qo'shiladi.</p>
+      <button class="btn" id="essay-save-button" style="margin-top:10px">💾 Ballni saqlash</button>
+    </div>`;
+}
+
+function bindEssayGrading(testId, attemptId, essay) {
+  const input = document.getElementById("essay-score");
+  const clamp = (value) => Math.min(essay.max, Math.max(0, Math.round(value)));
+  document.querySelectorAll("[data-essay-step]").forEach((button) =>
+    button.addEventListener("click", () => {
+      const current = input.value === "" ? 0 : Number(input.value) || 0;
+      input.value = clamp(current + Number(button.dataset.essayStep));
+      telegram?.HapticFeedback?.selectionChanged?.();
+    })
+  );
+  document.querySelectorAll("[data-essay-set]").forEach((button) =>
+    button.addEventListener("click", () => {
+      input.value = button.dataset.essaySet;
+      telegram?.HapticFeedback?.selectionChanged?.();
+    })
+  );
+  document.getElementById("essay-save-button").addEventListener(
+    "click",
+    guarded(async () => {
+      const raw = input.value.trim();
+      const score = raw === "" ? null : Number(raw);
+      if (score !== null && (!Number.isInteger(score) || score < 0 || score > essay.max)) {
+        throw new Error(`Ball 0 dan ${essay.max} gacha butun son bo'lsin`);
+      }
+      await api(`/api/teacher/tests/${testId}/students/${attemptId}/essay`, { method: "PUT", body: { score } });
+      showToast(score === null ? "Esse bahosi olib tashlandi" : `✅ Esse: ${score}/${essay.max} — umumiy ball qayta hisoblandi`);
+      await renderStudentDetail(testId, attemptId);
+    })
+  );
 }
 
 async function renderAddStudentsForm(testId, testTitle) {
@@ -14511,11 +14642,17 @@ async function renderResultsTab(selectedId) {
       <p class="section-label" style="margin:0 0 10px">${usesRasch ? "DARAJALAR (RASCH BALLI)" : "BAHOLAR (TO'G'RI JAVOBLAR FOIZI)"}</p>
       <div class="chart">${chart}</div>
     </div>
+    ${
+      results.essay_pending
+        ? `<div class="notice is-info" style="margin:12px 0 0">📝 ${results.essay_pending} ta o'quvchining essesi baholanmagan.
+             O'quvchini bosib, esse balini qo'ying — ball umumiy natijaga qo'shiladi.</div>`
+        : ""
+    }
 
     <button class="btn" id="results-pdf-button" style="margin-top:14px">📄 PDF HISOBOT</button>
     <button class="btn btn-ghost" id="results-excel-button">📊 EXCEL (javoblar va tahlil)</button>
     <div class="contact-actions" style="margin-top:10px">
-      <button class="btn btn-ghost" id="results-sections-button">🧩 Bo'limlar${results.section_names?.length ? ` (${results.section_names.length})` : ""}</button>
+      <button class="btn btn-ghost" id="results-sections-button">🧩 Bo'limlar${testSectionNames(results).length ? ` (${testSectionNames(results).length})` : ""}</button>
       <button class="btn btn-ghost" id="results-certificates-button">🎓 Sertifikatlar</button>
     </div>
     <button class="btn btn-ghost" id="results-send-students-button" style="margin-top:10px">📨 Sertifikatlarni o'quvchilarga yuborish</button>
@@ -14588,6 +14725,11 @@ async function renderResultsTab(selectedId) {
   );
 }
 
+// Savollar bo'limlari (esse — alohida ko'rsatiladi)
+function testSectionNames(results) {
+  return (results.section_names || []).filter((name) => name !== ESSAY_SECTION);
+}
+
 // Natijalar ro'yxatidagi bitta qator (o'rin, ism, bo'limlar/foiz, ball va daraja)
 function resultLineHtml(row, results) {
   const usesRasch = Boolean(results.uses_rasch);
@@ -14597,10 +14739,10 @@ function resultLineHtml(row, results) {
         <span class="result-name">
           ${escapeHtml(row.name)}
           <small class="result-meta">${
-            results.section_names?.length
-              ? results.section_names.map((name) => `${escapeHtml(name)}: ${row.sections[name]}%`).join(" • ")
+            testSectionNames(results).length
+              ? testSectionNames(results).map((name) => `${escapeHtml(name)}: ${row.sections[name]}%`).join(" • ")
               : `✅ ${row.correct} • ❌ ${row.wrong} • ${row.percent}%`
-          }</small>
+          }${results.essay_max ? ` • 📝 Esse: ${row.essay ?? "—"}/${results.essay_max}` : ""}</small>
         </span>
         ${
           row.dtm_ball != null

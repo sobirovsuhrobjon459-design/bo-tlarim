@@ -248,6 +248,8 @@ class Test(Base):
     # vertikal 3 ustunda (0–9); 5 — ID 4 xonali (maktab o'quvchilari ID'si 1001, 1002 ...).
     # Eski testlar o'z versiyasida qoladi — oldin chop etilgan varaqlar ham to'g'ri skanerlanishi uchun.
     sheet_version: Mapped[int] = mapped_column(default=10)  # 6 — ixcham; 7 — bloklari kvadratli; 8–10 — EvalBee uslubi
+    # Esse (Ona tili 45): maksimal bali (24). Bo'sh — testda esse yo'q
+    essay_max: Mapped[int | None] = mapped_column(default=None)
 
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     # O'qituvchi "o'chirgan" test. Bazadan butunlay o'chirilmaydi: unga bog'liq
@@ -372,6 +374,11 @@ class Attempt(Base):
     #
     # Yakunlanganda tozalanadi: natija StudentAnswer jadvalida qoladi.
     saved_answers: Mapped[str | None] = mapped_column(Text, default=None)
+
+    # Esse: o'quvchi ilovada yozgan matn (onlayn testda) va o'qituvchi qo'ygan ball (0–24).
+    # Ball bo'sh — hali baholanmagan
+    essay_text: Mapped[str | None] = mapped_column(Text, default=None)
+    essay_score: Mapped[int | None] = mapped_column(default=None)
 
 
 class StudentAnswer(Base):
@@ -1314,11 +1321,19 @@ class TestIn(BaseModel):
 
     questions: list[QuestionIn] = Field(default_factory=list, max_length=300)
     key_questions: list[KeyQuestionIn] = Field(default_factory=list, max_length=300)
+    # Esse qo'shilsinmi (faqat esseli fanda — Ona tili)
+    essay: bool = False
 
     @model_validator(mode="after")
     def check_price(self) -> "TestIn":
         _check_test_price(self.price)
         return self
+
+
+class EssayScoreIn(BaseModel):
+    """O'qituvchi qo'ygan esse bali; null — baholanmagan holatga qaytarish."""
+
+    score: int | None = Field(None, ge=0, le=100)
 
 
 class FinishIn(BaseModel):

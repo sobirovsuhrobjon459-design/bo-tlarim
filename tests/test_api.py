@@ -3773,6 +3773,87 @@ def test_ona_tili_milliy_sertifikat_tuzilishi():
     assert len(started.json()["questions"]) == 44
 
 
+def test_ona_tili_essesi_oqituvchi_baholaydi_va_ballga_qoshiladi():
+    """
+    Esse (45): o'quvchi ilovada yozadi, o'qituvchi 0–24 ball qo'yadi (UZBMB: 12 mezon × 0–2).
+    Bir xil javobli ikki o'quvchidan essesi yaxshirog'i ko'proq Rasch balli oladi.
+    """
+    reset_database()
+    register_teacher()
+    key = _subject_key("Ona tili va adabiyot")
+    created = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay=True)
+    plain = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180)
+
+    essay_text = "Vatan " * 120
+    attempts = {}
+    sent, restore = _capture_result_notices()
+    try:
+        for index in range(6):
+            user = 7400 + index
+            started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(user)).json()
+            assert started["essay"] == {"number": 45, "min_words": 100}
+            attempt_id = started["attempt_id"]
+            attempts[user] = attempt_id
+            # 7400 va 7401 — javoblari bir xil (yarmi to'g'ri); qolganlari har xil
+            solved = 20 if index < 2 else 5 + index * 6
+            answers = {str(item["number"]): (item["correct"] if position < solved else "Z")
+                       for position, item in enumerate(key)}
+            if index == 0:
+                # Qoralama ham esseni uzun saqlaydi (300 belgidan ko'p)
+                saved = client.post(f"/api/attempts/{attempt_id}/answers", headers=as_user(user),
+                                    json={"answers": {"essay": essay_text}})
+                assert saved.status_code == 200
+            else:
+                answers["essay"] = "Qisqa esse" if index == 1 else ""
+            finished = client.post(f"/api/attempts/{attempt_id}/finish", json={"answers": answers}, headers=as_user(user))
+            assert finished.status_code == 200, finished.text
+        plain_start = client.post(f"/api/tests/{plain['code']}/start", json={}, headers=as_user(7400)).json()
+        assert plain_start["essay"] is None
+        client.post(f"/api/attempts/{plain_start['attempt_id']}/finish", json={"answers": {"essay": "x"}},
+                    headers=as_user(7400))
+    finally:
+        restore()
+
+    teacher = as_user(555)
+    detail_url = f"/api/teacher/tests/{created['id']}/students/{attempts[7400]}"
+    detail = client.get(f"{detail_url}/detail", headers=teacher).json()
+    assert detail["essay"]["text"] == essay_text.strip() and detail["essay"]["words"] == 120
+    assert detail["essay"]["score"] is None and detail["essay"]["max"] == 24 and detail["essay"]["number"] == 45
+
+    results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=teacher).json()
+    assert results["essay_max"] == 24 and results["essay_pending"] == 6
+    assert results["section_names"][-1] == "Esse"
+    same = {row["attempt_id"]: row["ball"] for row in results["rows"]}
+    assert same[attempts[7400]] == same[attempts[7401]]  # esse baholanmaguncha — teng
+
+    # Baholash: 0–24 oralig'ida; 7400 — 20 ball, 7401 — 2 ball (100 so'zdan kam)
+    assert client.put(f"{detail_url}/essay", json={"score": 25}, headers=teacher).status_code == 422
+    assert client.put(f"{detail_url}/essay", json={"score": 20}, headers=teacher).json()["score"] == 20
+    other_url = f"/api/teacher/tests/{created['id']}/students/{attempts[7401]}/essay"
+    assert client.put(other_url, json={"score": 2}, headers=teacher).status_code == 200
+
+    results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=teacher).json()
+    rows = {row["attempt_id"]: row for row in results["rows"]}
+    assert results["essay_pending"] == 4
+    assert rows[attempts[7400]]["essay"] == 20 and rows[attempts[7400]]["sections"]["Esse"] == 83.3
+    assert rows[attempts[7400]]["ball"] > rows[attempts[7401]]["ball"], (rows[attempts[7400]], rows[attempts[7401]])
+    assert rows[attempts[7400]]["percent"] == rows[attempts[7401]]["percent"]  # foiz — faqat savollar
+
+    # Bahoni olib tashlash mumkin
+    assert client.put(other_url, json={"score": None}, headers=teacher).json()["score"] is None
+
+    # Essesiz testda baholab bo'lmaydi; boshqa o'qituvchi baholay olmaydi
+    plain_attempt = client.get(f"/api/teacher/tests/{plain['id']}/results", headers=teacher).json()["rows"][0]["attempt_id"]
+    assert client.put(f"/api/teacher/tests/{plain['id']}/students/{plain_attempt}/essay",
+                      json={"score": 3}, headers=teacher).status_code == 400
+    register_teacher(556)
+    assert client.put(f"{detail_url}/essay", json={"score": 5}, headers=as_user(556)).status_code in (403, 404)
+
+    for url in (f"/api/teacher/tests/{created['id']}/pdf", f"/api/teacher/tests/{created['id']}/certificates"):
+        pdf = client.get(url, headers=teacher)
+        assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF"), url
+
+
 def test_yozma_ish_har_bandi_kalitga_solishtiriladi():
     """Kimyo 41–43: har bandning yakuniy javobi kalit bilan; ko'proq to'g'ri band — ko'proq ball."""
     reset_database()
