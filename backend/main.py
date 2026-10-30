@@ -8775,16 +8775,15 @@ def _class_rating(
     """
     Sinf reytingi: sinfning BARCHA testlari va skanerlangan sinovlari (ClassTest, hamma fanlar)
     bo'yicha har o'quvchining o'rtacha foizi — kim ochsa ham bir xil. Qatnashmagan testi hisobga
-    olinmaydi; teng natija — teng o'rin (1, 1, 3 ...). Testlarning o'zi (ballar) esa avvalgidek
-    faqat kiritgan o'qituvchi va rahbariyatga ochiq. Qaytaradi: ({o'quvchi: {"rank", "avg", "tests"}}, testlar soni).
+    olinmaydi; teng natija — teng o'rin (1, 1, 3 ...). Test markazidan o'chirilgan imtihon kirmaydi.
+    O'quvchi profilidagi natijalar ham hammaga ochiq — reyting nimadan chiqqani ko'rinib turadi.
+    Qaytaradi: ({o'quvchi: {"rank", "avg", "tests"}}, testlar soni).
     """
 
     if member is None or not student_ids:
         return {}, 0
     test_ids = db.scalars(
-        select(ClassTest.id).where(
-            ClassTest.class_id == school_class.id, ClassTest.deleted_at.is_(None), ClassTest.max_score > 0
-        )
+        select(ClassTest.id).where(ClassTest.class_id == school_class.id, ClassTest.max_score > 0, *_live_class_tests())
     ).all()
     if not test_ids:
         return {}, 0
@@ -9205,20 +9204,34 @@ def _can_set_student_status(db: Session, member: SchoolMember, school_class: Sch
     return bool(room and room.warden_user_id == member.user_id)
 
 
-def _student_results(db: Session, member: SchoolMember, student: ClassStudent) -> list[dict]:
-    """Sinf natijalari (o'qituvchi kiritgan) va Test markazidagi natijalar — ko'rish huquqi bo'yicha."""
+def _live_class_tests():
+    """Sinf testi o'chirilmagan va (skanerlangan bo'lsa) Test markazidagi asl imtihoni ham o'chirilmagan."""
+    return (
+        ClassTest.deleted_at.is_(None),
+        or_(
+            ClassTest.source_test_id.is_(None),
+            ClassTest.source_test_id.not_in(select(Test.id).where(Test.deleted_at.is_not(None))),
+        ),
+    )
+
+
+def _student_results(db: Session, student: ClassStudent) -> list[dict]:
+    """
+    O'quvchining barcha natijalari: sinf testlari (o'qituvchi kiritgan yoki skanerlangan) va Test
+    markazidagi natijalar. Profilni ochgan har kim hammasini ko'radi — reyting shulardan chiqadi.
+    """
 
     results = []
     class_tests = db.execute(
         select(ClassTestScore, ClassTest)
         .join(ClassTest, ClassTest.id == ClassTestScore.test_id)
-        .where(ClassTestScore.student_id == student.id, ClassTest.deleted_at.is_(None))
+        .where(ClassTestScore.student_id == student.id, *_live_class_tests())
     ).all()
     linked = set()
     for score, test in class_tests:
         if test.source_test_id:
             linked.add(test.source_test_id)
-        if not _can_see_class_test(test, member) or score.score is None:
+        if score.score is None:
             continue
         results.append({
             "title": test.title, "subject": test.subject, "date": test.taken_on,
@@ -9228,13 +9241,12 @@ def _student_results(db: Session, member: SchoolMember, student: ClassStudent) -
         })
 
     attempts = db.execute(
-        select(Attempt, Test, Teacher)
+        select(Attempt, Test)
         .join(Test, Test.id == Attempt.test_id)
-        .join(Teacher, Teacher.id == Test.teacher_id)
         .where(Attempt.class_student_id == student.id, Attempt.status == "done", Test.deleted_at.is_(None))
     ).all()
-    for attempt, test, teacher in attempts:
-        if test.id in linked or not (_is_director(member) or teacher.user_id == member.user_id):
+    for attempt, test in attempts:
+        if test.id in linked:
             continue
         finished = attempt.finished_at or attempt.started_at
         results.append({
@@ -9339,7 +9351,7 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
         "can_manage": _can_manage_class(school_class, member),
         "curator": curator.full_name if curator else None,
         "dorm": _student_dorm_view(db, student),
-        "results": _student_results(db, member, student),
+        "results": _student_results(db, student),
         "payments": _student_payment_summary(db, school_class, student) if _can_see_payments(school_class, member) else None,
     }
 

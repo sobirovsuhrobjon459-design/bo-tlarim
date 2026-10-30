@@ -2676,7 +2676,7 @@ async function renderStudentProfile(schoolClass, studentId) {
             </div>`
         )
         .join("")
-    : `<p class="subtitle" style="padding:12px 14px;margin:0">Siz ko'ra oladigan natijalar hali yo'q.</p>`;
+    : `<p class="subtitle" style="padding:12px 14px;margin:0">Hali natija yo'q.</p>`;
 
   const statusHistoryHtml = student.status_history.length
     ? student.status_history

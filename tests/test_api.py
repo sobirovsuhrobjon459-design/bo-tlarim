@@ -2007,6 +2007,28 @@ def test_sinf_reytingi_test_va_sinov_natijalaridan():
     assert tests == 3
     assert rows["Hasan Husanov"]["rank"] == rows["Vali Aliyev"]["rank"] == 1 and rows["Ali Valiyev"]["rank"] == 3
 
+    # Profildagi natijalar hammaga ochiq — testi yo'q o'qituvchi ham ikkala testni ko'radi
+    profile = client.get(f"/api/classes/{cid}/students/{ids['Ali Valiyev']}", headers=as_user(703)).json()
+    assert sorted(item["title"] for item in profile["results"]) == ["Nazorat", "Sinov"], profile["results"]
+
+    # Test markazidan o'chirilgan imtihon reytingga ham, profilga ham kirmaydi
+    from backend.database import ClassTest, ClassTestScore
+
+    center = create_test(tg_id=702)
+    with SessionLocal() as session:
+        teacher_user_id = session.scalar(main.select(main.User.id).where(main.User.tg_id == 702))
+        scanned = ClassTest(class_id=cid, teacher_user_id=teacher_user_id, title="Skanerlangan", subject="Fizika", taken_on=main._dorm_today(), max_score=10,
+                            source_test_id=center["id"])
+        session.add(scanned)
+        session.flush()
+        session.add(ClassTestScore(test_id=scanned.id, student_id=ids["Ali Valiyev"], student_name="Ali Valiyev", score=10))
+        session.commit()
+    assert rating(703)[0] == 4 and rating(703)[1]["Ali Valiyev"]["rank"] == 1  # (90+50+100)/3 = 80 — Vali va Hasan bilan teng
+    assert client.delete(f"/api/teacher/tests/{center['id']}", headers=as_user(702)).status_code == 200
+    assert rating(703) == (tests, rows)
+    profile = client.get(f"/api/classes/{cid}/students/{ids['Ali Valiyev']}", headers=as_user(703)).json()
+    assert "Skanerlangan" not in [item["title"] for item in profile["results"]]
+
 
 def test_sinf_test_natijalari():
     """O'qituvchi natija kiritadi: foiz, baho, o'rin. Ko'radi — kiritgan o'qituvchi va rahbariyat."""
