@@ -2278,10 +2278,12 @@ function openCodeRangeSheet(schoolClass) {
   );
 }
 
-// Sinf reytingi belgisi: 1–3 — medal, qolgani — o'rin. Testda qatnashmagan — belgisiz
-function ratingBadge(rating) {
+// Sinf reytingi belgisi: 1–3 — medal, qolgani — o'rin (faqat reyting ko'rinishida).
+// Testda qatnashmagan — belgisiz
+function ratingBadge(rating, { medalsOnly = false } = {}) {
   if (!rating) return "";
   const medal = ["🥇", "🥈", "🥉"][rating.rank - 1];
+  if (!medal && medalsOnly) return "";
   return `<span class="rank-badge ${medal ? `top-${rating.rank}` : ""}"
                 title="O'rtacha ${rating.avg}% · ${rating.tests} ta test">${medal ? `${medal} ${rating.rank}` : `${rating.rank}-o'rin`}</span>`;
 }
@@ -2319,7 +2321,7 @@ function renderClassStudentsTab(schoolClass) {
                     : ""
                 }
               </span>
-              ${ratingBadge(student.rating)}
+              ${ratingBadge(student.rating, { medalsOnly: !byRating })}
             </div>`
         )
         .join("")

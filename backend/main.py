@@ -8773,20 +8773,19 @@ def _class_rating(
     db: Session, school_class: SchoolClass, member: SchoolMember | None, student_ids: list[int]
 ) -> tuple[dict[int, dict], int]:
     """
-    Sinf reytingi: sinf testlari va skanerlangan sinovlar (ClassTest) bo'yicha har o'quvchining
-    o'rtacha foizi. Qatnashmagan testi hisobga olinmaydi; teng natija — teng o'rin (1, 1, 3 ...).
-    Faqat ko'ruvchiga ochiq testlar olinadi (_can_see_class_test): rahbariyat — hammasi,
-    o'qituvchi — o'zi kiritganlari. Qaytaradi: ({o'quvchi: {"rank", "avg", "tests"}}, testlar soni).
+    Sinf reytingi: sinfning BARCHA testlari va skanerlangan sinovlari (ClassTest, hamma fanlar)
+    bo'yicha har o'quvchining o'rtacha foizi — kim ochsa ham bir xil. Qatnashmagan testi hisobga
+    olinmaydi; teng natija — teng o'rin (1, 1, 3 ...). Testlarning o'zi (ballar) esa avvalgidek
+    faqat kiritgan o'qituvchi va rahbariyatga ochiq. Qaytaradi: ({o'quvchi: {"rank", "avg", "tests"}}, testlar soni).
     """
 
     if member is None or not student_ids:
         return {}, 0
-    tests_query = select(ClassTest.id).where(
-        ClassTest.class_id == school_class.id, ClassTest.deleted_at.is_(None), ClassTest.max_score > 0
-    )
-    if not _is_director(member):
-        tests_query = tests_query.where(ClassTest.teacher_user_id == member.user_id)
-    test_ids = db.scalars(tests_query).all()
+    test_ids = db.scalars(
+        select(ClassTest.id).where(
+            ClassTest.class_id == school_class.id, ClassTest.deleted_at.is_(None), ClassTest.max_score > 0
+        )
+    ).all()
     if not test_ids:
         return {}, 0
 

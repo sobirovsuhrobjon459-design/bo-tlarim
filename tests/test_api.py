@@ -1956,8 +1956,8 @@ def test_davomatni_ochirish_tarix_va_statistikadan_olinadi():
 
 def test_sinf_reytingi_test_va_sinov_natijalaridan():
     """
-    O'quvchilar ro'yxatidagi reyting: sinf testlari bo'yicha o'rtacha foiz, qatnashmagani hisobga olinmaydi,
-    teng natija — teng o'rin. Har kim faqat o'zi ko'ra oladigan testlar bo'yicha ko'radi.
+    O'quvchilar ro'yxatidagi reyting: sinfning barcha testlari (hamma fanlar) bo'yicha o'rtacha foiz,
+    qatnashmagani hisobga olinmaydi, teng natija — teng o'rin. Hamma bir xil reytingni ko'radi.
     """
     reset_database()
     cid = _school_with_class()["id"]
@@ -1995,13 +1995,17 @@ def test_sinf_reytingi_test_va_sinov_natijalaridan():
     assert rows["Ali Valiyev"] == {"rank": 3, "avg": 70.0, "tests": 2}
     assert rows["Olim Karimov"] is None
 
-    # Fan o'qituvchisi — faqat o'z testi: Ali va Hasan teng (1, 1), Vali — 3
-    tests, rows = rating(702)
-    assert tests == 1
-    assert rows["Ali Valiyev"]["rank"] == rows["Hasan Husanov"]["rank"] == 1 and rows["Vali Aliyev"]["rank"] == 3
+    # Reyting hamma uchun bir xil — fan o'qituvchisi ham, testi yo'q o'qituvchi ham
+    assert rating(702) == (tests, rows)
+    assert rating(703) == (tests, rows)
 
-    # Testi yo'q o'qituvchida reyting yo'q
-    assert rating(703) == (0, {name: None for name in ids})
+    # Teng natija — teng o'rin: Hasan ikkinchi testda 70% → o'rtachasi 80, Vali bilan teng
+    assert client.post(f"/api/classes/{cid}/tests", headers=as_user(702), json={
+        "title": "Qo'shimcha", "subject": "Fizika", "taken_on": "2026-10-03", "max_score": 10,
+        "scores": {ids["Hasan Husanov"]: 7}}).status_code == 200
+    tests, rows = rating(703)
+    assert tests == 3
+    assert rows["Hasan Husanov"]["rank"] == rows["Vali Aliyev"]["rank"] == 1 and rows["Ali Valiyev"]["rank"] == 3
 
 
 def test_sinf_test_natijalari():
