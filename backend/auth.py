@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from .database import (
     ADMIN_ID,
+    is_admin_tg,
     BOT_TOKEN,
     DEV_MODE,
     WELCOME_CREDITS,
@@ -212,7 +213,7 @@ def get_current_teacher(user: User = Depends(get_current_user), db: Session = De
 def get_current_admin(user: User = Depends(get_current_user)) -> User:
     """Joriy foydalanuvchining Telegram ID'si ADMIN_ID bilan mosligini tekshiradi."""
 
-    if not ADMIN_ID or user.tg_id != ADMIN_ID:
+    if not is_admin_tg(user.tg_id):
         raise HTTPException(status_code=403, detail="Bu bo'lim faqat admin uchun")
 
     return user

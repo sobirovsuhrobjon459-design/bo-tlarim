@@ -56,8 +56,16 @@ for prefix in ("postgres://", "postgresql://"):
 # DEV_MODE=1 qolib ketsa ham, PostgreSQL bo'lgani uchun o'zi o'chadi.
 DEV_MODE = os.getenv("DEV_MODE", "0") == "1" and DATABASE_URL.startswith("sqlite")
 
-# Shu Telegram ID'ga ega foydalanuvchi "ADMIN" bo'limini ko'radi va boshqara oladi.
-ADMIN_ID = int(os.getenv("ADMIN_ID") or 0)
+# Shu Telegram ID'larga ega foydalanuvchilar "ADMIN" bo'limini ko'radi va boshqara oladi.
+# Bir nechta admin — vergul bilan: ADMIN_ID=111111,222222. Bildirishnomalar hammasiga boradi.
+ADMIN_IDS: tuple[int, ...] = tuple(
+    int(part) for part in (os.getenv("ADMIN_ID") or "").replace(";", ",").replace(" ", ",").split(",") if part.strip().isdigit()
+)
+ADMIN_ID = ADMIN_IDS[0] if ADMIN_IDS else 0  # birinchi (asosiy) admin
+
+
+def is_admin_tg(tg_id: int | None) -> bool:
+    return bool(tg_id) and tg_id in ADMIN_IDS
 
 # Pullik testda o'quvchi to'laganda, platforma ushlab qoladigan foiz (qolgani o'qituvchiga boradi).
 PLATFORM_COMMISSION_PERCENT = int(os.getenv("PLATFORM_COMMISSION_PERCENT") or 20)

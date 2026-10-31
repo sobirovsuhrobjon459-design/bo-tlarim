@@ -73,6 +73,8 @@ from .auth import (
 from .database import (
     ADMIN_CARD_NUMBER,
     ADMIN_ID,
+    ADMIN_IDS,
+    is_admin_tg,
     BOT_TOKEN,
     PAYME_MERCHANT_ID,
     PAYME_SECRET_KEY,
@@ -591,18 +593,24 @@ def send_backup_to_admin(db: Session) -> bool:
         backup_bytes = export_database(db)
         row_count = sum(len(rows) for rows in json.loads(backup_bytes)["tables"].values())
 
-        _send_pdf_to_telegram(
-            ADMIN_ID,
-            f"backup_{datetime.now():%Y-%m-%d_%H-%M}.json",
-            backup_bytes,
-            caption=(
-                "💾 Zaxira nusxa\n\n"
-                f"Sana: {datetime.now():%d.%m.%Y %H:%M}\n"
-                f"Jami yozuvlar: {row_count} ta\n\n"
-                "Bu faylni saqlab qo'ying — baza bilan nimadir bo'lsa, hammasi shundan tiklanadi."
-            ),
-        )
-        return True
+        sent = False
+        for admin_id in ADMIN_IDS:  # har bir admin'ga; biriga yetmasa ham qolganlariga boradi
+            try:
+                _send_pdf_to_telegram(
+                    admin_id,
+                    f"backup_{datetime.now():%Y-%m-%d_%H-%M}.json",
+                    backup_bytes,
+                    caption=(
+                        "💾 Zaxira nusxa\n\n"
+                        f"Sana: {datetime.now():%d.%m.%Y %H:%M}\n"
+                        f"Jami yozuvlar: {row_count} ta\n\n"
+                        "Bu faylni saqlab qo'ying — baza bilan nimadir bo'lsa, hammasi shundan tiklanadi."
+                    ),
+                )
+                sent = True
+            except Exception:
+                logging.getLogger("backend").warning("Zaxira nusxa %s ga yuborilmadi", admin_id, exc_info=True)
+        return sent
     except Exception:
         logging.getLogger("backend").warning("Zaxira nusxa yuborilmadi", exc_info=True)
         return False
@@ -760,10 +768,10 @@ def _warn_if_storage_is_temporary() -> None:
         "Render → Environment bo'limida DATABASE_URL ga doimiy PostgreSQL manzilini qo'ying."
     )
     logging.getLogger("backend").error(message)
-    if ADMIN_ID and BOT_TOKEN:
+    for admin_id in ADMIN_IDS if BOT_TOKEN else ():
         try:
             httpx.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                       json={"chat_id": ADMIN_ID, "text": message}, timeout=10)
+                       json={"chat_id": admin_id, "text": message}, timeout=10)
         except Exception:
             logging.getLogger("backend").warning("Ogohlantirish yuborilmadi", exc_info=True)
 
@@ -3367,14 +3375,16 @@ def _build_payme_checkout_url(account_field: str, order_id: int, amount: int) ->
 def _notify_admin_about_withdrawal(request: WithdrawalRequest, teacher: Teacher) -> None:
     """Admin'ga Telegram orqali, tugmali xabar yuboradi — shu yerdan to'g'ridan-to'g'ri tasdiqlash/rad etish mumkin."""
 
-    if not ADMIN_ID:
-        return
+    for admin_id in ADMIN_IDS:
+        _send_withdrawal_notice(admin_id, request, teacher)
 
+
+def _send_withdrawal_notice(admin_id: int, request: WithdrawalRequest, teacher: Teacher) -> None:
     try:
         httpx.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
             json={
-                "chat_id": ADMIN_ID,
+                "chat_id": admin_id,
                 "text": (
                     f"💸 Pul yechish so'rovi\n\n"
                     f"O'qituvchi: {teacher.user.full_name}\n"
@@ -4300,7 +4310,7 @@ def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)
         "full_name": user.full_name,
         "tg_id": user.tg_id,
         "photo_url": user.photo_url,
-        "is_admin": bool(ADMIN_ID) and user.tg_id == ADMIN_ID,
+        "is_admin": is_admin_tg(user.tg_id),
         "is_teacher": is_teacher,
         "default_channels": DEFAULT_REQUIRED_CHANNELS,
         # Pullik test va onlayn to'lov uchun ulangan tizimlar (bo'sh — pullik test yaratib bo'lmaydi)
@@ -4887,14 +4897,30 @@ def _card_topup_caption(purchase: CreditPurchase, teacher: Teacher) -> str:
 
 def _send_receipt_to_admin(purchase: CreditPurchase, teacher: Teacher, image: bytes, mime: str, extension: str) -> str:
     """
-    Chekni admin'ning Telegram chatiga ✅/❌ tugmalari bilan yuboradi.
+    Chekni har bir admin'ning Telegram chatiga ✅/❌ tugmalari bilan yuboradi (qaysi biri
+    birinchi bossa — o'sha hal qiladi; ikkinchi bosish "allaqachon ko'rib chiqilgan" bo'ladi).
     Telegram'dagi file_id'ni qaytaradi (rasm keyin shu orqali olinadi).
     """
 
+    file_id = None
+    last_error: Exception | None = None
+    for admin_id in ADMIN_IDS:
+        try:
+            sent = _send_receipt_photo(admin_id, purchase, teacher, image, mime, extension)
+            file_id = file_id or sent
+        except Exception as error:  # biriga yetmasa ham qolganlariga yuboriladi
+            last_error = error
+            logging.getLogger("backend").warning("Chek %s ga yuborilmadi", admin_id, exc_info=True)
+    if not file_id:
+        raise last_error or RuntimeError("Admin sozlanmagan")
+    return file_id
+
+
+def _send_receipt_photo(admin_id: int, purchase: CreditPurchase, teacher: Teacher, image: bytes, mime: str, extension: str) -> str:
     response = httpx.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
         data={
-            "chat_id": ADMIN_ID,
+            "chat_id": admin_id,
             "caption": _card_topup_caption(purchase, teacher),
             "reply_markup": json.dumps(
                 {
@@ -7748,7 +7774,7 @@ def test_rating(code: str, user: User = Depends(get_current_user), db: Session =
 
     test = _get_test_by_code(db, code, user)
     is_owner = test.teacher is not None and test.teacher.user_id == user.id
-    is_admin = bool(ADMIN_ID) and user.tg_id == ADMIN_ID
+    is_admin = is_admin_tg(user.tg_id)
     if not (is_owner or is_admin):
         raise HTTPException(status_code=403, detail="Natijalarni faqat o'qituvchi ko'radi")
 

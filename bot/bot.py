@@ -528,9 +528,9 @@ async def handle_withdrawal_decision(callback: CallbackQuery) -> None:
 
     # Importlar shu yerda, funksiya ichida — chunki backend hali to'liq ishga tushmagan
     # bosqichda (masalan standalone "python -m bot.bot" bilan) bu modulga ehtiyoj yo'q.
-    from backend.database import ADMIN_ID, SessionLocal, Teacher, WithdrawalRequest, withdraw_balance
+    from backend.database import SessionLocal, Teacher, WithdrawalRequest, is_admin_tg, withdraw_balance
 
-    if callback.from_user.id != ADMIN_ID:
+    if not is_admin_tg(callback.from_user.id):
         await callback.answer("Bu tugma faqat admin uchun", show_alert=True)
         return
 
@@ -597,9 +597,9 @@ async def handle_withdrawal_decision(callback: CallbackQuery) -> None:
 async def handle_card_topup_decision(callback: CallbackQuery) -> None:
     """Admin karta chekidagi "✅ Pul tushdi" / "❌ Rad etish" tugmasini bosganda ishlaydi."""
 
-    from backend.database import ADMIN_ID, SessionLocal
+    from backend.database import SessionLocal, is_admin_tg
 
-    if callback.from_user.id != ADMIN_ID:
+    if not is_admin_tg(callback.from_user.id):
         await callback.answer("Bu tugma faqat admin uchun", show_alert=True)
         return
 
