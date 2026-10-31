@@ -273,6 +273,23 @@ def test_admin_faqat_admin_id_bilan():
     assert client.get("/api/admin/stats", headers=as_user(1111)).status_code == 403
 
 
+def test_ikki_admin_id():
+    """ADMIN_ID=4242,5151 — ikkala admin ham panelga kiradi, begona kirmaydi."""
+    import backend.database as database
+
+    reset_database()
+    original = database.ADMIN_IDS
+    database.ADMIN_IDS = (4242, 5151)
+    try:
+        for tg_id in (4242, 5151):
+            assert client.get("/api/admin/stats", headers=as_user(tg_id)).status_code == 200, tg_id
+            assert client.get("/api/me", headers=as_user(tg_id)).json()["is_admin"] is True
+        assert client.get("/api/admin/stats", headers=as_user(1111)).status_code == 403
+        assert client.get("/api/me", headers=as_user(1111)).json()["is_admin"] is False
+    finally:
+        database.ADMIN_IDS = original
+
+
 def test_admin_odamlar_muassasalar_va_kredit():
     """Admin odamni topadi, kartochkasini ko'radi, kredit beradi/ayiradi, xabar yozadi; muassasalar ro'yxati."""
     reset_database()
