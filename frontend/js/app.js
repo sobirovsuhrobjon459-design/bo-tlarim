@@ -14728,6 +14728,7 @@ async function renderResultsTab(selectedId) {
     }
 
     <button class="btn" id="results-pdf-button" style="margin-top:14px">📄 PDF HISOBOT</button>
+    <button class="btn btn-ghost" id="results-image-button">🖼 RASM (guruhga yuborish uchun)</button>
     <button class="btn btn-ghost" id="results-excel-button">📊 EXCEL (javoblar va tahlil)</button>
     <div class="contact-actions" style="margin-top:10px">
       <button class="btn btn-ghost" id="results-sections-button">🧩 Bo'limlar${testSectionNames(results).length ? ` (${testSectionNames(results).length})` : ""}</button>
@@ -14760,6 +14761,7 @@ async function renderResultsTab(selectedId) {
   document.getElementById("all-results-button").addEventListener("click", () => renderResultsTestList(tests));
   document.getElementById("results-pdf-button").addEventListener("click", guarded(() => downloadOrSendPdf(testId)));
   document.getElementById("results-excel-button").addEventListener("click", guarded(() => downloadOrSendExcel(testId)));
+  document.getElementById("results-image-button").addEventListener("click", guarded(() => downloadOrSendImage(testId)));
   document.getElementById("results-certificates-button").addEventListener(
     "click",
     guarded(async () => {
@@ -15152,6 +15154,7 @@ async function renderTestResults(testId) {
       }
     </div>
     <button class="btn" id="pdf-button">📄 PDF HISOBOT</button>
+    <button class="btn btn-ghost" id="image-button">🖼 RASM (guruhga yuborish uchun)</button>
     <button class="btn btn-ghost" id="excel-button">📊 EXCEL (javoblar va tahlil)</button>
     <h3>Natijalar</h3>
     <input class="input" id="filter-input" placeholder="🔍 O'quvchini qidirish..." />
@@ -15173,6 +15176,7 @@ async function renderTestResults(testId) {
   document.querySelector('[data-action="test"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
   document.getElementById("pdf-button").addEventListener("click", guarded(() => downloadOrSendPdf(testId)));
   document.getElementById("excel-button").addEventListener("click", guarded(() => downloadOrSendExcel(testId)));
+  document.getElementById("image-button").addEventListener("click", guarded(() => downloadOrSendImage(testId)));
 
   document.getElementById("edit-price-button").addEventListener("click", () => showPriceEditor(testId, results.price));
   document.getElementById("question-stats-button").addEventListener(
@@ -15217,6 +15221,11 @@ async function saveNewPrice(testId) {
 
 async function downloadOrSendPdf(testId) {
   await deliverPdf(`/api/teacher/tests/${testId}/pdf`, "hisobot.pdf", "📄 PDF Telegram chatga yuborildi");
+}
+
+// Natijalar rasmi (PNG): o'rin, ism, to'g'ri/jami, ball va diagramma — guruhga yuborish uchun
+async function downloadOrSendImage(testId) {
+  await deliverPdf(`/api/teacher/tests/${testId}/image`, "natijalar.png", "🖼 Rasm Telegram chatga yuborildi");
 }
 
 // Excel: natijalar, har o'quvchining javoblari va savollar tahlili

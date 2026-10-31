@@ -1780,11 +1780,12 @@ def _report_banner(test: Test, width: float, uses_rasch: bool, dtm_max: float | 
     return elements + [banner, Spacer(1, 14)]
 
 
-def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes:
+def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher, overview_only: bool = False) -> bytes:
     """
     Test natijalari (PDF) — mock natijalari uslubida: sarlavha bloki, umumiy
     natijalar jadvali, so'ng har bir daraja alohida (A+ olganlar, A olganlar …
     NC), oxirida statistika. Pullikda — Rasch balli, bepulda — foiz va baho.
+    overview_only — faqat sarlavha va umumiy natijalar jadvali (natijalar rasmi uchun).
     """
 
     report = build_rasch_report(db, test)
@@ -1803,6 +1804,9 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher) -> bytes
         elements.append(_results_grid(rows, styles, width, uses_rasch, section_names))
     else:
         elements.append(Paragraph("Hali hech kim testni yakunlamagan.", styles["cell"]))
+    if overview_only:
+        document.build(elements, canvasmaker=_brand_canvas(test.title, "Test natijalari"))
+        return buffer.getvalue()
 
     # Har bir daraja alohida: A+ olganlar, A olganlar ... NC (DTM testida — yo'q: natija DTM bali)
     order = [] if report.get("dtm_max") else RASCH_GRADE_ORDER if uses_rasch else SCHOOL_GRADE_ORDER
@@ -6779,6 +6783,64 @@ def download_pdf(test_id: int, teacher: Teacher = Depends(get_current_teacher), 
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{test.code}.pdf"'},
     )
+
+
+def pdf_pages_to_png(pdf_bytes: bytes, scale: float = 2.0) -> bytes:
+    """PDF sahifalarini rasmga aylantiradi: bir nechta sahifa bo'lsa — ketma-ket, bitta uzun rasm (PNG)."""
+
+    import pypdfium2 as pdfium
+    from PIL import Image
+
+    document = pdfium.PdfDocument(pdf_bytes)
+    try:
+        pages = [document[index].render(scale=scale).to_pil().convert("RGB") for index in range(len(document))]
+    finally:
+        document.close()
+    gap = int(12 * scale)
+    width = max(page.width for page in pages)
+    image = Image.new("RGB", (width, sum(page.height for page in pages) + gap * (len(pages) - 1)), "#e5e7eb")
+    top = 0
+    for page in pages:
+        image.paste(page, (0, top))
+        top += page.height + gap
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()
+
+
+def test_results_png(db: Session, test: Test, teacher: Teacher) -> bytes:
+    """Natijalar rasmi — PDF hisobotdagi "Umumiy natijalar" sahifa(lar)ining o'zi."""
+    return pdf_pages_to_png(generate_test_report_pdf(db, test, teacher, overview_only=True))
+
+
+@app.get("/api/teacher/tests/{test_id}/image")
+def download_results_image(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """Natijalar rasmi (PNG) — brauzerda yuklab olish uchun."""
+    test = _get_own_test(db, teacher, test_id)
+    return StreamingResponse(io.BytesIO(test_results_png(db, test, teacher)), media_type="image/png",
+                             headers={"Content-Disposition": f'attachment; filename="{test.code}.png"'})
+
+
+# Telegram rasm (sendPhoto) cheklovi: eni + bo'yi 10 000 px gacha. Undan katta rasm
+# (ko'p o'quvchili, 5+ sahifali natija) hujjat bo'lib yuboriladi — sifati ham buzilmaydi
+PHOTO_MAX_SIDES = 9500
+
+
+@app.post("/api/teacher/tests/{test_id}/image/send")
+def send_results_image(test_id: int, teacher: Teacher = Depends(get_current_teacher), user: User = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    """Natijalar rasmini bot orqali o'qituvchining chatiga yuboradi (u yerdan guruhga uzatadi)."""
+    from PIL import Image
+
+    test = _get_own_test(db, teacher, test_id)
+    image = test_results_png(db, test, teacher)
+    width, height = Image.open(io.BytesIO(image)).size
+    caption = f"📊 «{test.title}» — natijalar"
+    if width + height > PHOTO_MAX_SIDES:
+        _send_pdf_to_telegram(user.tg_id, f"{test.code}_natijalar.png", image, caption, mime="image/png")
+    else:
+        _send_photo_to_telegram(user.tg_id, f"{test.code}_natijalar.png", image, caption)
+    return {"ok": True}
 
 
 @app.post("/api/teacher/tests/{test_id}/pdf/send")

@@ -4077,6 +4077,9 @@ def test_har_fan_milliy_sertifikat_pasporti_boyicha_ishlaydi():
         for url in (f"/api/teacher/tests/{created['id']}/pdf", f"/api/teacher/tests/{created['id']}/certificates"):
             pdf = client.get(url, headers=as_user(555))
             assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF"), (subject, url)
+        # Natijalar rasmi (PNG) — har fanda, DTM testida ham
+        image = client.get(f"/api/teacher/tests/{created['id']}/image", headers=as_user(555))
+        assert image.status_code == 200 and image.content[1:4] == b"PNG", (subject, image.status_code)
 
         questions = client.get(f"/api/teacher/tests/{created['id']}/questions", headers=as_user(555)).json()
         assert questions["keyboard"] == expected_keyboard[subject], subject
