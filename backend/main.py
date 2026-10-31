@@ -5816,11 +5816,10 @@ def test_school_classes(test_id: int, teacher: Teacher = Depends(get_current_tea
     )
     # Maktab, o'quv markazi va to'garakdagi guruhlar birga; bir nechta muassasa bo'lsa — nomi bilan
     schools = {member.school_id: member.school for member in members}
-    classes = db.scalars(
-        select(SchoolClass)
-        .where(SchoolClass.school_id.in_(list(schools)), SchoolClass.deleted_at.is_(None))
-        .order_by(SchoolClass.school_id, SchoolClass.name)
-    ).all()
+    classes = sorted(
+        db.scalars(select(SchoolClass).where(SchoolClass.school_id.in_(list(schools)), SchoolClass.deleted_at.is_(None))).all(),
+        key=lambda item: (item.school_id, _class_name_key(item.name)),
+    )
     return {
         "available": True,
         "classes": [
@@ -8249,11 +8248,10 @@ def _school_by_code(db: Session, user: User, code: str, school_id: int | None) -
 
 def _open_classes(db: Session, school_id: int) -> list[SchoolClass]:
     """Kuratori hali tayinlanmagan sinflar — qo'shilayotgan kurator o'zinikini tanlaydi."""
-    return db.scalars(
+    return _sorted_classes(db.scalars(
         select(SchoolClass)
         .where(SchoolClass.school_id == school_id, SchoolClass.deleted_at.is_(None), SchoolClass.curator_user_id.is_(None))
-        .order_by(SchoolClass.name)
-    ).all()
+    ).all())
 
 
 @app.post("/api/schools/lookup")
@@ -8844,10 +8842,24 @@ def _class_rating(
     )
     rating: dict[int, dict] = {}
     for index, (student_id, average, count) in enumerate(averages):
+        # Teng natija — teng o'rin, keyingi o'rin tashlab ketilmaydi: 1, 2, 2, 3
         same_as_previous = index and averages[index - 1][1] == average
-        rank = rating[averages[index - 1][0]]["rank"] if same_as_previous else index + 1
+        previous_rank = rating[averages[index - 1][0]]["rank"] if index else 0
+        rank = previous_rank if same_as_previous else previous_rank + 1
         rating[student_id] = {"rank": rank, "avg": average, "tests": count}
     return rating, len(test_ids)
+
+
+def _class_name_key(name: str) -> list:
+    """
+    Sinf nomining tabiiy tartibi: raqamlar son bo'yicha — 1-A, 2-A, …, 9-B, 10-1, 11-A
+    (oddiy saralashda "10" "2" dan oldin turardi). Raqamsiz nomlar ("Iqtisod-1") — raqamlilardan keyin.
+    """
+    return [(0, int(part)) if part.isdigit() else (1, part.lower()) for part in re.split(r"(\d+)", name.strip()) if part]
+
+
+def _sorted_classes(classes) -> list:
+    return sorted(classes, key=lambda item: _class_name_key(item.name))
 
 
 def _class_view(db: Session, school_class: SchoolClass, with_details: bool = False, member: SchoolMember | None = None) -> dict:
@@ -8922,13 +8934,12 @@ def my_classes(user: User = Depends(get_current_user), db: Session = Depends(get
     """O'qituvchining shu maktabdagi sinflari."""
 
     member = _require_school_member(db, user)
-    classes = db.scalars(
+    classes = _sorted_classes(db.scalars(
         select(SchoolClass)
         .where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None))
-        .order_by(SchoolClass.name)
-    ).all()
+    ).all())
     views = [_class_view(db, item, member=member) for item in classes]
-    views.sort(key=lambda view: (not view["is_curator"], view["name"].lower()))
+    views.sort(key=lambda view: (not view["is_curator"], _class_name_key(view["name"])))
     return views
 
 
@@ -9609,12 +9620,13 @@ def _class_test_view(db: Session, test: ClassTest, member: SchoolMember, with_sc
         })
     # Eng ko'p yechganlar tepada; qatnashmaganlar — oxirida
     rows.sort(key=lambda row: (row["score"] is None, -(row["score"] or 0), row["name"].lower()))
+    # Teng ball — teng o'rin, keyingi o'rin tashlab ketilmaydi: 1, 1, 2, 3 (sinf reytingidagi kabi)
     rank = 0
     for index, row in enumerate(rows):
         if row["score"] is None:
             continue
         if index == 0 or row["score"] != rows[index - 1]["score"]:
-            rank = index + 1
+            rank += 1
         row["rank"] = rank
 
     taken = [row for row in rows if row["score"] is not None]
@@ -10050,9 +10062,9 @@ def school_test_results(user: User = Depends(get_current_user), db: Session = De
     member = _require_school_member(db, user)
     if not _is_director(member):
         raise HTTPException(status_code=403, detail="Barcha natijalarni faqat rahbariyat ko'radi")
-    classes = db.scalars(
-        select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None)).order_by(SchoolClass.name)
-    ).all()
+    classes = _sorted_classes(db.scalars(
+        select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None))
+    ).all())
     rows = []
     for school_class in classes:
         tests = db.scalars(
@@ -10068,7 +10080,7 @@ def school_test_results(user: User = Depends(get_current_user), db: Session = De
             "last_date": tests[0].taken_on if tests else None,
             "average_percent": round(sum(averages) / len(averages), 1) if averages else None,
         })
-    rows.sort(key=lambda row: (row["tests"] == 0, row["name"].lower()))
+    rows.sort(key=lambda row: (row["tests"] == 0, _class_name_key(row["name"])))
     return rows
 
 
@@ -10584,9 +10596,9 @@ def payments_summary(month: str | None = None, user: User = Depends(get_current_
     if not _sees_all_finance(member):
         raise HTTPException(status_code=403, detail="Umumiy hisobotni rahbariyat va moliyachi ko'radi")
     month = month if month and re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month) else _current_month()
-    classes = db.scalars(
-        select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None)).order_by(SchoolClass.name)
-    ).all()
+    classes = _sorted_classes(db.scalars(
+        select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None))
+    ).all())
     rows = []
     for school_class in classes:
         info = class_payments(school_class.id, month, user, db)
@@ -10669,9 +10681,9 @@ def school_overview(user: User = Depends(get_current_user), db: Session = Depend
     leader = _is_director(member)
     head = _can_delete_classes(member)
 
-    classes = db.scalars(
-        select(SchoolClass).where(SchoolClass.school_id == school.id, SchoolClass.deleted_at.is_(None)).order_by(SchoolClass.name)
-    ).all()
+    classes = _sorted_classes(db.scalars(
+        select(SchoolClass).where(SchoolClass.school_id == school.id, SchoolClass.deleted_at.is_(None))
+    ).all())
     curated = [item for item in classes if item.curator_user_id == user.id]
     students_total = sum(len(_active_students(item)) for item in classes)
 
@@ -11127,9 +11139,9 @@ def school_timetable(user: User = Depends(get_current_user), db: Session = Depen
     member = _require_school_member(db, user)
     school_id = member.school_id
     leader = _is_director(member)
-    classes = db.scalars(
-        select(SchoolClass).where(SchoolClass.school_id == school_id, SchoolClass.deleted_at.is_(None)).order_by(SchoolClass.name)
-    ).all()
+    classes = _sorted_classes(db.scalars(
+        select(SchoolClass).where(SchoolClass.school_id == school_id, SchoolClass.deleted_at.is_(None))
+    ).all())
     class_ids = {item.id for item in classes}
     members = db.scalars(
         select(SchoolMember).where(SchoolMember.school_id == school_id, SchoolMember.left_at.is_(None)).order_by(SchoolMember.id)
@@ -11317,9 +11329,9 @@ def auto_timetable(body: AutoTimetableIn, user: User = Depends(get_current_user)
     member = _require_school_member(db, user)
     _require_director(member)
     school_id = member.school_id
-    classes = db.scalars(
-        select(SchoolClass).where(SchoolClass.school_id == school_id, SchoolClass.deleted_at.is_(None)).order_by(SchoolClass.name)
-    ).all()
+    classes = _sorted_classes(db.scalars(
+        select(SchoolClass).where(SchoolClass.school_id == school_id, SchoolClass.deleted_at.is_(None))
+    ).all())
     wanted = set(body.class_ids) if body.class_ids else None
     plans = _active_plans(db, school_id=school_id)
     plan_by_class: dict[int, list[ClassSubjectPlan]] = {}
@@ -11558,9 +11570,8 @@ def list_announcements(limit: int = 30, user: User = Depends(get_current_user), 
         # Butun maktabga — rahbariyat; sinfga — rahbariyat yoki o'sha sinf kuratori
         "can_post_school": _is_director(member),
         "post_classes": (
-            [{"id": item.id, "name": item.name} for item in db.scalars(
-                select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None))
-                .order_by(SchoolClass.name))]
+            [{"id": item.id, "name": item.name} for item in _sorted_classes(db.scalars(
+                select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None))))]
             if _is_director(member)
             else [{"id": item.id, "name": item.name} for item in curated]
         ),
@@ -11981,8 +11992,8 @@ def dorm_candidates(user: User = Depends(get_current_user), db: Session = Depend
         .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
         .where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None),
                ClassStudent.removed_at.is_(None), ClassStudent.id.not_in(placed))
-        .order_by(SchoolClass.name, ClassStudent.full_name)
     ).all()
+    rows = sorted(rows, key=lambda row: (_class_name_key(row[1].name), row[0].full_name.lower()))
     return [{"id": student.id, "name": student.full_name, "class_name": school_class.name} for student, school_class in rows]
 
 

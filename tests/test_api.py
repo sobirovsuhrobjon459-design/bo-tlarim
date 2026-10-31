@@ -1973,6 +1973,16 @@ def test_davomatni_ochirish_tarix_va_statistikadan_olinadi():
         session.close()
 
 
+def test_sinflar_raqam_tartibida():
+    """Sinflar 1 dan 11 gacha tartibda: 2-A "10-1" dan oldin (oddiy saralashda keyin turardi)."""
+    reset_database()
+    _school_with_class(701)  # "10/2"
+    for name in ("10-1 (Qizlar)", "2-A", "11-A", "1-A", "10-1 (Yigitlar)", "Iqtisod-1", "9-B"):
+        assert client.post("/api/classes", json={"name": name}, headers=as_user(701)).status_code == 200
+    names = [item["name"] for item in client.get("/api/classes", headers=as_user(701)).json()]
+    assert names == ["1-A", "2-A", "9-B", "10-1 (Qizlar)", "10-1 (Yigitlar)", "10/2", "11-A", "Iqtisod-1"], names
+
+
 def test_sinf_reytingi_test_va_sinov_natijalaridan():
     """
     O'quvchilar ro'yxatidagi reyting: sinfning barcha testlari (hamma fanlar) bo'yicha o'rtacha foiz,
@@ -2024,7 +2034,8 @@ def test_sinf_reytingi_test_va_sinov_natijalaridan():
         "scores": {ids["Hasan Husanov"]: 7}}).status_code == 200
     tests, rows = rating(703)
     assert tests == 3
-    assert rows["Hasan Husanov"]["rank"] == rows["Vali Aliyev"]["rank"] == 1 and rows["Ali Valiyev"]["rank"] == 3
+    # Teng natijadan keyin o'rin tashlab ketilmaydi: 1, 1, 2
+    assert rows["Hasan Husanov"]["rank"] == rows["Vali Aliyev"]["rank"] == 1 and rows["Ali Valiyev"]["rank"] == 2
 
     # Profildagi natijalar hammaga ochiq — testi yo'q o'qituvchi ham ikkala testni ko'radi
     profile = client.get(f"/api/classes/{cid}/students/{ids['Ali Valiyev']}", headers=as_user(703)).json()
@@ -2075,7 +2086,7 @@ def test_sinf_test_natijalari():
     assert [r["name"] for r in rows] == ["Ali Valiyev", "Hasan Husanov", "Vali Aliyev", "Olim Karimov"], rows
     # Boshlang'ich test rejimi: ball/maks va foiz, darajasiz (A+ … NC yo'q); diagramma rangi — foizdan
     assert rows[0]["percent"] == 90 and rows[0]["level"] == "good" and rows[0]["rank"] == 1 and rows[1]["rank"] == 1
-    assert rows[2]["percent"] == 60 and rows[2]["level"] == "mid" and rows[2]["rank"] == 3
+    assert rows[2]["percent"] == 60 and rows[2]["level"] == "mid" and rows[2]["rank"] == 2  # 1, 1, 2 — o'rin tashlanmaydi
     assert "grade" not in rows[0] and test["max_score"] == 30
     assert rows[3]["score"] is None and "rank" not in rows[3]
     assert test["participants"] == 3 and test["average_percent"] == 80, test
