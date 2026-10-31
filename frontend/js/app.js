@@ -8931,7 +8931,7 @@ async function renderMyAttemptReview(attemptId) {
     <div class="review-hero">
       ${
         review.grade
-          ? `<div class="grade-badge" style="--grade-color:${gradeColor}"><span>${escapeHtml(review.grade)}</span><small>daraja</small></div>`
+          ? `<div class="grade-badge" style="--grade-color:${gradeColor}"><span>${escapeHtml(review.grade)}</span><small>${review.ball != null || review.dtm_ball != null ? "daraja" : "baho"}</small></div>`
           : ""
       }
       <h2 style="margin:12px 0 2px">${escapeHtml(review.title)}</h2>
@@ -11488,6 +11488,8 @@ async function saveNewTest() {
     end_time: localTimeToUtcIso(document.getElementById("field-end-time").value),
     questions: [],
     key_questions: [],
+    // Hisoblash usuli: Rash test — Rasch modeli, Boshlang'ich test — foiz va 5 ballik baho
+    test_type: document.getElementById("field-type").value === "boshlangich" ? "boshlangich" : "rash",
     essay: Boolean(SUBJECT_PRESETS[document.getElementById("field-subject").value]?.essay) &&
       document.getElementById("field-essay").checked,
   };
@@ -11565,6 +11567,11 @@ function openTestEditSheet(test, reopenHint = false) {
     ${reopenHint ? `<div class="notice" style="margin:0 0 10px">Test vaqti tugagan — qayta ochish uchun yangi tugash vaqtini tanlang (masalan «+1 soat» yoki «Cheklovsiz»).</div>` : ""}
     <label class="field-label" style="margin:0">Test nomi
       <input class="input" id="edit-test-title" maxlength="200" value="${escapeHtml(test.title)}" style="margin:4px 0 0" /></label>
+    <label class="field-label">Hisoblash usuli
+      <select class="input" id="edit-test-type" style="margin:4px 0 0">
+        <option value="rash" ${test.test_type !== "boshlangich" ? "selected" : ""}>Rash test — Rasch balli, A+ … NC daraja</option>
+        <option value="boshlangich" ${test.test_type === "boshlangich" ? "selected" : ""}>Boshlang'ich test — foiz va 5 ballik baho</option>
+      </select></label>
     <label class="field-label">Davomiyligi (daqiqa)
       <input class="input" id="edit-test-duration" type="number" min="${test.has_attempts ? test.duration : 1}" max="300"
              value="${test.duration}" style="margin:4px 0 0" /></label>
@@ -11606,6 +11613,7 @@ function openTestEditSheet(test, reopenHint = false) {
         title: sheet.querySelector("#edit-test-title").value.trim(),
         duration: Number(sheet.querySelector("#edit-test-duration").value) || test.duration,
         end_time: localTimeToUtcIso(endInput.value),
+        test_type: sheet.querySelector("#edit-test-type").value,
       };
       if (!test.has_attempts) body.start_time = localTimeToUtcIso(sheet.querySelector("#edit-test-start").value);
       const saved = await api(`/api/teacher/tests/${test.id}`, { method: "PATCH", body });
@@ -14659,10 +14667,11 @@ async function renderResultsTab(selectedId) {
           { label: "A+", from: 70, to: 101 },
         ]
       : [
-          { label: "2", from: 0, to: 56 },
-          { label: "3", from: 56, to: 71 },
-          { label: "4", from: 71, to: 86 },
-          { label: "5", from: 86, to: 101 },
+          // Boshlang'ich test — baho yo'q, faqat to'g'ri javoblar foizi
+          { label: "0–55%", from: 0, to: 56 },
+          { label: "56–70%", from: 56, to: 71 },
+          { label: "71–85%", from: 71, to: 86 },
+          { label: "86–100%", from: 86, to: 101 },
         ]
   ).map((bucket) => ({
     ...bucket,
@@ -14713,11 +14722,10 @@ async function renderResultsTab(selectedId) {
                <div class="stat-tile"><span class="stat-value">${ballText(summary.max_ball)}</span>Eng yuqori ball</div>
                <div class="stat-tile"><span class="stat-value">${summary.top_count} ta</span>A+ va A</div>`
             : `<div class="stat-tile"><span class="stat-value">${summary.avg_percent}%</span>O'rtacha foiz</div>
-               <div class="stat-tile"><span class="stat-value">${summary.max_percent}%</span>Eng yuqori</div>
-               <div class="stat-tile"><span class="stat-value">${summary.top_count} ta</span>A'lo (5)</div>`
+               <div class="stat-tile"><span class="stat-value">${summary.max_percent}%</span>Eng yuqori</div>`
         }
       </div>
-      <p class="section-label" style="margin:0 0 10px">${usesRasch ? "DARAJALAR (RASCH BALLI)" : "BAHOLAR (TO'G'RI JAVOBLAR FOIZI)"}</p>
+      <p class="section-label" style="margin:0 0 10px">${usesRasch ? "DARAJALAR (RASCH BALLI)" : "TO'G'RI JAVOBLAR FOIZI"}</p>
       <div class="chart">${chart}</div>
     </div>
     ${
@@ -14743,7 +14751,7 @@ async function renderResultsTab(selectedId) {
 
     <div class="row-between" style="margin:18px 0 8px">
       <span class="section-label" style="margin:0">${results.rows.length > TOP_COUNT ? `TOP-${TOP_COUNT}` : "ISHTIROKCHILAR (O'RIN BO'YICHA)"}</span>
-      <span class="subtitle" style="margin:0;font-size:12px">${usesRasch ? "ball • daraja" : "foiz • baho"}</span>
+      <span class="subtitle" style="margin:0;font-size:12px">${usesRasch ? "ball • daraja" : "foiz • to'g'ri"}</span>
     </div>
     <div class="result-cards">${rows}</div>
     <div class="contact-actions" style="margin-top:10px">
@@ -14827,7 +14835,7 @@ function resultLineHtml(row, results) {
         ${
           row.dtm_ball != null
             ? `<span class="result-percent">${row.dtm_ball}<small class="result-grade">DTM bali</small></span>`
-            : `<span class="result-percent">${usesRasch ? ballText(row.ball) : `${row.percent}%`}<small class="result-grade">${usesRasch ? escapeHtml(row.grade) : `baho ${escapeHtml(row.grade)}`}</small></span>`
+            : `<span class="result-percent">${usesRasch ? ballText(row.ball) : `${row.percent}%`}<small class="result-grade">${usesRasch ? escapeHtml(row.grade) : `${row.correct}/${row.total}`}</small></span>`
         }
       </div>`;
 }
@@ -15126,7 +15134,7 @@ async function renderTestResults(testId) {
         <tr class="result-row">
           <td>${row.rank}</td><td>${escapeHtml(row.name)}</td>
           <td>${row.correct}</td><td>${row.wrong}</td><td>${row.percent}%</td>
-          ${results.uses_rasch ? `<td><b>${ballText(row.ball)}</b></td>` : ""}<td><b>${escapeHtml(row.grade)}</b></td>
+          ${results.uses_rasch ? `<td><b>${ballText(row.ball)}</b></td><td><b>${escapeHtml(row.grade)}</b></td>` : ""}
         </tr>`;
 
   showPage(`
@@ -15149,8 +15157,7 @@ async function renderTestResults(testId) {
              <div class="stat-tile"><span class="stat-value">${ballText(results.summary.max_ball)}</span>Eng yuqori ball</div>
              <div class="stat-tile"><span class="stat-value">${results.summary.top_count} ta</span>A+ va A</div>`
           : `<div class="stat-tile"><span class="stat-value">${results.summary.avg_percent}%</span>O'rtacha foiz</div>
-             <div class="stat-tile"><span class="stat-value">${results.summary.max_percent}%</span>Eng yuqori</div>
-             <div class="stat-tile"><span class="stat-value">${results.summary.top_count} ta</span>A'lo (5)</div>`
+             <div class="stat-tile"><span class="stat-value">${results.summary.max_percent}%</span>Eng yuqori</div>`
       }
     </div>
     <button class="btn" id="pdf-button">📄 PDF HISOBOT</button>
@@ -15165,7 +15172,7 @@ async function renderTestResults(testId) {
             ? `<tr><th>№</th><th>O'quvchi ism-familiyasi</th>${hasVariants ? "<th>Var.</th>" : ""}${results.section_names
                 .map((name, index) => `<th style="text-align:center">${dtmSectionTitle(name, index)}</th>`)
                 .join("")}<th style="text-align:center">Jami ball</th></tr>`
-            : `<tr><th>O'rin</th><th>O'quvchi</th><th>✅</th><th>❌</th><th>%</th>${results.uses_rasch ? "<th>Ball</th><th>Daraja</th>" : "<th>Baho</th>"}</tr>`
+            : `<tr><th>O'rin</th><th>O'quvchi</th><th>✅</th><th>❌</th><th>%</th>${results.uses_rasch ? "<th>Ball</th><th>Daraja</th>" : ""}</tr>`
         }</thead>
         <tbody id="results-table-body"></tbody>
       </table>
@@ -15223,9 +15230,24 @@ async function downloadOrSendPdf(testId) {
   await deliverPdf(`/api/teacher/tests/${testId}/pdf`, "hisobot.pdf", "📄 PDF Telegram chatga yuborildi");
 }
 
-// Natijalar rasmi (PNG): o'rin, ism, to'g'ri/jami, ball va diagramma — guruhga yuborish uchun
+// Natijalar rasmlari: PDF'dagi "Umumiy natijalar" sahifalari, har sahifa — alohida rasm (guruhga yuborish uchun)
 async function downloadOrSendImage(testId) {
-  await deliverPdf(`/api/teacher/tests/${testId}/image`, "natijalar.png", "🖼 Rasm Telegram chatga yuborildi");
+  if (sendsViaBot()) {
+    const { pages } = await api(`/api/teacher/tests/${testId}/image/send`, { method: "POST", body: {} });
+    showToast(pages > 1 ? `🖼 ${pages} ta rasm Telegram chatga yuborildi` : "🖼 Rasm Telegram chatga yuborildi");
+    return;
+  }
+  // Oddiy brauzer: har sahifa alohida fayl bo'lib yuklanadi
+  let total = 1;
+  for (let page = 1; page <= total; page += 1) {
+    const response = await fetch(`/api/teacher/tests/${testId}/image?page=${page}`, { headers: authHeaders() });
+    if (!response.ok) throw new Error("Rasmni yuklab bo'lmadi");
+    total = Number(response.headers.get("X-Page-Count")) || 1;
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(await response.blob());
+    link.download = `natijalar_${page}.png`;
+    link.click();
+  }
 }
 
 // Excel: natijalar, har o'quvchining javoblari va savollar tahlili

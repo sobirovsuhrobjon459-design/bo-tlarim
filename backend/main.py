@@ -221,6 +221,7 @@ def _add_missing_columns() -> None:
             # Eski testlar — eski varaq ko'rinishi (raqamsiz), chop etilganlari to'g'ri skanerlansin
             "sheet_version": "INTEGER DEFAULT 1",
             "essay_max": "INTEGER",
+            "test_type": "VARCHAR(15) DEFAULT 'rash'",
         },
         "test_attempts": {
             "offline_name": "VARCHAR(200)", "saved_answers": "TEXT", "sheet_number": "INTEGER", "variant": "VARCHAR(2)",
@@ -1138,17 +1139,6 @@ def _item_number(label: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _school_grade(percent: float) -> str:
-    """Bepul testlar uchun oddiy 5 ballik baho: 86%+ — 5, 71%+ — 4, 56%+ — 3, qolgani — 2."""
-    if percent >= 86:
-        return "5"
-    if percent >= 71:
-        return "4"
-    if percent >= 56:
-        return "3"
-    return "2"
-
-
 def build_rasch_report(db: Session, test: Test) -> dict:
     """
     Test natijalari Rasch modeli bo'yicha: har bir qatnashchining balli,
@@ -1162,10 +1152,9 @@ def build_rasch_report(db: Session, test: Test) -> dict:
     results = best_attempts(db, test)
     items = _rasch_items(test)
     total_questions = _question_count(test)
-    # Hamma testlar Rasch modeli bo'yicha baholanadi (Milliy sertifikat uslubidagi
-    # ball va A+ … NC daraja). Ilgari faqat pullik testlarda edi — pullik test
-    # olib tashlangach, hamma natija oddiy 2–5 baho bo'lib qolgandi.
-    uses_rasch = True
+    # Rash test — Rasch modeli (Milliy sertifikat uslubidagi ball va A+ … NC daraja);
+    # boshlang'ich test — to'g'ri javoblar soni, foiz va 5 ballik baho (o'qituvchi test turini tanlaydi)
+    uses_rasch = test.test_type != "boshlangich"
 
     correct_refs: dict[int, set[int]] = {attempt.id: set() for attempt, _ in results}
     if correct_refs:
@@ -1237,7 +1226,8 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             "percent": attempt.percent,
             "seconds": attempt.seconds,
             "ball": score,
-            "grade": grade_for(score) if uses_rasch else _school_grade(attempt.percent),
+            # Boshlang'ich testda daraja ham, baho ham yo'q — to'g'ri javoblar soni va foiz yetarli
+            "grade": grade_for(score) if uses_rasch else None,
             "sections": split_sections(row_matrix, attempt),
             "essay": attempt.essay_score,
             "dtm_ball": round(sum(w for solved, w in zip(row_matrix, item_weights) if solved), 1) if item_weights else None,
@@ -1270,7 +1260,7 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             }
         )
 
-    top_count = sum(1 for row in rows if (row["ball"] >= 65 if uses_rasch else row["grade"] == "5"))
+    top_count = sum(1 for row in rows if row["ball"] >= 65) if uses_rasch else 0
     best = rows[0] if rows else None
 
     return {
@@ -1388,7 +1378,6 @@ def _stat_tiles(summary: dict, styles: dict, width: float):
             ("ISHTIROKCHILAR", f"{summary['participants']}", ""),
             ("O'RTACHA FOIZ", f"{summary['avg_percent']}%", ""),
             ("ENG YUQORI", f"{summary['max_percent']}%", summary["max_name"]),
-            ("A'LO (5)", f"{summary['top_count']} ta", f"ishtirokchilarning {summary['top_share']}%"),
         ]
 
     gap = 8
@@ -1533,7 +1522,7 @@ def _results_table(rows: list[dict], styles: dict, width: float, uses_rasch: boo
         return _section_results_table(rows, styles, width, uses_rasch, section_names)
     total_title, total_of = _total_column(rows, uses_rasch)
     header = ["O'rin", "F.I.Sh.", "To'g'ri", "Xato", "Foiz", total_title, "Daraja"] if uses_rasch else \
-        ["O'rin", "F.I.Sh.", "To'g'ri", "Xato", "Foiz", "Baho"]
+        ["O'rin", "F.I.Sh.", "To'g'ri", "Xato", "Foiz"]
     data = [[Paragraph(f"<font color='white'>{xml_escape(text)}</font>", styles["cell_bold"]) for text in header]]
     for row in rows:
         data.append(
@@ -1543,12 +1532,12 @@ def _results_table(rows: list[dict], styles: dict, width: float, uses_rasch: boo
                 Paragraph(f"{row['correct']}/{row['total']}", styles["cell"]),
                 Paragraph(str(row["wrong"]), styles["cell"]),
                 Paragraph(f"{row['percent']}%", styles["cell"]),
-                *([Paragraph(total_of(row), styles["cell_bold"])] if uses_rasch else []),
-                Paragraph(xml_escape(row["grade"]), styles["cell_bold"]),
+                *([Paragraph(total_of(row), styles["cell_bold"]),
+                   Paragraph(xml_escape(row["grade"]), styles["cell_bold"])] if uses_rasch else []),
             ]
         )
 
-    column_widths = [0.08, 0.38, 0.11, 0.08, 0.11, 0.12, 0.12] if uses_rasch else [0.09, 0.44, 0.12, 0.09, 0.12, 0.14]
+    column_widths = [0.08, 0.38, 0.11, 0.08, 0.11, 0.12, 0.12] if uses_rasch else [0.10, 0.52, 0.14, 0.10, 0.14]
     table = Table(data, colWidths=[width * part for part in column_widths], repeatRows=1)
     commands = [
         ("BACKGROUND", (0, 0), (-1, 0), REPORT_TABLE_HEAD),
@@ -1573,7 +1562,8 @@ def _section_results_table(rows: list[dict], styles: dict, width: float, uses_ra
 
     total_title, total_of = _total_column(rows, uses_rasch)
     dtm = _is_dtm(rows)
-    header = ["№", "F.I.Sh.", *(_dtm_section_titles(section_names) if dtm else section_names), total_title, "Baho"]
+    header = ["№", "F.I.Sh.", *(_dtm_section_titles(section_names) if dtm else section_names), total_title,
+              *(["Baho"] if uses_rasch else [])]
     centered = ParagraphStyle("cell_center", parent=styles["cell"], alignment=1)
     data = [[Paragraph(f"<font color='white'><b>{xml_escape(text).replace(chr(10), '<br/>')}</b></font>",
                        centered if index != 1 else styles["cell"])
@@ -1586,12 +1576,13 @@ def _section_results_table(rows: list[dict], styles: dict, width: float, uses_ra
             Paragraph(xml_escape(row["name"]), styles["cell"]),
             *[Paragraph(value, centered) for value in values],
             Paragraph(f"<b>{total}</b>", centered),
-            Paragraph(f"<font color='white'><b>{xml_escape(row['grade'])}</b></font>", centered),
+            *([Paragraph(f"<font color='white'><b>{xml_escape(row['grade'])}</b></font>", centered)] if uses_rasch else []),
         ])
 
+    tail = 2 if uses_rasch else 1
     name_share = 0.40 if len(section_names) <= 2 else 0.30
-    other = (1 - 0.07 - name_share) / (len(section_names) + 2)
-    widths = [0.07, name_share, *([other] * (len(section_names) + 2))]
+    other = (1 - 0.07 - name_share) / (len(section_names) + tail)
+    widths = [0.07, name_share, *([other] * (len(section_names) + tail))]
     table = Table(data, colWidths=[width * share for share in widths], repeatRows=1)
     commands = [
         ("BACKGROUND", (0, 0), (-1, 0), REPORT_TABLE_HEAD),
@@ -1603,7 +1594,9 @@ def _section_results_table(rows: list[dict], styles: dict, width: float, uses_ra
     ]
     for index, row in enumerate(rows, start=1):
         if index % 2 == 0:
-            commands.append(("BACKGROUND", (0, index), (-2, index), REPORT_TILE_BG))
+            commands.append(("BACKGROUND", (0, index), (-2 if uses_rasch else -1, index), REPORT_TILE_BG))
+        if not uses_rasch:
+            continue
         fill = GRADE_FILL.get(row["grade"])
         commands.append(("BACKGROUND", (-1, index), (-1, index), colors.HexColor(fill) if fill else REPORT_MUTED))
     table.setStyle(TableStyle(commands))
@@ -1611,7 +1604,6 @@ def _section_results_table(rows: list[dict], styles: dict, width: float, uses_ra
 
 
 RASCH_GRADE_ORDER = ["A+", "A", "B+", "B", "C+", "C", "NC"]
-SCHOOL_GRADE_ORDER = ["5", "4", "3", "2"]
 
 
 REPORT_HEADER_HEIGHT = 64  # tepadagi sarlavha (logo + yashil chiziq) egallagan joy (pt)
@@ -1703,8 +1695,9 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
         middle = ["To'g'ri", "Foiz"] if uses_rasch else ["To'g'ri"]
     total_title, total_of = _total_column(rows, uses_rasch)
     dtm = _is_dtm(rows) and bool(section_names)
+    show_grade = uses_rasch and not dtm  # boshlang'ich testda baho ustuni yo'q
     header = ["№", "Ism Familiya", *(_dtm_section_titles(middle) if dtm else middle), "Jami ball" if dtm else total_title,
-              *([] if dtm else ["Baho"])]
+              *(["Baho"] if show_grade else [])]
     # Ko'p bo'limda (Fizika — 6 ta) ustunlar tor: sarlavha kichikroq shriftda,
     # aks holda "Mexanika" kabi so'zlar o'rtasidan bo'linib ketardi
     many = len(middle) > 4
@@ -1725,11 +1718,11 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
             Paragraph(xml_escape(row["name"]), styles["cell"]),
             *[Paragraph(value, centered) for value in middle_values],
             Paragraph(f"<b>{total}</b>", centered),
-            *([] if dtm else [Paragraph(f"<font color='white'><b>{xml_escape(row['grade'])}</b></font>", centered)]),
+            *([Paragraph(f"<font color='white'><b>{xml_escape(row['grade'])}</b></font>", centered)] if show_grade else []),
         ])
 
     # Bo'limlar ko'p bo'lsa (Fizikada 6 ta) ustunlar torayadi — ism ustuniga kamida 24% qoladi
-    tail = 1 if dtm else 2
+    tail = 2 if show_grade else 1
     other = min(0.13, (1 - 0.07 - 0.24) / (len(middle) + tail))
     name_share = 1 - 0.07 - other * (len(middle) + tail)
     widths = [0.07, name_share, *([other] * (len(middle) + tail))]
@@ -1745,8 +1738,8 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
         commands += [("LEFTPADDING", (2, 0), (-1, -1), 2), ("RIGHTPADDING", (2, 0), (-1, -1), 2)]
     for index, row in enumerate(rows, start=1):
         if index % 2 == 0:
-            commands.append(("BACKGROUND", (0, index), (-1 if dtm else -2, index), REPORT_TILE_BG))
-        if dtm:
+            commands.append(("BACKGROUND", (0, index), (-2 if show_grade else -1, index), REPORT_TILE_BG))
+        if not show_grade:
             continue
         fill = GRADE_FILL.get(row["grade"])
         commands.append(("BACKGROUND", (-1, index), (-1, index), colors.HexColor(fill) if fill else REPORT_MUTED))
@@ -1809,7 +1802,7 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher, overview
         return buffer.getvalue()
 
     # Har bir daraja alohida: A+ olganlar, A olganlar ... NC (DTM testida — yo'q: natija DTM bali)
-    order = [] if report.get("dtm_max") else RASCH_GRADE_ORDER if uses_rasch else SCHOOL_GRADE_ORDER
+    order = RASCH_GRADE_ORDER if uses_rasch and not report.get("dtm_max") else []
     for grade in order:
         group = [row for row in rows if row["grade"] == grade]
         if not group:
@@ -1846,7 +1839,7 @@ def generate_test_report_pdf(db: Session, test: Test, teacher: Teacher, overview
         "Ball Rasch modeli bo'yicha hisoblangan (Milliy sertifikat uslubida): qiyin savol ko'proq ball beradi, "
         "o'rtacha ball ~50. Darajalar: A+ 70+, A 65+, B+ 60+, B 55+, C+ 50+, C 46+; 46 dan past — NC."
         if uses_rasch
-        else "Baho to'g'ri javoblar foizi bo'yicha: 86% va yuqori — 5, 71% — 4, 56% — 3, qolgani — 2."
+        else "Natija to'g'ri javoblar soni va foizi bo'yicha."
     )
     elements += [Spacer(1, 10), Paragraph(xml_escape(f"{footnote} O'qituvchi: {teacher.user.full_name}."), styles["meta"])]
 
@@ -5173,6 +5166,7 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         start_time=start_time,
         end_time=end_time,
         essay_max=essay_max(body.subject) if body.essay else None,
+        test_type=body.test_type,
         questions=[Question(**question.model_dump()) for question in body.questions] if body.mode == "full" else [],
         key_questions=(
             [KeyQuestion(**key_question.model_dump()) for key_question in body.key_questions]
@@ -5320,6 +5314,7 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
         "subject": test.subject,
         "topic": test.topic,
         "mode": test.mode,
+        "test_type": test.test_type or "rash",
         "price": test.price,
         "enrollment_type": test.enrollment_type,
         "required_channel": test.required_channel,
@@ -5395,6 +5390,8 @@ def edit_test(test_id: int, body: TestEditIn, teacher: Teacher = Depends(get_cur
         test.title = " ".join(body.title.split())
     if "duration" in fields and body.duration is not None:
         test.duration = body.duration
+    if "test_type" in fields and body.test_type:
+        test.test_type = body.test_type
     test.start_time, test.end_time = start_time, end_time
 
     # Vaqti tugab o'zi yopilgan test cho'zilsa — qayta ochiladi (o'qituvchi aynan shuni xohlaydi)
@@ -6578,10 +6575,12 @@ def _draw_certificate_page(pdf, test: Test, teacher: Teacher, row: dict, section
     field(height - 368, "Fan:", test.subject[:40])
     if row.get("dtm_ball") is not None:
         field(height - 392, "DTM bali:", f"{row['dtm_ball']:g} / {DTM_MAX_BALL:g}".replace(".", ","), size=12)
-    else:
+    elif row.get("ball") is not None:
         field(height - 392, "Umumiy to'plagan bali:", ball, size=12)
+    else:  # boshlang'ich test — Rasch balli yo'q
+        field(height - 392, "To'g'ri javoblar:", f"{row['correct']} / {row['total']}", size=12)
     field(height - 416, "To'g'ri javoblar foizi:", f"{row['percent']:g} %  ({row['correct']}/{row['total']})", size=12)
-    if row.get("dtm_ball") is None:  # DTM testida daraja yo'q — natija DTM bali
+    if row.get("dtm_ball") is None and row.get("grade"):  # DTM va boshlang'ich testda daraja yo'q
         field(height - 440, "Sertifikat darajasi:", row["grade"], size=13)
     field(height - 464, "Qatnashchilar orasidagi o'rni:", str(row["rank"]))
 
@@ -6785,62 +6784,77 @@ def download_pdf(test_id: int, teacher: Teacher = Depends(get_current_teacher), 
     )
 
 
-def pdf_pages_to_png(pdf_bytes: bytes, scale: float = 2.0) -> bytes:
-    """PDF sahifalarini rasmga aylantiradi: bir nechta sahifa bo'lsa — ketma-ket, bitta uzun rasm (PNG)."""
+def pdf_pages_to_png(pdf_bytes: bytes, scale: float = 2.0) -> list[bytes]:
+    """PDF'ning har bir sahifasi — alohida rasm (PNG)."""
 
     import pypdfium2 as pdfium
-    from PIL import Image
 
     document = pdfium.PdfDocument(pdf_bytes)
+    images = []
     try:
-        pages = [document[index].render(scale=scale).to_pil().convert("RGB") for index in range(len(document))]
+        for index in range(len(document)):
+            buffer = io.BytesIO()
+            document[index].render(scale=scale).to_pil().convert("RGB").save(buffer, format="PNG", optimize=True)
+            images.append(buffer.getvalue())
     finally:
         document.close()
-    gap = int(12 * scale)
-    width = max(page.width for page in pages)
-    image = Image.new("RGB", (width, sum(page.height for page in pages) + gap * (len(pages) - 1)), "#e5e7eb")
-    top = 0
-    for page in pages:
-        image.paste(page, (0, top))
-        top += page.height + gap
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG", optimize=True)
-    return buffer.getvalue()
+    return images
 
 
-def test_results_png(db: Session, test: Test, teacher: Teacher) -> bytes:
-    """Natijalar rasmi — PDF hisobotdagi "Umumiy natijalar" sahifa(lar)ining o'zi."""
+def test_results_pngs(db: Session, test: Test, teacher: Teacher) -> list[bytes]:
+    """Natijalar rasmlari — PDF hisobotdagi "Umumiy natijalar" sahifalarining o'zi, har sahifa alohida."""
     return pdf_pages_to_png(generate_test_report_pdf(db, test, teacher, overview_only=True))
 
 
 @app.get("/api/teacher/tests/{test_id}/image")
-def download_results_image(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
-    """Natijalar rasmi (PNG) — brauzerda yuklab olish uchun."""
+def download_results_image(test_id: int, page: int = 1, teacher: Teacher = Depends(get_current_teacher),
+                           db: Session = Depends(get_db)):
+    """Natijalar rasmining bitta sahifasi (PNG) — brauzerda yuklab olish uchun. X-Page-Count — jami sahifalar."""
     test = _get_own_test(db, teacher, test_id)
-    return StreamingResponse(io.BytesIO(test_results_png(db, test, teacher)), media_type="image/png",
-                             headers={"Content-Disposition": f'attachment; filename="{test.code}.png"'})
+    images = test_results_pngs(db, test, teacher)
+    if not 1 <= page <= len(images):
+        raise HTTPException(status_code=404, detail="Bunday sahifa yo'q")
+    return StreamingResponse(io.BytesIO(images[page - 1]), media_type="image/png", headers={
+        "Content-Disposition": f'attachment; filename="{test.code}_{page}.png"',
+        "X-Page-Count": str(len(images)), "Access-Control-Expose-Headers": "X-Page-Count",
+    })
 
 
-# Telegram rasm (sendPhoto) cheklovi: eni + bo'yi 10 000 px gacha. Undan katta rasm
-# (ko'p o'quvchili, 5+ sahifali natija) hujjat bo'lib yuboriladi — sifati ham buzilmaydi
-PHOTO_MAX_SIDES = 9500
+TELEGRAM_ALBUM_SIZE = 10  # bitta albomda ko'pi bilan 10 ta rasm
+
+
+def _send_photo_album(chat_id: int, file_prefix: str, images: list[bytes], caption: str = "") -> None:
+    """Bir nechta rasm — albom bo'lib (10 tadan); izoh birinchi rasmda. Bitta rasm — oddiy rasm."""
+    if len(images) == 1:
+        _send_photo_to_telegram(chat_id, f"{file_prefix}.png", images[0], caption)
+        return
+    for start in range(0, len(images), TELEGRAM_ALBUM_SIZE):
+        chunk = images[start:start + TELEGRAM_ALBUM_SIZE]
+        if len(chunk) == 1:  # albom kamida 2 ta rasmdan bo'ladi
+            _send_photo_to_telegram(chat_id, f"{file_prefix}_{start + 1}.png", chunk[0])
+            continue
+        media = [{"type": "photo", "media": f"attach://photo{index}",
+                  **({"caption": caption} if caption and start == 0 and index == 0 else {})}
+                 for index in range(len(chunk))]
+        response = httpx.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMediaGroup",
+            data={"chat_id": chat_id, "media": json.dumps(media, ensure_ascii=False)},
+            files={f"photo{index}": (f"{file_prefix}_{start + index + 1}.png", image, "image/png")
+                   for index, image in enumerate(chunk)},
+            timeout=60,
+        )
+        if response.status_code != 200:
+            raise HTTPException(status_code=502, detail="Rasmlar yuborilmadi (botga /start bosganmisiz?)")
 
 
 @app.post("/api/teacher/tests/{test_id}/image/send")
 def send_results_image(test_id: int, teacher: Teacher = Depends(get_current_teacher), user: User = Depends(get_current_user),
                        db: Session = Depends(get_db)):
-    """Natijalar rasmini bot orqali o'qituvchining chatiga yuboradi (u yerdan guruhga uzatadi)."""
-    from PIL import Image
-
+    """Natijalar rasmlarini (har sahifa — alohida rasm) bot orqali o'qituvchining chatiga yuboradi."""
     test = _get_own_test(db, teacher, test_id)
-    image = test_results_png(db, test, teacher)
-    width, height = Image.open(io.BytesIO(image)).size
-    caption = f"📊 «{test.title}» — natijalar"
-    if width + height > PHOTO_MAX_SIDES:
-        _send_pdf_to_telegram(user.tg_id, f"{test.code}_natijalar.png", image, caption, mime="image/png")
-    else:
-        _send_photo_to_telegram(user.tg_id, f"{test.code}_natijalar.png", image, caption)
-    return {"ok": True}
+    images = test_results_pngs(db, test, teacher)
+    _send_photo_album(user.tg_id, f"{test.code}_natijalar", images, f"📊 «{test.title}» — natijalar")
+    return {"ok": True, "pages": len(images)}
 
 
 @app.post("/api/teacher/tests/{test_id}/pdf/send")
@@ -6899,13 +6913,14 @@ def generate_test_report_xlsx(db: Session, test: Test) -> bytes:
     results = workbook.active
     results.title = "Natijalar"
     dtm = _is_dtm(rows)
+    rasch = report["uses_rasch"]
     header(results, ["O'rin", "Raqam", "Ism-familiya", "To'g'ri", "Xato", "Jami", "Foiz %", *(["DTM bali"] if dtm else []),
-                     "Ball", "Daraja", *sections],
-           [7, 8, 32, 9, 8, 7, 9, *([10] if dtm else []), 9, 9, *[14] * len(sections)])
+                     *(["Ball", "Daraja"] if rasch else []), *sections],
+           [7, 8, 32, 9, 8, 7, 9, *([10] if dtm else []), *([9, 9] if rasch else []), *[14] * len(sections)])
     for row in rows:
         results.append([
             row["rank"], numbers.get(row["attempt_id"]), row["name"], row["correct"], row["wrong"], row["total"],
-            row["percent"], *([row["dtm_ball"]] if dtm else []), row["ball"], row["grade"],
+            row["percent"], *([row["dtm_ball"]] if dtm else []), *([row["ball"], row["grade"]] if rasch else []),
             *[row["sections"].get(name) for name in sections],
         ])
 

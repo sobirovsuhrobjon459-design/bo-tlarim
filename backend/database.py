@@ -229,6 +229,8 @@ class Test(Base):
     # "full"  — savol matni va variantlar to'liq botda kiritiladi
     # "key"   — faqat javoblar kaliti kiritiladi (savollar tashqarida, masalan kanalda)
     mode: Mapped[str] = mapped_column(String(10), default="full")
+    # Test turi: "rash" — Rasch modeli (ball, A+ … NC daraja); "boshlangich" — to'g'ri javoblar, foiz va 5 ballik baho
+    test_type: Mapped[str] = mapped_column(String(15), default="rash")
 
     # Telegram guruhga bog'lash (ixtiyoriy)
     telegram_group_id: Mapped[int | None] = mapped_column(BigInteger, default=None)
@@ -1333,6 +1335,7 @@ class TestIn(BaseModel):
     key_questions: list[KeyQuestionIn] = Field(default_factory=list, max_length=300)
     # Esse qo'shilsinmi (faqat esseli fanda — Ona tili)
     essay: bool = False
+    test_type: Literal["rash", "boshlangich"] = "rash"
 
     @model_validator(mode="after")
     def check_price(self) -> "TestIn":
@@ -1362,6 +1365,8 @@ class TestEditIn(BaseModel):
     duration: int | None = Field(None, ge=1, le=300)
     start_time: datetime | None = None
     end_time: datetime | None = None
+    # Hisoblash usuli: Rasch yoki boshlang'ich (natijalar darhol qayta hisoblanadi)
+    test_type: Literal["rash", "boshlangich"] | None = None
 
 
 class TeacherCardIn(BaseModel):

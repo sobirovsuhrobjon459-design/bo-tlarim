@@ -1973,6 +1973,59 @@ def test_davomatni_ochirish_tarix_va_statistikadan_olinadi():
         session.close()
 
 
+def test_natija_rasmlari_albom_bolib_yuboriladi():
+    """Har sahifa — alohida rasm: 11 sahifa → 10 talik albom + bitta rasm; izoh birinchisida."""
+    import json as _json
+
+    calls = []
+
+    class Reply:
+        status_code = 200
+
+    original = main.httpx.post
+    main.httpx.post = lambda url, data=None, files=None, timeout=None: calls.append((url.rsplit("/", 1)[-1], data, files)) or Reply()
+    try:
+        main._send_photo_album(1, "T", [b"png"] * 11, "Natijalar")
+        main._send_photo_album(1, "T", [b"png"], "Bitta")
+    finally:
+        main.httpx.post = original
+    assert [name for name, _, _ in calls] == ["sendMediaGroup", "sendPhoto", "sendPhoto"], calls
+    media = _json.loads(calls[0][1]["media"])
+    assert len(media) == 10 and len(calls[0][2]) == 10 and media[0]["caption"] == "Natijalar" and "caption" not in media[1]
+    assert "caption" not in calls[1][1] and calls[2][1]["caption"] == "Bitta"
+
+
+def test_boshlangich_test_rasch_siz_hisoblanadi():
+    """Boshlang'ich test: ball yo'q — to'g'ri javoblar, foiz va 5 ballik baho; turni keyin o'zgartirsa — qayta hisoblanadi."""
+    reset_database()
+    register_teacher()
+    key = [{"number": n, "question_type": "single", "option_count": 4, "correct": "A"} for n in range(1, 11)]
+    created = create_test(key_questions=key, test_type="boshlangich")
+    for index, solved in enumerate((9, 7, 4)):
+        started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(7600 + index)).json()
+        answers = {str(n): ("A" if n <= solved else "B") for n in range(1, 11)}
+        client.post(f"/api/attempts/{started['attempt_id']}/finish", json={"answers": answers}, headers=as_user(7600 + index))
+
+    url = f"/api/teacher/tests/{created['id']}"
+    assert client.get(url, headers=as_user(555)).json()["test_type"] == "boshlangich"
+    results = client.get(f"{url}/results", headers=as_user(555)).json()
+    assert results["uses_rasch"] is False
+    # Daraja ham, baho ham yo'q — faqat to'g'ri javoblar soni va foiz
+    assert [(row["correct"], row["percent"], row["ball"], row["grade"]) for row in results["rows"]] ==         [(9, 90.0, None, None), (7, 70.0, None, None), (4, 40.0, None, None)]
+    excel = client.get(f"{url}/excel", headers=as_user(555))
+    assert excel.status_code == 200
+    pdf = client.get(f"{url}/pdf", headers=as_user(555))
+    assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
+    certificates = client.get(f"{url}/certificates", headers=as_user(555))
+    assert certificates.status_code == 200 and certificates.content.startswith(b"%PDF")
+
+    # O'qituvchi hisoblash usulini o'zgartiradi — natijalar Rasch bo'yicha
+    assert client.patch(url, json={"test_type": "rash"}, headers=as_user(555)).status_code == 200
+    results = client.get(f"{url}/results", headers=as_user(555)).json()
+    assert results["uses_rasch"] is True and all(row["ball"] is not None for row in results["rows"])
+    assert client.patch(url, json={"test_type": "boshqa"}, headers=as_user(555)).status_code == 422
+
+
 def test_sinflar_raqam_tartibida():
     """Sinflar 1 dan 11 gacha tartibda: 2-A "10-1" dan oldin (oddiy saralashda keyin turardi)."""
     reset_database()
@@ -4077,9 +4130,11 @@ def test_har_fan_milliy_sertifikat_pasporti_boyicha_ishlaydi():
         for url in (f"/api/teacher/tests/{created['id']}/pdf", f"/api/teacher/tests/{created['id']}/certificates"):
             pdf = client.get(url, headers=as_user(555))
             assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF"), (subject, url)
-        # Natijalar rasmi (PNG) — har fanda, DTM testida ham
+        # Natijalar rasmi (PNG) — har fanda, DTM testida ham; har sahifa alohida
         image = client.get(f"/api/teacher/tests/{created['id']}/image", headers=as_user(555))
         assert image.status_code == 200 and image.content[1:4] == b"PNG", (subject, image.status_code)
+        assert int(image.headers["X-Page-Count"]) >= 1
+        assert client.get(f"/api/teacher/tests/{created['id']}/image?page=99", headers=as_user(555)).status_code == 404
 
         questions = client.get(f"/api/teacher/tests/{created['id']}/questions", headers=as_user(555)).json()
         assert questions["keyboard"] == expected_keyboard[subject], subject
