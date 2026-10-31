@@ -2247,8 +2247,28 @@ function openCodeRangeSheet(schoolClass) {
     </div>
     <p class="subtitle" id="code-hint" style="margin:6px 0 0"></p>
     <button class="btn" id="code-save" style="margin-top:12px">💾 Saqlash</button>
+    ${
+      schoolClass.code_start
+        ? `<button class="btn btn-ghost danger-text" id="code-clear" style="margin-top:8px">🗑 ID'larni olib tashlash</button>`
+        : ""
+    }
     <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
   `);
+  sheet.querySelector("#code-clear")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const sure = await askConfirm(
+        `«${schoolClass.name}» sinfining ID oralig'i (${schoolClass.code_start}–${schoolClass.code_end}) va o'quvchilarning ID'lari olib tashlansinmi? ` +
+          "Natija va davomatlar saqlanib qoladi. Hali skanerlanmagan titullardagi ID'lar ham bekor bo'ladi."
+      );
+      if (!sure) return;
+      const updated = await api(`/api/classes/${schoolClass.id}/student-codes`, { method: "DELETE" });
+      myClassesCache = null;
+      showToast("🗑 ID'lar olib tashlandi");
+      close();
+      openClassTab(updated, "students");
+    })
+  );
   const startInput = sheet.querySelector("#code-start");
   const endInput = sheet.querySelector("#code-end");
   const hint = sheet.querySelector("#code-hint");

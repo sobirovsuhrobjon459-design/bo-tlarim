@@ -9024,6 +9024,32 @@ def delete_class(class_id: int, user: User = Depends(get_current_user), db: Sess
     return {"ok": True}
 
 
+@app.delete("/api/classes/{class_id}/student-codes")
+def clear_class_code_range(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Sinfning ID oralig'i va o'quvchilarning ID'lari olib tashlanadi (admin yoki direktor).
+    Natija va davomatlar o'quvchiga bog'langan — yo'qolmaydi. Hali skanerlanmagan titullardagi raqam ham
+    bekor bo'ladi: keyin shu raqamlar boshqa sinfga berilsa, varaq begona o'quvchiga tushib qolmasin.
+    """
+
+    school_class = _director_class(db, user, class_id)
+    students = _active_students(school_class)
+    codes = {student.student_code for student in students if student.student_code}
+    if codes:
+        for attempt in db.scalars(
+            select(Attempt).where(Attempt.class_student_id.in_([student.id for student in students]),
+                                  Attempt.status == "pending", Attempt.sheet_number.in_(codes))
+        ).all():
+            attempt.sheet_number = None
+    for student in students:
+        student.student_code = None
+    school_class.code_start = school_class.code_end = None
+    db.commit()
+    logging.getLogger("backend").info("ID oralig'i olib tashlandi: class=%s user=%s (%s ta ID)", class_id, user.id, len(codes))
+    db.refresh(school_class)
+    return _class_view(db, school_class, with_details=True, member=_active_membership(db, user))
+
+
 @app.put("/api/classes/{class_id}/student-codes")
 def set_class_code_range(
     class_id: int, body: ClassCodeRangeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)

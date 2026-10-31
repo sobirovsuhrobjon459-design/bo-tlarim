@@ -5596,6 +5596,17 @@ def test_sinf_id_oraligini_admin_belgilaydi():
     after = client.post(f"/api/classes/{cid}/students", json={"full_name": "Yangi Bola"}, headers=as_user(701)).json()
     assert after["students"][-1]["code"] == 1004
 
+    # ID oralig'ini olib tashlash: faqat admin/direktor; ID'lar bo'shaydi va qaytib berilmaydi
+    assert client.delete(url, headers=as_user(703)).status_code in (403, 404)
+    cleared = client.delete(url, headers=as_user(701))
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["code_start"] is None and all(s["code"] is None for s in cleared.json()["students"])
+    reopened = client.get(f"/api/classes/{cid}", headers=as_user(701)).json()
+    assert all(s["code"] is None for s in reopened["students"]), reopened["students"]
+    # Qayta belgilash mumkin
+    again = client.put(url, json={"start": 1001, "end": 1038}, headers=as_user(701)).json()
+    assert [s["code"] for s in again["students"]] == [1001, 1002, 1003, 1004], again["students"]
+
     # Boshqa sinf: kesishgan oraliq rad etiladi
     other = client.post("/api/classes", json={"name": "Iqtisod-1"}, headers=as_user(701)).json()
     client.post(f"/api/classes/{other['id']}/students", json={"full_name": "Jasur Umarov"}, headers=as_user(701))
