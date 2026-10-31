@@ -7904,8 +7904,8 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         curator_of.setdefault(curator_id, []).append(class_name)
     # Avval egasi, keyin qo'shilish tartibida
     # Avval admin, keyin direktor, zam direktor, so'ng qo'shilish tartibida
-    rank = {"director": 1, "deputy": 2}
-    members.sort(key=lambda item: (0 if item.role == "owner" else rank.get(item.position, 3), item.joined_at, item.id))
+    rank = {"director": 1, "deputy": 2, "accountant": 3, "commandant": 4}
+    members.sort(key=lambda item: (0 if item.role == "owner" else rank.get(item.position, 5), item.joined_at, item.id))
 
     return {
         "id": school.id,
@@ -7927,17 +7927,17 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         "my_subjects": _read_subjects(member),
         "invite_link": school_invite_link(school.code) if member.role == "owner" else None,
         # Oylik to'lov — summani admin/direktor belgilaydi; ko'radi rahbariyat va kuratorlar (o'z sinfi)
-        "monthly_fee": school.monthly_fee if leader or db.scalar(
+        "monthly_fee": school.monthly_fee if _sees_all_finance(member) or db.scalar(
             select(SchoolClass.id).where(SchoolClass.school_id == school.id, SchoolClass.deleted_at.is_(None),
                                          SchoolClass.curator_user_id == user.id).limit(1)) else None,
-        "can_see_all_payments": leader,
+        "can_see_all_payments": _sees_all_finance(member),
         # Yotoqxona: rahbariyat va tarbiyachilar ochadi (to'garakda yo'q)
         "dorm": (school.kind or "school") != "club" and (
-            _can_delete_classes(member)
+            _can_manage_dorm(member)
             or bool(db.scalar(select(DormRoom.id).where(DormRoom.school_id == school.id, DormRoom.deleted_at.is_(None),
                                                        DormRoom.warden_user_id == user.id)))
         ),
-        "can_set_fee": _can_delete_classes(member),
+        "can_set_fee": _can_set_fees(member),
         "can_remove_members": _can_delete_classes(member),
         "members": [
             {
@@ -8574,7 +8574,25 @@ def _school_class(db: Session, user: User, class_id: int) -> tuple[SchoolClass, 
     return school_class, member
 
 
-POSITION_LABELS = {"director": "Direktor", "deputy": "Zam direktor"}
+POSITION_LABELS = {"director": "Direktor", "deputy": "Zam direktor"}  # rahbariyat
+# Rahbariyatga kirmaydigan lavozimlar — faqat o'z sohasi: moliyachi — to'lovlar, komendant — yotoqxona
+STAFF_POSITION_LABELS = {"accountant": "Moliyachi", "commandant": "Komendant"}
+ALL_POSITION_LABELS = {**POSITION_LABELS, **STAFF_POSITION_LABELS}
+
+
+def _sees_all_finance(member: SchoolMember) -> bool:
+    """Barcha sinflarning to'lovlari, qarzlari va narxlari: rahbariyat va moliyachi."""
+    return _is_director(member) or member.position == "accountant"
+
+
+def _can_set_fees(member: SchoolMember) -> bool:
+    """Oylik to'lov summasini belgilaydi: admin, direktor va moliyachi."""
+    return _can_delete_classes(member) or member.position == "accountant"
+
+
+def _can_manage_dorm(member: SchoolMember) -> bool:
+    """Yotoqxonani boshqaradi (binolar, xonalar, joylashtirish, tarbiyachilar): admin, direktor va komendant."""
+    return _can_delete_classes(member) or member.position == "commandant"
 
 
 def _is_director(member: SchoolMember) -> bool:
@@ -8599,8 +8617,8 @@ def _can_manage_class(school_class: SchoolClass, member: SchoolMember) -> bool:
 
 
 def _can_see_payments(school_class: SchoolClass, member: SchoolMember) -> bool:
-    """Moliyaviy ma'lumotlar (to'lov, qarz, narx): rahbariyat — hamma sinf, kurator — faqat o'z sinfi."""
-    return _is_director(member) or school_class.curator_user_id == member.user_id
+    """Moliyaviy ma'lumotlar (to'lov, qarz, narx): rahbariyat va moliyachi — hamma sinf, kurator — faqat o'z sinfi."""
+    return _sees_all_finance(member) or school_class.curator_user_id == member.user_id
 
 
 def _require_director(member: SchoolMember) -> None:
@@ -9028,8 +9046,8 @@ def _member_role_label(member: SchoolMember) -> str:
     """Xabarlar uchun: "Fizika o'qituvchisi", "Direktor", "Maktab admini"."""
     if member.role == "owner":
         return "Maktab admini"
-    if member.position in POSITION_LABELS:
-        return POSITION_LABELS[member.position]
+    if member.position in ALL_POSITION_LABELS:
+        return ALL_POSITION_LABELS[member.position]
     try:
         subjects = json.loads(member.subjects or "[]")
     except ValueError:
@@ -9232,7 +9250,7 @@ def _can_set_student_status(db: Session, member: SchoolMember, school_class: Sch
     if _is_director(member) or school_class.curator_user_id == member.user_id:
         return True
     room = _student_dorm_room(db, student.id)
-    return bool(room and room.warden_user_id == member.user_id)
+    return bool(room and (room.warden_user_id == member.user_id or member.position == "commandant"))
 
 
 def _live_class_tests():
@@ -10239,8 +10257,8 @@ def _payment_view(db: Session, payment: TuitionPayment) -> dict:
 def set_monthly_fee(body: FeeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Oylik o'qish to'lovini admin yoki direktor belgilaydi (barcha o'quvchilar uchun)."""
     member = _require_school_member(db, user)
-    if not _can_delete_classes(member):
-        raise HTTPException(status_code=403, detail="Oylik to'lovni faqat admin yoki direktor belgilaydi")
+    if not _can_set_fees(member):
+        raise HTTPException(status_code=403, detail="Oylik to'lovni admin, direktor yoki moliyachi belgilaydi")
     from_month = _record_fee_change(db, member.school, None, body.monthly_fee, body.from_month, user)
     db.commit()
     logging.getLogger("backend").info("Oylik to'lov o'zgardi: school=%s fee=%s from=%s user=%s",
@@ -10255,8 +10273,8 @@ def fee_history(class_id: int | None = None, user: User = Depends(get_current_us
         school_class, member = _school_class(db, user, class_id)
     else:
         school_class, member = None, _require_school_member(db, user)
-    if not _can_delete_classes(member):
-        raise HTTPException(status_code=403, detail="Narx tarixini admin yoki direktor ko'radi")
+    if not _can_set_fees(member):
+        raise HTTPException(status_code=403, detail="Narx tarixini admin, direktor yoki moliyachi ko'radi")
     return {"history": _fee_history(db, member.school, school_class)}
 
 
@@ -10264,8 +10282,8 @@ def fee_history(class_id: int | None = None, user: User = Depends(get_current_us
 def set_class_fee(class_id: int, body: ClassFeeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Guruhning o'z oylik narxi (admin yoki direktor). Bo'sh — muassasaning umumiy summasiga qaytadi."""
     school_class, member = _school_class(db, user, class_id)
-    if not _can_delete_classes(member):
-        raise HTTPException(status_code=403, detail="Narxni faqat admin yoki direktor belgilaydi")
+    if not _can_set_fees(member):
+        raise HTTPException(status_code=403, detail="Narxni admin, direktor yoki moliyachi belgilaydi")
     from_month = _record_fee_change(db, member.school, school_class, body.monthly_fee, body.from_month, user)
     db.commit()
     logging.getLogger("backend").info("Guruh narxi o'zgardi: class=%s fee=%s from=%s user=%s",
@@ -10537,8 +10555,8 @@ def class_debtors_text(class_id: int, month: str | None = None, user: User = Dep
 def payments_summary(month: str | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Oylik hisobot (rahbariyat): har sinf bo'yicha kutilgan, tushgan va qarz."""
     member = _require_school_member(db, user)
-    if not _is_director(member):
-        raise HTTPException(status_code=403, detail="Umumiy hisobotni rahbariyat ko'radi")
+    if not _sees_all_finance(member):
+        raise HTTPException(status_code=403, detail="Umumiy hisobotni rahbariyat va moliyachi ko'radi")
     month = month if month and re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month) else _current_month()
     classes = db.scalars(
         select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None)).order_by(SchoolClass.name)
@@ -10659,7 +10677,7 @@ def school_overview(user: User = Depends(get_current_user), db: Session = Depend
     ]
 
     # Qarzdorlar (joriy oy): rahbariyat — butun maktab, kurator — o'z sinflari
-    payment_classes = classes if leader else curated
+    payment_classes = classes if _sees_all_finance(member) else curated
     debtors = debt_sum = None
     if payment_classes and any(_class_fee(school, item) > 0 for item in payment_classes):
         month = _current_month()
@@ -11588,7 +11606,7 @@ def delete_announcement(announcement_id: int, user: User = Depends(get_current_u
 
 
 # ---------- Yotoqxona: xonalar, joylashtirish, kechki yo'qlama ----------
-# Maktab va o'quv markazida (to'garakda yo'q). Rahbariyat (admin, direktor) — hamma xona: ochadi,
+# Maktab va o'quv markazida (to'garakda yo'q). Rahbariyat (admin, direktor) va komendant — hamma xona: ochadi,
 # o'quvchilarni joylashtiradi, tarbiyachi tayinlaydi. Tarbiyachi — faqat o'z xonalari: ko'radi va yo'qlama oladi.
 
 DORM_STATUSES = {"present": "Bor", "absent": "Yo'q", "sick": "Kasal", "excused": "Ruxsat bilan"}
@@ -11604,7 +11622,7 @@ def _dorm_member(db: Session, user: User) -> SchoolMember:
 def _dorm_rooms_of(db: Session, member: SchoolMember) -> list[DormRoom]:
     """Ko'rinadigan xonalar: rahbariyatga — hammasi, tarbiyachiga — o'ziniki."""
     query = select(DormRoom).where(DormRoom.school_id == member.school_id, DormRoom.deleted_at.is_(None))
-    if not _can_delete_classes(member):
+    if not _can_manage_dorm(member):
         query = query.where(DormRoom.warden_user_id == member.user_id)
     return db.scalars(query.order_by(DormRoom.floor, DormRoom.name)).all()
 
@@ -11613,9 +11631,9 @@ def _dorm_room(db: Session, member: SchoolMember, room_id: int, manage: bool = F
     room = db.get(DormRoom, room_id)
     if not room or room.deleted_at is not None or room.school_id != member.school_id:
         raise HTTPException(status_code=404, detail="Xona topilmadi")
-    leader = _can_delete_classes(member)
+    leader = _can_manage_dorm(member)
     if manage and not leader:
-        raise HTTPException(status_code=403, detail="Xonalarni admin yoki direktor boshqaradi")
+        raise HTTPException(status_code=403, detail="Xonalarni admin, direktor yoki komendant boshqaradi")
     if not leader and room.warden_user_id != member.user_id:
         raise HTTPException(status_code=403, detail="Bu xona sizga biriktirilmagan")
     return room
@@ -11675,7 +11693,7 @@ def dorm_overview(user: User = Depends(get_current_user), db: Session = Depends(
     """Yotoqxona: xonalar (qavat bo'yicha), bandlik va bugungi kechki yo'qlama holati."""
 
     member = _dorm_member(db, user)
-    leader = _can_delete_classes(member)
+    leader = _can_manage_dorm(member)
     rooms = _dorm_rooms_of(db, member)
     if not leader and not rooms:
         raise HTTPException(status_code=403, detail="Yotoqxona bo'limi rahbariyat va tarbiyachilar uchun")
@@ -11731,7 +11749,7 @@ def _dorm_buildings_of(db: Session, member: SchoolMember, rooms: list[DormRoom])
     None — binoga biriktirilmagan xonalar (binolar qo'shilishidan oldin ochilganlar) guruhi.
     """
     query = select(DormBuilding).where(DormBuilding.school_id == member.school_id, DormBuilding.deleted_at.is_(None))
-    if not _can_delete_classes(member):
+    if not _can_manage_dorm(member):
         query = query.where(DormBuilding.id.in_({room.building_id for room in rooms if room.building_id} or {-1}))
     result: list[DormBuilding | None] = list(db.scalars(query.order_by(DormBuilding.name)).all())
     if any(room.building_id is None for room in rooms):
@@ -11751,8 +11769,8 @@ def _dorm_building(db: Session, member: SchoolMember, building_id: int | None) -
 @app.post("/api/dorm/buildings")
 def create_dorm_building(body: DormBuildingIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     member = _dorm_member(db, user)
-    if not _can_delete_classes(member):
-        raise HTTPException(status_code=403, detail="Binolarni admin yoki direktor qo'shadi")
+    if not _can_manage_dorm(member):
+        raise HTTPException(status_code=403, detail="Binolarni admin, direktor yoki komendant qo'shadi")
     same = db.scalar(select(DormBuilding.id).where(DormBuilding.school_id == member.school_id, DormBuilding.deleted_at.is_(None),
                                                    func.lower(DormBuilding.name) == body.name.lower()))
     if same:
@@ -11778,8 +11796,8 @@ def create_dorm_building(body: DormBuildingIn, user: User = Depends(get_current_
 def rename_dorm_building(building_id: int, body: DormBuildingIn, user: User = Depends(get_current_user),
                         db: Session = Depends(get_db)):
     member = _dorm_member(db, user)
-    if not _can_delete_classes(member):
-        raise HTTPException(status_code=403, detail="Binolarni admin yoki direktor boshqaradi")
+    if not _can_manage_dorm(member):
+        raise HTTPException(status_code=403, detail="Binolarni admin, direktor yoki komendant boshqaradi")
     building = db.get(DormBuilding, _dorm_building(db, member, building_id))
     same = db.scalar(select(DormBuilding.id).where(DormBuilding.school_id == member.school_id, DormBuilding.deleted_at.is_(None),
                                                    DormBuilding.id != building.id, func.lower(DormBuilding.name) == body.name.lower()))
@@ -11793,8 +11811,8 @@ def rename_dorm_building(building_id: int, body: DormBuildingIn, user: User = De
 @app.delete("/api/dorm/buildings/{building_id}")
 def delete_dorm_building(building_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     member = _dorm_member(db, user)
-    if not _can_delete_classes(member):
-        raise HTTPException(status_code=403, detail="Binolarni admin yoki direktor boshqaradi")
+    if not _can_manage_dorm(member):
+        raise HTTPException(status_code=403, detail="Binolarni admin, direktor yoki komendant boshqaradi")
     building = db.get(DormBuilding, _dorm_building(db, member, building_id))
     if db.scalar(select(DormRoom.id).where(DormRoom.building_id == building.id, DormRoom.deleted_at.is_(None))):
         raise HTTPException(status_code=409, detail="Binoda xonalar bor — avval ularni o'chiring yoki boshqa binoga o'tkazing")
@@ -11826,8 +11844,8 @@ def _dorm_same_room(db: Session, member: SchoolMember, name: str, building_id: i
 @app.post("/api/dorm/rooms")
 def create_dorm_room(body: DormRoomIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     member = _dorm_member(db, user)
-    if not _can_delete_classes(member):
-        raise HTTPException(status_code=403, detail="Xonalarni admin yoki direktor ochadi")
+    if not _can_manage_dorm(member):
+        raise HTTPException(status_code=403, detail="Xonalarni admin, direktor yoki komendant ochadi")
     building_id = _dorm_building(db, member, body.building_id)
     if _dorm_same_room(db, member, body.name, building_id):
         raise HTTPException(status_code=409, detail=f"«{body.name}» xonasi bu binoda allaqachon bor")
@@ -11847,8 +11865,8 @@ def create_dorm_rooms_bulk(body: DormRoomBulkIn, user: User = Depends(get_curren
     """
 
     member = _dorm_member(db, user)
-    if not _can_delete_classes(member):
-        raise HTTPException(status_code=403, detail="Xonalarni admin yoki direktor ochadi")
+    if not _can_manage_dorm(member):
+        raise HTTPException(status_code=403, detail="Xonalarni admin, direktor yoki komendant ochadi")
     building_id = _dorm_building(db, member, body.building_id)
     warden = _dorm_warden(db, member, body.warden_user_id)
 
@@ -11914,7 +11932,7 @@ def dorm_room_detail(room_id: int, user: User = Depends(get_current_user), db: S
     return {
         **view,
         "building_name": building.name if building else DORM_NO_BUILDING,
-        "can_manage": _can_delete_classes(member),
+        "can_manage": _can_manage_dorm(member),
         "date": today,
         "checks": [
             {"date": check.check_date, "counts": _dorm_check_counts(check), "taken_by": takers.get(check.taken_by, ""),
@@ -11929,8 +11947,8 @@ def dorm_candidates(user: User = Depends(get_current_user), db: Session = Depend
     """Joylashtirish uchun: hali yotoqxonada joyi yo'q o'quvchilar (sinfi bilan)."""
 
     member = _dorm_member(db, user)
-    if not _can_delete_classes(member):
-        raise HTTPException(status_code=403, detail="O'quvchilarni admin yoki direktor joylashtiradi")
+    if not _can_manage_dorm(member):
+        raise HTTPException(status_code=403, detail="O'quvchilarni admin, direktor yoki komendant joylashtiradi")
     placed = select(DormResident.student_id).where(DormResident.school_id == member.school_id, DormResident.left_at.is_(None))
     rows = db.execute(
         select(ClassStudent, SchoolClass)

@@ -4259,6 +4259,8 @@ function subjectsText(subjects) {
 const POSITION_BADGES = {
   director: `<span class="badge badge-blue">🎓 Direktor</span>`,
   deputy: `<span class="badge badge-blue">🎖 Zam direktor</span>`,
+  accountant: `<span class="badge badge-blue">💰 Moliyachi</span>`,
+  commandant: `<span class="badge badge-blue">🏠 Komendant</span>`,
 };
 
 function roleBadge(role, position = null) {
@@ -5196,7 +5198,7 @@ async function loadSchoolOverview() {
 
 function schoolRoleLabel(school) {
   if (school.my_role === "owner") return "Admin";
-  return { director: "Direktor", deputy: "Zam direktor" }[school.my_position] || "O'qituvchi";
+  return POSITION_TITLES[school.my_position] || "O'qituvchi";
 }
 
 function schoolStatsHtml(overview) {
@@ -7349,7 +7351,7 @@ function renderStaffDetail(member) {
   const canAssign = isOwner(school) && member.role !== "owner" && !member.is_me;
   const canRemove = (isOwner(school) || school.can_remove_members) && member.role !== "owner" && !member.is_me;
   const showPrivate = school.can_see_phones || member.is_me;
-  const role = member.role === "owner" ? "Maktab admini" : { director: "Direktor", deputy: "Zam direktor" }[member.position] || "O'qituvchi";
+  const role = member.role === "owner" ? "Maktab admini" : POSITION_TITLES[member.position] || "O'qituvchi";
   const telegramLink = member.username ? `https://t.me/${member.username}` : member.phone ? `https://t.me/${member.phone}` : "";
   const row = (label, value) =>
     `<div class="row-between"><span class="subtitle" style="margin:0">${label}</span><b style="text-align:right">${value}</b></div>`;
@@ -7402,8 +7404,11 @@ function formatDate(isoDate) {
   return `${day}.${month}.${year}`;
 }
 
+// Lavozim nomlari: direktor va zam direktor — rahbariyat; moliyachi va komendant — o'z sohasi
+const POSITION_TITLES = { director: "Direktor", deputy: "Zam direktor", accountant: "Moliyachi", commandant: "Komendant" };
+
 /*
-  Lavozim tayinlash (faqat admin): Direktor — bitta; Zam direktor — bir nechta.
+  Lavozim tayinlash (faqat admin): Direktor — bitta; Zam direktor, Moliyachi, Komendant — bir nechta.
   Sinf ochish, kurator tayinlash va sinfni o'chirish — faqat admin va direktor;
   zam direktor o'qituvchi qo'shadi va davomatlarni tahrirlaydi. O'quvchilarni
   admin, direktor va o'sha sinfning kuratori qo'shadi.
@@ -7413,6 +7418,8 @@ function openPositionSheet(member, { canAssign = true } = {}) {
     { id: "", icon: "👤", title: "O'qituvchi", note: "Davomat oladi, kurator bo'lsa sinfini boshqaradi" },
     { id: "deputy", icon: "🎖", title: "Zam direktor", note: "O'qituvchi qo'shadi, davomatlarni tahrirlaydi" },
     { id: "director", icon: "🎓", title: "Direktor", note: "Admin ishlari: sinf ochadi, kurator tayinlaydi, sinfni o'chiradi" },
+    { id: "accountant", icon: "💰", title: "Moliyachi", note: "Barcha sinflar to'lovi, qarzlar, narxlar va moliya hisoboti" },
+    { id: "commandant", icon: "🏠", title: "Komendant", note: "Yotoqxona: xonalar, joylashtirish, tarbiyachilar, hisobot" },
   ];
   const current = member.position || "";
   const { sheet, close } = openSheet(`
@@ -7466,7 +7473,7 @@ function openPositionSheet(member, { canAssign = true } = {}) {
         });
         currentSchool = school;
         close();
-        showToast(position ? `✅ ${member.name} — ${position === "director" ? "Direktor" : "Zam direktor"}` : `${member.name} — oddiy o'qituvchi`);
+        showToast(position ? `✅ ${member.name} — ${POSITION_TITLES[position]}` : `${member.name} — oddiy o'qituvchi`);
         renderSchoolTeachers(school);
       })
     );
@@ -8329,7 +8336,7 @@ async function adminUsersView() {
   };
 }
 
-const ADMIN_ROLE_LABELS = { owner: "Asoschi", director: "Direktor", deputy: "Zam direktor", teacher: "O'qituvchi" };
+const ADMIN_ROLE_LABELS = { owner: "Asoschi", ...POSITION_TITLES, teacher: "O'qituvchi" };
 
 async function openAdminUserSheet(userId) {
   const user = await api(`/api/admin/users/${userId}`);

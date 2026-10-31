@@ -1749,9 +1749,9 @@ class StudentsBulkIn(BaseModel):
 
 
 class PositionIn(BaseModel):
-    """O'qituvchiga lavozim: direktor, zam direktor yoki oddiy o'qituvchi (bo'sh)."""
+    """Xodim lavozimi: direktor, zam direktor, moliyachi, komendant yoki oddiy o'qituvchi (bo'sh)."""
 
-    position: Literal["director", "deputy"] | None = None
+    position: Literal["director", "deputy", "accountant", "commandant"] | None = None
 
 
 class CuratorIn(BaseModel):

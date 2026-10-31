@@ -2129,6 +2129,60 @@ def test_fan_oqituvchisi_faqat_ozi_olgan_davomatni_koradi():
     assert seen(705) == {bio["id"]}
 
 
+def test_moliyachi_va_komendant_lavozimlari():
+    """
+    Moliyachi — barcha sinflar to'lovi, narxi va moliya hisoboti (rahbariyat huquqlarisiz).
+    Komendant — yotoqxonani boshqaradi. Ikkalasi ham sinf ocha olmaydi va lavozim tayinlay olmaydi.
+    """
+    from backend.database import User
+
+    reset_database()
+    cid = _school_with_class(701)["id"]
+    sid = client.post(f"/api/classes/{cid}/students", json={"full_name": "Ali Valiyev"}, headers=as_user(701)).json()["students"][0]["id"]
+    school = client.get("/api/schools/me", headers=as_user(701)).json()["school"]
+    for tg_id, first in ((705, "Moliya"), (706, "Komendant")):
+        _set_name(tg_id, first, "Xodim")
+        assert client.post("/api/schools/join", json={"code": current_code(school), "subjects": ["Fizika"],
+                                                      "phone": f"93 444 55 {tg_id - 700:02d}"}, headers=as_user(tg_id)).status_code == 200
+    with SessionLocal() as session:
+        uid = {tg: session.scalar(main.select(User.id).where(User.tg_id == tg)) for tg in (705, 706)}
+
+    # Lavozimni faqat admin tayinlaydi
+    assert client.put(f"/api/schools/members/{uid[705]}/position", json={"position": "accountant"}, headers=as_user(706)).status_code == 403
+    for tg, position in ((705, "accountant"), (706, "commandant")):
+        assigned = client.put(f"/api/schools/members/{uid[tg]}/position", json={"position": position}, headers=as_user(701))
+        assert assigned.status_code == 200, assigned.text
+    members = {m["name"]: m for m in client.get("/api/schools/me", headers=as_user(701)).json()["school"]["members"]}
+    assert members["Moliya Xodim"]["position"] == "accountant" and members["Komendant Xodim"]["position"] == "commandant"
+
+    # Moliyachi: narx belgilaydi, to'lov qabul qiladi, hisobotni ko'radi; rahbariyat huquqlari yo'q
+    finance = client.get("/api/schools/me", headers=as_user(705)).json()["school"]
+    assert finance["can_see_all_payments"] is True and finance["can_set_fee"] is True and finance["is_leader"] is False
+    assert finance["dorm"] is False
+    assert client.put("/api/schools/fee", json={"monthly_fee": 500_000}, headers=as_user(705)).status_code == 200
+    paid = client.post(f"/api/classes/{cid}/students/{sid}/payments", json={"month": main._current_month(), "amount": 200_000},
+                       headers=as_user(705))
+    assert paid.status_code == 200, paid.text
+    assert client.get("/api/schools/payments/summary", headers=as_user(705)).json()["totals"]["paid"] == 200_000
+    assert client.get(f"/api/classes/{cid}/students/{sid}", headers=as_user(705)).json()["payments"] is not None
+    assert client.post("/api/classes", json={"name": "5-B"}, headers=as_user(705)).status_code == 403
+    assert client.get("/api/dorm", headers=as_user(705)).status_code == 403
+
+    # Komendant: yotoqxona — xona ochadi, o'quvchini joylashtiradi; to'lovlarni ko'rmaydi
+    dorm_school = client.get("/api/schools/me", headers=as_user(706)).json()["school"]
+    assert dorm_school["dorm"] is True and dorm_school["can_see_all_payments"] is False and dorm_school["is_leader"] is False
+    room = client.post("/api/dorm/rooms", json={"name": "101", "capacity": 4}, headers=as_user(706))
+    assert room.status_code == 200, room.text
+    assert client.get("/api/dorm", headers=as_user(706)).json()["can_manage"] is True
+    assert any(item["id"] == sid for item in client.get("/api/dorm/candidates", headers=as_user(706)).json())
+    assert client.get(f"/api/classes/{cid}/payments", headers=as_user(706)).status_code == 403
+    assert client.get("/api/schools/payments/summary", headers=as_user(706)).status_code == 403
+    assert client.post("/api/classes", json={"name": "5-B"}, headers=as_user(706)).status_code == 403
+
+    # Noma'lum lavozim rad etiladi
+    assert client.put(f"/api/schools/members/{uid[705]}/position", json={"position": "boss"}, headers=as_user(701)).status_code == 422
+
+
 def test_oqish_tolovlari():
     """Oylik summa, chegirma, qisman to'lov, ortiqcha to'lovni rad etish, bekor qilish (o'chirilmaydi), ruxsatlar."""
     reset_database()
@@ -4025,7 +4079,10 @@ def test_natija_xabarlari_navbat_bilan_yetkaziladi():
             main._send_result_notice((555, f"Natija #{index:03d} " + "x" * 40))
         main._send_result_notice((777, "boshqa o'qituvchi"))
         deadline = _time.monotonic() + 20
-        while _time.monotonic() < deadline and sum(text.count("Natija #") for _, text, _ in sent) < 300:
+        # Ikkala o'qituvchining xabarlari ham yetib kelguncha kutiladi (777 ga xabar 555 dan keyin ketishi mumkin)
+        while _time.monotonic() < deadline and (
+            sum(text.count("Natija #") for _, text, _ in sent) < 300 or not any(chat == 777 for chat, _, _ in sent)
+        ):
             _time.sleep(0.1)
     finally:
         main._telegram_send_message, main.NOTICE_BATCH_WINDOW, main.NOTICE_CHAT_INTERVAL, main.BOT_TOKEN = originals
