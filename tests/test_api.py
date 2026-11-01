@@ -20,7 +20,7 @@ import sys
 import tempfile
 import traceback
 import urllib.parse
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -5116,7 +5116,7 @@ def test_evalbee_uslubidagi_titul():
     for version, anchor_count, height in ((9, 30, 668), (8, 45, 842)):
         test_id = create_test(enrollment_type="closed", key_questions=questions)["id"]
         with SessionLocal() as session:
-            assert session.get(Test, test_id).sheet_version == 10  # yangi test — eng yangi titul
+            assert session.get(Test, test_id).sheet_version == 11  # yangi test — eng yangi titul
             session.get(Test, test_id).sheet_version = version
             session.commit()
         base = f"/api/teacher/tests/{test_id}"
@@ -5193,8 +5193,8 @@ def test_skanerlash_yakunlansa_natijalar_botga_yuboriladi():
 
 def test_titul_savollar_soniga_moslashadi():
     """
-    9-versiya: titul har doim tik; savol kam — doirachalar katta va titul varaqni to'ldiradi (yonlarda bo'sh joy
-    qolmaydi, ostida Chittak belgisiga joy qoladi); ko'p (120 gacha) — doirachalar kichikroq, titul butun A4.
+    11-versiya (uzluksiz): titul har doim tik, A4 ga sig'adi (ostida Chittak belgisiga joy qoladi); doiracha
+    o'lchami va oralig'i (A–B–C–D, qatorlar) savollar sonidan qat'i nazar bir xil; ko'p savolda — ko'proq ustun.
     """
 
     reset_database()
@@ -5207,8 +5207,11 @@ def test_titul_savollar_soniga_moslashadi():
         layout = client.get(f"/api/teacher/tests/{test_id}/scan/layout", headers=as_user(555)).json()
         page = layout["sheet_page"]
         radius = next(bubble["r"] for bubble in layout["bubbles"] if bubble["kind"] == "single")
+        first_row = [bubble for bubble in layout["bubbles"] if bubble["kind"] == "single" and bubble["ref"] == 1]
+        second_row = [bubble for bubble in layout["bubbles"] if bubble["kind"] == "single" and bubble["ref"] == 2]
+        spacing = (round(first_row[1]["x"] - first_row[0]["x"], 2), round(first_row[0]["y"] - second_row[0]["y"], 2))
         anchors = sum(bubble["kind"] == "anchor" for bubble in layout["bubbles"])
-        sizes[count] = (round(page["width"]), round(page["height"]), round(radius, 1), anchors)
+        sizes[count] = (round(page["width"]), round(page["height"]), round(radius, 1), anchors, spacing)
         assert page["height"] >= page["width"], page  # tik
 
         # ID ning hamma raqamlari (0–9 oraliqsiz ustunda) — 5–9 qatorlari ham to'g'ri o'qilsin
@@ -5219,9 +5222,13 @@ def test_titul_savollar_soniga_moslashadi():
         assert scanned.status_code == 200, (count, scanned.text)
         assert scanned.json()["answers"] == {"1": "A", str(count): "C"} and scanned.json()["sheet_number"] == int(number), (
             count, scanned.json()["sheet_number"])
-    assert sizes[10][0] == 595 and sizes[120][:2] == (595, 841), sizes  # hammasi varaq kengligida
-    assert sizes[10][1] <= 842 - main.SHEET_BRAND_SPACE, sizes  # kam savolda ostida belgiga joy qoladi
-    assert sizes[10][2] > sizes[120][2], sizes  # kam savolda doiracha kattaroq
+    assert all(width <= 595 and height <= 842 for width, height, *_ in sizes.values()), sizes  # bitta A4
+    assert sizes[10][1] <= 842 - main.SHEET_BRAND_SPACE, sizes  # kam savolda ostida Chittak belgisiga joy qoladi
+    assert sizes[10][0] < sizes[120][0], sizes  # 120 savol — 4 ustun, kengroq
+    assert sizes[10][4] == (15.0, 15.0), sizes  # doirachalar orasi gorizontal va vertikal — teng
+    # Doiracha o'lchami, A–B–C–D orasi va qatorlar orasi — hamma titulda bir xil
+    assert sizes[10][2] == sizes[45][2] == sizes[120][2], sizes
+    assert sizes[10][4] == sizes[45][4] == sizes[120][4], sizes
     assert sizes[10][3] < sizes[45][3] < sizes[120][3], sizes  # kvadratlar faqat ishlatilgan bloklarda
 
 
@@ -5239,14 +5246,21 @@ def test_qisman_korinmagan_varaq_rad_etiladi():
     photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "1", "id3": "3", 1: "B"})
     image = cv2.imdecode(np.frombuffer(base64.b64decode(photo), np.uint8), cv2.IMREAD_COLOR)
     height, width = image.shape[:2]
-    # 15° burilgan, kadr kengaytirilmagan — varaq burchaklari kadrdan chiqib ketadi
-    turned = cv2.warpAffine(image, cv2.getRotationMatrix2D((width / 2, height / 2), 15, 1.0), (width, height),
-                            borderValue=(90, 70, 60))
-    cut = base64.b64encode(cv2.imencode(".jpg", turned)[1].tobytes()).decode()
     url = f"/api/teacher/tests/{test_id}/scan"
-    refused = client.post(url, json={"image_base64": cut}, headers=as_user(555))
-    # Burchaklar topilmaydi yoki imtihon kodi o'qilmaydi — har ikkalasida javob qaytmaydi
-    assert refused.status_code == 422 and "answers" not in refused.json(), refused.text
+    covered = image.copy()
+    covered[int(height * 0.75):, int(width * 0.7):] = (90, 70, 60)  # pastki o'ng burchak (qo'l, stol) yopilgan
+    for name, part in (("o'ng cheti kesilgan", image[:, : int(width * 0.8)]), ("pasti kesilgan", image[: int(height * 0.8)]),
+                       ("burchagi yopilgan", covered)):
+        cut = base64.b64encode(cv2.imencode(".jpg", part)[1].tobytes()).decode()
+        refused = client.post(url, json={"image_base64": cut}, headers=as_user(555))
+        # Burchaklar topilmaydi yoki imtihon kodi o'qilmaydi — har ikkalasida javob qaytmaydi
+        assert refused.status_code == 422 and "answers" not in refused.json(), (name, refused.text)
+    # Qiyshiq olingan, lekin to'liq kadrdagi surat — to'g'ri o'qiladi
+    turned = cv2.warpAffine(image, cv2.getRotationMatrix2D((width / 2, height / 2), 10, 1.0), (width, height),
+                            borderValue=(90, 70, 60))
+    tilted = client.post(url, json={"image_base64": base64.b64encode(cv2.imencode(".jpg", turned)[1].tobytes()).decode()},
+                         headers=as_user(555))
+    assert tilted.status_code == 200 and tilted.json()["answers"] == {"1": "B"}, tilted.text
     whole = client.post(url, json={"image_base64": photo}, headers=as_user(555))
     assert whole.status_code == 200 and whole.json()["answers"] == {"1": "B"}, whole.text
 
@@ -5429,7 +5443,7 @@ def test_varaqdagi_oquvchi_raqami_boyicha_taniladi():
                 headers=as_user(555))
     detail = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1, "Birinchi Bola"), (2, "Ikkinchi Bola")]
-    assert detail["sheet_version"] == 10
+    assert detail["sheet_version"] == 11
 
     url = f"/api/teacher/tests/{test_id}/scan"
     photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "0", "id3": "2", 1: "B", 2: "C"})
@@ -5711,7 +5725,7 @@ def test_skaner_natijasi_sinf_natijalariga_yoziladi():
     assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json() == {"added": 0}
     detail = client.get(base, headers=as_user(701)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1001, "Ali Valiyev"), (1002, "Zuhra Karimova")]
-    assert detail["sheet_version"] == 10
+    assert detail["sheet_version"] == 11
 
     # Zuhra (1002) varag'i: 1-savol to'g'ri, 2-savol to'g'ri
     scanned = client.post(f"{base}/scan", json={"image_base64": _sheet_photo(test["id"], {
@@ -5882,12 +5896,11 @@ def test_narx_oshsa_tolangan_eski_oylar_qarzga_aylanmaydi():
     group = client.post("/api/classes", json={"name": "Ingliz tili"}, headers=kind).json()
     client.post(f"/api/classes/{group['id']}/students", json={"full_name": "Ali Valiyev"}, headers=kind)
     sid = client.get(f"/api/classes/{group['id']}", headers=kind).json()["students"][0]["id"]
-    with SessionLocal() as session:  # o'quvchi 2 oy oldin qo'shilgan
-        session.get(ClassStudent, sid).created_at -= timedelta(days=70)
-        session.commit()
-
     now = _current_month()
     two_ago, one_ago = _shift_month(now, -2), _shift_month(now, -1)
+    with SessionLocal() as session:  # o'quvchi 2 oy oldin (o'sha oyning boshida) qo'shilgan — oyning kunidan qat'i nazar
+        session.get(ClassStudent, sid).created_at = datetime.strptime(f"{two_ago}-03", "%Y-%m-%d")
+        session.commit()
     client.put(f"/api/classes/{group['id']}/fee", json={"monthly_fee": 300_000}, headers=kind)
     for month in (two_ago, one_ago):
         paid = client.post(f"/api/classes/{group['id']}/students/{sid}/payments", json={"month": month, "amount": 300_000},
@@ -5938,7 +5951,8 @@ def test_tarixsiz_oshirilgan_narxni_tuzatish():
     now = _current_month()
     one_ago = _shift_month(now, -1)
     with SessionLocal() as session:
-        session.get(ClassStudent, sid).created_at -= timedelta(days=40)
+        # O'tgan oyning boshida qo'shilgan (oyning qaysi kuni ishga tushirilishidan qat'i nazar — 2 oy)
+        session.get(ClassStudent, sid).created_at = datetime.strptime(f"{one_ago}-03", "%Y-%m-%d")
         session.get(SchoolClass, group["id"]).monthly_fee = 300_000  # eski tizimda — tarixsiz
         session.commit()
     client.post(f"/api/classes/{group['id']}/students/{sid}/payments", json={"month": one_ago, "amount": 300_000}, headers=kind)

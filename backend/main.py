@@ -2773,10 +2773,136 @@ def _dtm_sheet_plan(test: Test, items: list, style: dict, reserved: int) -> dict
     return {"slots": slots, "titles": titles}
 
 
+# 11-versiya — "uzluksiz" titul (EvalBee'ning Continuous ko'rinishi): savollar ustun bo'ylab bir xil qator
+# oralig'ida uzluksiz ketadi, har 5 savolda "A B C D" qatori; doiracha o'lchami va oraliqlari savollar sonidan
+# qat'i nazar bir xil. Kvadratlar savolga emas, to'rga bog'langan: har 5 qatorda, ustunlar chegarasida —
+# skaner ilgarigidek har doirachani atrofidagi 4 kvadrat bo'yicha joylaydi.
+SHEET11_SCALE = 1.1                   # yozuvlar (raqam, harf) o'lchami
+SHEET11_PITCH = 15.0                  # doirachalar orasi — gorizontal ham, vertikal ham bir xil (namunadagidek)
+SHEET11_RADIUS = 5.5                  # doiracha (diametri oraliqning ~73% i)
+SHEET11_ROW = SHEET11_PITCH           # qatorlar orasi
+SHEET11_COLUMN = 8 * SHEET11_PITCH    # ustun kengligi (namunadagidek 8 oraliq); 4 ustun ham A4 ga sig'adi
+SHEET11_DATE_ROW_WIDTH = 500          # undan tor titulda quti 3 qator: Ism-familiya / Imtihon / Sana
+SHEET11_MAX_BLOCKS = 8                # 5 qatorli oraliqlar soni (A4 bo'yiga sig'adigani)
+SHEET11_MIN_RATIO = 1.2               # titul tik bo'lsin: skaner varaqni shakli bo'yicha ham tekshiradi
+SHEET11_GROUP = 5                     # har 5 savolda "A B C D" qatori
+
+
+def _continuous_fill(items: list, columns: int, rows: int, prefix: int, titles: dict[int, str]) -> list[list]:
+    """
+    Savollarni ustunlarga qatorma-qator joylaydi. 1-sahifaning 1-ustunida tepada ID uchun prefix qator band.
+    "A B C D" qatori: ustun boshida, fan sarlavhasidan keyin, variantlar soni o'zgarganda va har 5 savolda
+    (ustun boshidagi harflardan keyin hali 3 ta savol bo'lmagan bo'lsa — qo'yilmaydi, EvalBee'dagidek).
+    Natija — sahifalar: [(tur, ustun, qator, ma'lumot)], tur: "title" | "letters" | "question".
+    """
+
+    pages, page = [], []
+    column, row = 0, prefix
+    since_label, last_options = None, None
+    for index, item in enumerate(items):
+        options, title = item[2], titles.get(index)
+        while True:
+            label = (row == 0 or title is not None or options != last_options or since_label is None
+                     or (index % SHEET11_GROUP == 0 and since_label >= 3))
+            need = (1 if title else 0) + (1 if label else 0) + 1
+            # Yangi guruh ustun oxirida yolg'iz savol bilan qolmasin ("A B C D" ostida bitta savol) — keyingi ustunga
+            orphan = label and row > 0 and index < len(items) - 1 and rows - row - need < 1
+            if row + need <= rows and not orphan:
+                break
+            column, row = column + 1, 0
+            if column == columns:
+                pages.append(page)
+                page, column = [], 0
+        if title is not None:
+            page.append(("title", column, row, title))
+            row += 1
+        if label:
+            page.append(("letters", column, row, options))
+            row += 1
+            since_label = 0
+        page.append(("question", column, row, item))
+        row += 1
+        since_label += 1
+        last_options = options
+    pages.append(page)
+    return pages
+
+
+def _continuous_style(columns: int, blocks: int) -> dict:
+    """11-versiya titulining o'lchamlari (doirachalar qismi — qat'iy)."""
+
+    k = SHEET11_SCALE
+    step = SHEET11_GROUP * SHEET11_ROW
+    # Ustunlar bir-biriga yaqin (namunadagidek); 4 ustun A4 eniga sig'adigan qilib toraytiriladi
+    column_width = min(SHEET11_COLUMN, (A4[0] - 2 * SHEET_CORNER) / columns)
+    width = 2 * SHEET_CORNER + columns * column_width
+    height = 2 * SHEET_CORNER + (blocks + 2) * step
+    font = min(k, 1.2)
+    date_row = width < SHEET11_DATE_ROW_WIDTH
+    if date_row:
+        # Tor titul: Ism-familiya / Imtihon / Sana — uch qator (imtihon nomiga butun en)
+        box_top, box_bottom = SHEET_CORNER + 4, SHEET_CORNER + step - 13
+        box_middle = box_top + (box_bottom - box_top) / 3
+        box_font = 9.5
+    else:
+        box_top, box_bottom = SHEET_CORNER + 6, SHEET_CORNER + step - 14
+        box_middle = (box_top + box_bottom) / 2
+        box_font = 10 * font
+    logo_height = max(8.0, min(SHEET_LOGO_HEIGHT, (box_middle - box_top) - 8))
+    logo_width = logo_height * SHEET_LOGO_RATIO
+    name_left, name_right = SHEET_CORNER + 16 + 7.2 * box_font, width - SHEET_CORNER - 16
+    show_logo = (name_right - name_left) - logo_width - 10 >= SHEET_NAME_MIN_ROOM
+    return {
+        "edge_marks": blocks + 1, "step": step, "row": SHEET11_ROW, "header": 0.0,
+        "radius": SHEET11_RADIUS, "gap": SHEET11_PITCH, "label": SHEET9["label"] * k,
+        "number_font": 8.5 * k, "letter_font": 7 * k, "digit_font": 8 * k,
+        "box": (box_top, box_middle, box_bottom), "box_font": box_font,
+        "box_date": box_top + 2 * (box_bottom - box_top) / 3 if date_row else None,
+        "sana_width": 0.0 if date_row else min(120 * font, (width - 2 * SHEET_CORNER - 32) * 0.3),
+        "name_area": (name_left, box_top + 2, name_right - (logo_width + 10 if show_logo else 0), box_middle),
+        "logo": (logo_width, logo_height) if show_logo else None,
+        "instructions": True, "sparse": True, "columns": columns, "title_band": 0.0,
+        "column_width": column_width, "width": width, "height": height,
+        "scale": k, "bubble_scale": k,
+    }
+
+
+def _continuous_plan(test: Test, items: list, variants: list[str] | None) -> dict:
+    """11-versiya: eng kam ustun, so'ng eng past titul — hammasi bitta sahifaga sig'adigan va tik bo'ladigani."""
+
+    prefix = 11 + (2 if variants else 0) + 1  # ID (yozish kataklari + 0–9), variant, bo'sh qator
+    titles: dict[int, str] = {}  # fan sarlavhalari (hozircha ishlatilmaydi: DTM tituli eski ko'rinishda)
+    chosen = None
+    for columns in (2, 3, 4):
+        for blocks in range(2, SHEET11_MAX_BLOCKS + 1):
+            rows = blocks * SHEET11_GROUP + 1
+            if rows < prefix + 2:
+                continue
+            style = _continuous_style(columns, blocks)
+            if style["height"] / style["width"] < SHEET11_MIN_RATIO:
+                continue
+            pages = _continuous_fill(items, columns, rows, prefix, titles)
+            if len(pages) == 1:
+                chosen = (style, pages)
+                break
+        if chosen:
+            break
+    if not chosen:  # juda ko'p savol — 4 ustunli eng baland titul, bir necha sahifa
+        style = _continuous_style(4, SHEET11_MAX_BLOCKS)
+        chosen = (style, _continuous_fill(items, 4, SHEET11_MAX_BLOCKS * SHEET11_GROUP + 1, prefix, titles))
+    style, pages = chosen
+    return {"continuous": True, "width": style["width"], "height": style["height"], "edge_marks": style["edge_marks"],
+            "pages": pages, "column_width": style["column_width"], "style": style, "reserved": 0, "prefix": prefix}
+
+
 def _evalbee_plan(test: Test, variants: list[str] | None = None, key_override: dict | None = None) -> dict:
-    """8–9-versiya: blok qatorlari × ustunlar; 1-ustunning tepasida ID (va variant)."""
+    """8–9-versiya: blok qatorlari × ustunlar; 1-ustunning tepasida ID (va variant). 11-versiya — uzluksiz."""
 
     items = [item for item in _answer_sheet_items(test, key_override) if item[1] != "text"]
+    # DTM tituli (fanlar bo'yicha guruhlangan) o'zgarmaydi — 10-versiyadagidek chiziladi
+    dtm_test = len(items) == 90 and bool(score_weights(test.subject, len(items)))
+    if (test.sheet_version or 1) >= 11 and not dtm_test:
+        return _continuous_plan(test, items, variants)
     reserved = 3 if variants else 2  # 1-ustunda ID (2 blok) va variant (1 blok)
     if (test.sheet_version or 1) >= 9:
         dtm_titles = reserved == 2 and len(items) == 90 and bool(score_weights(test.subject, len(items)))
@@ -2817,12 +2943,17 @@ def _draw_fill_examples(sheet, top, width: float, y_line: float, style: dict) ->
     sheet.circle(start, first, radius, stroke=1, fill=1)
     sheet.setFont(REPORT_FONT, 8.5 * font)
     hint = "doirachani to'liq, qora ruchka yoki qalam bilan bo'yang. Har savolga — bitta javob."
-    if sheet.stringWidth(hint, REPORT_FONT, 8.5 * font) > right - start - radius - 8:
-        hint = "to'liq bo'yang, har savolga bitta javob"
+    for shorter in ("to'liq bo'yang, har savolga bitta javob", "to'liq bo'yang"):
+        # Yozuv titul chetidan (o'ng chet belgilari chizig'idan) chiqib ketmasin — skanerga xalaqit beradi
+        if sheet.stringWidth(hint, REPORT_FONT, 8.5 * font) > right - start - radius - 8:
+            hint = shorter
     sheet.drawString(start + radius + 8, first - 3 * font, hint)
     # Noto'g'ri — belgi, X, yarim, nuqta, ikkita
     examples = ["belgi", "X", "yarim", "nuqta", "ikkita"]
     spacing = min(62.0, (right - start - 2 * radius) / (len(examples) - 0.4))
+    while spacing < 38 and len(examples) > 3:  # tor titulda yozuvlar bir-biriga tegmasin
+        examples.remove("nuqta" if "nuqta" in examples else "belgi")
+        spacing = min(62.0, (right - start - 2 * radius) / (len(examples) - 0.4))
     sheet.setFont(REPORT_FONT, 7.5 * font)
     for index, caption in enumerate(examples):
         x = start + index * spacing
@@ -2857,7 +2988,7 @@ def _draw_evalbee_card(sheet, test: Test, plan: dict, page: int, with_answers: b
     radius, gap, label_width, header = style["radius"], style["gap"], style["label"], style["header"]
     content = label_width + 3 * gap + 2 * radius
     pad = (column_width - content) / 2
-    label_right = pad + label_width - 6 * style.get("scale", 1)  # savol raqamining o'ng cheti
+    label_right = pad + label_width - 6 * style.get("bubble_scale", style.get("scale", 1))  # savol raqamining o'ng cheti
 
     def top(distance: float) -> float:
         return height - distance
@@ -2873,10 +3004,22 @@ def _draw_evalbee_card(sheet, test: Test, plan: dict, page: int, with_answers: b
     def line_x(column: int) -> float:
         return SHEET_CORNER + column * column_width
 
+    continuous = bool(plan.get("continuous"))
+    blocks_count = style["edge_marks"] - 1
+
+    def cell(column: int, row: int) -> tuple[int, int]:
+        """11-versiya: qator qaysi 5 qatorli oraliqda (kvadratlar to'rining katagi)."""
+        return column, min(row // SHEET11_GROUP, blocks_count - 1)
+
     # Shu sahifada ishlatilgan bloklar: kvadratlar faqat ularning burchaklarida (9-versiya)
-    used = {(column, block_row) for _, column, block_row, _ in plan["pages"][page - 1]}
-    if page == 1:
-        used |= {(0, block_row) for block_row in range(plan["reserved"] if variants else 2)}
+    if continuous:
+        used = {cell(column, row) for _, column, row, _ in plan["pages"][page - 1]}
+        if page == 1:
+            used |= {cell(0, row) for row in range(plan["prefix"] - 1)}
+    else:
+        used = {(column, block_row) for _, column, block_row, _ in plan["pages"][page - 1]}
+        if page == 1:
+            used |= {(0, block_row) for block_row in range(plan["reserved"] if variants else 2)}
     corners_used = {(column + dx, block_row + dy) for column, block_row in used for dx in (0, 1) for dy in (0, 1)}
 
     # Chet belgilari (chap/o'ng chiziqlar) + burchaklar + imtihon kodi
@@ -2910,16 +3053,24 @@ def _draw_evalbee_card(sheet, test: Test, plan: dict, page: int, with_answers: b
     sana = style["sana_width"]
     box_left, box_right = SHEET_CORNER + 16, width - SHEET_CORNER - 16
     sheet.setStrokeColor(colors.HexColor("#555555"))
+    box_date = style.get("box_date")  # tor titulda: Sana — alohida (uchinchi) qatorda
+    exam_bottom = box_date or box_bottom
     sheet.rect(box_left, top(box_bottom), box_right - box_left, box_bottom - box_top, stroke=1, fill=0)
     sheet.line(box_left, top(box_middle), box_right, top(box_middle))
-    sheet.line(box_right - sana, top(box_bottom), box_right - sana, top(box_middle))
+    if box_date:
+        sheet.line(box_left, top(box_date), box_right, top(box_date))
+    else:
+        sheet.line(box_right - sana, top(box_bottom), box_right - sana, top(box_middle))
     sheet.setStrokeColor(colors.black)
     name_y = top(box_middle - (box_middle - box_top) / 2 - font * 0.35)
-    exam_y = top(box_bottom - (box_bottom - box_middle) / 2 - font * 0.35)
+    exam_y = top(exam_bottom - (exam_bottom - box_middle) / 2 - font * 0.35)
     sheet.setFont(REPORT_FONT, font)
     sheet.drawString(box_left + 6, name_y, "Ism-familiya :")
     sheet.drawString(box_left + 6, exam_y, "Imtihon :")
-    sheet.drawString(box_right - sana + 6, exam_y, "Sana :")
+    if box_date:
+        sheet.drawString(box_left + 6, top(box_bottom - (box_bottom - box_date) / 2 - font * 0.35), "Sana :")
+    else:
+        sheet.drawString(box_right - sana + 6, exam_y, "Sana :")
     if style.get("logo"):
         logo_width, logo_height = style["logo"]
         row_height = box_middle - box_top
@@ -2945,7 +3096,7 @@ def _draw_evalbee_card(sheet, test: Test, plan: dict, page: int, with_answers: b
     code = f"  ·  Kod {test.code}" if style["instructions"] else ""
     exam_left = box_left + 5.6 * font
     # Tor titulda avval shrift kichrayadi (70% gacha), keyin nom qisqartiriladi — imtihon kodi doim ko'rinsin
-    room, size = box_right - sana - exam_left - 6, font
+    room, size = box_right - (0 if box_date else sana) - exam_left - 6, font
     while size > font * 0.7 and sheet.stringWidth(title + code, REPORT_FONT_BOLD, size) > room:
         size -= 0.25
     while len(title) > 4 and sheet.stringWidth(title + code, REPORT_FONT_BOLD, size) > room:
@@ -2963,6 +3114,11 @@ def _draw_evalbee_card(sheet, test: Test, plan: dict, page: int, with_answers: b
         # Pastda, oxirgi kvadratlar qatori bilan imtihon kodi orasidagi bo'sh joyda (kvadratlarga tegmasin)
         sheet.drawCentredString(width / 2, top(bottom_line + 30), f"{corner_note}Kod {test.code} · doirachani to'liq bo'yang")
         sheet.setFillColor(colors.black)
+
+    if continuous:
+        _draw_continuous_body(sheet, plan, page, student, variants, with_answers, note, block, cell, line_x, line_y,
+                              option_x, label_right, column_width)
+        return
 
     if page == 1:
         # O'quvchi ID (Roll No): 4 ustun; 0–4 birinchi blokda, 5–9 ikkinchisida; tepada yozish kataklari
@@ -3057,6 +3213,86 @@ def _draw_evalbee_card(sheet, test: Test, plan: dict, page: int, with_answers: b
             sheet.circle(x, center, radius, stroke=1, fill=1 if filled else 0)
             note({"ref": ref, "label": label, "kind": question_type, "letter": letter,
                   "x": x, "y": center, "r": radius, "block": corners})
+
+
+def _draw_continuous_body(sheet, plan: dict, page: int, student: tuple | None, variants: list[str] | None,
+                          with_answers: bool, note, block, cell, line_x, line_y, option_x, label_right: float,
+                          column_width: float) -> None:
+    """11-versiya: ID, variant, fan sarlavhalari, "A B C D" qatorlari va savollar — bir xil qator oralig'ida."""
+
+    style = plan["style"]
+    radius, pitch = style["radius"], style["row"]
+
+    def row_y(row: int) -> float:
+        return line_y(0) - row * pitch
+
+    def text_y(row: int, size: float) -> float:
+        return row_y(row) - size * 0.35
+
+    if page == 1:
+        # O'quvchi ID: 0-qatorda yozish kataklari, ostida 0–9 (4 xona)
+        digits = f"{student[0]:04d}" if student else None
+        sheet.setFont("Helvetica-Bold", style["letter_font"])
+        sheet.drawRightString(line_x(0) + label_right, text_y(0, style["letter_font"]), "ID")
+        box_low = row_y(0) - radius + 2.5  # "0" qatoridagi doirachalarga tegmasin
+        for column in range(4):
+            x = option_x(0, column)
+            sheet.rect(x - radius - 0.5, box_low, 2 * radius + 1, 2 * radius - 1, stroke=1, fill=0)
+            if digits:
+                sheet.drawCentredString(x, box_low + radius - 0.5 - style["letter_font"] * 0.35, digits[column])
+        sheet.setFont("Helvetica-Bold", style["digit_font"])
+        for digit in range(10):
+            row = 1 + digit
+            corners = block(*cell(0, row))
+            sheet.drawRightString(line_x(0) + label_right, text_y(row, style["digit_font"]), str(digit))
+            for column in range(4):
+                x = option_x(0, column)
+                filled = digits is not None and int(digits[column]) == digit
+                sheet.circle(x, row_y(row), radius, stroke=1, fill=1 if filled else 0)
+                note({"ref": f"id{column}", "label": "ID", "kind": "id", "letter": str(digit),
+                      "x": x, "y": row_y(row), "r": radius, "block": corners})
+        if variants:
+            # Variant: harflar (11-qator) va doirachalar (12-qator)
+            student_variant = student[2] if student and len(student) > 2 else None
+            sheet.setFont("Helvetica-Bold", style["letter_font"])
+            for index, name in enumerate(variants[:4]):
+                sheet.drawCentredString(option_x(0, index), text_y(11, style["letter_font"]), name)
+            corners = block(*cell(0, 12))
+            sheet.drawRightString(line_x(0) + label_right, text_y(12, style["letter_font"]), "Var.")
+            for index, name in enumerate(variants[:4]):
+                x = option_x(0, index)
+                sheet.circle(x, row_y(12), radius, stroke=1, fill=1 if student_variant == name else 0)
+                note({"ref": "variant", "label": "Variant", "kind": "variant", "letter": name,
+                      "x": x, "y": row_y(12), "r": radius, "block": corners})
+
+    for kind, column, row, payload in plan["pages"][page - 1]:
+        if kind == "title":
+            # Fan nomi (DTM): ustun kengligiga sig'adigan qilib
+            text, size = payload, 8.5 * style["scale"]
+            room = column_width - SHEET_EDGE_SIZE - 10
+            while size > 6 and sheet.stringWidth(text, REPORT_FONT_BOLD, size) > room:
+                size -= 0.25
+            while len(text) > 4 and sheet.stringWidth(text, REPORT_FONT_BOLD, size) > room:
+                text = text[:-2].rstrip() + "…"
+            sheet.setFont(REPORT_FONT_BOLD, size)
+            sheet.drawCentredString(line_x(column) + column_width / 2, text_y(row, size), text)
+        elif kind == "letters":
+            sheet.setFont("Helvetica-Bold", style["letter_font"])
+            for option in range(payload):
+                sheet.drawCentredString(option_x(column, option), text_y(row, style["letter_font"]), chr(65 + option))
+        else:
+            label, question_type, options, correct, ref = payload
+            corners = block(*cell(column, row))
+            sheet.setFont("Helvetica", style["number_font"])
+            sheet.drawRightString(line_x(column) + label_right, text_y(row, style["number_font"]), f"{label}")
+            correct_letters = set((correct or "").split(","))
+            for option in range(options):
+                letter = chr(65 + option)
+                x = option_x(column, option)
+                filled = with_answers and letter in correct_letters
+                sheet.circle(x, row_y(row), radius, stroke=1, fill=1 if filled else 0)
+                note({"ref": ref, "label": label, "kind": question_type, "letter": letter,
+                      "x": x, "y": row_y(row), "r": radius, "block": corners})
 
 
 def _draw_sheet_brand(sheet, card_bottom: float) -> None:

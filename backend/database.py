@@ -257,7 +257,8 @@ class Test(Base):
     # va pastda imtihon kodi (boshqa imtihon tituli bilan adashmaydi); 4 — o'quvchi ID
     # vertikal 3 ustunda (0–9); 5 — ID 4 xonali (maktab o'quvchilari ID'si 1001, 1002 ...).
     # Eski testlar o'z versiyasida qoladi — oldin chop etilgan varaqlar ham to'g'ri skanerlanishi uchun.
-    sheet_version: Mapped[int] = mapped_column(default=10)  # 6 — ixcham; 7 — bloklari kvadratli; 8–10 — EvalBee uslubi
+    # 6 — ixcham; 7 — bloklari kvadratli; 8–10 — EvalBee uslubi; 11 — doirachalar o'lchami va oralig'i doim bir xil
+    sheet_version: Mapped[int] = mapped_column(default=11)
     # Esse (Ona tili 45): maksimal bali (24). Bo'sh — testda esse yo'q
     essay_max: Mapped[int | None] = mapped_column(default=None)
 
