@@ -2350,6 +2350,10 @@ def test_davomat_matn_rasm_va_pdf():
     assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
     image = client.get(f"/api/attendance/{attendance['id']}/file", params={"format": "image"}, headers=as_user(701))
     assert image.status_code == 200 and image.content.startswith(b"\x89PNG")
+    # Rasm — PDF sahifasining o'zi: o'lchami A4 nisbatida, sahifalar soni aytiladi
+    from PIL import Image as _Image
+    width, height = _Image.open(io.BytesIO(image.content)).size
+    assert abs(height / width - 842 / 595) < 0.02 and image.headers["X-Page-Count"] == "1", (width, height)
 
     # Bot orqali yuborish (Telegram o'rniga yozib olamiz)
     sent = []

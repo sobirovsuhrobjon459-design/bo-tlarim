@@ -3472,8 +3472,11 @@ async function sendAttendance(attendance, format) {
   if (sendsViaBot()) {
     await api(`/api/attendance/${attendance.id}/send?format=${format}`, { method: "POST", body: {} });
     showToast(`✅ ${format === "image" ? "Rasm" : "PDF"} bot chatiga yuborildi`);
+  } else if (format === "image") {
+    // Rasm — PDF ko'rinishining o'zi (har sahifa alohida)
+    await downloadPageImages(`/api/attendance/${attendance.id}/file?format=image`, "davomat");
   } else {
-    await downloadFile(`/api/attendance/${attendance.id}/file?format=${format}`, format === "image" ? "davomat.png" : "davomat.pdf");
+    await downloadFile(`/api/attendance/${attendance.id}/file?format=${format}`, "davomat.pdf");
   }
 }
 
@@ -15256,15 +15259,19 @@ async function downloadOrSendImage(testId) {
     showToast(pages > 1 ? `🖼 ${pages} ta rasm Telegram chatga yuborildi` : "🖼 Rasm Telegram chatga yuborildi");
     return;
   }
-  // Oddiy brauzer: har sahifa alohida fayl bo'lib yuklanadi
+  await downloadPageImages(`/api/teacher/tests/${testId}/image`, "natijalar");
+}
+
+// Oddiy brauzer: PDF sahifalari rasmlari — har sahifa alohida fayl (server X-Page-Count bilan sonini aytadi)
+async function downloadPageImages(url, baseName) {
   let total = 1;
   for (let page = 1; page <= total; page += 1) {
-    const response = await fetch(`/api/teacher/tests/${testId}/image?page=${page}`, { headers: authHeaders() });
+    const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}page=${page}`, { headers: authHeaders() });
     if (!response.ok) throw new Error("Rasmni yuklab bo'lmadi");
     total = Number(response.headers.get("X-Page-Count")) || 1;
     const link = document.createElement("a");
     link.href = URL.createObjectURL(await response.blob());
-    link.download = `natijalar_${page}.png`;
+    link.download = `${baseName}_${page}.png`;
     link.click();
   }
 }

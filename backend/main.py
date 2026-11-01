@@ -12905,54 +12905,9 @@ def _brand_png(image_bytes: bytes, org_text: str, kind_text: str) -> bytes:
     return buffer.getvalue()
 
 
-def attendance_image(context: dict) -> bytes:
-    """Ota-onalar guruhiga — rasm (PNG) ko'rinishi."""
-
-    from PIL import Image, ImageDraw, ImageFont
-
-    def font(name: str, size: int):
-        try:
-            return ImageFont.truetype(str(FONTS_DIR / name), size)
-        except OSError:
-            return ImageFont.load_default()
-
-    title_font, text_font, bold_font = font("DejaVuSerif-Bold.ttf", 46), font("DejaVuSerif.ttf", 30), font("DejaVuSerif-Bold.ttf", 30)
-    width, row_height, top = 1080, 62, 300
-    marks = context["marks"]
-    height = top + row_height * (len(marks) + 1) + 60
-
-    image = Image.new("RGB", (width, height), "#ffffff")
-    draw = ImageDraw.Draw(image)
-    draw.text((50, 40), f"{context['class_name']} — {context['lesson']}", font=title_font, fill="#0B1F2A")
-    draw.text((50, 110), f"{context['school_name']}  ·  davomat", font=text_font, fill="#4F6670")
-    draw.text((50, 152), f"O'qituvchi: {context['teacher_name']}", font=text_font, fill="#4F6670")
-    times = f"Dars: {context['when']}" + (f"   Tahrir: {context['updated_at']}" if context["updated_at"] else "")
-    draw.text((50, 194), times, font=text_font, fill="#6b7280")
-
-    counts = context["counts"]
-    x = 50
-    for status in ATTENDANCE_LABELS:
-        text = f"{ATTENDANCE_LABELS[status][0]}: {counts.get(status, 0)}"
-        draw.text((x, 240), text, font=bold_font, fill=ATTENDANCE_COLORS[status])
-        x += draw.textlength(text, font=bold_font) + 40
-
-    y = top
-    draw.rectangle([40, y, width - 40, y + row_height], fill="#00A844")
-    draw.text((60, y + 14), "№", font=bold_font, fill="#ffffff")
-    draw.text((140, y + 14), "F.I.Sh.", font=bold_font, fill="#ffffff")
-    draw.text((width - 300, y + 14), "Holat", font=bold_font, fill="#ffffff")
-    for index, (name, status) in enumerate(marks, start=1):
-        y += row_height
-        if index % 2 == 0:
-            draw.rectangle([40, y, width - 40, y + row_height], fill="#F3FAF5")
-        draw.text((60, y + 14), str(index), font=text_font, fill="#111827")
-        draw.text((140, y + 14), name[:38], font=text_font, fill="#111827")
-        draw.text((width - 300, y + 14), ATTENDANCE_LABELS.get(status, ("?", ""))[0], font=bold_font,
-                  fill=ATTENDANCE_COLORS.get(status, "#111827"))
-
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG", optimize=True)
-    return _brand_png(buffer.getvalue(), context["school_name"], f"{context['class_name']} · davomat")
+def attendance_images(context: dict) -> list[bytes]:
+    """Davomat rasmi — PDF ko'rinishining o'zi, har sahifasi alohida rasm (PNG)."""
+    return pdf_pages_to_png(attendance_pdf(context))
 
 
 def _send_photo_to_telegram(chat_id: int, file_name: str, image_bytes: bytes, caption: str = "") -> None:
@@ -12968,14 +12923,20 @@ def _send_photo_to_telegram(chat_id: int, file_name: str, image_bytes: bytes, ca
 
 @app.get("/api/attendance/{attendance_id}/file")
 def attendance_file(
-    attendance_id: int, format: str = "pdf", user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    attendance_id: int, format: str = "pdf", page: int = 1, user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """Davomatni PDF yoki rasm qilib yuklab beradi (oddiy brauzer uchun)."""
+    """Davomatni PDF yoki rasm qilib yuklab beradi (oddiy brauzer uchun). Rasm — PDF'ning page-sahifasi."""
 
     context = _attendance_context(db, _school_attendance(db, user, attendance_id)[0])
     if format == "image":
-        return StreamingResponse(io.BytesIO(attendance_image(context)), media_type="image/png",
-                                 headers={"Content-Disposition": 'attachment; filename="davomat.png"'})
+        images = attendance_images(context)
+        if not 1 <= page <= len(images):
+            raise HTTPException(status_code=404, detail="Bunday sahifa yo'q")
+        return StreamingResponse(io.BytesIO(images[page - 1]), media_type="image/png", headers={
+            "Content-Disposition": f'attachment; filename="davomat_{page}.png"',
+            "X-Page-Count": str(len(images)), "Access-Control-Expose-Headers": "X-Page-Count",
+        })
     return StreamingResponse(io.BytesIO(attendance_pdf(context)), media_type="application/pdf",
                              headers={"Content-Disposition": 'attachment; filename="davomat.pdf"'})
 
@@ -12996,7 +12957,8 @@ def send_attendance(
         if not _send_bot_text(user.tg_id, attendance_text(context)):
             raise HTTPException(status_code=502, detail="Xabar yuborilmadi (botga /start bosganmisiz?)")
     elif format == "image":
-        _send_photo_to_telegram(user.tg_id, "davomat.png", attendance_image(context), caption)
+        # PDF bilan bir xil; bir necha sahifa bo'lsa — albom (har sahifa alohida rasm)
+        _send_photo_album(user.tg_id, "davomat", attendance_images(context), caption)
     else:
         _send_pdf_to_telegram(user.tg_id, f"davomat_{context['class_name']}.pdf".replace("/", "-"),
                               attendance_pdf(context), caption)
