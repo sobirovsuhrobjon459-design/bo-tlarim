@@ -10244,149 +10244,25 @@ def class_test_pdf(context: dict) -> bytes:
     return buffer.getvalue()
 
 
-def class_test_image(context: dict) -> bytes:
-    """Test natijalari — rasm (PNG), guruhga yuborish uchun: kartali reyting jadvali va foiz chiziqlari."""
-
-    from PIL import Image, ImageDraw, ImageFilter, ImageFont
-
-    def font(name: str, size: int):
-        try:
-            return ImageFont.truetype(str(FONTS_DIR / name), size)
-        except OSError:
-            return ImageFont.load_default()
-
-    def fit(text: str, typeface, max_width: float) -> str:
-        if draw.textlength(text, font=typeface) <= max_width:
-            return text
-        while text and draw.textlength(text + "…", font=typeface) > max_width:
-            text = text[:-1]
-        return text.rstrip() + "…"
-
-    def gradient(size: tuple[int, int], start: str, end: str) -> Image.Image:
-        """Chapdan o'ngga rang o'tishi."""
-        mask = Image.linear_gradient("L").rotate(90).resize(size)
-        return Image.composite(Image.new("RGBA", size, end), Image.new("RGBA", size, start), mask)
-
-    title_font = font("DejaVuSans-Bold.ttf", 64)
-    meta_font, meta_bold = font("DejaVuSans.ttf", 28), font("DejaVuSans-Bold.ttf", 28)
-    head_font, name_font = font("DejaVuSans.ttf", 30), font("DejaVuSans-Bold.ttf", 31)
-    rank_font, small_font = font("DejaVuSans-Bold.ttf", 26), font("DejaVuSans.ttf", 24)
-
-    rows = context["scores"]
-    width, row_height, gap = 1600, 80, 10
-    head_top = 290
-    table_top = head_top + 100
-    height = table_top + len(rows) * (row_height + gap) + 70
-    name_x, score_x, percent_x = 250, 935, 1100
-    panel_left, panel_right = 1215, width - 50
-    bar_left, bar_right = panel_left + 30, panel_right - 25
-
-    image = Image.new("RGBA", (width, height), "#F3FAF5")
-    draw = ImageDraw.Draw(image)
-
-    # Sarlavha va test haqida ma'lumot
-    draw.text((width // 2, 92), fit(context["title"], title_font, width - 120), font=title_font, fill="#0B1F2A", anchor="mm")
-    meta = "  ·  ".join(part for part in (context["school_name"], context["class_name"], context["subject"] or "Fan", context["date"]) if part)
-    draw.text((width // 2, 170), fit(meta, meta_font, width - 120), font=meta_font, fill="#4F6670", anchor="mm")
-    summary = (f"Qatnashdi: {context['participants']} / {context['total']}   ·   O'rtacha: "
-               f"{_fmt_number(context['average_percent'] or 0)}%   ·   Maks. {_fmt_number(context['max_score'])} ball")
-    draw.text((width // 2, 214), summary, font=meta_bold, fill="#0B1F2A", anchor="mm")
-    draw.text((width // 2, 252), fit(f"O'qituvchi: {context['teacher_name']}", small_font, width - 120),
-              font=small_font, fill="#4F6670", anchor="mm")
-
-    # Ustunlar sarlavhasi: chapda ingichka chiziq, o'ngda egri bo'lib ko'tariladigan to'q ko'k-yashil tasma
-    band_height, line = 84, 9
-    band_bottom = head_top + band_height
-    curve_from, curve_to = 700, 860
-    points = [(40, band_bottom - line)]
-    for step in range(41):
-        t = step / 40
-        smooth = t * t * (3 - 2 * t)
-        points.append((curve_from + (curve_to - curve_from) * t, band_bottom - line - (band_height - line) * smooth))
-    points += [(width, head_top), (width, band_bottom), (40, band_bottom)]
-    band_mask = Image.new("L", (width, height), 0)
-    ImageDraw.Draw(band_mask).polygon(points, fill=255)
-    band = Image.new("RGBA", (width, height), "#0B1F2A")
-    band.paste(gradient((width - 600, height), "#0B1F2A", "#00A844"), (600, 0))
-    image.paste(band, (0, 0), band_mask)
-    draw = ImageDraw.Draw(image)
-    head_y = head_top + 38
-    draw.text((120, head_y), "No.", font=head_font, fill="#0B1F2A", anchor="mm")
-    draw.text((name_x + 160, head_y), "Ism", font=head_font, fill="#0B1F2A", anchor="mm")
-    draw.text((score_x, head_y + 4), "Natija", font=head_font, fill="#ffffff", anchor="mm")
-    draw.text((percent_x, head_y + 4), "%", font=head_font, fill="#ffffff", anchor="mm")
-    draw.text(((panel_left + panel_right) // 2, head_y + 4), "Grafik", font=head_font, fill="#ffffff", anchor="mm")
-
-    # Qator kartalarining yumshoq soyasi
-    shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    shadow_draw = ImageDraw.Draw(shadow)
-    for index in range(len(rows)):
-        top = table_top + index * (row_height + gap)
-        shadow_draw.rounded_rectangle([44, top + 6, width - 44, top + row_height + 6], radius=16, fill=(29, 59, 83, 34))
-    image.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(9)))
-    draw = ImageDraw.Draw(image)
-
-    for index in range(len(rows)):
-        top = table_top + index * (row_height + gap)
-        draw.rounded_rectangle([40, top, width - 40, top + row_height], radius=16,
-                               fill="#ffffff" if index % 2 == 0 else "#F3FAF5")
-    # Grafik ustunining umumiy och foni
-    if rows:
-        draw.rounded_rectangle([panel_left, table_top - 6, panel_right, table_top + len(rows) * (row_height + gap) - gap + 6],
-                               radius=18, fill="#EAF7EE")
-
-    for index, row in enumerate(rows):
-        top = table_top + index * (row_height + gap)
-        middle = top + row_height // 2
-        absent = row["score"] is None
-        rank = row.get("rank")
-
-        # O'rin doirachasi: birinchi uchtasi to'q, qolganlari och
-        podium = bool(rank) and rank <= 3
-        draw.ellipse([92, middle - 28, 148, middle + 28], fill="#00A844" if podium else "#EAF7EE")
-        draw.text((120, middle), str(rank) if rank else "—", font=rank_font,
-                  fill="#ffffff" if podium else "#0B1F2A", anchor="mm")
-
-        # Avatar: oddiy odam belgisi
-        cx = 195
-        draw.ellipse([cx - 28, middle - 28, cx + 28, middle + 28], fill="#EAF7EE")
-        person = "#b4c2ce" if absent else "#7D97A3"
-        draw.ellipse([cx - 10, middle - 19, cx + 10, middle + 1], fill=person)
-        draw.chord([cx - 20, middle + 5, cx + 20, middle + 37], 180, 360, fill=person)
-
-        draw.text((name_x, middle), fit(row["name"], name_font, score_x - 90 - name_x), font=name_font,
-                  fill="#9aa6b2" if absent else "#111c2b", anchor="lm")
-
-        draw.rounded_rectangle([bar_left, middle - 15, bar_right, middle + 15], radius=15, fill="#DDEFE2")
-        if absent:
-            draw.text(((score_x + percent_x) // 2, middle), "kelmadi", font=small_font, fill="#9aa6b2", anchor="mm")
-            continue
-        percent = max(0.0, min(100.0, float(row["percent"])))
-        draw.text((score_x, middle), f"{_fmt_number(row['score'])}/{_fmt_number(context['max_score'])}",
-                  font=name_font, fill="#111c2b", anchor="mm")
-        draw.text((percent_x, middle), f"{_fmt_number(round(percent, 1))}%", font=head_font, fill="#4F6670", anchor="mm")
-
-        start, end = SCORE_LEVEL_COLORS[row["level"]]
-        length = max(30, int((bar_right - bar_left) * percent / 100))
-        bar_mask = Image.new("L", (length, 30), 0)
-        ImageDraw.Draw(bar_mask).rounded_rectangle([0, 0, length - 1, 29], radius=15, fill=255)
-        image.paste(gradient((length, 30), start, end), (bar_left, middle - 15), bar_mask)
-        dot = bar_left + length - 15
-        draw.ellipse([dot - 8, middle - 8, dot + 8, middle + 8], fill="#ffffff")
-
-    buffer = io.BytesIO()
-    image.convert("RGB").save(buffer, format="PNG", optimize=True)
-    return _brand_png(buffer.getvalue(), context["school_name"], f"{context['class_name']} · test natijalari")
+def class_test_images(context: dict) -> list[bytes]:
+    """Sinf testi natijalari rasmi — PDF ko'rinishining o'zi, har sahifasi alohida rasm (PNG)."""
+    return pdf_pages_to_png(class_test_pdf(context))
 
 
 @app.get("/api/class-tests/{test_id}/file")
-def class_test_file(test_id: int, format: str = "pdf", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def class_test_file(test_id: int, format: str = "pdf", page: int = 1, user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
     test, member = _visible_class_test(db, user, test_id)
     context = _class_test_context(db, test, member)
-    name = f"natija_{context['class_name']}".replace("/", "-")
     if format == "image":
-        return StreamingResponse(io.BytesIO(class_test_image(context)), media_type="image/png",
-                                 headers={"Content-Disposition": f'attachment; filename="{test.id}.png"'})
+        # Rasm — PDF'ning page-sahifasi (X-Page-Count — jami sahifalar)
+        images = class_test_images(context)
+        if not 1 <= page <= len(images):
+            raise HTTPException(status_code=404, detail="Bunday sahifa yo'q")
+        return StreamingResponse(io.BytesIO(images[page - 1]), media_type="image/png", headers={
+            "Content-Disposition": f'attachment; filename="{test.id}_{page}.png"',
+            "X-Page-Count": str(len(images)), "Access-Control-Expose-Headers": "X-Page-Count",
+        })
     return StreamingResponse(io.BytesIO(class_test_pdf(context)), media_type="application/pdf",
                              headers={"Content-Disposition": f'attachment; filename="{test.id}.pdf"'})
 
@@ -10400,7 +10276,8 @@ def send_class_test(test_id: int, format: str = "pdf", user: User = Depends(get_
                f"📊 O'rtacha: {_fmt_number(context['average_percent'] or 0)}%")
     file_name = f"natija_{context['class_name']}".replace("/", "-")
     if format == "image":
-        _send_photo_to_telegram(user.tg_id, f"{file_name}.png", class_test_image(context), caption)
+        # PDF bilan bir xil; bir necha sahifa bo'lsa — albom (har sahifa alohida rasm)
+        _send_photo_album(user.tg_id, file_name, class_test_images(context), caption)
     else:
         _send_pdf_to_telegram(user.tg_id, f"{file_name}.pdf", class_test_pdf(context), caption)
     return {"ok": True}

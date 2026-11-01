@@ -2155,6 +2155,10 @@ def test_sinf_test_natijalari():
     assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
     png = client.get(f"/api/class-tests/{test['id']}/file", params={"format": "image"}, headers=as_user(701))
     assert png.status_code == 200 and png.content[1:4] == b"PNG"
+    # Rasm — PDF sahifasining o'zi (A4 nisbatida), sahifalar soni aytiladi
+    from PIL import Image as _Image
+    width, height = _Image.open(io.BytesIO(png.content)).size
+    assert abs(height / width - 842 / 595) < 0.02 and png.headers["X-Page-Count"] == "1", (width, height)
     overview = client.get("/api/schools/test-results", headers=as_user(701)).json()
     assert overview[0]["tests"] == 1 and overview[0]["average_percent"] == 80, overview
     assert client.get("/api/schools/test-results", headers=as_user(703)).status_code == 403

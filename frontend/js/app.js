@@ -3028,8 +3028,11 @@ async function sendClassTest(test, format) {
   if (sendsViaBot()) {
     await api(`/api/class-tests/${test.id}/send?format=${format}`, { method: "POST", body: {} });
     showToast(`✅ ${format === "image" ? "Rasm" : "PDF"} bot chatiga yuborildi`);
+  } else if (format === "image") {
+    // Rasm — PDF ko'rinishining o'zi (har sahifa alohida)
+    await downloadPageImages(`/api/class-tests/${test.id}/file?format=image`, "natija");
   } else {
-    await downloadFile(`/api/class-tests/${test.id}/file?format=${format}`, format === "image" ? "natija.png" : "natija.pdf");
+    await downloadFile(`/api/class-tests/${test.id}/file?format=${format}`, "natija.pdf");
   }
 }
 
