@@ -8501,6 +8501,8 @@ async function adminSchoolsView() {
               <span>👥 <b>${school.classes}</b> ${instTerms(school.kind).group}</span>
               <span>🎒 <b>${formatNumber(school.students)}</b> o'quvchi</span>
             </div>
+            <button type="button" class="btn btn-ghost danger-text" data-delete-school="${school.id}"
+                    style="width:auto;padding:6px 14px;margin:10px 0 0">🗑 O'chirish</button>
           </div>
         </div>`
     )
@@ -8531,8 +8533,43 @@ async function adminSchoolsView() {
         })
       );
       document.querySelectorAll("a[data-admin-user]").forEach((link) => link.addEventListener("click", (event) => event.preventDefault()));
+      document.querySelectorAll("[data-delete-school]").forEach((button) => {
+        const school = schools.find((item) => item.id === Number(button.dataset.deleteSchool));
+        button.addEventListener("click", () => openDeleteSchoolSheet(school));
+      });
     },
   };
+}
+
+// Muassasani o'chirish (platforma admini): tasdiq uchun nomi aynan yoziladi
+function openDeleteSchoolSheet(school) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 6px">🗑 «${escapeHtml(school.name)}» o'chirilsinmi?</h3>
+    <div class="notice" style="margin:0 0 10px">
+      ${instTerms(school.kind).title}: ${school.staff} xodim, ${school.classes} ${instTerms(school.kind).group},
+      ${formatNumber(school.students)} o'quvchi. O'chirilgach ro'yxatlarda ko'rinmaydi, kod va havola bilan
+      qo'shilib bo'lmaydi, barcha xodimlar undan chiqariladi. Ma'lumotlar bazada saqlanib qoladi.
+    </div>
+    <label class="field-label" for="delete-school-confirm">Tasdiqlash uchun nomini yozing: <b>${escapeHtml(school.name)}</b></label>
+    <input class="input" id="delete-school-confirm" autocomplete="off" placeholder="${escapeHtml(school.name)}" />
+    <button class="btn" id="delete-school-button" style="margin-top:10px;background:#d93636;color:#fff" disabled>🗑 O'chirish</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+  const input = sheet.querySelector("#delete-school-confirm");
+  const button = sheet.querySelector("#delete-school-button");
+  const normalize = (value) => value.trim().replace(/\s+/g, " ").toLowerCase();
+  input.addEventListener("input", () => {
+    button.disabled = normalize(input.value) !== normalize(school.name);
+  });
+  button.addEventListener(
+    "click",
+    guarded(async () => {
+      const result = await api(`/api/admin/schools/${school.id}/delete`, { method: "POST", body: { confirm: input.value } });
+      close();
+      showToast(`🗑 «${school.name}» o'chirildi (${result.members_removed} ta xodim chiqarildi)`);
+      await renderAdminDashboard("schools");
+    })
+  );
 }
 
 /* ---------- 🎁 Promo ---------- */

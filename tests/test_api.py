@@ -2026,6 +2026,45 @@ def test_boshlangich_test_rasch_siz_hisoblanadi():
     assert client.patch(url, json={"test_type": "boshqa"}, headers=as_user(555)).status_code == 422
 
 
+def test_admin_muassasani_ochiradi():
+    """Platforma admini muassasani o'chiradi: nomi aynan yozilsa; ro'yxat, kod, havola va a'zolikdan yo'qoladi."""
+    reset_database()
+    cid = _school_with_class(701)["id"]
+    client.post(f"/api/classes/{cid}/students", json={"full_name": "Ali Valiyev"}, headers=as_user(701))
+    school = client.get("/api/schools/me", headers=as_user(701)).json()["school"]
+    _set_name(702, "Ustoz", "Ikkinchi")
+    client.post("/api/schools/join", json={"code": current_code(school), "subjects": ["Fizika"], "phone": "93 444 55 02"},
+                headers=as_user(702))
+    invite = client.post("/api/schools/invites", json={}, headers=as_user(701)).json()
+    admin = as_user(4242)
+    _set_name(4242, "Bosh", "Admin")
+    listed = client.get("/api/admin/schools", headers=admin).json()
+    assert [item["id"] for item in listed] == [school["id"]]
+
+    url = f"/api/admin/schools/{school['id']}/delete"
+    assert client.post(url, json={"confirm": school["name"]}, headers=as_user(702)).status_code == 403  # admin emas
+    assert client.post(url, json={"confirm": "boshqa nom"}, headers=admin).status_code == 422
+    deleted = client.post(url, json={"confirm": "  " + school["name"].upper() + " "}, headers=admin)
+    assert deleted.status_code == 200 and deleted.json()["members_removed"] == 2, deleted.text
+
+    # Hamma joydan yo'qoladi
+    assert client.get("/api/admin/schools", headers=admin).json() == []
+    assert client.get("/api/schools/me", headers=as_user(701)).json()["school"] is None
+    assert client.get("/api/schools/me", headers=as_user(702)).json()["school"] is None
+    assert client.get(f"/api/classes/{cid}", headers=as_user(701)).status_code in (403, 404)
+    _set_name(703, "Yangi", "Ustoz")
+    assert client.post("/api/schools/join", json={"code": current_code(school), "subjects": ["Fizika"], "phone": "93 444 55 03"},
+                       headers=as_user(703)).status_code == 404
+    token = invite.get("token") or invite.get("link", "").rsplit("_", 1)[-1]
+    if token:
+        assert client.get(f"/api/schools/invites/{token}", headers=as_user(703)).status_code == 404
+    assert client.post(url, json={"confirm": school["name"]}, headers=admin).status_code == 404  # ikkinchi marta
+    # Ma'lumotlar bazada qoladi
+    with SessionLocal() as session:
+        from backend.database import PrivateSchool
+        assert session.get(PrivateSchool, school["id"]).deleted_at is not None
+
+
 def test_sinflar_raqam_tartibida():
     """Sinflar 1 dan 11 gacha tartibda: 2-A "10-1" dan oldin (oddiy saralashda keyin turardi)."""
     reset_database()

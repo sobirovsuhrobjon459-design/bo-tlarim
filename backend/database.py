@@ -519,6 +519,9 @@ class PrivateSchool(Base):
     # Muassasa turi: school (xususiy maktab) | course (o'quv markazi) | club (to'garak).
     # Hammasi bir xil tizimda ishlaydi; o'qituvchi har turdan bittasiga a'zo bo'la oladi
     kind: Mapped[str] = mapped_column(String(10), default="school", index=True)
+    # Platforma admini o'chirgan: ro'yxatlarda ko'rinmaydi, kod/havola bilan qo'shilib bo'lmaydi.
+    # Ma'lumotlar (sinflar, o'quvchilar, to'lovlar, davomat) bazada qoladi — tiklash mumkin
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
 
     members: Mapped[list["SchoolMember"]] = relationship(back_populates="school", order_by="SchoolMember.id")
 
@@ -1343,6 +1346,12 @@ class TestIn(BaseModel):
     def check_price(self) -> "TestIn":
         _check_test_price(self.price)
         return self
+
+
+class AdminSchoolDeleteIn(BaseModel):
+    """Muassasani o'chirishni tasdiqlash: nomi aynan yoziladi (tasodifan o'chib ketmasin)."""
+
+    confirm: str = Field(min_length=1, max_length=200)
 
 
 class EssayScoreIn(BaseModel):

@@ -126,6 +126,7 @@ from .database import (
     CardTopUpIn,
     CreditPurchaseIn,
     EssayScoreIn,
+    AdminSchoolDeleteIn,
     FinishIn,
     IS_SQLITE,
     InviteAcceptIn,
@@ -233,7 +234,8 @@ def _add_missing_columns() -> None:
             "curator_user_id": "INTEGER", "code_start": "INTEGER", "code_end": "INTEGER", "shift_id": "INTEGER",
             "monthly_fee": "INTEGER",
         },
-        "private_schools": {"monthly_fee": "INTEGER DEFAULT 0", "kind": "VARCHAR(10) DEFAULT 'school'"},
+        "private_schools": {"monthly_fee": "INTEGER DEFAULT 0", "kind": "VARCHAR(10) DEFAULT 'school'",
+                            "deleted_at": "TIMESTAMP"},
         "class_students": {"discount_percent": "INTEGER DEFAULT 0", "student_code": "INTEGER", "added_by_user_id": "INTEGER"},
         "class_tests": {"source_test_id": "INTEGER"},
         "promo_codes": {"per_teacher_limit": "INTEGER DEFAULT 3"},
@@ -8147,6 +8149,7 @@ def _active_membership(db: Session, user: User, kind: str | None = None) -> Scho
             SchoolMember.user_id == user.id,
             SchoolMember.left_at.is_(None),
             PrivateSchool.kind == (kind or _request_inst_kind.get()),
+            PrivateSchool.deleted_at.is_(None),
         )
         .order_by(SchoolMember.id.desc())
     )
@@ -8341,7 +8344,8 @@ def list_schools(
     if region not in REGIONS or (district and not is_valid_location(region, district)):
         raise HTTPException(status_code=422, detail="Viloyat yoki tuman noto'g'ri tanlangan")
 
-    query = select(PrivateSchool).where(PrivateSchool.region == region, PrivateSchool.kind == _request_inst_kind.get())
+    query = select(PrivateSchool).where(PrivateSchool.region == region, PrivateSchool.kind == _request_inst_kind.get(),
+                                        PrivateSchool.deleted_at.is_(None))
     if district:
         query = query.where(PrivateSchool.district == district)
     schools = db.scalars(query.order_by(PrivateSchool.district, PrivateSchool.name)).all()
@@ -8406,7 +8410,7 @@ def return_to_own_school(school_id: int, user: User = Depends(get_current_user),
     """Admin o'z maktabiga kodsiz qaytadi."""
 
     school = db.get(PrivateSchool, school_id)
-    if not school:
+    if not school or school.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Maktab topilmadi")
     if school.owner_user_id != user.id:
         raise HTTPException(status_code=403, detail="Bu maktab sizniki emas — kirish uchun maktab kodi kerak")
@@ -8428,7 +8432,7 @@ def request_school_code(school_id: int, user: User = Depends(get_current_user), 
 
     _require_profile_name(user)
     school = db.get(PrivateSchool, school_id)
-    if not school:
+    if not school or school.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Maktab topilmadi")
     if school.owner_user_id == user.id:
         raise HTTPException(status_code=400, detail="Bu sizning maktabingiz — kod kerak emas, «Maktabimga kirish»ni bosing")
@@ -8484,7 +8488,8 @@ def my_school(user: User = Depends(get_current_user), db: Session = Depends(get_
     # A'zo emas, lekin o'zi ochgan maktab bor — kodsiz qaytish uchun
     owned = db.scalar(
         select(PrivateSchool)
-        .where(PrivateSchool.owner_user_id == user.id, PrivateSchool.kind == _request_inst_kind.get())
+        .where(PrivateSchool.owner_user_id == user.id, PrivateSchool.kind == _request_inst_kind.get(),
+               PrivateSchool.deleted_at.is_(None))
         .order_by(PrivateSchool.id.desc())
     )
     return {
@@ -8513,6 +8518,7 @@ def create_school(body: SchoolCreateIn, user: User = Depends(get_current_user), 
             PrivateSchool.region == body.region,
             PrivateSchool.district == body.district,
             PrivateSchool.kind == kind,
+            PrivateSchool.deleted_at.is_(None),
             func.lower(PrivateSchool.name) == body.name.lower(),
         )
     )
@@ -8556,13 +8562,13 @@ def _school_by_code(db: Session, user: User, code: str, school_id: int | None) -
     _check_code_attempts(user)
     if school_id:
         school = db.get(PrivateSchool, school_id)
-        if not school:
+        if not school or school.deleted_at is not None:
             raise HTTPException(status_code=404, detail="Maktab topilmadi")
         if not hmac.compare_digest(code, school.code):
             _record_code_failure(user)
             raise HTTPException(status_code=403, detail="Maktab kodi noto'g'ri. Kodni maktabingiz adminidan oling.")
     else:
-        school = db.scalar(select(PrivateSchool).where(PrivateSchool.code == code))
+        school = db.scalar(select(PrivateSchool).where(PrivateSchool.code == code, PrivateSchool.deleted_at.is_(None)))
         if not school:
             _record_code_failure(user)
             raise HTTPException(status_code=404, detail="Bunday kodli maktab topilmadi. Kodni tekshirib qayta kiriting.")
@@ -8668,6 +8674,9 @@ def _valid_invite(db: Session, token: str) -> SchoolInvite:
         raise HTTPException(status_code=410, detail="Bu taklif havolasi allaqachon ishlatilgan. Admindan yangisini so'rang.")
     if invite.expires_at < utcnow():
         raise HTTPException(status_code=410, detail="Taklif havolasining muddati tugagan. Admindan yangisini so'rang.")
+    school = db.get(PrivateSchool, invite.school_id)
+    if not school or school.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Taklif havolasi topilmadi")
     return invite
 
 
@@ -13405,7 +13414,7 @@ def admin_overview(admin: User = Depends(get_current_admin), db: Session = Depen
     return {
         "periods": periods,
         "pending": pending,
-        "schools": db.scalar(select(func.count()).select_from(PrivateSchool)),
+        "schools": db.scalar(select(func.count()).select_from(PrivateSchool).where(PrivateSchool.deleted_at.is_(None))),
         "users": db.scalar(select(func.count()).select_from(User)),
         "teachers": db.scalar(select(func.count()).select_from(Teacher)),
         "tests": db.scalar(select(func.count()).select_from(Test)),
@@ -13914,6 +13923,7 @@ def admin_list_schools(q: str = "", admin: User = Depends(get_current_admin), db
         .outerjoin(staff, staff.c.school_id == PrivateSchool.id)
         .outerjoin(classes, classes.c.school_id == PrivateSchool.id)
         .outerjoin(students, students.c.school_id == PrivateSchool.id)
+        .where(PrivateSchool.deleted_at.is_(None))
     )
     text_query = q.strip()
     if text_query:
@@ -13941,6 +13951,34 @@ def admin_list_schools(q: str = "", admin: User = Depends(get_current_admin), db
         }
         for school, owner, staff_count, class_count, student_count in rows
     ]
+
+
+@app.post("/api/admin/schools/{school_id}/delete")
+def admin_delete_school(school_id: int, body: AdminSchoolDeleteIn, admin: User = Depends(get_current_admin),
+                        db: Session = Depends(get_db)):
+    """
+    Platforma admini muassasani o'chiradi: ro'yxatlardan yo'qoladi, kod va havola bilan qo'shilib
+    bo'lmaydi, barcha xodimlar undan chiqariladi (Test markazidagi testlari o'zida qoladi).
+    Ma'lumotlar bazada qoladi — tiklash mumkin. Tasdiq uchun muassasa nomi aynan yoziladi.
+    """
+
+    school = db.get(PrivateSchool, school_id)
+    if not school or school.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Muassasa topilmadi")
+    if " ".join(body.confirm.split()).lower() != " ".join(school.name.split()).lower():
+        raise HTTPException(status_code=422, detail="Tasdiqlash uchun muassasa nomini aynan yozing")
+    now = utcnow()
+    school.deleted_at = now
+    members = 0
+    for member in school.members:
+        if member.left_at is None:
+            member.left_at = now
+            member.position = None
+            members += 1
+    db.commit()
+    logging.getLogger("backend").warning("Muassasa o'chirildi: id=%s nomi=%s admin=%s (%s ta xodim chiqarildi)",
+                                         school.id, school.name, admin.id, members)
+    return {"ok": True, "members_removed": members}
 
 
 @app.get("/api/admin/payments")
