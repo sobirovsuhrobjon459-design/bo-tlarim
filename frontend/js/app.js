@@ -10662,8 +10662,9 @@ function dtmSectionTitle(name, index) {
 }
 
 const SUBJECTS_BY_TYPE = {
-  rash: ["Tarix", "Matematika", "Kimyo", "Biologiya", "Huquq", "Fizika", "Ona tili va adabiyot", "DTM testi"],
+  rash: ["Tarix", "Matematika", "Kimyo", "Biologiya", "Huquq", "Fizika", "Ona tili va adabiyot"],
   boshlangich: SUBJECTS, // barcha fanlar
+  dtm: [DTM_SUBJECT], // fanlar qat'iy: 3 ta majburiy + o'qituvchi tanlaydigan 2 ta asosiy fan
 };
 
 // Milliy sertifikatda har bir fanning o'z tuzilishi bor. U BITTA joyda —
@@ -10755,6 +10756,16 @@ const TEST_TYPES = {
     allowText: false,
     hint: "Oddiy test: barcha savollar variantli (A/B/C/D). Natija — to'g'ri javoblar soni va foiz.",
   },
+  dtm: {
+    label: "DTM test",
+    testCount: 90,
+    optionCount: 4,
+    textCount: 0,
+    textParts: 1,
+    duration: 180,
+    allowText: false,
+    hint: "Oliygohga kirish testi: 90 ta savol — majburiy fanlar 1–30, asosiy fanlar 31–60 va 61–90; 180 daqiqa. Natija DTM bali bilan.",
+  },
 };
 
 /*
@@ -10795,6 +10806,7 @@ function renderNewTestForm(testType, draft = {}) {
 
   const typeSubjects = SUBJECTS_BY_TYPE[type] || SUBJECTS;
   const subject = typeSubjects.includes(draft.subject) ? draft.subject : typeSubjects[0];
+  const isDtm = type === "dtm";
   const subjectOptions = typeSubjects.map((item) => selectOption(item, item, subject)).join("");
 
   // Offline test — mock emas: o'qituvchi savollar sonini o'zi kiritadi, hammasi A/B/C/D, yozmasiz
@@ -10803,7 +10815,7 @@ function renderNewTestForm(testType, draft = {}) {
   // Fan bo'yicha tuzilish faqat Rash testda (Milliy sertifikat mockida) qo'llanadi
   const structure = offline
     ? { ...preset, testCount: subject === DTM_SUBJECT ? 90 : "", optionCount: 4, textCount: 0, textParts: 1, partOverrides: {}, fixedParts: {}, options: {}, note: "" }
-    : type === "rash"
+    : type === "rash" || isDtm
       ? subjectStructure(subject, preset)
       : { ...preset, options: {}, note: "" };
   // Kalitdagi yozma javoblar ham fanga mos klaviatura bilan kiritiladi
@@ -10850,19 +10862,34 @@ function renderNewTestForm(testType, draft = {}) {
           .join("")}
       </select>
       <p class="subtitle" style="margin:-6px 0 0">${
-        offline
+        offline && !isDtm
           ? `Offline: barcha savollar A/B/C/D, sonini o'zingiz kiritasiz. ${
-              type === "rash" ? "Milliy sertifikat fanlari va DTM testi." : "Barcha fanlar."
+              type === "rash" ? "Milliy sertifikat fanlari." : "Barcha fanlar."
             }`
           : preset.hint
       }</p>
     </div>
 
-    <label class="field-label" for="field-subject">Fanni tanlang</label>
-    <select class="input" id="field-subject">
-      ${subjectOptions}
-    </select>
-    <p class="subtitle" id="subject-note" style="margin:-6px 0 0">${structure.note}</p>
+    <!-- DTM testida fan qat'iy (DTM testi) — fan o'rniga 2 ta asosiy fan tanlanadi -->
+    <div ${isDtm ? "hidden" : ""}>
+      <label class="field-label" for="field-subject">Fanni tanlang</label>
+      <select class="input" id="field-subject">
+        ${subjectOptions}
+      </select>
+    </div>
+    <div id="dtm-main-subjects" ${isDtm ? "" : "hidden"}>
+      <div class="row-between" style="gap:8px;align-items:flex-end">
+        <div style="flex:1;min-width:0">
+          <label class="field-label" for="dtm-first-subject">1-asosiy fan (31–60)</label>
+          <select class="input" id="dtm-first-subject">${dtmSubjectOptions()}</select>
+        </div>
+        <div style="flex:1;min-width:0">
+          <label class="field-label" for="dtm-second-subject">2-asosiy fan (61–90)</label>
+          <select class="input" id="dtm-second-subject">${dtmSubjectOptions()}</select>
+        </div>
+      </div>
+    </div>
+    <p class="subtitle" id="subject-note" style="margin:-6px 0 0">${isDtm ? "" : structure.note}</p>
     <div class="setting-card" id="essay-card" style="margin-top:10px;${SUBJECT_PRESETS[subject]?.essay ? "" : "display:none"}">
       <label class="setting-row">
         <input type="checkbox" id="field-essay" ${offline ? "" : "checked"} />
@@ -10960,18 +10987,6 @@ function renderNewTestForm(testType, draft = {}) {
       <div class="row-between" style="gap:10px">
         <span style="min-width:0"><b>🧩 Bo'limlar:</b> <span id="geometry-summary"></span></span>
         <button class="btn btn-ghost" id="pick-geometry-button" style="width:auto;padding:6px 12px;margin:0">Belgilash</button>
-      </div>
-      <div id="dtm-main-subjects" ${subject === DTM_SUBJECT ? "" : "hidden"} style="margin-top:10px">
-        <div class="row-between" style="gap:8px;align-items:flex-end">
-          <div style="flex:1;min-width:0">
-            <label class="field-label" for="dtm-first-subject">1-asosiy fan (31–60)</label>
-            <select id="dtm-first-subject">${dtmSubjectOptions()}</select>
-          </div>
-          <div style="flex:1;min-width:0">
-            <label class="field-label" for="dtm-second-subject">2-asosiy fan (61–90)</label>
-            <select id="dtm-second-subject">${dtmSubjectOptions()}</select>
-          </div>
-        </div>
       </div>
     </div>`;
 
@@ -11489,7 +11504,7 @@ async function saveNewTest() {
     questions: [],
     key_questions: [],
     // Hisoblash usuli: Rash test — Rasch modeli, Boshlang'ich test — to'g'ri javoblar soni va foiz
-    test_type: document.getElementById("field-type").value === "boshlangich" ? "boshlangich" : "rash",
+    test_type: { boshlangich: "boshlangich", dtm: "dtm" }[document.getElementById("field-type").value] || "rash",
     essay: Boolean(SUBJECT_PRESETS[document.getElementById("field-subject").value]?.essay) &&
       document.getElementById("field-essay").checked,
   };
@@ -11567,11 +11582,15 @@ function openTestEditSheet(test, reopenHint = false) {
     ${reopenHint ? `<div class="notice" style="margin:0 0 10px">Test vaqti tugagan — qayta ochish uchun yangi tugash vaqtini tanlang (masalan «+1 soat» yoki «Cheklovsiz»).</div>` : ""}
     <label class="field-label" style="margin:0">Test nomi
       <input class="input" id="edit-test-title" maxlength="200" value="${escapeHtml(test.title)}" style="margin:4px 0 0" /></label>
-    <label class="field-label">Hisoblash usuli
+    ${
+      test.test_type === "dtm" || test.subject === DTM_SUBJECT
+        ? "" // DTM testi — natija doim DTM bali bilan
+        : `<label class="field-label">Hisoblash usuli
       <select class="input" id="edit-test-type" style="margin:4px 0 0">
         <option value="rash" ${test.test_type !== "boshlangich" ? "selected" : ""}>Rash test — Rasch balli, A+ … NC daraja</option>
         <option value="boshlangich" ${test.test_type === "boshlangich" ? "selected" : ""}>Boshlang'ich test — to'g'ri javoblar soni va foiz</option>
-      </select></label>
+      </select></label>`
+    }
     <label class="field-label">Davomiyligi (daqiqa)
       <input class="input" id="edit-test-duration" type="number" min="${test.has_attempts ? test.duration : 1}" max="300"
              value="${test.duration}" style="margin:4px 0 0" /></label>
@@ -11613,7 +11632,7 @@ function openTestEditSheet(test, reopenHint = false) {
         title: sheet.querySelector("#edit-test-title").value.trim(),
         duration: Number(sheet.querySelector("#edit-test-duration").value) || test.duration,
         end_time: localTimeToUtcIso(endInput.value),
-        test_type: sheet.querySelector("#edit-test-type").value,
+        ...(sheet.querySelector("#edit-test-type") ? { test_type: sheet.querySelector("#edit-test-type").value } : {}),
       };
       if (!test.has_attempts) body.start_time = localTimeToUtcIso(sheet.querySelector("#edit-test-start").value);
       const saved = await api(`/api/teacher/tests/${test.id}`, { method: "PATCH", body });

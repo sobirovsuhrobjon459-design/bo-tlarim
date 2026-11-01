@@ -1336,7 +1336,8 @@ class TestIn(BaseModel):
     key_questions: list[KeyQuestionIn] = Field(default_factory=list, max_length=300)
     # Esse qo'shilsinmi (faqat esseli fanda — Ona tili)
     essay: bool = False
-    test_type: Literal["rash", "boshlangich"] = "rash"
+    # dtm — Oliygohga kirish (DTM) testi: 90 savol, natija DTM bali bilan (fan — "DTM testi")
+    test_type: Literal["rash", "boshlangich", "dtm"] = "rash"
 
     @model_validator(mode="after")
     def check_price(self) -> "TestIn":

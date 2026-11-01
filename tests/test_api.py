@@ -5193,8 +5193,8 @@ def test_skanerlash_yakunlansa_natijalar_botga_yuboriladi():
 
 def test_titul_savollar_soniga_moslashadi():
     """
-    11-versiya (uzluksiz): titul har doim tik, A4 ga sig'adi (ostida Chittak belgisiga joy qoladi); doiracha
-    o'lchami va oralig'i (A–B–C–D, qatorlar) savollar sonidan qat'i nazar bir xil; ko'p savolda — ko'proq ustun.
+    11-versiya (uzluksiz): titul har doim tik va A4 ni to'ldiradi (bir tekis kattalashadi — savol kam bo'lsa doirachalar
+    yirikroq); har titulda doirachalar orasi gorizontal va vertikal bo'yicha teng; ko'p savolda — ko'proq ustun.
     """
 
     reset_database()
@@ -5223,12 +5223,11 @@ def test_titul_savollar_soniga_moslashadi():
         assert scanned.json()["answers"] == {"1": "A", str(count): "C"} and scanned.json()["sheet_number"] == int(number), (
             count, scanned.json()["sheet_number"])
     assert all(width <= 595 and height <= 842 for width, height, *_ in sizes.values()), sizes  # bitta A4
+    # A4 ni to'ldiradi: eni yoki bo'yi (ostida Chittak belgisiga joy qoldirib) to'liq
+    assert all(max(width / 595, height / (842 - main.SHEET_BRAND_SPACE)) >= 0.95 for width, height, *_ in sizes.values()), sizes
     assert sizes[10][1] <= 842 - main.SHEET_BRAND_SPACE, sizes  # kam savolda ostida Chittak belgisiga joy qoladi
-    assert sizes[10][0] < sizes[120][0], sizes  # 120 savol — 4 ustun, kengroq
-    assert sizes[10][4] == (15.0, 15.0), sizes  # doirachalar orasi gorizontal va vertikal — teng
-    # Doiracha o'lchami, A–B–C–D orasi va qatorlar orasi — hamma titulda bir xil
-    assert sizes[10][2] == sizes[45][2] == sizes[120][2], sizes
-    assert sizes[10][4] == sizes[45][4] == sizes[120][4], sizes
+    assert all(spacing[0] == spacing[1] for *_, spacing in sizes.values()), sizes  # gorizontal = vertikal
+    assert sizes[10][2] >= sizes[45][2] >= sizes[120][2], sizes  # savol kam — doirachalar yirikroq
     assert sizes[10][3] < sizes[45][3] < sizes[120][3], sizes  # kvadratlar faqat ishlatilgan bloklarda
 
 
@@ -6023,7 +6022,9 @@ def test_dtm_testi_natijasi_dtm_bali_bilan():
     reset_database()
     register_teacher()
     key = [{"number": n, "question_type": "single", "option_count": 4, "correct": "A"} for n in range(1, 91)]
-    created = create_test(enrollment_type="closed", subject="DTM testi", duration=180, key_questions=key)
+    # Test turi — "DTM test" (ilovada alohida tur: fan — "DTM testi", 90 savol)
+    created = create_test(enrollment_type="closed", subject="DTM testi", duration=180, key_questions=key, test_type="dtm")
+    assert client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()["test_type"] == "dtm"
     client.post(f"/api/teacher/tests/{created['id']}/students", json={"names": ["Hasan Hasanov", "Zuhra Karimova"]},
                 headers=as_user(555))
     students = client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()["students"]
