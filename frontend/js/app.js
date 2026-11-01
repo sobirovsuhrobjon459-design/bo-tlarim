@@ -2832,17 +2832,17 @@ async function renderClassResultsTab(schoolClass) {
   showPage(`
     <div data-class-tab="results">
       ${classHeader(schoolClass)}
-      <p class="section-label">TEST MARKAZI</p>
+      <p class="section-label">SINOV NATIJALARI</p>
+      <button class="btn btn-ghost" id="add-class-test-button">+ Natijani qo'lda kiritish</button>
+      <div id="class-tests" style="margin-top:14px"><p class="subtitle">⏳ Yuklanmoqda...</p></div>
+
+      <p class="section-label" style="margin-top:18px">TEST MARKAZI</p>
       <div class="row-between" style="gap:8px">
         <button class="btn" id="class-new-exam-button" style="margin:0">📝 Yangi imtihon</button>
         <button class="btn btn-ghost" id="class-attach-exam-button" style="margin:0">🔗 Testni biriktirish</button>
       </div>
       <p class="subtitle" style="margin:6px 0 0">Titul bilan o'tkaziladigan imtihon shu sinfga biriktiriladi: o'quvchilar ID raqami bilan ro'yxatga qo'shiladi, skanerlangan natijalar shu yerga yoziladi.</p>
       <div id="class-center-tests" style="margin-top:10px"></div>
-
-      <p class="section-label" style="margin-top:18px">SINOV NATIJALARI</p>
-      <button class="btn btn-ghost" id="add-class-test-button">+ Natijani qo'lda kiritish</button>
-      <div id="class-tests" style="margin-top:14px"><p class="subtitle">⏳ Yuklanmoqda...</p></div>
     </div>
   `);
   wireClassTab(schoolClass, "results");
@@ -2878,7 +2878,7 @@ async function renderClassResultsTab(schoolClass) {
              )
              .join("")}
          </div>`
-      : `<p class="subtitle" style="margin:6px 0 0">Hali natija kiritilmagan. Sinfda o'tkazgan testingiz natijalarini kiriting — har bir o'quvchining foizi va bahosi chiqadi.</p>`;
+      : `<p class="subtitle" style="margin:6px 0 0">Hali natija kiritilmagan. Sinfda o'tkazgan testingiz natijalarini kiriting — har bir o'quvchining natijasi (21/25) va foizi chiqadi.</p>`;
     holder.querySelectorAll("[data-class-test]").forEach((item) => {
       item.addEventListener("click", guarded(() => renderClassTestDetail(Number(item.dataset.classTest), schoolClass)));
     });
