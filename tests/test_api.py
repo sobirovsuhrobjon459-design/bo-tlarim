@@ -6012,6 +6012,26 @@ def test_sinf_ichida_test_markazi_imtihonlari():
     reattached = client.post(f"/api/teacher/tests/{test['id']}/classes", json={"class_ids": [cid]}, headers=as_user(701))
     assert reattached.json()["added"] == 2, reattached.text
 
+    # Natija kiritilgach: imtihon kartochkasida o'rtacha foiz; "qo'lda kiritilganlar" ro'yxatida takrorlanmaydi
+    attempt_id = client.get(f"/api/teacher/tests/{test['id']}", headers=as_user(701)).json()["students"][0]["id"]
+    saved = client.post(f"/api/teacher/tests/{test['id']}/students/{attempt_id}/answers",
+                        json={"answers": {"1": "B", "2": "C"}}, headers=as_user(701))
+    assert saved.status_code == 200, saved.text
+    card = client.get(f"/api/classes/{cid}/center-tests", headers=as_user(701)).json()[0]
+    assert card["class_test_id"] and card["results_visible"] is True, card
+    assert card["average_percent"] == 50 and card["participants"] == 1, card  # 4 savoldan 2 tasi
+    assert client.get(f"/api/classes/{cid}/tests", params={"manual": "true"}, headers=as_user(701)).json() == []
+    # Rahbariyatning "Test natijalari" sahifasi — hammasi (skanerlanganlari ham)
+    assert len(client.get(f"/api/classes/{cid}/tests", headers=as_user(701)).json()) == 1
+    assert client.get(f"/api/class-tests/{card['class_test_id']}", headers=as_user(701)).status_code == 200
+    manual = client.post(f"/api/classes/{cid}/tests", headers=as_user(701), json={
+        "title": "Qo'lda", "subject": "Matematika", "taken_on": "2026-11-01", "max_score": 10,
+        "scores": {str(client.get(f"/api/classes/{cid}", headers=as_user(701)).json()["students"][0]["id"]): 7}})
+    assert manual.status_code == 200, manual.text
+    manual_titles = [item["title"] for item in client.get(f"/api/classes/{cid}/tests", params={"manual": "true"},
+                                                          headers=as_user(701)).json()]
+    assert manual_titles == ["Qo'lda"], manual_titles
+
 
 def test_dtm_testi_fan_shabloni():
     """DTM testi: 90 ta savol, majburiy 3 fan (10 tadan) va 2 mutaxassislik fani (30 tadan), yozmasiz."""

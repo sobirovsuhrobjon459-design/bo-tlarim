@@ -10023,13 +10023,17 @@ def _save_scores(db: Session, test: ClassTest, school_class: SchoolClass, scores
 
 
 @app.get("/api/classes/{class_id}/tests")
-def list_class_tests(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_class_tests(class_id: int, manual: bool = False, user: User = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """
+    Sinf test natijalari. manual=true — faqat qo'lda kiritilganlar (sinfning "Sinov" bo'limi uchun:
+    skanerlangan imtihon natijasi imtihonning o'z kartochkasida ko'rinadi, ikki marta chiqmasin).
+    """
     school_class, member = _school_class(db, user, class_id)
-    tests = db.scalars(
-        select(ClassTest)
-        .where(ClassTest.class_id == school_class.id, ClassTest.deleted_at.is_(None))
-        .order_by(ClassTest.taken_on.desc(), ClassTest.id.desc())
-    ).all()
+    query = select(ClassTest).where(ClassTest.class_id == school_class.id, ClassTest.deleted_at.is_(None))
+    if manual:
+        query = query.where(ClassTest.source_test_id.is_(None))
+    tests = db.scalars(query.order_by(ClassTest.taken_on.desc(), ClassTest.id.desc())).all()
     return [_class_test_view(db, test, member, with_scores=False) for test in tests if _can_see_class_test(test, member)]
 
 
@@ -10058,7 +10062,7 @@ def class_center_tests(class_id: int, user: User = Depends(get_current_user), db
         select(Test).where(Test.id.in_(list(by_test)), Test.deleted_at.is_(None)).order_by(Test.id.desc())
     ).all()
     class_tests = {
-        item.source_test_id: item.id
+        item.source_test_id: item
         for item in db.scalars(
             select(ClassTest).where(
                 ClassTest.class_id == school_class.id, ClassTest.source_test_id.in_(list(by_test)), ClassTest.deleted_at.is_(None)
@@ -10082,9 +10086,21 @@ def class_center_tests(class_id: int, user: User = Depends(get_current_user), db
             "can_remove": bool(owner and owner.user_id == user.id) or _can_delete_classes(member),
             "done": done,
             "total": done + by_test[test.id].get("pending", 0),
-            "class_test_id": class_tests.get(test.id),
+            **_center_test_results(db, class_tests.get(test.id), member),
         })
     return result
+
+
+def _center_test_results(db: Session, class_test: ClassTest | None, member: SchoolMember) -> dict:
+    """Imtihonning sinfdagi natijalari (skanerlangandan keyin): o'rtacha foiz — faqat natijani ko'ra oladiganga."""
+    visible = bool(class_test) and _can_see_class_test(class_test, member)
+    summary = _class_test_view(db, class_test, member, with_scores=False) if visible else None
+    return {
+        "class_test_id": class_test.id if class_test else None,
+        "results_visible": visible,
+        "average_percent": summary["average_percent"] if summary else None,
+        "participants": summary["participants"] if summary else 0,
+    }
 
 
 @app.delete("/api/classes/{class_id}/center-tests/{test_id}")

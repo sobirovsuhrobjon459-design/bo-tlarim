@@ -2861,7 +2861,8 @@ async function renderClassResultsTab(schoolClass) {
 
   const holder = document.getElementById("class-tests");
   try {
-    const tests = await api(`/api/classes/${schoolClass.id}/tests`);
+    // Faqat qo'lda kiritilganlar — skanerlangan imtihon natijasi imtihon kartochkasida (ikki marta chiqmasin)
+    const tests = await api(`/api/classes/${schoolClass.id}/tests?manual=true`);
     if (!holder.isConnected) return;
     holder.innerHTML = tests.length
       ? `<div class="panel pick-list">
@@ -2971,6 +2972,15 @@ async function loadClassCenterTests(schoolClass) {
                       <p class="subtitle" style="margin:0">Skanerlangan: <b>${test.done} / ${test.total}</b>${
                         test.is_mine ? "" : ` · ${escapeHtml(test.teacher)}`
                       }</p>
+                      ${
+                        // Skanerlangan natijalar shu kartochkada (alohida qator bo'lib takrorlanmaydi)
+                        test.results_visible && test.participants
+                          ? `<p class="subtitle" style="margin:6px 0 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                               O'rtacha: <b>${test.average_percent ?? 0}%</b>
+                               <button type="button" class="share-pill" data-center-results="${test.class_test_id}">📊 Natijalar</button>
+                             </p>`
+                          : ""
+                      }
                     </div>
                     <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
                       ${test.can_remove ? deleteButton("data-remove-center-test", test.id) : ""}
@@ -3005,6 +3015,11 @@ async function loadClassCenterTests(schoolClass) {
         guarded(async (event) => {
           // 🗑 va kodni nusxalash — o'z ishini qiladi, kartani ochmaydi
           if (event.target.closest("[data-remove-center-test], [data-copy]")) return;
+          // 📊 Natijalar — sinf ko'rinishidagi natijalar (ball/maks, foiz, rasm, PDF)
+          if (event.target.closest("[data-center-results]")) {
+            await renderClassTestDetail(test.class_test_id, schoolClass);
+            return;
+          }
           if (test.is_mine) await renderTestDetail(test.id); // skanerlash, kalit, titul — Test markazida
           else if (test.class_test_id) await renderClassTestDetail(test.class_test_id, schoolClass);
           else showToast(`Bu imtihon ${test.teacher}niki — natijalar skanerlangach shu yerda chiqadi`);
