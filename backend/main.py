@@ -1153,7 +1153,7 @@ def build_rasch_report(db: Session, test: Test) -> dict:
     items = _rasch_items(test)
     total_questions = _question_count(test)
     # Rash test — Rasch modeli (Milliy sertifikat uslubidagi ball va A+ … NC daraja);
-    # boshlang'ich test — to'g'ri javoblar soni, foiz va 5 ballik baho (o'qituvchi test turini tanlaydi)
+    # boshlang'ich test — faqat to'g'ri javoblar soni va foiz, bahosiz (o'qituvchi test turini tanlaydi)
     uses_rasch = test.test_type != "boshlangich"
 
     correct_refs: dict[int, set[int]] = {attempt.id: set() for attempt, _ in results}

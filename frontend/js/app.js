@@ -10753,7 +10753,7 @@ const TEST_TYPES = {
     textParts: 1,
     duration: 60,
     allowText: false,
-    hint: "Oddiy test: barcha savollar variantli (A/B/C/D).",
+    hint: "Oddiy test: barcha savollar variantli (A/B/C/D). Natija — to'g'ri javoblar soni va foiz.",
   },
 };
 
@@ -11488,7 +11488,7 @@ async function saveNewTest() {
     end_time: localTimeToUtcIso(document.getElementById("field-end-time").value),
     questions: [],
     key_questions: [],
-    // Hisoblash usuli: Rash test — Rasch modeli, Boshlang'ich test — foiz va 5 ballik baho
+    // Hisoblash usuli: Rash test — Rasch modeli, Boshlang'ich test — to'g'ri javoblar soni va foiz
     test_type: document.getElementById("field-type").value === "boshlangich" ? "boshlangich" : "rash",
     essay: Boolean(SUBJECT_PRESETS[document.getElementById("field-subject").value]?.essay) &&
       document.getElementById("field-essay").checked,
@@ -11570,7 +11570,7 @@ function openTestEditSheet(test, reopenHint = false) {
     <label class="field-label">Hisoblash usuli
       <select class="input" id="edit-test-type" style="margin:4px 0 0">
         <option value="rash" ${test.test_type !== "boshlangich" ? "selected" : ""}>Rash test — Rasch balli, A+ … NC daraja</option>
-        <option value="boshlangich" ${test.test_type === "boshlangich" ? "selected" : ""}>Boshlang'ich test — foiz va 5 ballik baho</option>
+        <option value="boshlangich" ${test.test_type === "boshlangich" ? "selected" : ""}>Boshlang'ich test — to'g'ri javoblar soni va foiz</option>
       </select></label>
     <label class="field-label">Davomiyligi (daqiqa)
       <input class="input" id="edit-test-duration" type="number" min="${test.has_attempts ? test.duration : 1}" max="300"
@@ -14653,7 +14653,7 @@ async function renderResultsTab(selectedId) {
   const results = await api(`/api/teacher/tests/${testId}/results`);
   const summary = results.summary;
 
-  // Pullik testda — Rasch darajalari (Milliy sertifikat), bepulda — 5 ballik baho
+  // Rash testda — Rasch darajalari (Milliy sertifikat), boshlang'ich testda — faqat foiz
   const usesRasch = Boolean(results.uses_rasch);
   const buckets = (
     usesRasch
