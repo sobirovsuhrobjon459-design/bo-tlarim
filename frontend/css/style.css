@@ -1912,6 +1912,118 @@ select option {
   border-radius: 999px;
 }
 
+/* Tasdiq oynasi (askConfirm) — xira fon ustida, ekran o'rtasida */
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  /* Ochiq oyna (sheet, 60) va klaviatura tugmasi (10050) ustida, xabar (toast, 10100) ostida */
+  z-index: 10080;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: rgba(0, 0, 0, 0);
+  transition: background-color 0.18s ease;
+}
+
+.confirm-backdrop.open {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.confirm-dialog {
+  width: 100%;
+  max-width: 360px;
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 24px 20px 18px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.45);
+  text-align: center;
+  opacity: 0;
+  transform: scale(0.94);
+  transition: opacity 0.18s ease, transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.confirm-backdrop.open .confirm-dialog {
+  opacity: 1;
+  transform: none;
+}
+
+.confirm-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  background: rgba(0, 168, 68, 0.12);
+  color: var(--color-primary);
+}
+
+.confirm-icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+.confirm-dialog.is-danger .confirm-icon {
+  background: rgba(217, 54, 54, 0.12);
+  color: #d93636;
+}
+
+.confirm-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+/* Uzun savol (izohsiz) — oddiy matn bo'lib o'qiladi */
+.confirm-title.is-long {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.confirm-text {
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.confirm-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.confirm-dialog .confirm-actions .btn {
+  margin: 0;
+  padding: 13px 10px;
+  font-size: 15px;
+  border-radius: 14px;
+}
+
+.confirm-dialog.is-danger .confirm-actions .confirm-ok {
+  background: #d93636;
+  color: #ffffff;
+  box-shadow: 0 10px 22px -14px rgba(217, 54, 54, 0.8);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .confirm-backdrop,
+  .confirm-dialog {
+    transition: none;
+  }
+}
+
 /* Majburiy maydon belgisi */
 .required-mark {
   color: #d93636;

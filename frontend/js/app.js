@@ -495,7 +495,11 @@ function syncTelegramBackButton() {
 }
 
 function handleTelegramBack() {
-  // Ochiq oyna (sheet) bo'lsa — avval o'shani yopadi
+  // Ochiq tasdiq oynasi yoki oyna (sheet) bo'lsa — avval o'shani yopadi
+  if (closeActiveConfirm) {
+    closeActiveConfirm(false);
+    return;
+  }
   const sheet = document.querySelector(".sheet-backdrop");
   if (sheet) {
     (sheet.querySelector("[data-sheet-close]") || sheet).click();
@@ -1163,22 +1167,96 @@ function openExternalLink(url) {
   }
 }
 
+/*
+  Tasdiq oynasi — ilovaning o'zida, xira fon ustida ochiladi (brauzer yoki Telegram'ning
+  tepadan tushadigan "OK / Cancel" so'rovi o'rniga). Brauzerda, Telegram'da va telefon
+  ilovasida bir xil ko'rinadi. Javob: true — tasdiqlandi; false — "Bekor qilish",
+  fonga bosish, Esc yoki "orqaga" tugmasi.
+  Savol o'chirish / chiqarish / rad etish haqida bo'lsa — tugma qizil va amal nomi bilan.
+*/
+const CONFIRM_WARNING_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/>
+</svg>`;
+const CONFIRM_QUESTION_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/>
+</svg>`;
+// [savoldagi so'z, tugma yozuvi] — birinchi mos kelgani olinadi
+const CONFIRM_DANGER_ACTIONS = [
+  [/o['ʻ’‘]chir/i, "O'chirish"],
+  [/chiqaril/i, "Chiqarish"],
+  [/olib tashla/i, "Olib tashlash"],
+  [/rad eta/i, "Rad etish"],
+  [/yo['ʻ’‘]qoladi/i, "Chiqish"],
+];
+let closeActiveConfirm = null; // ochiq tasdiq oynasini "bekor" deb yopadi
+
 function askConfirm(message) {
-  // Telegram ichida chiroyli dialog ko'rsatadi, oddiy brauzerda esa odatdagi confirm.
-  // showConfirm faqat Telegram 6.2+ da ishlaydi: eski versiyada xato beradi va
-  // javob hech qachon qaytmaydi — tugma "jim" qolardi. Shuning uchun versiya
-  // tekshiriladi va har qanday xatoda oddiy confirm'ga o'tiladi.
+  closeActiveConfirm?.(false); // oldingisi ochiq qolgan bo'lsa — bekor
+  const text = String(message ?? "").trim();
+  // Birinchi savol ("…?") — qalin sarlavha, qolgani ostida izoh bo'lib turadi
+  const split = text.match(/^([\s\S]*?\?)(?=\s|$)\s*([\s\S]*)$/);
+  const [title, details] = split && split[1].length <= 140 ? [split[1], split[2]] : [text, ""];
+  // Qo'shtirnoqdagi nomlar (test, sinf nomi) amal turini aniqlashga xalaqit bermasin
+  const question = title.replace(/«[^»]*»|"[^"]*"/g, "");
+  const danger = CONFIRM_DANGER_ACTIONS.find(([pattern]) => pattern.test(question));
+  const icon = danger ? (/o['ʻ’‘]chir/i.test(question) ? TRASH_ICON : CONFIRM_WARNING_ICON) : CONFIRM_QUESTION_ICON;
+
   return new Promise((resolve) => {
-    const telegramConfirm = telegram?.showConfirm && telegram.isVersionAtLeast?.("6.2");
-    if (telegramConfirm) {
-      try {
-        telegram.showConfirm(message, (confirmed) => resolve(Boolean(confirmed)));
-        return;
-      } catch (_) {
-        /* pastdagi oddiy confirm */
+    const backdrop = document.createElement("div");
+    backdrop.className = "confirm-backdrop";
+    backdrop.innerHTML = `
+      <div class="confirm-dialog${danger ? " is-danger" : ""}" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+        <div class="confirm-icon">${icon}</div>
+        <p class="confirm-title${title.length > 140 ? " is-long" : ""}" id="confirm-title">${escapeHtml(title)}</p>
+        ${details ? `<p class="confirm-text">${escapeHtml(details)}</p>` : ""}
+        <div class="confirm-actions">
+          <button type="button" class="btn btn-ghost" data-confirm="no">Bekor qilish</button>
+          <button type="button" class="btn confirm-ok" data-confirm="yes">${danger ? danger[1] : "Ha"}</button>
+        </div>
+      </div>`;
+    // Ochiq klaviatura yopilsin — oyna to'liq ko'rinsin
+    const opener = document.activeElement;
+    if (opener && opener !== document.body) opener.blur?.();
+    document.body.appendChild(backdrop);
+    requestAnimationFrame(() => backdrop.classList.add("open"));
+    const buttons = [...backdrop.querySelectorAll("[data-confirm]")];
+
+    let done = false;
+    const finish = (answer) => {
+      if (done) return;
+      done = true;
+      if (closeActiveConfirm === finish) closeActiveConfirm = null;
+      document.removeEventListener("keydown", onKey, true);
+      backdrop.style.pointerEvents = "none"; // so'nib borayotgan oyna bosishni ushlamasin
+      backdrop.classList.remove("open");
+      setTimeout(() => backdrop.remove(), 200);
+      // Klaviatura bilan ishlayotganga: fokus bosilgan tugmaga qaytadi
+      if (opener?.tagName === "BUTTON" && opener.isConnected) opener.focus({ preventScroll: true });
+      resolve(answer);
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        finish(false);
+      } else if (event.key === "Tab") {
+        // Fokus oynadan tashqariga chiqmasin
+        event.preventDefault();
+        const index = buttons.indexOf(document.activeElement);
+        buttons[(index + (event.shiftKey ? -1 : 1) + buttons.length) % buttons.length].focus();
       }
-    }
-    resolve(window.confirm(message));
+    };
+    closeActiveConfirm = finish;
+    document.addEventListener("keydown", onKey, true);
+    backdrop.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-confirm]");
+      if (button) finish(button.dataset.confirm === "yes");
+      else if (event.target === backdrop) finish(false);
+    });
+    // Enter — xavfsiz tugmada: o'chirishda "Bekor qilish", boshqasida "Ha"
+    buttons[danger ? 0 : 1].focus({ preventScroll: true });
   });
 }
 
@@ -1521,8 +1599,8 @@ function renderHome(userName, backendOk) {
     <h1 class="fade-up">${greeting}</h1>
     <p class="subtitle fade-up">Bilimingizni sinang va natijangizni kuzating.</p>
 
-    ${roleCard("school-folder", ROLE_ICONS.school, "TA'LIM MUASSASALARI", "Xususiy maktab, kurslar, to'garaklar")}
     ${roleCard("tests", ROLE_ICONS.folder, "TEST MARKAZI", "Testlar")}
+    ${roleCard("school-folder", ROLE_ICONS.school, "TA'LIM MUASSASALARI", "Xususiy maktab, kurslar, to'garaklar")}
     ${isAdmin ? roleCard("admin", ROLE_ICONS.admin, "ADMIN", "Umumiy statistika va boshqaruv") : ""}
 
     ${statusHtml}
@@ -1549,9 +1627,9 @@ function renderHome(userName, backendOk) {
 }
 
 /*
-  Bosh sahifada ikkita papka bor:
-    • "Ta'lim muassasalari" — Xususiy maktab, O'quv kurslari, To'garaklar;
-    • "Test markazi" — O'quvchi va O'qituvchi bo'limlari.
+  Bosh sahifada ikkita papka bor (Test markazi eng yuqorida):
+    • "Test markazi" — O'quvchi va O'qituvchi bo'limlari;
+    • "Ta'lim muassasalari" — Xususiy maktab, O'quv kurslari, To'garaklar.
   Bo'limlar ichidagi "←" tugmalari o'z papkasiga qaytaradi (bosh sahifaga emas).
 */
 function renderSchoolFolder() {
@@ -16043,8 +16121,8 @@ function renderWebSidebar(active, userName) {
     <div class="web-brand"><span class="web-logo">${WEB_LOGO}</span><span>Chittak</span></div>
     <nav class="web-nav">
       ${item("home", WEB_NAV_ICONS.home, "Bosh sahifa")}
-      ${item("school-folder", ROLE_ICONS.school, "Ta'lim muassasalari")}
       ${item("tests", ROLE_ICONS.folder, "Test markazi")}
+      ${item("school-folder", ROLE_ICONS.school, "Ta'lim muassasalari")}
       ${isAdmin ? item("admin", ROLE_ICONS.admin, "Admin") : ""}
     </nav>
     <div class="web-account">
@@ -16057,6 +16135,10 @@ function renderWebSidebar(active, userName) {
 // Android'ning "orqaga" tugmasi (ilova shu funksiyani chaqiradi):
 // true — ilova ichida orqaga qaytildi, false — ilovadan chiqish mumkin.
 window.appBack = () => {
+  if (closeActiveConfirm) {
+    closeActiveConfirm(false); // ochiq tasdiq oynasi — "Bekor qilish"
+    return true;
+  }
   const sheet = document.querySelector(".sheet-backdrop");
   if (sheet) {
     (sheet.querySelector("[data-sheet-close]") || sheet).click();
