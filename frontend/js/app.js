@@ -1589,6 +1589,316 @@ document.addEventListener("click", (event) => {
   if (link) openExternalLink(`https://t.me/${link.dataset.supportUser}`);
 });
 
+/*
+  Bosh sahifa — har kimga o'z ishlari (ma'lumot: /api/home):
+    • o'qituvchiga — tez amallar (test yaratish, titul skanerlash, davomat), bugungi darslari va faol testlari;
+    • o'quvchiga — test kodi maydoni, tugallanmagan testlari va oxirgi natijalari;
+    • a'zo bo'lgan muassasalari (maktab, o'quv markazi, to'garak).
+  Bo'sh qism ko'rinmaydi. Ma'lumot eslab qolinadi: qaytganda sahifa darhol chiziladi, yangisi fonda olinadi.
+  Pastda barcha bo'limlar (kompyuterda ular chap menyuda — u yerda yashirin).
+*/
+let homeData = null;
+
+const HOME_ICONS = {
+  plus: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`,
+  scan: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>`,
+  check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h11"/></svg>`,
+};
+
+function homeDateText(data) {
+  const [, month, day] = String(data?.today || "").split("-").map(Number);
+  return month ? `${data.weekday_label}, ${day}-${FEE_MONTH_NAMES[month - 1].toLowerCase()}` : "";
+}
+
+function homeTile(attrs, icon, label) {
+  return `<button type="button" class="home-tile" ${attrs}><span class="card-icon">${icon}</span><span>${label}</span></button>`;
+}
+
+function homeLabel(label, linkAttrs = "", linkText = "") {
+  return `
+    <div class="home-label">
+      <p class="section-label">${label}</p>
+      ${linkAttrs ? `<button type="button" class="home-link" ${linkAttrs}>${linkText}</button>` : ""}
+    </div>`;
+}
+
+function homeCard(icon, title, note, attrs, extra = "") {
+  return `
+    <div class="card home-card" ${attrs}>
+      <div class="card-icon">${icon}</div>
+      <div class="card-body"><h3>${title}</h3><p>${note}</p>${extra}</div>
+      <span class="home-chevron" aria-hidden="true">›</span>
+    </div>`;
+}
+
+function homeShortDate(isoString) {
+  const moment = parseUtc(isoString);
+  return `${String(moment.getDate()).padStart(2, "0")}.${String(moment.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function homeBlocksHtml(data) {
+  // Birinchi ochilish — ma'lumot kelguncha joy egallab turadi (sahifa sakramasin)
+  if (!data) return `<div class="skeleton skeleton-card" style="margin-top:16px"></div><div class="skeleton skeleton-card"></div>`;
+  const blocks = [];
+
+  if (data.tests) {
+    blocks.push(`
+      <section class="home-block">
+        <div class="home-tiles${data.places.length ? "" : " two"}">
+          ${homeTile('data-home-act="new-test"', HOME_ICONS.plus, "Test yaratish")}
+          ${homeTile('data-home-act="scan"', HOME_ICONS.scan, "Titul skanerlash")}
+          ${data.places.length ? homeTile('data-home-act="attendance"', HOME_ICONS.check, "Davomat olish") : ""}
+        </div>
+      </section>`);
+  } else {
+    blocks.push(`
+      <section class="home-block">
+        <form class="card home-code" id="home-code-form" autocomplete="off">
+          <p class="section-label">🔑 TEST KODI BILAN KIRISH</p>
+          <div class="home-code-row">
+            <input class="input" id="home-code-input" placeholder="Masalan: VH7S" maxlength="20"
+                   autocapitalize="characters" spellcheck="false" />
+            <button class="btn" type="submit">Boshlash</button>
+          </div>
+        </form>
+      </section>`);
+  }
+
+  if (data.unfinished.length) {
+    const cards = data.unfinished.map((item) => {
+      const done = item.total ? Math.min(100, Math.round((item.answered / item.total) * 100)) : 0;
+      return homeCard(
+        ROLE_ICONS.student,
+        escapeHtml(item.title),
+        `Tugallanmagan · ${item.answered} / ${item.total} savol`,
+        `data-home-resume="${escapeHtml(item.code)}"`,
+        `<div class="home-progress"><span style="width:${done}%"></span></div>`
+      );
+    });
+    blocks.push(`<section class="home-block">${homeLabel("DAVOM ETTIRISH")}${cards.join("")}</section>`);
+  }
+
+  if (data.lessons.length) {
+    const schools = new Set(data.lessons.map((lesson) => lesson.school_name));
+    const rows = data.lessons.map((lesson) => {
+      // Dars boshlangan yoki o'tgan, davomat olinmagan — shu yerdan olinadi
+      const action = lesson.attendance_taken
+        ? `<span class="home-ok">✓ Davomat olindi</span>`
+        : lesson.state !== "next"
+          ? `<button type="button" class="btn home-take" data-home-take="${lesson.class_id}" data-kind="${lesson.kind}">Davomat olish</button>`
+          : `<span class="home-muted">keyinroq</span>`;
+      const note = [
+        lesson.period ? `${lesson.period}-dars` : `${lesson.start_time}–${lesson.end_time}`,
+        lesson.state === "now" ? "hozir" : "",
+        schools.size > 1 ? lesson.school_name : "",
+      ].filter(Boolean).join(" · ");
+      return `
+        <div class="home-row">
+          <span class="home-time">${lesson.start_time}</span>
+          <span class="home-row-body"><b>${escapeHtml(lesson.class_name)} · ${escapeHtml(lesson.subject || "Dars")}</b><small>${escapeHtml(note)}</small></span>
+          ${action}
+        </div>`;
+    });
+    blocks.push(`
+      <section class="home-block">
+        ${homeLabel("BUGUNGI DARSLARIM", `data-home-schedule="${data.lessons[0].kind}"`, "Jadval ›")}
+        <div class="panel home-list">${rows.join("")}</div>
+      </section>`);
+  }
+
+  if (data.tests) {
+    const { items, total } = data.tests;
+    const body = items.length
+      ? `<div class="panel home-list">${items
+          .map(
+            (test) => `
+              <div class="home-row is-link" data-home-test="${test.id}">
+                <span class="home-row-body"><b>${escapeHtml(test.title)}</b><small>Kod ${escapeHtml(test.code)} · ${test.offline ? "titul" : "onlayn"}</small></span>
+                <span class="home-score"><b>${test.offline ? `${test.done} / ${test.expected}` : test.done}</b><small>${test.offline ? "skanerlangan" : "topshirdi"}</small></span>
+              </div>`
+          )
+          .join("")}</div>`
+      : homeCard(
+          ROLE_ICONS.folder,
+          "Faol test yo'q",
+          total ? `Jami ${total} ta test — hammasi yopilgan` : "Birinchi testingizni yarating",
+          `data-home-act="${total ? "tests" : "new-test"}"`
+        );
+    blocks.push(`<section class="home-block">${homeLabel("TESTLARIM", 'data-home-act="tests"', "Barchasi ›")}${body}</section>`);
+  }
+
+  if (data.results.length) {
+    const rows = data.results.map(
+      (item) => `
+        <div class="home-row is-link" data-home-review="${item.attempt_id}" data-visible="${item.visible ? 1 : 0}">
+          <span class="home-row-body"><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.subject)}${
+            item.finished_at ? ` · ${homeShortDate(item.finished_at)}` : ""
+          }</small></span>
+          ${
+            item.visible
+              ? `<span class="home-score"><b>${item.percent}%</b><small>${item.correct} ta to'g'ri</small></span>`
+              : `<span class="home-muted">Natija test<br>yopilgach chiqadi</span>`
+          }
+        </div>`
+    );
+    blocks.push(`
+      <section class="home-block">
+        ${homeLabel("OXIRGI NATIJALARIM", 'data-home-act="student"', "Barchasi ›")}
+        <div class="panel home-list">${rows.join("")}</div>
+      </section>`);
+  }
+
+  if (data.places.length) {
+    const titles = { school: "MAKTABIM", course: "O'QUV MARKAZIM", club: "TO'GARAGIM" };
+    const icons = { school: ROLE_ICONS.privateSchool, course: ROLE_ICONS.course, club: ROLE_ICONS.club };
+    const cards = data.places.map((place) => {
+      const terms = INST_KINDS[place.kind] || INST_KINDS.school;
+      const leader = place.role === "owner" || ["director", "deputy"].includes(place.position);
+      const parts = [
+        place.role === "owner" ? `${terms.place[0].toUpperCase()}${terms.place.slice(1)} admini` : POSITION_TITLES[place.position] || "O'qituvchi",
+        leader ? `${place.classes} ta ${terms.group}` : "",
+        place.curated.length ? `${place.curated.join(", ")} ${terms.lead}i` : "",
+      ];
+      return homeCard(
+        icons[place.kind] || ROLE_ICONS.school,
+        escapeHtml(place.name),
+        escapeHtml(parts.filter(Boolean).join(" · ")),
+        `data-home-place="${place.kind}"`
+      );
+    });
+    const label = data.places.length > 1 ? "MUASSASALARIM" : titles[data.places[0].kind] || titles.school;
+    blocks.push(`<section class="home-block">${homeLabel(label)}${cards.join("")}</section>`);
+  }
+
+  return blocks.join("");
+}
+
+// Bosh sahifadan muassasa ichidagi sahifaga: avval o'sha muassasa (turi va ma'lumoti) tayyorlanadi
+async function prepareInstitution(kind) {
+  setInstKind(kind);
+  if (!schoolMembershipKnown || !currentSchool) {
+    const { school } = await api("/api/schools/me");
+    currentSchool = school;
+    schoolMembershipKnown = true;
+  }
+}
+
+async function findTestFromHome() {
+  const input = document.getElementById("home-code-input");
+  const code = input.value.trim();
+  if (!code) {
+    showToast("Test kodini kiriting");
+    input.focus();
+    return;
+  }
+  renderTestFound(await api(`/api/tests/${encodeURIComponent(code)}`));
+}
+
+async function homeAction(action) {
+  if (action === "new-test") {
+    isTeacher = true;
+    renderNewTestKindChoice();
+  } else if (action === "tests") {
+    isTeacher = true;
+    await renderTeacherDashboard();
+  } else if (action === "student") {
+    await renderStudentHome();
+  } else if (action === "scan") {
+    // Skaner test sahifasidan ochiladi (kalit, o'quvchilar ro'yxati o'sha yerda yuklanadi)
+    const tests = homeData?.tests?.scan || [];
+    if (!tests.length) {
+      showToast("Skanerlash uchun titulli (offline) faol test yo'q — avval test yarating");
+      return;
+    }
+    const choices = tests.map((test) => ({ id: test.id, name: test.title, note: `Kod ${test.code}` }));
+    await pickClassThen("Qaysi testni skanerlaysiz?", Promise.resolve(choices), async (testId) => {
+      isTeacher = true;
+      await renderTestDetail(testId);
+      document.getElementById("scan-sheet-button")?.click();
+    });
+  } else if (action === "attendance") {
+    const places = homeData?.places || [];
+    const start = async (kind) => {
+      await prepareInstitution(kind);
+      await pickClassThen("Davomat — sinfni tanlang", attendanceClassChoices(), startAttendanceFor);
+    };
+    if (places.length <= 1) await start(places[0]?.kind || "school");
+    else {
+      const choices = places.map((place, index) => ({ id: index, name: place.name, note: instTerms(place.kind).title }));
+      await pickClassThen("Qaysi muassasada?", Promise.resolve(choices), (index) => start(places[index].kind));
+    }
+  }
+}
+
+function drawHomeBlocks(container) {
+  // Fonda yangilanganda yozilayotgan test kodi yo'qolmasin
+  const typed = document.getElementById("home-code-input");
+  const typedValue = typed?.value || "";
+  const hadFocus = typed && document.activeElement === typed;
+
+  container.innerHTML = homeBlocksHtml(homeData);
+  const dateLine = document.getElementById("home-date");
+  if (dateLine && homeDateText(homeData)) dateLine.textContent = homeDateText(homeData);
+
+  const on = (selector, handler) =>
+    container.querySelectorAll(selector).forEach((element) => element.addEventListener("click", guarded(() => handler(element))));
+  on("[data-home-act]", (element) => homeAction(element.dataset.homeAct));
+  on("[data-home-resume]", (element) => startTest(element.dataset.homeResume));
+  on("[data-home-test]", (element) => {
+    isTeacher = true;
+    return renderTestDetail(Number(element.dataset.homeTest));
+  });
+  on("[data-home-review]", async (element) => {
+    if (element.dataset.visible !== "1") {
+      showToast("⏳ Natija test yakunlangach ochiladi");
+      return;
+    }
+    await renderMyAttemptReview(Number(element.dataset.homeReview));
+  });
+  on("[data-home-take]", async (element) => {
+    await prepareInstitution(element.dataset.kind);
+    await startAttendanceFor(Number(element.dataset.homeTake));
+  });
+  on("[data-home-schedule]", async (element) => {
+    await prepareInstitution(element.dataset.homeSchedule);
+    await renderSchedule("mine");
+  });
+  on("[data-home-place]", (element) => enterInstitution(element.dataset.homePlace));
+
+  const form = document.getElementById("home-code-form");
+  if (form) {
+    // Enter ham shu tugmani bosadi; sahifa qayta yuklanmasin
+    form.addEventListener("submit", (event) => event.preventDefault());
+    form.querySelector("button").addEventListener("click", guarded(findTestFromHome));
+    const input = document.getElementById("home-code-input");
+    input.value = typedValue;
+    if (hadFocus) input.focus();
+  }
+}
+
+async function refreshHomeBlocks() {
+  let fresh = null;
+  try {
+    fresh = await api("/api/home");
+  } catch (_) {
+    /* internet yo'q — eslangan holat qoladi */
+  }
+  const container = document.getElementById("home-blocks");
+  if (fresh) {
+    const changed = JSON.stringify(fresh) !== JSON.stringify(homeData);
+    homeData = fresh;
+    if (container && changed) drawHomeBlocks(container);
+  } else if (container && !homeData) {
+    // Birinchi ochilishda ham ishlamadi — kamida test kodi yoki tez amallar chiqsin
+    homeData = {
+      unfinished: [], results: [], places: [], lessons: [],
+      tests: isTeacher ? { total: 0, active: 0, items: [], scan: [] } : null,
+    };
+    drawHomeBlocks(container);
+    homeData = null;
+  }
+}
+
 function renderHome(userName, backendOk) {
   const greeting = userName ? `Xush kelibsiz,<br>${escapeHtml(userName)}` : "Chittakka<br>xush kelibsiz";
 
@@ -1597,11 +1907,18 @@ function renderHome(userName, backendOk) {
 
   showPage(`
     <h1 class="fade-up">${greeting}</h1>
-    <p class="subtitle fade-up">Bilimingizni sinang va natijangizni kuzating.</p>
+    <p class="subtitle fade-up" id="home-date">${homeDateText(homeData) || "Bilimingizni sinang va natijangizni kuzating."}</p>
 
-    ${roleCard("tests", ROLE_ICONS.folder, "TEST MARKAZI", "Testlar")}
-    ${roleCard("school-folder", ROLE_ICONS.school, "TA'LIM MUASSASALARI", "Xususiy maktab, kurslar, to'garaklar")}
-    ${isAdmin ? roleCard("admin", ROLE_ICONS.admin, "ADMIN", "Umumiy statistika va boshqaruv") : ""}
+    <div id="home-blocks"></div>
+
+    <section class="home-sections">
+      <p class="section-label">BARCHA BO'LIMLAR</p>
+      <div class="home-tiles${isAdmin ? "" : " two"}">
+        ${homeTile('data-action="tests"', ROLE_ICONS.folder, "Test markazi")}
+        ${homeTile('data-action="school-folder"', ROLE_ICONS.school, "Ta'lim muassasalari")}
+        ${isAdmin ? homeTile('data-action="admin"', ROLE_ICONS.admin, "Admin") : ""}
+      </div>
+    </section>
 
     ${statusHtml}
     ${supportCardHtml(undefined, { bottom: true })}
@@ -1624,10 +1941,14 @@ function renderHome(userName, backendOk) {
       await renderAdminDashboard();
     })
   );
+
+  // O'z ishlari: eslangani darhol, yangisi fonda
+  drawHomeBlocks(document.getElementById("home-blocks"));
+  refreshHomeBlocks();
 }
 
 /*
-  Bosh sahifada ikkita papka bor (Test markazi eng yuqorida):
+  Bosh sahifadagi "Barcha bo'limlar"da ikkita papka bor (Test markazi birinchi):
     • "Test markazi" — O'quvchi va O'qituvchi bo'limlari;
     • "Ta'lim muassasalari" — Xususiy maktab, O'quv kurslari, To'garaklar.
   Bo'limlar ichidagi "←" tugmalari o'z papkasiga qaytaradi (bosh sahifaga emas).
@@ -7894,40 +8215,13 @@ function applyHomeData(me) {
 let openedFromLink = false; // ?open=... havolasi faqat birinchi ochilishda ishlaydi
 
 /*
-  O'qituvchi bo'limi eslab qolinadi: ilova keyingi safar ochilganda o'qituvchi
-  "Test markazi → O'qituvchi" ni qayta bosmaydi — to'g'ridan-to'g'ri "Testlar"ga
-  tushadi. Faqat "Chiqish" tugmasi bilan (tasdiqlab) chiqqandagina unutiladi.
+  Ilgari o'qituvchi ilovani ochganda to'g'ridan-to'g'ri "Testlar"ga tushardi (eslab qolingan bo'lim).
+  Endi hamma bosh sahifadan boshlaydi — testlar, darslar shu yerda. Eski belgi tozalanadi.
 */
-const AREA_STORAGE_KEY = "remembered-area";
-
-function rememberTeacherArea(remember) {
-  try {
-    if (remember) localStorage.setItem(AREA_STORAGE_KEY, "teacher");
-    else localStorage.removeItem(AREA_STORAGE_KEY);
-  } catch (_) {
-    /* xotira yopiq bo'lsa — har safar tanlanadi, xolos */
-  }
-}
-
-function remembersTeacherArea() {
-  try {
-    return localStorage.getItem(AREA_STORAGE_KEY) === "teacher";
-  } catch (_) {
-    return false;
-  }
-}
-
-// Bot havolasi bilan ochilgan bo'lsa (test, taklif, cheklar) — o'sha sahifa ustun
-function openedWithLink() {
-  const params = new URLSearchParams(window.location.search);
-  return ["open", "test_code", "invite", "school_code"].some((key) => params.get(key));
-}
-
-async function exitTeacherArea() {
-  if (!(await confirmLeave())) return;
-  if (!(await askConfirm("O'qituvchi bo'limidan chiqasizmi?"))) return;
-  rememberTeacherArea(false);
-  await loadHome();
+try {
+  localStorage.removeItem("remembered-area");
+} catch (_) {
+  /* xotira yopiq */
 }
 
 // O'qituvchi ilovani ochganda: o'quvchilar to'lab, ruxsat kutayotgan bo'lsa — darhol oyna
@@ -7973,15 +8267,8 @@ async function loadHome() {
       await renderTestPaymentsPage();
       return;
     }
-    if (me.is_teacher && remembersTeacherArea() && !openedWithLink()) {
-      try {
-        await renderTeacherDashboard();
-      } catch (_) {
-        renderHome(me.full_name || null, true);
-      }
-    } else {
-      renderHome(me.full_name || null, true);
-    }
+    // Hamma bosh sahifadan boshlaydi: o'qituvchining testlari, darslari ham shu yerda
+    renderHome(me.full_name || null, true);
     if (me.is_teacher && me.pending_payments > 0) showPendingPaymentsPrompt(me.pending_payments);
   } catch (error) {
     isAdmin = false;
@@ -10087,12 +10374,9 @@ function heroAvatarHtml(me) {
 }
 
 function drawTeacherDashboard(me, stats, tests) {
-  rememberTeacherArea(true);
+  // "←" — kelgan joyiga (bosh sahifa yoki Test markazi papkasi)
   showPage(`
-    <div class="page-header">
-      <h2 style="margin:0;flex:1">Testlar</h2>
-      <button class="btn btn-ghost" type="button" id="exit-teacher-button" style="width:auto;padding:8px 14px;margin:0">Chiqish</button>
-    </div>
+    ${pageHeader("Testlar")}
     <section class="hero-card">
       <div class="hero-brand"><img src="/img/chittak-icon.png" alt="">Chittak</div>
       <div class="hero-top">
@@ -10150,10 +10434,9 @@ function drawTeacherDashboard(me, stats, tests) {
       <button class="tab ${teacherTestsTab === "closed" ? "active" : ""}" data-tab="closed">Yopilgan testlar</button>
     </div>
     <div id="teacher-test-list"></div>
-  `, { exitRoot: true });
+  `);
 
   wireTeacherChrome("tests");
-  document.getElementById("exit-teacher-button").addEventListener("click", guarded(exitTeacherArea));
   document.getElementById("edit-name-button").addEventListener(
     "click",
     guarded(() => renderEditName(me, renderTeacherDashboard))
@@ -15769,6 +16052,7 @@ async function appLogout() {
   }
   setAppSession("");
   homeSnapshot = null;
+  homeData = null; // keyingi akkauntga oldingisining testlari ko'rinmasin
   pageDataCache.clear();
   renderAppLogin();
 }

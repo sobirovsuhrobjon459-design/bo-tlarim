@@ -235,6 +235,20 @@ html.web-mode:not(.web-signed-in) body {
   html.web-signed-in .page:has(> .role-card) > :not(.role-card) {
     grid-column: 1 / -1;
   }
+
+  /* Bosh sahifa: kengroq, qismlar ikki ustunda; bo'limlar chap menyuda — pastdagi tugmalar kerak emas */
+  html.web-signed-in #app:has(#home-blocks) {
+    max-width: 1040px;
+  }
+
+  html.web-signed-in #home-blocks {
+    columns: 2;
+    column-gap: 22px;
+  }
+
+  html.web-signed-in .home-sections {
+    display: none;
+  }
 }
 
 /* ---------- Sayt bosh sahifasi (kirmagan mehmon uchun landing) ---------- */

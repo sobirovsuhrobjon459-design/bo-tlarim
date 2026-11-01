@@ -4605,6 +4605,136 @@ def my_attempts(user: User = Depends(get_current_user), db: Session = Depends(ge
     return {"in_progress": in_progress, "completed": completed}
 
 
+def _answered_count(saved_answers: str | None) -> int:
+    """Belgilangan savollar soni: {"1": "B", "40a": "..", "40b": ".."} → 2 (qismlar bitta savol)."""
+    try:
+        answers = json.loads(saved_answers or "{}")
+    except (TypeError, ValueError):
+        return 0
+    if not isinstance(answers, dict):
+        return 0
+    numbers = {re.match(r"\d+", str(key)) for key, value in answers.items() if value not in (None, "")}
+    return len({match.group() for match in numbers if match})
+
+
+@app.get("/api/home")
+def home_summary(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Bosh sahifa — foydalanuvchining o'z ishlari bitta so'rovda: tugallanmagan testlari, oxirgi
+    natijalari, o'qituvchi bo'lsa faol testlari, a'zo bo'lgan muassasalari va bugungi darslari.
+    Bo'sh qism bosh sahifada ko'rinmaydi.
+    """
+
+    local_now = utcnow() + TASHKENT_OFFSET
+    day_start = datetime(local_now.year, local_now.month, local_now.day) - TASHKENT_OFFSET
+
+    # O'quvchi sifatida: tugallanmagan va oxirgi yakunlangan testlari
+    attempts = db.scalars(
+        select(Attempt)
+        .where(Attempt.user_id == user.id, Attempt.status.in_(["in_progress", "done"]))
+        .order_by(Attempt.id.desc())
+        .limit(60)
+    ).all()
+    tests_by_id = {
+        test.id: test for test in db.scalars(select(Test).where(Test.id.in_({item.test_id for item in attempts} or {-1})))
+    }
+    unfinished, results = [], []
+    for attempt in attempts:
+        test = tests_by_id.get(attempt.test_id)
+        if not test or test.deleted_at is not None:
+            continue
+        if attempt.status == "in_progress" and test.status != "closed" and len(unfinished) < 3:
+            unfinished.append({
+                "code": test.code, "title": test.title, "subject": test.subject,
+                "answered": _answered_count(attempt.saved_answers), "total": _question_count(test),
+            })
+        elif attempt.status == "done" and len(results) < 3:
+            # Natija test yakunlangach ochiladi (qarang: my_attempt_review)
+            visible = test.status == "closed"
+            results.append({
+                "attempt_id": attempt.id, "title": test.title, "subject": test.subject,
+                "finished_at": attempt.finished_at, "visible": visible,
+                "percent": round(attempt.percent) if visible else None,
+                "correct": attempt.correct if visible else None,
+            })
+
+    # O'qituvchi sifatida: faol testlari (skanerlash uchun — titulli testlar alohida)
+    teacher = ensure_school_teacher(db, user)
+    my_tests = None
+    if teacher:
+        active = db.scalars(
+            select(Test)
+            .where(Test.teacher_id == teacher.id, Test.deleted_at.is_(None), Test.status == "active")
+            .order_by(Test.id.desc())
+        ).all()
+        active_ids = [test.id for test in active] or [-1]
+        done = dict(db.execute(
+            select(Attempt.test_id, func.count(distinct(_participant_key_expression())))
+            .where(Attempt.test_id.in_(active_ids), Attempt.status == "done")
+            .group_by(Attempt.test_id)
+        ).all())
+        pending = dict(db.execute(
+            select(Attempt.test_id, func.count())
+            .where(Attempt.test_id.in_(active_ids), Attempt.status == "pending")
+            .group_by(Attempt.test_id)
+        ).all())
+        my_tests = {
+            "total": db.scalar(
+                select(func.count()).select_from(Test).where(Test.teacher_id == teacher.id, Test.deleted_at.is_(None))
+            ),
+            "active": len(active),
+            "items": [
+                {
+                    "id": test.id, "code": test.code, "title": test.title, "subject": test.subject,
+                    "offline": test.enrollment_type == "closed",
+                    "done": done.get(test.id, 0),
+                    "expected": done.get(test.id, 0) + pending.get(test.id, 0),
+                }
+                for test in active[:3]
+            ],
+            "scan": [{"id": test.id, "code": test.code, "title": test.title}
+                     for test in active if test.enrollment_type == "closed"][:20],
+        }
+
+    # Muassasalari va bugungi darslari (faqat o'zi o'tadiganlari)
+    places, lessons = [], []
+    for member in _all_memberships(db, user):
+        school = member.school
+        if not school or school.deleted_at is not None:
+            continue
+        kind = school.kind or "school"
+        classes = _sorted_classes(db.scalars(
+            select(SchoolClass).where(SchoolClass.school_id == school.id, SchoolClass.deleted_at.is_(None))
+        ).all())
+        places.append({
+            "school_id": school.id, "kind": kind, "name": school.name,
+            "role": member.role, "position": member.position, "classes": len(classes),
+            "curated": [item.name for item in classes if item.curator_user_id == user.id],
+        })
+        today_attendance = db.scalars(
+            select(Attendance).where(
+                Attendance.deleted_at.is_(None), Attendance.taken_at >= day_start,
+                Attendance.class_id.in_([item.id for item in classes] or [-1]),
+            )
+        ).all()
+        lessons += [
+            {**row, "kind": kind, "school_name": school.name}
+            for row in _today_lessons(db, member, user, classes, local_now, today_attendance)
+            if row["mine"]
+        ]
+    lessons.sort(key=lambda row: (row["start_time"], row["class_name"]))
+
+    return {
+        "today": local_now.date(),
+        "weekday_label": WEEKDAYS[local_now.weekday()],
+        "unfinished": unfinished,
+        "results": results,
+        "tests": my_tests,
+        "places": places,
+        "lessons": lessons,
+    }
+
+
 @app.get("/api/me/attempts/{attempt_id}/review")
 def my_attempt_review(attempt_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """

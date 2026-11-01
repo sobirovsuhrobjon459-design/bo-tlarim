@@ -6792,3 +6792,66 @@ def test_maktabga_qoshilgan_oqituvchi_avtomatik_test_markazida_royxatdan_otadi()
     assert create_test(704, enrollment_type="closed")["id"]
     # Maktab egasi ham — ro'yxatdan o'tmagan bo'lsa ham o'qituvchi
     assert client.get("/api/me", headers=as_user(701)).json()["is_teacher"] is True
+
+
+def test_bosh_sahifa_oz_ishlarini_korsatadi():
+    """
+    /api/home: o'quvchiga tugallanmagan testi va natijalari (test yopilgachgina foiz), o'qituvchiga
+    faol testlari (titullilari skaner uchun alohida), a'zo bo'lgan maktabi va bugungi o'z darslari.
+    """
+    from backend.database import User
+
+    reset_database()
+    # Yangi foydalanuvchi — hamma qism bo'sh
+    empty = client.get("/api/home", headers=as_user(950)).json()
+    assert (empty["unfinished"], empty["results"], empty["tests"], empty["places"], empty["lessons"]) == ([], [], None, [], []), empty
+
+    register_teacher()
+    online = create_test(title="Onlayn")
+    offline = create_test(title="Titulli", enrollment_type="closed")
+
+    # O'quvchi: bitta testni boshlab, 2 savolni belgiladi (3-savolning a/b qismlari bitta savol)
+    started = client.post(f"/api/tests/{online['code']}/start", json={}, headers=as_user(901)).json()
+    client.post(f"/api/attempts/{started['attempt_id']}/answers", json={"answers": {"1": "B", "3": "A,C", "2": ""}},
+                headers=as_user(901))
+    home = client.get("/api/home", headers=as_user(901)).json()
+    assert home["unfinished"] == [{"code": online["code"], "title": "Onlayn", "subject": "Matematika", "answered": 2, "total": 4}]
+    assert main._answered_count('{"40a": "x", "40b": "y", "1": "A"}') == 2
+
+    # Yakunladi — natija test yopilguncha yashirin
+    graded = finish_and_grade(started["attempt_id"], json={"answers": {"1": "B", "2": "C"}}, headers=as_user(901))
+    home = client.get("/api/home", headers=as_user(901)).json()
+    assert home["unfinished"] == [] and len(home["results"]) == 1
+    assert home["results"][0]["visible"] is False and home["results"][0]["percent"] is None
+    assert client.post(f"/api/teacher/tests/{online['id']}/close", headers=as_user(555)).status_code == 200
+    result = client.get("/api/home", headers=as_user(901)).json()["results"][0]
+    # Avval saqlangan javoblar ham hisobga olinadi: 1, 2, 3 to'g'ri — 75%
+    assert result["visible"] is True and result["correct"] == graded["correct"] == 3, result
+    assert result["percent"] == round(graded["percent"]) == 75, result
+
+    # O'qituvchi: faqat faol testlar; skanerlash ro'yxatida — titullisi
+    tests = client.get("/api/home", headers=as_user(555)).json()["tests"]
+    assert tests["total"] == 2 and tests["active"] == 1, tests
+    assert [item["title"] for item in tests["items"]] == ["Titulli"] and tests["items"][0]["offline"] is True
+    assert tests["scan"] == [{"id": offline["id"], "code": offline["code"], "title": "Titulli"}]
+
+    # Maktab a'zosi: muassasasi va bugungi o'z darsi (davomat olingach — belgilanadi)
+    cid = _school_with_class(701)["id"]
+    with SessionLocal() as session:
+        owner_id = session.scalar(main.select(User.id).where(User.tg_id == 701))
+    assert client.put(f"/api/classes/{cid}/curator", json={"user_id": owner_id}, headers=as_user(701)).status_code == 200
+    weekday = (utcnow() + main.TASHKENT_OFFSET).weekday()
+    slot = client.post(f"/api/classes/{cid}/schedule", json={"weekday": weekday, "start_time": "00:00", "end_time": "00:01",
+                                                             "subject": "Matematika", "teacher_user_id": owner_id}, headers=as_user(701))
+    assert slot.status_code == 200, slot.text
+    home = client.get("/api/home", headers=as_user(701)).json()
+    place = home["places"][0]
+    assert (place["kind"], place["name"], place["role"], place["classes"], place["curated"]) == ("school", "Maktab 701", "owner", 1, ["10/2"])
+    assert home["tests"] is not None  # maktab a'zosi — o'qituvchi ham
+    assert [(row["class_name"], row["kind"], row["attendance_taken"]) for row in home["lessons"]] == [("10/2", "school", False)]
+    assert client.post(f"/api/classes/{cid}/students", json={"full_name": "Ali Valiyev"}, headers=as_user(701)).status_code == 200
+    taken = client.post(f"/api/classes/{cid}/attendance", json={"subject": "Matematika"}, headers=as_user(701))
+    assert taken.status_code == 200, taken.text
+    assert client.get("/api/home", headers=as_user(701)).json()["lessons"][0]["attendance_taken"] is True
+    # Boshqa o'qituvchining darsi "Bugungi darslarim"ga tushmaydi
+    assert client.get("/api/home", headers=as_user(555)).json()["lessons"] == []
