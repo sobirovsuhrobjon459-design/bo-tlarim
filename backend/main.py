@@ -14500,7 +14500,7 @@ def _founder_html() -> str:
         "name": "Sultonmurodov Ulug'bek Sherzod o'g'li",
         "givenName": "Ulug'bek",
         "familyName": "Sultonmurodov",
-        "alternateName": ["Ulug'bek Sultonmurodov", "Ulugbek Sultonmurodov", "Sultonmurodov Ulugbek", "Улуғбек Султонмуродов"],
+        "alternateName": ["Ulug'bek Sultonmurodov", "Ulugbek Sultonmurodov", "Sultonmurodov Ulugbek", "Улуғбек Султонмуродов", "Султонмуродов Улугбек"],
         "birthDate": "2010-02-15",
         "birthPlace": {
             "@type": "Place",
@@ -14515,8 +14515,8 @@ def _founder_html() -> str:
     }
     return f"""<!doctype html>
 <html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sultonmurodov Ulug'bek Sherzod o'g'li — Chittak.uz asoschisi</title>
-<meta name="description" content="Sultonmurodov Ulug'bek Sherzod o'g'li — Chittak.uz ta'lim platformasi asoschisi. 2010-yil 15-fevralda Farg'ona viloyati O'zbekiston tumani Qudash qishlog'ida tug'ilgan.">
+<title>Sultonmurodov Ulug'bek (Ulugbek) Sherzod o'g'li — Chittak.uz asoschisi</title>
+<meta name="description" content="Sultonmurodov Ulug'bek (Sultonmurodov Ulugbek, Султонмуродов Улуғбек) Sherzod o'g'li — Chittak.uz ta'lim platformasi asoschisi. 2010-yil 15-fevralda Farg'ona viloyati O'zbekiston tumani Qudash qishlog'ida tug'ilgan.">
 <link rel="canonical" href="https://www.chittak.uz/asoschi">
 <meta property="og:type" content="profile">
 <meta property="og:title" content="Sultonmurodov Ulug'bek — Chittak.uz asoschisi">
@@ -14536,6 +14536,7 @@ def _founder_html() -> str:
 </style></head><body><main>
 <h1>Sultonmurodov Ulug'bek Sherzod o'g'li</h1>
 <p class="muted"><a href="/">Chittak.uz</a> platformasi asoschisi</p>
+<p class="muted">Boshqa yozilishlari: Sultonmurodov Ulugbek, Ulugbek Sultonmurodov, Султонмуродов Улуғбек, Султонмуродов Улугбек</p>
 
 <p>Sultonmurodov Ulug'bek Sherzod o'g'li — maktablar, o'quv markazlari va repetitorlar uchun yaratilgan
 Chittak.uz ta'lim platformasining asoschisi. Platformada onlayn testlar, titul (javob varaqasi) skaneri,
