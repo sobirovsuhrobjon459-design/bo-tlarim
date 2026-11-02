@@ -14492,6 +14492,74 @@ o'chirishni ham xuddi shu aloqa orqali so'rashingiz mumkin.</p>
 </main></body></html>"""
 
 
+def _founder_html() -> str:
+    # Google odam haqidagi ma'lumotni shu sahifadan va undagi Person tuzilgan ma'lumotidan oladi
+    person = {
+        "@context": "https://schema.org",
+        "@type": "Person",
+        "name": "Sultonmurodov Ulug'bek Sherzod o'g'li",
+        "givenName": "Ulug'bek",
+        "familyName": "Sultonmurodov",
+        "alternateName": ["Ulug'bek Sultonmurodov", "Ulugbek Sultonmurodov", "Sultonmurodov Ulugbek", "Улуғбек Султонмуродов"],
+        "birthDate": "2010-02-15",
+        "birthPlace": {
+            "@type": "Place",
+            "name": "Qudash qishlog'i, O'zbekiston tumani, Farg'ona viloyati, O'zbekiston",
+            "address": {"@type": "PostalAddress", "addressLocality": "Qudash", "addressRegion": "Farg'ona viloyati",
+                        "addressCountry": "UZ"},
+        },
+        "nationality": {"@type": "Country", "name": "O'zbekiston"},
+        "jobTitle": "Chittak.uz platformasi asoschisi",
+        "url": "https://www.chittak.uz/asoschi",
+        "worksFor": {"@type": "Organization", "name": "Chittak", "url": "https://www.chittak.uz/"},
+    }
+    return f"""<!doctype html>
+<html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sultonmurodov Ulug'bek Sherzod o'g'li — Chittak.uz asoschisi</title>
+<meta name="description" content="Sultonmurodov Ulug'bek Sherzod o'g'li — Chittak.uz ta'lim platformasi asoschisi. 2010-yil 15-fevralda Farg'ona viloyati O'zbekiston tumani Qudash qishlog'ida tug'ilgan.">
+<link rel="canonical" href="https://www.chittak.uz/asoschi">
+<meta property="og:type" content="profile">
+<meta property="og:title" content="Sultonmurodov Ulug'bek — Chittak.uz asoschisi">
+<meta property="og:url" content="https://www.chittak.uz/asoschi">
+<script type="application/ld+json">{json.dumps(person, ensure_ascii=False)}</script>
+<style>
+  :root {{ color-scheme: light; --ink: #0b1f2a; --muted: #4f6670; --bg: #f3faf5; --line: #ddefe2 }}
+  body {{ margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif }}
+  main {{ max-width: 760px; margin: 0 auto; padding: 28px 18px 60px; background: #fff; min-height: 100vh; box-sizing: border-box }}
+  h1 {{ font-size: 26px; line-height: 1.25; margin: 0 0 6px }}
+  h2 {{ font-size: 18px; margin: 28px 0 8px }}
+  p, li {{ margin: 0 0 8px }}
+  .muted {{ color: var(--muted); font-size: 14px }}
+  dl {{ display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0 }}
+  dt {{ color: var(--muted) }}
+  dd {{ margin: 0; font-weight: 600 }}
+</style></head><body><main>
+<h1>Sultonmurodov Ulug'bek Sherzod o'g'li</h1>
+<p class="muted"><a href="/">Chittak.uz</a> platformasi asoschisi</p>
+
+<p>Sultonmurodov Ulug'bek Sherzod o'g'li — maktablar, o'quv markazlari va repetitorlar uchun yaratilgan
+Chittak.uz ta'lim platformasining asoschisi. Platformada onlayn testlar, titul (javob varaqasi) skaneri,
+Rasch modeli bo'yicha natijalar tahlili va maktab CRM bitta joyda jamlangan.</p>
+
+<h2>Ma'lumot</h2>
+<dl>
+  <dt>Ism-familiyasi</dt><dd>Sultonmurodov Ulug'bek Sherzod o'g'li</dd>
+  <dt>Faoliyati</dt><dd>Chittak.uz platformasi asoschisi</dd>
+  <dt>Tug'ilgan sana</dt><dd>2010-yil 15-fevral</dd>
+  <dt>Tug'ilgan joyi</dt><dd>Farg'ona viloyati, O'zbekiston tumani, Qudash qishlog'i</dd>
+</dl>
+
+<h2>Chittak.uz haqida</h2>
+<p>Chittak — ilg'or ta'lim, tezkor natija. Batafsil: <a href="https://www.chittak.uz/">www.chittak.uz</a></p>
+</main></body></html>"""
+
+
+@app.get("/asoschi", include_in_schema=False)
+def founder_page():
+    """Platforma asoschisi haqida ommaviy sahifa (Google qidiruvi uchun)."""
+    return HTMLResponse(_founder_html())
+
+
 @app.get("/hisobni-ochirish", include_in_schema=False)
 @app.get("/delete-account", include_in_schema=False)
 def account_deletion_page():
