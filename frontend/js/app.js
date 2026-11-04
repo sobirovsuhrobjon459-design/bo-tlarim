@@ -14290,9 +14290,104 @@ async function renderAttachClasses(testId) {
 }
 
 // Test sahifasidagi ixcham amal tugmasi: ikonka va ostida qisqa nom; to'liq nomi — title va aria-label'da
-function actionTile(id, emoji, short, label = short) {
-  return `<button class="btn btn-ghost action-tile" id="${id}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
-    <span class="action-tile-icon">${emoji}</span><span class="action-tile-label">${escapeHtml(short)}</span></button>`;
+/*
+  Test sahifasi menyusi — ixcham, ikki ustunda: Natijalar, Sozlamalar, Titul, Kalit, O'quvchilar, Yakunlash.
+  Guruh tugmasi (Sozlamalar, Titul, O'quvchilar) pastdan oyna ochadi; guruhda bitta amal bo'lsa — darhol o'sha.
+  Har bir amalning o'z tugmasi (id bilan) sahifada yashirin turadi va eski ulanishlari bilan ishlaydi —
+  oynadagi band shu tugmani bosadi. Shunday qilib amallar kodi o'zgarmaydi.
+*/
+function testMenuGroups(test, isClosedTest, isFinished) {
+  const groups = {
+    settings: {
+      icon: "⚙️",
+      label: "Sozlamalar",
+      items: [
+        ["edit-test-button", "⚙️", "Nomi, vaqti", "Test nomi, davomiyligi, boshlanish va tugash vaqti"],
+        test.mode === "key" && ["edit-key-button", "📝", "Kalitni tuzatish", "Javoblar kalitini tahrirlash"],
+      ],
+    },
+    // Titul (javoblar varaqasi) faqat oflayn (yopiq) testda — onlayn testda o'quvchi ilovada belgilaydi
+    sheets: isClosedTest && {
+      icon: "📄",
+      label: "Titul",
+      items: [
+        ["answer-sheet-button", "📄", "Oddiy titul", "Bo'sh javoblar varaqasi (PDF)"],
+        test.sheet_version >= 2 && ["personal-sheets-button", "🧾", "Ismli titul", "Har o'quvchiga — ismi va ID yozilgan"],
+        test.sheet_version >= 2 && ["named-sheets-button", "🆔", "O'quvchilar ro'yxati", "Ism va ID raqamlari"],
+        test.mode === "key" && [
+          "variants-button", "🔀", "Variantlar",
+          test.variants.length ? `Hozir: ${test.variants.join(", ")}` : "A, B, C, D variant kalitlari",
+        ],
+      ],
+    },
+    students: isClosedTest && !isFinished && {
+      icon: "👥",
+      label: "O'quvchilar",
+      items: [
+        ["add-students-button", "👥", "O'quvchi qo'shish", "Ro'yxatga o'quvchi qo'shish"],
+        ["attach-classes-button-open", "🏫", "Sinf biriktirish", "Imtihonni sinf yoki guruhga biriktirish"],
+      ],
+    },
+  };
+  for (const [key, group] of Object.entries(groups)) {
+    if (!group) delete groups[key];
+    else group.items = group.items.filter(Boolean);
+  }
+  return groups;
+}
+
+function testMenuButton(attrs, emoji, label) {
+  return `<button type="button" class="test-menu-button" ${attrs}><span class="test-menu-icon">${emoji}</span><span>${escapeHtml(label)}</span></button>`;
+}
+
+function testMenuHtml(test, groups, isClosedTest, isFinished) {
+  const group = (key) => (groups[key] ? testMenuButton(`data-menu-group="${key}"`, groups[key].icon, groups[key].label) : "");
+  const buttons = [
+    testMenuButton('id="results-button"', "📊", "Natijalar"),
+    group("settings"),
+    group("sheets"),
+    isClosedTest ? testMenuButton('id="answer-key-button"', "🔑", "Kalit") : "",
+    group("students"),
+    !isFinished && !isClosedTest && !test.broadcast_at ? testMenuButton('id="broadcast-button"', "📢", "E'lon qilish") : "",
+    isFinished ? testMenuButton('id="reopen-button"', "🔓", "Qayta ochish") : testMenuButton('id="finish-button"', "🏁", "Yakunlash"),
+  ].filter(Boolean);
+  // Guruh ichidagi amallarning o'z tugmalari — ko'rinmaydi, oynadagi band ularni bosadi
+  const hidden = Object.values(groups)
+    .flatMap((item) => item.items)
+    .map(([id, , label]) => `<button type="button" id="${id}" hidden>${escapeHtml(label)}</button>`)
+    .join("");
+  return `<div class="test-menu">${buttons.join("")}</div><div hidden>${hidden}</div>`;
+}
+
+function wireTestMenu(groups) {
+  document.querySelectorAll("[data-menu-group]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const group = groups[button.dataset.menuGroup];
+      if (group.items.length === 1) {
+        document.getElementById(group.items[0][0])?.click();
+        return;
+      }
+      const { sheet, close } = openSheet(`
+        <h3 style="margin:0 0 14px">${group.icon} ${escapeHtml(group.label)}</h3>
+        ${group.items
+          .map(
+            ([id, icon, label, note]) => `
+              <button type="button" class="menu-sheet-item" data-menu-proxy="${id}">
+                <span class="menu-sheet-icon">${icon}</span>
+                <span class="menu-sheet-text"><b>${escapeHtml(label)}</b><small>${escapeHtml(note)}</small></span>
+              </button>`
+          )
+          .join("")}
+        <button class="btn btn-ghost" data-sheet-close style="margin-top:4px">Yopish</button>
+      `);
+      sheet.querySelectorAll("[data-menu-proxy]").forEach((item) =>
+        item.addEventListener("click", () => {
+          close();
+          document.getElementById(item.dataset.menuProxy)?.click();
+        })
+      );
+    });
+  });
 }
 
 async function renderTestDetail(testId) {
@@ -14304,6 +14399,7 @@ async function renderTestDetail(testId) {
     processScanQueue(); // telefonda tekshirilib, hali yuborilmagan natijalar bo'lsa
   }
   const isFinished = test.status === "closed";
+  const menuGroups = testMenuGroups(test, isClosedTest, isFinished);
 
   const studentRow = (student) => `
           <div class="list-row" data-student-id="${student.id}">
@@ -14352,33 +14448,11 @@ async function renderTestDetail(testId) {
       }
     </section>
     ${
-      // Skaner — asosiy amal: katta yashil tugma. Qolganlari — ixcham ikonkalar (nomi bosib turilganda/title'da)
+      // Skaner — asosiy amal: katta yashil tugma
       isClosedTest && !isFinished ? `<button class="btn scan-main-button" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""
     }
     ${isClosedTest ? `<div id="scan-queue-slot"></div>` : ""}
-    <div class="action-grid">
-      ${actionTile("edit-test-button", "⚙️", "Nomi, vaqti", "Tahrirlash (nomi, vaqti)")}
-      ${test.mode === "key" ? actionTile("edit-key-button", "📝", "Kalitni tuzatish", "Javoblar kalitini tahrirlash") : ""}
-      ${
-        // Titul (javoblar varaqasi) faqat oflayn (yopiq) testda — onlayn testda o'quvchi ilovada belgilaydi
-        isClosedTest
-          ? `${actionTile("answer-sheet-button", "📄", "Titul", "Javoblar varaqasini olish")}
-             ${actionTile("answer-key-button", "🔑", "Kalit PDF", "To'g'ri javoblar (kalit)")}
-             ${
-               test.sheet_version >= 2
-                 ? `${actionTile("personal-sheets-button", "🧾", "Ismli titul", "Ismli titullar (har o'quvchiga, ID bo'yalgan)")}
-                    ${actionTile("named-sheets-button", "🆔", "Ro'yxat (ID)", "O'quvchilar ro'yxati (ism va ID)")}`
-                 : ""
-             }
-             ${test.mode === "key" ? actionTile("variants-button", "🔀", "Variantlar", `Variantlar${test.variants.length ? ` (${test.variants.join(", ")})` : " (A/B/C/D)"}`) : ""}`
-          : ""
-      }
-      ${isClosedTest && !isFinished ? actionTile("add-students-button", "👥", "O'quvchi qo'shish", "O'quvchilarni qo'shish") : ""}
-      ${isClosedTest && !isFinished ? actionTile("attach-classes-button-open", "🏫", "Sinf biriktirish", "Sinfni biriktirish") : ""}
-      ${!isFinished && !isClosedTest && !test.broadcast_at ? actionTile("broadcast-button", "📢", "E'lon qilish", "Hammaga e'lon qilish") : ""}
-      ${actionTile("results-button", "📊", "Natijalar", "Natijalarni ko'rish")}
-      ${isFinished ? actionTile("reopen-button", "🔓", "Qayta ochish", "Testni qayta ochish") : actionTile("finish-button", "🏁", "Yakunlash", "Yakunlash va natijalarni olish")}
-    </div>
+    ${testMenuHtml(test, menuGroups, isClosedTest, isFinished)}
     ${test.broadcast_at ? `<p class="subtitle" style="margin:4px 4px 10px">📢 E'lon qilingan: ${formatDateTime(test.broadcast_at)}</p>` : ""}
 
     ${test.missing > 0 && !isFinished
@@ -14397,6 +14471,7 @@ async function renderTestDetail(testId) {
   `);
 
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
+  wireTestMenu(menuGroups);
   document.getElementById("edit-test-button").addEventListener("click", () => openTestEditSheet(test));
   document
     .getElementById("edit-key-button")

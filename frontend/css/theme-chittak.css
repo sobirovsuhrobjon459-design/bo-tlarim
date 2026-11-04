@@ -1688,42 +1688,101 @@ button.tt-cell {
   font-size: 13px;
 }
 
-/* ========== Test sahifasi: ixcham amallar (3 ustun, faqat ikonka) ========== */
+/* ========== Test sahifasi: ixcham menyu (2 ustun: ikonka + nomi), guruhlar pastdan oynada ========== */
 
-.action-grid {
+.test-menu {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: 1fr 1fr;
   gap: 10px;
   margin: 10px 0 14px;
 }
 
-.action-grid .btn.action-tile {
-  margin: 0;
-  min-height: 72px;
-  padding: 8px 4px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  border-radius: 16px;
-  color: var(--color-primary);
+/* Toq sonli bo'lsa — oxirgisi butun qatorda */
+.test-menu > .test-menu-button:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
 }
 
-.action-tile-icon {
-  font-size: 24px;
+.test-menu-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 54px;
+  padding: 12px 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+
+.test-menu-button:active {
+  transform: scale(0.97);
+}
+
+.test-menu-icon {
+  display: inline-flex;
+  color: var(--color-primary);
+  font-size: 20px;
   line-height: 1;
 }
 
-.action-tile-label {
-  font-size: 11.5px;
-  font-weight: 700;
-  line-height: 1.2;
-  color: var(--color-text);
+.test-menu-icon svg {
+  width: 22px;
+  height: 22px;
 }
 
-.action-grid .btn.action-tile:active {
-  transform: scale(0.94);
+/* Guruh oynasidagi band: ikonka, nomi va izohi */
+.menu-sheet-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-sheet-item:active {
+  transform: scale(0.98);
+}
+
+.menu-sheet-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: rgba(0, 168, 68, 0.1);
+  color: var(--color-primary);
+  font-size: 20px;
+}
+
+.menu-sheet-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.menu-sheet-text b {
+  display: block;
+  font-size: 16px;
+}
+
+.menu-sheet-text small {
+  color: var(--color-text-muted);
+  font-size: 13px;
 }
 
 .btn.scan-main-button {
