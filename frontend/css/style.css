@@ -2024,42 +2024,12 @@ select option {
   }
 }
 
-/* ---------- Bosh sahifa: har kimning o'z ishlari ---------- */
-
-.home-block {
-  break-inside: avoid;
-}
-
-.home-block > .home-tiles {
-  margin-top: 16px;
-}
-
-.home-label {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.home-link {
-  border: 0;
-  background: none;
-  padding: 0;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--color-primary);
-  cursor: pointer;
-}
+/* ---------- Bosh menyu: uchta bo'lim va "Mening maktabim" ---------- */
 
 .home-tiles {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
-}
-
-.home-tiles.two {
-  grid-template-columns: repeat(2, 1fr);
 }
 
 .home-tile {
@@ -2095,42 +2065,25 @@ select option {
   height: 21px;
 }
 
-.home-code {
-  display: block;
-  margin-top: 16px;
-  cursor: default;
+/* Bosh menyudagi uchta asosiy bo'lim — kattaroq */
+.home-menu {
+  margin: 20px 0 12px;
 }
 
-.home-code .section-label {
-  margin: 0;
+.home-menu .home-tile {
+  gap: 12px;
+  padding: 22px 6px 18px;
+  font-size: 15px;
 }
 
-.home-code-row {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
+.home-menu .home-tile .card-icon {
+  width: 58px;
+  height: 58px;
 }
 
-.home-code-row .input {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  text-transform: uppercase;
-  letter-spacing: 2px;
-  font-weight: 700;
-}
-
-.home-code-row .input::placeholder {
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 500;
-}
-
-.home-code-row .btn {
-  width: auto;
-  margin: 0;
-  padding: 12px 18px;
-  white-space: nowrap;
+.home-menu .home-tile .card-icon svg {
+  width: 28px;
+  height: 28px;
 }
 
 .home-card {
@@ -2147,103 +2100,6 @@ select option {
   margin-left: auto;
   color: var(--color-text-muted);
   font-size: 22px;
-}
-
-.home-progress {
-  height: 6px;
-  margin-top: 8px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--color-border);
-}
-
-.home-progress > span {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: var(--color-primary);
-}
-
-.home-list {
-  padding: 2px 0;
-}
-
-.home-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.home-row:last-child {
-  border-bottom: 0;
-}
-
-.home-row.is-link {
-  cursor: pointer;
-}
-
-.home-time {
-  flex-shrink: 0;
-  width: 46px;
-  font-size: 15px;
-  font-weight: 800;
-}
-
-.home-row-body {
-  flex: 1;
-  min-width: 0;
-}
-
-.home-row-body b {
-  display: block;
-  font-size: 15px;
-  overflow-wrap: anywhere;
-}
-
-.home-row-body small {
-  color: var(--color-text-muted);
-  font-size: 13px;
-}
-
-.home-ok {
-  color: var(--color-primary);
-  font-size: 13px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.home-muted {
-  color: var(--color-text-muted);
-  font-size: 13px;
-  text-align: right;
-}
-
-.home-score {
-  flex-shrink: 0;
-  text-align: right;
-  line-height: 1.15;
-}
-
-.home-score b {
-  font-size: 18px;
-  white-space: nowrap;
-}
-
-.home-score small {
-  display: block;
-  color: var(--color-text-muted);
-  font-size: 12px;
-}
-
-.home-row .btn.home-take {
-  width: auto;
-  margin: 0;
-  padding: 8px 12px;
-  border-radius: 12px;
-  font-size: 13px;
-  white-space: nowrap;
 }
 
 /* Majburiy maydon belgisi */
