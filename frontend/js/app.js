@@ -14292,19 +14292,18 @@ async function renderAttachClasses(testId) {
 // Test sahifasidagi ixcham amal tugmasi: ikonka va ostida qisqa nom; to'liq nomi — title va aria-label'da
 /*
   Test sahifasi menyusi — ixcham, ikki ustunda: Natijalar, Sozlamalar, Titul, Kalit, O'quvchilar, Yakunlash.
-  Guruh tugmasi (Sozlamalar, Titul, O'quvchilar) pastdan oyna ochadi; guruhda bitta amal bo'lsa — darhol o'sha.
+  Guruh tugmasi (Titul, Kalit, O'quvchilar) pastdan oyna ochadi; guruhda bitta amal bo'lsa — darhol o'sha
+  (Sozlamalar — darhol "Nomi, vaqti").
   Har bir amalning o'z tugmasi (id bilan) sahifada yashirin turadi va eski ulanishlari bilan ishlaydi —
   oynadagi band shu tugmani bosadi. Shunday qilib amallar kodi o'zgarmaydi.
 */
 function testMenuGroups(test, isClosedTest, isFinished) {
   const groups = {
+    // Bitta amal — tugma bosilishi bilan o'sha ochiladi
     settings: {
       icon: "⚙️",
       label: "Sozlamalar",
-      items: [
-        ["edit-test-button", "⚙️", "Nomi, vaqti", "Test nomi, davomiyligi, boshlanish va tugash vaqti"],
-        test.mode === "key" && ["edit-key-button", "📝", "Kalitni tuzatish", "Javoblar kalitini tahrirlash"],
-      ],
+      items: [["edit-test-button", "⚙️", "Nomi, vaqti", "Test nomi, davomiyligi, boshlanish va tugash vaqti"]],
     },
     // Titul (javoblar varaqasi) faqat oflayn (yopiq) testda — onlayn testda o'quvchi ilovada belgilaydi
     sheets: isClosedTest && {
@@ -14314,10 +14313,15 @@ function testMenuGroups(test, isClosedTest, isFinished) {
         ["answer-sheet-button", "📄", "Oddiy titul", "Bo'sh javoblar varaqasi (PDF)"],
         test.sheet_version >= 2 && ["personal-sheets-button", "🧾", "Ismli titul", "Har o'quvchiga — ismi va ID yozilgan"],
         test.sheet_version >= 2 && ["named-sheets-button", "🆔", "O'quvchilar ro'yxati", "Ism va ID raqamlari"],
-        test.mode === "key" && [
-          "variants-button", "🔀", "Variantlar",
-          test.variants.length ? `Hozir: ${test.variants.join(", ")}` : "A, B, C, D variant kalitlari",
-        ],
+      ],
+    },
+    // Kalit: chop etish uchun PDF (oflayn testda) va kalitni tuzatish (faqat kalit bilan tuzilgan testda)
+    key: {
+      icon: "🔑",
+      label: "Kalit",
+      items: [
+        isClosedTest && ["answer-key-button", "🔑", "Kalit PDF", "To'g'ri javoblar — chop etish uchun"],
+        test.mode === "key" && ["edit-key-button", "📝", "Kalitni tuzatish", "Javoblar kalitini tahrirlash"],
       ],
     },
     students: isClosedTest && !isFinished && {
@@ -14330,8 +14334,8 @@ function testMenuGroups(test, isClosedTest, isFinished) {
     },
   };
   for (const [key, group] of Object.entries(groups)) {
-    if (!group) delete groups[key];
-    else group.items = group.items.filter(Boolean);
+    if (group) group.items = group.items.filter(Boolean);
+    if (!group || !group.items.length) delete groups[key];
   }
   return groups;
 }
@@ -14346,7 +14350,7 @@ function testMenuHtml(test, groups, isClosedTest, isFinished) {
     testMenuButton('id="results-button"', "📊", "Natijalar"),
     group("settings"),
     group("sheets"),
-    isClosedTest ? testMenuButton('id="answer-key-button"', "🔑", "Kalit") : "",
+    group("key"),
     group("students"),
     !isFinished && !isClosedTest && !test.broadcast_at ? testMenuButton('id="broadcast-button"', "📢", "E'lon qilish") : "",
     isFinished ? testMenuButton('id="reopen-button"', "🔓", "Qayta ochish") : testMenuButton('id="finish-button"', "🏁", "Yakunlash"),
