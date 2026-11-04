@@ -2379,15 +2379,16 @@ def test_davomat_matn_rasm_va_pdf():
     assert history[0]["lesson_start"] == "11:00" and history[0]["lesson_end"] == "11:45", history[0]
 
     text = client.get(f"/api/attendance/{attendance['id']}/text", headers=as_user(701)).json()["text"]
-    assert "10/2 — Ingliz tili darsi" in text and "Aziza Karimova" in text, text
-    assert " · 11:00–11:45" in text, text
+    # Ota-onalar guruhiga — maktab shabloni: salom, sana va vaqt, guruh, dars, o'qituvchi, davomat soni
+    assert text.startswith("Assalomu alaykum, hurmatli ota-onalar.\n\n📆 Sana: "), text
+    assert " · 11:00–11:45\n📋 Guruh: 10/2\n📚 Dars: Ingliz tili\n👤 Aziza Karimova\n\n" in text, text
+    assert "Davomat: ✅ Bor: 0 · ❌ Yo'q: 1 · 🟡 Sababli: 0 · ⏰ Kechikdi: 0" in text, text
 
     # Tahrirda dars vaqti o'zgaradi
     edited = client.put(f"/api/attendance/{attendance['id']}", json={"lesson_start": "12:00", "lesson_end": "12:45"},
                         headers=as_user(701)).json()
     assert (edited["lesson_start"], edited["lesson_end"]) == ("12:00", "12:45") and edited["updated_at"], edited
     assert "❌ Yo'q:\n1. Фаррух Комилжонов" in text, text
-    assert "Ota-onalar" not in text
 
     pdf = client.get(f"/api/attendance/{attendance['id']}/file", params={"format": "pdf"}, headers=as_user(701))
     assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
@@ -5712,7 +5713,8 @@ def test_sinf_id_oraligini_admin_belgilaydi():
 
     # Yangi o'quvchi — oraliqdagi keyingi bo'sh raqam
     after = client.post(f"/api/classes/{cid}/students", json={"full_name": "Yangi Bola"}, headers=as_user(701)).json()
-    assert after["students"][-1]["code"] == 1004
+    # Ro'yxat alifbo tartibida — yangi o'quvchi oxirida bo'lishi shart emas
+    assert next(s for s in after["students"] if s["full_name"] == "Yangi Bola")["code"] == 1004
 
     # ID oralig'ini olib tashlash: faqat admin/direktor; ID'lar bo'shaydi va qaytib berilmaydi
     assert client.delete(url, headers=as_user(703)).status_code in (403, 404)
@@ -6855,3 +6857,25 @@ def test_bosh_sahifa_oz_ishlarini_korsatadi():
     assert client.get("/api/home", headers=as_user(701)).json()["lessons"][0]["attendance_taken"] is True
     # Boshqa o'qituvchining darsi "Bugungi darslarim"ga tushmaydi
     assert client.get("/api/home", headers=as_user(555)).json()["lessons"] == []
+
+
+def test_sinf_royxati_familiya_boyicha_alifbo_tartibida():
+    """Sinf ro'yxati va davomat — familiya bo'yicha o'zbek alifbosi tartibida (apostrof turi, katta-kichik harf farq qilmaydi)."""
+    reset_database()
+    cid = _school_with_class(701)["id"]
+    names = ("Shavkatov Husanjon", "Tohirov Husanboy", "Jo`rayev Ziyodjon", "G‘aniyev Bobur", "abdurahmonov Xudoyberdi",
+             "Chorshanbiyev Ali", "Bahromov Asadxo'ja", "O‘ktamov Sardor", "Zokirov Jasur", "Sobirova Gulsevar",
+             "Abdufattoyev Rashidbek", "Ma’rufov Aziz")
+    for name in names:
+        added = client.post(f"/api/classes/{cid}/students", json={"full_name": name}, headers=as_user(701))
+        assert added.status_code == 200, added.text
+    # O'zbek alifbosi: ... Y, Z, O‘, G‘, Sh, Ch (jurnaldagidek); tutuq belgisi (Ma’rufov) hisobga olinmaydi
+    expected = ["Abdufattoyev Rashidbek", "abdurahmonov Xudoyberdi", "Bahromov Asadxo'ja", "Jo`rayev Ziyodjon",
+                "Ma’rufov Aziz", "Sobirova Gulsevar", "Tohirov Husanboy", "Zokirov Jasur", "O‘ktamov Sardor",
+                "G‘aniyev Bobur", "Shavkatov Husanjon", "Chorshanbiyev Ali"]
+    students = client.get(f"/api/classes/{cid}", headers=as_user(701)).json()["students"]
+    assert [student["full_name"] for student in students] == expected, students
+
+    taken = client.post(f"/api/classes/{cid}/attendance", json={"subject": "Matematika"}, headers=as_user(701))
+    assert taken.status_code == 200, taken.text
+    assert [mark["name"] for mark in taken.json()["marks"]] == expected

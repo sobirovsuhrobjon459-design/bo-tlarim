@@ -9215,7 +9215,13 @@ def _assign_student_codes(db: Session, school_id: int) -> None:
 
 
 def _active_students(school_class: SchoolClass) -> list[ClassStudent]:
-    return [student for student in school_class.students if student.removed_at is None]
+    """
+    Sinf ro'yxati — jurnaldagidek o'zbek alifbosi tartibida (ism "Familiya Ism" ko'rinishida yoziladi,
+    demak familiya bo'yicha; Sh, Ch, O‘, G‘ — Z dan keyin, qarang: _uz_sort_key). Davomat, to'lov, natija
+    va PDF/rasm hisobotlari ham shu tartibda chiqadi.
+    """
+    active = [student for student in school_class.students if student.removed_at is None]
+    return sorted(active, key=lambda student: (_uz_sort_key(student.full_name), student.id))
 
 
 def _attendance_counts(attendance: Attendance) -> dict[str, int]:
@@ -9237,9 +9243,14 @@ def _attendance_view(attendance: Attendance) -> dict:
         "counts": _attendance_counts(attendance),
         "marks": [
             {"student_id": mark.student_id, "name": mark.student_name, "status": mark.status}
-            for mark in attendance.marks
+            for mark in _sorted_marks(attendance)
         ],
     }
+
+
+def _sorted_marks(attendance: Attendance) -> list[AttendanceMark]:
+    """Davomat belgilari — sinf ro'yxatidagidek alifbo tartibida (eski davomatlar ham)."""
+    return sorted(attendance.marks, key=lambda mark: (_uz_sort_key(mark.student_name), mark.id))
 
 
 def _student_attendance_stats(db: Session, student_ids: list[int], scope=None) -> dict[int, dict]:
@@ -11000,6 +11011,38 @@ SHORT_MONTH_NAMES = ["Yan", "Fev", "Mar", "Apr", "May", "Iyun", "Iyul", "Avg", "
 
 _SEARCH_INVISIBLE = dict.fromkeys(map(ord, "​‌‍⁠﻿"))
 _SEARCH_APOSTROPHES = str.maketrans({ch: "" for ch in "'`ʻʼ‘’´"})
+
+
+_UZ_ALPHABET = ["a", "b", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v",
+                "x", "y", "z", "o‘", "g‘", "sh", "ch"]
+_UZ_LETTER_RANK = {letter: index + 1 for index, letter in enumerate(_UZ_ALPHABET)}
+_UZ_APOSTROPHES = "'`ʻʼ‘’´"
+
+
+def _uz_sort_key(text: str) -> tuple:
+    """
+    O'zbek alifbosi tartibi (maktab jurnalidagidek): A, B, D … X, Y, Z, O‘, G‘, Sh, Ch.
+    Katta-kichik harf va apostrof turi farq qilmaydi (Jo`rayev = Jo‘rayev); tutuq belgisi (Ma’ruf)
+    tartibga ta'sir qilmaydi. Alifboda yo'q harflar (kirill, c, w) — oxirida, o'z tartibida.
+    """
+
+    value = " ".join((text or "").translate(_SEARCH_INVISIBLE).lower().split())
+    key, index = [], 0
+    while index < len(value):
+        char = value[index]
+        following = value[index + 1] if index + 1 < len(value) else ""
+        if char in "og" and following and following in _UZ_APOSTROPHES:
+            key.append(_UZ_LETTER_RANK[char + "‘"])
+            index += 2
+        elif char + following in ("sh", "ch"):
+            key.append(_UZ_LETTER_RANK[char + following])
+            index += 2
+        elif char in _UZ_APOSTROPHES:
+            index += 1
+        else:
+            key.append(0 if char == " " else _UZ_LETTER_RANK.get(char, 100 + ord(char)))
+            index += 1
+    return tuple(key)
 
 
 def _search_key(text: str) -> str:
@@ -12799,7 +12842,7 @@ def _attendance_context(db: Session, attendance: Attendance) -> dict:
         # "09.10.2026 · 11:00–11:45" — sana, keyin dars vaqti
         "when": _attendance_when(attendance),
         "counts": _attendance_counts(attendance),
-        "marks": [(mark.student_name, mark.status) for mark in attendance.marks],
+        "marks": [(mark.student_name, mark.status) for mark in _sorted_marks(attendance)],
     }
 
 
@@ -12818,15 +12861,26 @@ def attendance_caption(context: dict) -> str:
 
 def attendance_text(context: dict) -> str:
     """
-    Matn ko'rinishi — faqat darsda BO'LMAGANLAR (yo'q, sababli, kechikkan).
+    Matn ko'rinishi — ota-onalar guruhiga (maktab shabloni): salom, sana va dars vaqti, guruh, fan,
+    o'qituvchi, davomat soni va faqat darsda BO'LMAGANLAR (yo'q, sababli, kechikkan).
     To'liq ro'yxat (borlar bilan) rasm va PDF'da bo'ladi.
     """
 
     counts = context["counts"]
     lines = [
-        attendance_caption(context),
+        "Assalomu alaykum, hurmatli ota-onalar.",
         "",
-        " · ".join(f"{ATTENDANCE_LABELS[s][1]} {ATTENDANCE_LABELS[s][0]}: {counts.get(s, 0)}" for s in ATTENDANCE_LABELS),
+        f"📆 Sana: {context['when']}",
+        f"📋 Guruh: {context['class_name']}",
+    ]
+    if context["subject"]:
+        lines.append(f"📚 Dars: {context['subject']}")
+    lines += [
+        f"👤 {context['teacher_name']}",
+        "",
+        "Davomat: " + " · ".join(
+            f"{ATTENDANCE_LABELS[s][1]} {ATTENDANCE_LABELS[s][0]}: {counts.get(s, 0)}" for s in ATTENDANCE_LABELS
+        ),
     ]
 
     missing_any = False
