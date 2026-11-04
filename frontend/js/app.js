@@ -1799,10 +1799,15 @@ function formatBirthDate(value) {
 let myClassesCache = null;
 
 function curatorLine(item) {
-  // Fan guruhida kurator o'rnida — guruh o'qituvchisi
+  // Fan guruhida kurator o'rnida — asosiy va yordamchi o'qituvchi
   if (item.is_group) {
-    if (item.is_curator) return "👩‍🏫 Siz — guruh o'qituvchisi";
-    return item.curator ? `👩‍🏫 O'qituvchi: ${escapeHtml(item.curator.name)}` : "⚠️ O'qituvchi tayinlanmagan";
+    const main = item.is_curator
+      ? "👩‍🏫 Siz — asosiy o'qituvchi"
+      : item.curator ? `👩‍🏫 ${escapeHtml(item.curator.name)}` : "⚠️ O'qituvchi tayinlanmagan";
+    const helper = item.is_assistant
+      ? "🤝 Siz — yordamchi o'qituvchi"
+      : item.assistant ? `🤝 Yordamchi: ${escapeHtml(item.assistant.name)}` : "";
+    return [main, helper].filter(Boolean).join(" · ");
   }
   if (item.is_curator) return "🎓 Siz — kurator";
   return item.curator ? `🎓 Kurator: ${escapeHtml(item.curator.name)}` : "⚠️ Kurator tayinlanmagan";
@@ -1905,11 +1910,11 @@ function renderSchoolGroups(school) {
           .filter((item) => item.subject === subject)
           .map(
             (item) => `
-              <button type="button" class="class-row${item.is_curator ? " is-mine" : ""}" data-class-id="${item.id}">
+              <button type="button" class="class-row${item.is_curator || item.is_assistant ? " is-mine" : ""}" data-class-id="${item.id}">
                 <span class="class-count"><b>${item.students_count}</b><small>o'quvchi</small></span>
                 <span class="class-info">
                   <b>${escapeHtml(item.name)}</b>
-                  <small>${item.is_curator ? "⭐ Sizning guruhingiz" : item.curator ? `👩‍🏫 ${escapeHtml(item.curator.name)}` : "⚠️ O'qituvchi tayinlanmagan"}</small>
+                  <small>${item.is_curator || item.is_assistant ? "⭐ Sizning guruhingiz" : curatorLine(item)}</small>
                 </span>
                 <span class="class-arrow">›</span>
               </button>`
@@ -1933,20 +1938,26 @@ function renderSchoolGroups(school) {
 
 function openCreateGroupSheet(school) {
   const teachers = school.members || []; // admin ham dars berishi mumkin
+  const teacherOptions = teachers
+    .map((member) => `<option value="${member.user_id}">${escapeHtml(member.name)}${member.subjects?.length ? ` — ${subjectsText(member.subjects)}` : ""}</option>`)
+    .join("");
   const { sheet, close } = openSheet(`
     <h3 style="margin:0 0 10px">+ Fan guruhi ochish</h3>
     <label class="field-label" for="group-subject">Fan</label>
     <input class="input" id="group-subject" maxlength="100" value="Ingliz tili" />
     <label class="field-label" for="group-name">Guruh nomi</label>
     <input class="input" id="group-name" maxlength="100" placeholder="Masalan: Ingliz tili — A1" />
-    <label class="field-label" for="group-teacher">👩‍🏫 Guruh o'qituvchisi</label>
+    <label class="field-label" for="group-teacher">👩‍🏫 Asosiy o'qituvchi</label>
     <select id="group-teacher">
       <option value="">— Keyin tayinlayman —</option>
-      ${teachers
-        .map((member) => `<option value="${member.user_id}">${escapeHtml(member.name)}${member.subjects?.length ? ` — ${subjectsText(member.subjects)}` : ""}</option>`)
-        .join("")}
+      ${teacherOptions}
     </select>
-    <p class="subtitle" style="margin:6px 0 0">O'qituvchi guruhga o'quvchilarni maktab ro'yxatidan qo'shadi va chiqaradi.</p>
+    <label class="field-label" for="group-assistant">🤝 Yordamchi o'qituvchi</label>
+    <select id="group-assistant">
+      <option value="">— Yo'q —</option>
+      ${teacherOptions}
+    </select>
+    <p class="subtitle" style="margin:6px 0 0">Ikkala o'qituvchi ham guruhga o'quvchilarni maktab ro'yxatidan qo'shadi, chiqaradi va davomat oladi.</p>
     <button class="btn" id="group-create" style="margin-top:14px">+ Ochish</button>
     <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
   `);
@@ -1964,7 +1975,10 @@ function openCreateGroupSheet(school) {
       if (!name) throw new Error("Guruh nomini kiriting");
       let created = await api("/api/classes", { method: "POST", body: { name, subject } });
       const teacherId = Number(sheet.querySelector("#group-teacher").value) || null;
+      const assistantId = Number(sheet.querySelector("#group-assistant").value) || null;
+      if (teacherId && teacherId === assistantId) throw new Error("Asosiy va yordamchi o'qituvchi bir kishi bo'lmasin");
       if (teacherId) created = await api(`/api/classes/${created.id}/curator`, { method: "PUT", body: { user_id: teacherId } });
+      if (assistantId) created = await api(`/api/classes/${created.id}/assistant`, { method: "PUT", body: { user_id: assistantId } });
       close();
       myClassesCache = null;
       showToast(`✅ «${created.name}» ochildi — endi o'quvchilarni qo'shing`);
@@ -2238,12 +2252,12 @@ function openClassSettings(schoolClass, tab) {
     <button class="btn" id="sheet-save-name" style="margin-top:10px">💾 Nomini saqlash</button>
 
     <label class="field-label" for="sheet-curator" style="margin-top:16px">${
-      schoolClass.is_group ? "👩‍🏫 Guruh o'qituvchisi" : "🎓 Kurator (sinf rahbari)"
+      schoolClass.is_group ? "👩‍🏫 Asosiy o'qituvchi" : "🎓 Kurator (sinf rahbari)"
     }</label>
     <select id="sheet-curator">
-      <option value="">— Kurator tayinlanmagan —</option>
+      <option value="">— ${schoolClass.is_group ? "O'qituvchi" : "Kurator"} tayinlanmagan —</option>
       ${(currentSchool?.members || [])
-        .filter((member) => member.role !== "owner")
+        .filter((member) => schoolClass.is_group || member.role !== "owner")
         .map(
           (member) =>
             `<option value="${member.user_id}" ${schoolClass.curator?.user_id === member.user_id ? "selected" : ""}>${escapeHtml(member.name)} — ${subjectsText(member.subjects)}</option>`
@@ -2252,10 +2266,25 @@ function openClassSettings(schoolClass, tab) {
     </select>
     <p class="subtitle" style="margin:4px 0 0">${
       schoolClass.is_group
-        ? "Guruh o'qituvchisi o'quvchilarni maktab ro'yxatidan qo'shadi va guruhdan chiqaradi."
+        ? "Guruh o'qituvchilari o'quvchilarni maktab ro'yxatidan qo'shadi, guruhdan chiqaradi va davomat oladi."
         : "Kurator o'quvchilarni qo'shadi va sinfni boshqaradi."
     }</p>
-    <button class="btn" id="sheet-save-curator" style="margin-top:10px">${schoolClass.is_group ? "👩‍🏫 O'qituvchini saqlash" : "🎓 Kuratorni saqlash"}</button>
+    <button class="btn" id="sheet-save-curator" style="margin-top:10px">${schoolClass.is_group ? "👩‍🏫 Asosiy o'qituvchini saqlash" : "🎓 Kuratorni saqlash"}</button>
+    ${
+      schoolClass.is_group
+        ? `<label class="field-label" for="sheet-assistant" style="margin-top:16px">🤝 Yordamchi o'qituvchi</label>
+           <select id="sheet-assistant">
+             <option value="">— Yo'q —</option>
+             ${(currentSchool?.members || [])
+               .map(
+                 (member) =>
+                   `<option value="${member.user_id}" ${schoolClass.assistant?.user_id === member.user_id ? "selected" : ""}>${escapeHtml(member.name)} — ${subjectsText(member.subjects)}</option>`
+               )
+               .join("")}
+           </select>
+           <button class="btn" id="sheet-save-assistant" style="margin-top:10px">🤝 Yordamchini saqlash</button>`
+        : ""
+    }
 
     ${
       schoolClass.is_director && !schoolClass.is_group
@@ -2299,7 +2328,23 @@ function openClassSettings(schoolClass, tab) {
         body: { user_id: value ? Number(value) : null },
       });
       myClassesCache = null;
-      showToast(updated.curator ? `✅ Kurator: ${updated.curator.name}` : "Kurator olib tashlandi");
+      const role = schoolClass.is_group ? "Asosiy o'qituvchi" : "Kurator";
+      showToast(updated.curator ? `✅ ${role}: ${updated.curator.name}` : `${role} olib tashlandi`);
+      close();
+      openClassTab(updated, tab);
+    })
+  );
+
+  sheet.querySelector("#sheet-save-assistant")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const value = sheet.querySelector("#sheet-assistant").value;
+      const updated = await api(`/api/classes/${schoolClass.id}/assistant`, {
+        method: "PUT",
+        body: { user_id: value ? Number(value) : null },
+      });
+      myClassesCache = null;
+      showToast(updated.assistant ? `✅ Yordamchi o'qituvchi: ${updated.assistant.name}` : "Yordamchi o'qituvchi olib tashlandi");
       close();
       openClassTab(updated, tab);
     })

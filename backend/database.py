@@ -604,6 +604,8 @@ class SchoolClass(Base):
     code_end: Mapped[int | None] = mapped_column(default=None)
     teacher_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)  # kim yaratgan
     curator_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
+    # Fan guruhida — yordamchi o'qituvchi (asosiy o'qituvchi — curator_user_id); huquqlari asosiynikidek
+    assistant_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
     name: Mapped[str] = mapped_column(String(100))
     # Fan guruhi (masalan ingliz tili darajalari): fan nomi. Bo'sh — oddiy sinf. Guruh sinfdagidek ishlaydi
     # (davomat, test natijalari, jadval), lekin o'quvchilari maktab ro'yxatidan olinadi va o'z sinfida qoladi

@@ -233,7 +233,7 @@ def _add_missing_columns() -> None:
         "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)"},
         "school_classes": {
             "curator_user_id": "INTEGER", "code_start": "INTEGER", "code_end": "INTEGER", "shift_id": "INTEGER",
-            "monthly_fee": "INTEGER", "subject": "VARCHAR(100)",
+            "monthly_fee": "INTEGER", "subject": "VARCHAR(100)", "assistant_user_id": "INTEGER",
         },
         "private_schools": {"monthly_fee": "INTEGER DEFAULT 0", "kind": "VARCHAR(10) DEFAULT 'school'",
                             "deleted_at": "TIMESTAMP"},
@@ -8833,9 +8833,13 @@ def remove_member(user_id: int, user: User = Depends(get_current_user), db: Sess
     target.left_at = utcnow()
     target.position = None
     for school_class in db.scalars(
-        select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.curator_user_id == user_id)
+        select(SchoolClass).where(SchoolClass.school_id == member.school_id,
+                                  or_(SchoolClass.curator_user_id == user_id, SchoolClass.assistant_user_id == user_id))
     ):
-        school_class.curator_user_id = None
+        if school_class.curator_user_id == user_id:
+            school_class.curator_user_id = None
+        if school_class.assistant_user_id == user_id:
+            school_class.assistant_user_id = None
     db.commit()
     db.refresh(member)
     logging.getLogger("backend").info("Xodim maktabdan chiqarildi: school=%s user=%s", member.school_id, user_id)
@@ -8996,9 +9000,14 @@ def _require_head(member: SchoolMember) -> None:
         raise HTTPException(status_code=403, detail="Sinflarni faqat maktab admini yoki direktor ochadi va sozlaydi")
 
 
+def _is_class_teacher(school_class: SchoolClass, user_id: int | None) -> bool:
+    """Sinf kuratori yoki fan guruhining asosiy / yordamchi o'qituvchisi — huquqlari bir xil."""
+    return user_id is not None and user_id in (school_class.curator_user_id, school_class.assistant_user_id)
+
+
 def _can_manage_class(school_class: SchoolClass, member: SchoolMember) -> bool:
-    """O'quvchilarni qo'shish/tahrirlash — admin, direktor yoki o'sha sinfning kuratori."""
-    return _can_delete_classes(member) or school_class.curator_user_id == member.user_id
+    """O'quvchilarni qo'shish/tahrirlash — admin, direktor yoki o'sha sinfning kuratori (guruh o'qituvchilari)."""
+    return _can_delete_classes(member) or _is_class_teacher(school_class, member.user_id)
 
 
 def _can_see_payments(school_class: SchoolClass, member: SchoolMember) -> bool:
@@ -9027,7 +9036,7 @@ def _director_class(db: Session, user: User, class_id: int) -> SchoolClass:
 
 def _sees_all_attendance(school_class: SchoolClass, member: SchoolMember | None) -> bool:
     """Sinfning barcha davomatlarini — rahbariyat va sinf kuratori ko'radi; fan o'qituvchisi faqat o'zinikini."""
-    return bool(member and (_is_director(member) or school_class.curator_user_id == member.user_id))
+    return bool(member and (_is_director(member) or _is_class_teacher(school_class, member.user_id)))
 
 
 def _attendance_filter(school_class: SchoolClass, member: SchoolMember | None):
@@ -9247,6 +9256,7 @@ def _sorted_classes(classes) -> list:
 def _class_view(db: Session, school_class: SchoolClass, with_details: bool = False, member: SchoolMember | None = None) -> dict:
     students = _active_students(school_class)
     curator = db.get(User, school_class.curator_user_id) if school_class.curator_user_id else None
+    assistant = db.get(User, school_class.assistant_user_id) if school_class.assistant_user_id else None
     view = {
         "id": school_class.id,
         "name": school_class.name,
@@ -9257,6 +9267,8 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
         "created_at": school_class.created_at,
         "curator": {"user_id": curator.id, "name": curator.full_name} if curator else None,
         "is_curator": bool(member and school_class.curator_user_id == member.user_id),
+        "assistant": {"user_id": assistant.id, "name": assistant.full_name} if assistant else None,
+        "is_assistant": bool(member and school_class.assistant_user_id and school_class.assistant_user_id == member.user_id),
         "can_manage": bool(member and _can_manage_class(school_class, member)),
         # ⚙️ sozlamalar (nom, kurator, o'chirish) — admin va direktor
         "is_director": bool(member and _can_delete_classes(member)),
@@ -9386,6 +9398,26 @@ def assign_curator(class_id: int, body: CuratorIn, user: User = Depends(get_curr
             raise HTTPException(status_code=404, detail="Bu o'qituvchi maktabingizda yo'q")
 
     school_class.curator_user_id = body.user_id
+    if body.user_id is not None and school_class.assistant_user_id == body.user_id:
+        school_class.assistant_user_id = None
+    db.commit()
+    return _class_view(db, school_class, with_details=True, member=member)
+
+
+@app.put("/api/classes/{class_id}/assistant")
+def assign_assistant(class_id: int, body: CuratorIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Admin yoki direktor fan guruhiga yordamchi o'qituvchi tayinlaydi yoki olib tashlaydi."""
+
+    school_class, member = _school_class(db, user, class_id)
+    _require_head(member)
+    if not school_class.subject:
+        raise HTTPException(status_code=400, detail="Yordamchi o'qituvchi faqat fan guruhiga tayinlanadi")
+    if body.user_id is not None:
+        if not _active_school_member(db, member.school_id, body.user_id):
+            raise HTTPException(status_code=404, detail="Bu o'qituvchi maktabingizda yo'q")
+        if body.user_id == school_class.curator_user_id:
+            raise HTTPException(status_code=422, detail="U — guruhning asosiy o'qituvchisi; yordamchi boshqa odam bo'lsin")
+    school_class.assistant_user_id = body.user_id
     db.commit()
     return _class_view(db, school_class, with_details=True, member=member)
 
@@ -9814,7 +9846,7 @@ def _student_dorm_room(db: Session, student_id: int) -> DormRoom | None:
 def _can_set_student_status(db: Session, member: SchoolMember, school_class: SchoolClass, student: ClassStudent) -> bool:
     """Holatni o'zgartiradi: rahbariyat, sinf kuratori yoki o'quvchi yashaydigan xonaning tarbiyachisi."""
 
-    if _is_director(member) or school_class.curator_user_id == member.user_id:
+    if _is_director(member) or _is_class_teacher(school_class, member.user_id):
         return True
     room = _student_dorm_room(db, student.id)
     return bool(room and (room.warden_user_id == member.user_id or member.position == "commandant"))
@@ -11152,7 +11184,7 @@ def school_overview(user: User = Depends(get_current_user), db: Session = Depend
     classes = _sorted_classes(db.scalars(
         select(SchoolClass).where(SchoolClass.school_id == school.id, SchoolClass.deleted_at.is_(None))
     ).all())
-    curated = [item for item in classes if item.curator_user_id == user.id]
+    curated = [item for item in classes if _is_class_teacher(item, user.id)]
     # Fan guruhlari — o'quvchilari sinflarda allaqachon sanalgan; to'lov va "davomat olinmagan" ham sinf bo'yicha
     real_classes = [item for item in classes if not item.subject]
     real_curated = [item for item in curated if not item.subject]
@@ -11286,7 +11318,7 @@ WEEKDAYS = ["Dushanba", "Seshanba", "Chorshanba", "Payshanba", "Juma", "Shanba",
 
 
 def _can_edit_schedule(school_class: SchoolClass, member: SchoolMember) -> bool:
-    return _is_director(member) or school_class.curator_user_id == member.user_id
+    return _is_director(member) or _is_class_teacher(school_class, member.user_id)
 
 
 def _slot_view(db: Session, slot: LessonSlot, class_name: str | None = None) -> dict:
@@ -11973,7 +12005,7 @@ def _today_lessons(db: Session, member: SchoolMember, user: User, classes: list[
     names = {item.id: item.name for item in classes}
     slots = [slot for slot in _active_slots(db, school_id=member.school_id, weekday=local_now.weekday()) if slot.class_id in names]
     if not _is_director(member):
-        curated = {item.id for item in classes if item.curator_user_id == user.id}
+        curated = {item.id for item in classes if _is_class_teacher(item, user.id)}
         slots = [slot for slot in slots if slot.teacher_user_id == user.id or slot.class_id in curated]
     now_text = local_now.strftime("%H:%M")
     rows = []

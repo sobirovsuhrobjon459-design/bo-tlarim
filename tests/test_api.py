@@ -6933,3 +6933,25 @@ def test_fan_guruhlari_ingliz_tili_darajalari():
     # Sinfdan chiqarilsa — guruhdan ham
     assert client.delete(f"/api/classes/{cid}/students/{ids['Valiyev Ali']}", headers=owner).status_code == 200
     assert client.get(f"/api/classes/{b1['id']}", headers=teacher).json()["students"] == []
+
+
+    # Yordamchi o'qituvchi: faqat fan guruhiga, admin tayinlaydi; huquqlari asosiy o'qituvchinikidek
+    _set_name(705, "Yordamchi", "Ustoz")
+    client.post("/api/schools/join", json={"code": current_code(school), "subjects": ["Ingliz tili"], "phone": "93 444 55 05"},
+                headers=as_user(705))
+    with SessionLocal() as session:
+        helper_id = session.scalar(main.select(User.id).where(User.tg_id == 705))
+    helper = as_user(705)
+    assert client.post(f"/api/classes/{a1['id']}/members", json={"student_ids": [ids["Karimova Zuhra"]]}, headers=helper).status_code == 403
+    assert client.put(f"/api/classes/{cid}/assistant", json={"user_id": helper_id}, headers=owner).status_code == 400
+    assert client.put(f"/api/classes/{a1['id']}/assistant", json={"user_id": helper_id}, headers=teacher).status_code == 403
+    assert client.put(f"/api/classes/{a1['id']}/assistant", json={"user_id": teacher_id}, headers=owner).status_code == 422
+    assigned = client.put(f"/api/classes/{a1['id']}/assistant", json={"user_id": helper_id}, headers=owner).json()
+    assert assigned["assistant"]["name"] == "Yordamchi Ustoz" and assigned["curator"]["user_id"] == teacher_id, assigned
+    assert client.get(f"/api/classes/{a1['id']}", headers=helper).json()["is_assistant"] is True
+    joined = client.post(f"/api/classes/{a1['id']}/members", json={"student_ids": [ids["Karimova Zuhra"]]}, headers=helper)
+    assert joined.status_code == 200 and joined.json()["added"] == 1, joined.text
+    assert client.post(f"/api/classes/{a1['id']}/attendance", json={"subject": "Ingliz tili"}, headers=helper).status_code == 200
+    # Asosiy o'qituvchi qilib tayinlansa — yordamchilikdan olinadi
+    promoted = client.put(f"/api/classes/{a1['id']}/curator", json={"user_id": helper_id}, headers=owner).json()
+    assert promoted["curator"]["user_id"] == helper_id and promoted["assistant"] is None, promoted
