@@ -6839,3 +6839,97 @@ def test_sinf_royxati_familiya_boyicha_alifbo_tartibida():
     taken = client.post(f"/api/classes/{cid}/attendance", json={"subject": "Matematika"}, headers=as_user(701))
     assert taken.status_code == 200, taken.text
     assert [mark["name"] for mark in taken.json()["marks"]] == expected
+
+
+def test_fan_guruhlari_ingliz_tili_darajalari():
+    """
+    Fan guruhi (masalan ingliz tili darajalari): admin ochadi, guruh o'qituvchisi o'quvchini maktab ro'yxatidan
+    qo'shadi (yotoqxonadagidek). O'quvchi o'z sinfida qoladi; bir fanda — bitta guruh. Guruhda davomat sinfdagidek;
+    ism, ID va holat asl o'quvchidan; to'lov, qidiruv va o'quvchilar sonida ikki marta chiqmaydi.
+    """
+    from backend.database import User
+
+    reset_database()
+    owner = as_user(701)
+    cid = _school_with_class(701)["id"]  # 10/2
+    other = client.post("/api/classes", json={"name": "9-A"}, headers=owner).json()["id"]
+    school = client.get("/api/schools/me", headers=owner).json()["school"]
+    _set_name(704, "Ingliz", "Ustoz")
+    client.post("/api/schools/join", json={"code": current_code(school), "subjects": ["Ingliz tili"], "phone": "93 444 55 04"},
+                headers=as_user(704))
+    with SessionLocal() as session:
+        teacher_id = session.scalar(main.select(User.id).where(User.tg_id == 704))
+    ids = {}
+    for class_id, names in ((cid, ("Valiyev Ali", "Karimova Zuhra")), (other, ("Sobirov Bek",))):
+        for name in names:
+            view = client.post(f"/api/classes/{class_id}/students", json={"full_name": name}, headers=owner).json()
+            ids[name] = next(s["id"] for s in view["students"] if s["full_name"] == name)
+
+    # Guruhni faqat admin/direktor ochadi
+    body = {"name": "Ingliz tili — A1", "subject": "Ingliz tili"}
+    assert client.post("/api/classes", json=body, headers=as_user(704)).status_code == 403
+    a1 = client.post("/api/classes", json=body, headers=owner).json()
+    assert a1["is_group"] is True and a1["subject"] == "Ingliz tili", a1
+    b1 = client.post("/api/classes", json={"name": "Ingliz tili — B1", "subject": "Ingliz tili"}, headers=owner).json()
+    for group in (a1, b1):
+        assert client.put(f"/api/classes/{group['id']}/curator", json={"user_id": teacher_id}, headers=owner).status_code == 200
+
+    # Guruh o'qituvchisi: nomzodlar — maktabning hamma o'quvchisi (sinfi bilan); oddiy sinfga bunday qo'shib bo'lmaydi
+    teacher = as_user(704)
+    candidates = client.get(f"/api/classes/{a1['id']}/candidates", headers=teacher).json()
+    assert sorted((c["name"], c["class_name"], c["group"]) for c in candidates) == [
+        ("Karimova Zuhra", "10/2", None), ("Sobirov Bek", "9-A", None), ("Valiyev Ali", "10/2", None)], candidates
+    assert client.get(f"/api/classes/{cid}/candidates", headers=owner).status_code == 400
+    added = client.post(f"/api/classes/{a1['id']}/members", json={"student_ids": [ids["Valiyev Ali"], ids["Sobirov Bek"]]},
+                        headers=teacher)
+    assert added.status_code == 200, added.text
+    assert added.json()["added"] == 2 and added.json()["moved"] == 0
+    members = {s["full_name"]: s for s in added.json()["class"]["students"]}
+    assert {name: s["from_class"] for name, s in members.items()} == {"Sobirov Bek": "9-A", "Valiyev Ali": "10/2"}
+    # Ism bilan yangi o'quvchi guruhga qo'shilmaydi; boshqa o'qituvchi guruhni boshqara olmaydi
+    assert client.post(f"/api/classes/{a1['id']}/students", json={"full_name": "Yangi Bola"}, headers=teacher).status_code == 422
+    assert client.post(f"/api/classes/{a1['id']}/members", json={"student_ids": [ids["Karimova Zuhra"]]},
+                       headers=as_user(999)).status_code in (403, 404)
+
+    # Bir fanda — bitta guruh: B1 ga qo'shilsa, A1 dan chiqadi
+    moved = client.post(f"/api/classes/{b1['id']}/members", json={"student_ids": [ids["Valiyev Ali"]]}, headers=teacher).json()
+    assert moved["added"] == 1 and moved["moved"] == 1, moved
+    a1_view = client.get(f"/api/classes/{a1['id']}", headers=teacher).json()
+    assert [s["full_name"] for s in a1_view["students"]] == ["Sobirov Bek"]
+    candidates = {c["name"]: c["group"] for c in client.get(f"/api/classes/{a1['id']}/candidates", headers=teacher).json()}
+    assert candidates == {"Karimova Zuhra": None, "Valiyev Ali": "Ingliz tili — B1"}, candidates
+
+    # Davomat — sinfdagidek
+    taken = client.post(f"/api/classes/{b1['id']}/attendance", json={"subject": "Ingliz tili"}, headers=teacher)
+    assert taken.status_code == 200, taken.text
+    assert [mark["name"] for mark in taken.json()["marks"]] == ["Valiyev Ali"]
+
+    # Ism va ID — asl o'quvchidan; guruhdagi yozuv o'zi tahrirlanmaydi
+    copy_id = client.get(f"/api/classes/{b1['id']}", headers=teacher).json()["students"][0]["id"]
+    assert client.put(f"/api/classes/{b1['id']}/students/{copy_id}", json={"full_name": "Boshqa Ism"}, headers=owner).status_code == 422
+    assert client.put(f"/api/classes/{cid}/students/{ids['Valiyev Ali']}", json={"full_name": "Valiyev Alisher"},
+                      headers=owner).status_code == 200
+    assert client.put(f"/api/classes/{cid}/student-codes", json={"start": 1001, "end": 1030}, headers=owner).status_code == 200
+    source = next(s for s in client.get(f"/api/classes/{cid}", headers=owner).json()["students"] if s["id"] == ids["Valiyev Ali"])
+    copy = client.get(f"/api/classes/{b1['id']}", headers=teacher).json()["students"][0]
+    assert (copy["full_name"], copy["code"]) == ("Valiyev Alisher", source["code"]) and source["code"], (copy, source)
+
+    # Holat guruhda belgilansa ham asl o'quvchiga yoziladi — sinfda ham ko'rinadi
+    assert client.put(f"/api/classes/{b1['id']}/students/{copy_id}/status", json={"status": "sick"}, headers=teacher).status_code == 200
+    assert next(s for s in client.get(f"/api/classes/{cid}", headers=owner).json()["students"]
+                if s["id"] == ids["Valiyev Ali"])["away"] == "sick"
+
+    # Qidiruv, o'quvchilar soni, to'lov — guruh nusxasisiz
+    found = client.get("/api/schools/students/search", params={"q": "valiyev"}, headers=owner).json()["students"]
+    assert [s["class_name"] for s in found] == ["10/2"], found
+    assert client.put("/api/schools/fee", json={"monthly_fee": 300000}, headers=owner).status_code == 200
+    overview = client.get("/api/schools/overview", headers=owner).json()
+    assert overview["stats"]["students"] == 3 and overview["stats"]["classes"] == 2, overview["stats"]
+    assert {item["name"] for item in overview["payment_classes"]} == {"10/2", "9-A"}
+    summary = client.get("/api/schools/payments/summary", headers=owner).json()
+    assert {row["name"] for row in summary["classes"]} == {"10/2", "9-A"}
+    assert client.get(f"/api/classes/{b1['id']}/payments", headers=owner).json()["monthly_fee"] == 0
+
+    # Sinfdan chiqarilsa — guruhdan ham
+    assert client.delete(f"/api/classes/{cid}/students/{ids['Valiyev Ali']}", headers=owner).status_code == 200
+    assert client.get(f"/api/classes/{b1['id']}", headers=teacher).json()["students"] == []

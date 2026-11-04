@@ -605,6 +605,9 @@ class SchoolClass(Base):
     teacher_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)  # kim yaratgan
     curator_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
     name: Mapped[str] = mapped_column(String(100))
+    # Fan guruhi (masalan ingliz tili darajalari): fan nomi. Bo'sh — oddiy sinf. Guruh sinfdagidek ishlaydi
+    # (davomat, test natijalari, jadval), lekin o'quvchilari maktab ro'yxatidan olinadi va o'z sinfida qoladi
+    subject: Mapped[str | None] = mapped_column(String(100), default=None)
     # Qo'ng'iroq setkasi (smena) — darslar shu setka kataklariga qo'yiladi
     shift_id: Mapped[int | None] = mapped_column(default=None)
     # Guruhning o'z oylik narxi (kurs va to'garaklarda har guruh har xil); bo'sh — muassasaning umumiy summasi
@@ -633,6 +636,8 @@ class ClassStudent(Base):
     removed_at: Mapped[datetime | None] = mapped_column(default=None)
     # O'qish to'lovidan chegirma (foiz): 30 — oylik summaning 70% i to'lanadi
     discount_percent: Mapped[int] = mapped_column(default=0)
+    # Fan guruhidagi o'quvchi — asl (sinfdagi) o'quvchiga havola: ismi, ID'si va holati o'shandan olinadi
+    source_student_id: Mapped[int | None] = mapped_column(default=None, index=True)
 
     school_class: Mapped["SchoolClass"] = relationship(back_populates="students")
 
@@ -1622,13 +1627,22 @@ ATTENDANCE_STATUSES = ("present", "absent", "excused", "late")
 
 class ClassIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
+    # Fan guruhi ochilganda — fan nomi (masalan "Ingliz tili"); oddiy sinfda bo'sh
+    subject: str | None = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
     def normalize(self) -> "ClassIn":
         self.name = " ".join(self.name.split())
         if not self.name:
             raise ValueError("Sinf nomini kiriting")
+        self.subject = " ".join((self.subject or "").split()) or None
         return self
+
+
+class GroupMembersIn(BaseModel):
+    """Fan guruhiga maktab ro'yxatidan qo'shiladigan o'quvchilar (sinfdagi yozuvlari)."""
+
+    student_ids: list[int] = Field(min_length=1, max_length=500)
 
 
 class StudentIn(BaseModel):

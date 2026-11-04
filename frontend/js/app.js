@@ -1799,6 +1799,11 @@ function formatBirthDate(value) {
 let myClassesCache = null;
 
 function curatorLine(item) {
+  // Fan guruhida kurator o'rnida — guruh o'qituvchisi
+  if (item.is_group) {
+    if (item.is_curator) return "👩‍🏫 Siz — guruh o'qituvchisi";
+    return item.curator ? `👩‍🏫 O'qituvchi: ${escapeHtml(item.curator.name)}` : "⚠️ O'qituvchi tayinlanmagan";
+  }
   if (item.is_curator) return "🎓 Siz — kurator";
   return item.curator ? `🎓 Kurator: ${escapeHtml(item.curator.name)}` : "⚠️ Kurator tayinlanmagan";
 }
@@ -1845,7 +1850,10 @@ function wireClassList(container) {
 
 async function loadMyClassesInto(container, scope = "mine") {
   // "Mening sinflarim" — faqat kuratorligim; "Barcha sinflar" — hammasi (o'zimniki ham, ⭐ bilan)
-  const pick = (classes) => (scope === "mine" ? classes.filter((item) => item.is_curator) : classes);
+  const pick = (all) => {
+    const classes = all.filter((item) => !item.is_group); // fan guruhlari — "Fan guruhlari" bo'limida
+    return scope === "mine" ? classes.filter((item) => item.is_curator) : classes;
+  };
   const draw = (classes) => {
     container.innerHTML = classListHtml(pick(classes), scope);
     wireClassList(container);
@@ -1860,6 +1868,164 @@ async function loadMyClassesInto(container, scope = "mine") {
   } catch (error) {
     if (!myClassesCache && container.isConnected) container.innerHTML = `<p class="subtitle">${escapeHtml(error.message)}</p>`;
   }
+}
+
+/*
+  Fan guruhlari (masalan ingliz tili darajalari): admin ochadi, guruh o'qituvchisi o'quvchilarni maktab
+  ro'yxatidan qo'shadi (yotoqxonadagidek). Guruh sinfdagidek ishlaydi — davomat, test natijalari, jadval;
+  o'quvchi o'z sinfida qoladi, bir fanda — bitta guruhda.
+*/
+function renderSchoolGroups(school) {
+  currentSchool = school;
+  showPage(`
+    <div data-school-tab="groups">
+      ${schoolSubHeader("Fan guruhlari")}
+      ${school.can_create_classes ? `<button class="btn" id="create-group-button" style="margin:0 0 12px">+ Guruh ochish</button>` : ""}
+      <p class="subtitle" style="margin:0">Masalan, ingliz tili darajalari bo'yicha: o'quvchilar turli sinflardan, har biri o'z sinfida ham qoladi. ⭐ — siz o'qituvchi bo'lgan guruh.</p>
+      <div id="groups-list" style="margin-top:14px"><p class="subtitle" style="margin:6px 0 0">⏳ Yuklanmoqda...</p></div>
+    </div>
+  `);
+  wireSchoolSubPage();
+  document.getElementById("create-group-button")?.addEventListener("click", () => openCreateGroupSheet(school));
+
+  const container = document.getElementById("groups-list");
+  const draw = (all) => {
+    const groups = all.filter((item) => item.is_group);
+    if (!groups.length) {
+      container.innerHTML = `<p class="subtitle" style="margin:6px 0 0">Hali guruh ochilmagan.${
+        school.can_create_classes ? " Tepadagi \"+ Guruh ochish\" bilan boshlang." : ""
+      }</p>`;
+      return;
+    }
+    // Fan bo'yicha: INGLIZ TILI → A1, A2, B1 ...
+    const subjects = [...new Set(groups.map((item) => item.subject))].sort((a, b) => a.localeCompare(b));
+    container.innerHTML = subjects
+      .map((subject) => {
+        const rows = groups
+          .filter((item) => item.subject === subject)
+          .map(
+            (item) => `
+              <button type="button" class="class-row${item.is_curator ? " is-mine" : ""}" data-class-id="${item.id}">
+                <span class="class-count"><b>${item.students_count}</b><small>o'quvchi</small></span>
+                <span class="class-info">
+                  <b>${escapeHtml(item.name)}</b>
+                  <small>${item.is_curator ? "⭐ Sizning guruhingiz" : item.curator ? `👩‍🏫 ${escapeHtml(item.curator.name)}` : "⚠️ O'qituvchi tayinlanmagan"}</small>
+                </span>
+                <span class="class-arrow">›</span>
+              </button>`
+          )
+          .join("");
+        return `<p class="section-label">${escapeHtml(subject.toUpperCase())}</p><div class="class-list">${rows}</div>`;
+      })
+      .join("");
+    wireClassList(container);
+  };
+  if (myClassesCache) draw(myClassesCache);
+  api("/api/classes")
+    .then((classes) => {
+      myClassesCache = classes;
+      if (container.isConnected) draw(classes);
+    })
+    .catch((error) => {
+      if (!myClassesCache && container.isConnected) container.innerHTML = `<p class="subtitle">${escapeHtml(error.message)}</p>`;
+    });
+}
+
+function openCreateGroupSheet(school) {
+  const teachers = school.members || []; // admin ham dars berishi mumkin
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 10px">+ Fan guruhi ochish</h3>
+    <label class="field-label" for="group-subject">Fan</label>
+    <input class="input" id="group-subject" maxlength="100" value="Ingliz tili" />
+    <label class="field-label" for="group-name">Guruh nomi</label>
+    <input class="input" id="group-name" maxlength="100" placeholder="Masalan: Ingliz tili — A1" />
+    <label class="field-label" for="group-teacher">👩‍🏫 Guruh o'qituvchisi</label>
+    <select id="group-teacher">
+      <option value="">— Keyin tayinlayman —</option>
+      ${teachers
+        .map((member) => `<option value="${member.user_id}">${escapeHtml(member.name)}${member.subjects?.length ? ` — ${subjectsText(member.subjects)}` : ""}</option>`)
+        .join("")}
+    </select>
+    <p class="subtitle" style="margin:6px 0 0">O'qituvchi guruhga o'quvchilarni maktab ro'yxatidan qo'shadi va chiqaradi.</p>
+    <button class="btn" id="group-create" style="margin-top:14px">+ Ochish</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+  const nameInput = sheet.querySelector("#group-name");
+  // Fan yozilganda nom namunasi ham shunga moslashadi
+  sheet.querySelector("#group-subject").addEventListener("input", (event) => {
+    nameInput.placeholder = `Masalan: ${event.target.value.trim() || "Ingliz tili"} — A1`;
+  });
+  sheet.querySelector("#group-create").addEventListener(
+    "click",
+    guarded(async () => {
+      const subject = sheet.querySelector("#group-subject").value.trim();
+      const name = nameInput.value.trim();
+      if (!subject) throw new Error("Fanni kiriting");
+      if (!name) throw new Error("Guruh nomini kiriting");
+      let created = await api("/api/classes", { method: "POST", body: { name, subject } });
+      const teacherId = Number(sheet.querySelector("#group-teacher").value) || null;
+      if (teacherId) created = await api(`/api/classes/${created.id}/curator`, { method: "PUT", body: { user_id: teacherId } });
+      close();
+      myClassesCache = null;
+      showToast(`✅ «${created.name}» ochildi — endi o'quvchilarni qo'shing`);
+      openClassTab(created, "students");
+    })
+  );
+}
+
+// Guruhga o'quvchi qo'shish — yotoqxonadagidek: maktab ro'yxatidan belgilab, bir yo'la
+async function openGroupAddSheet(group) {
+  const candidates = await api(`/api/classes/${group.id}/candidates`);
+  const picked = new Set();
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 6px">+ «${escapeHtml(group.name)}» guruhiga qo'shish</h3>
+    <p class="subtitle" style="margin:0 0 10px">O'quvchi o'z sinfida ham qoladi. Shu fanning boshqa guruhidagi o'quvchi qo'shilsa — o'sha guruhdan bu yerga o'tadi.</p>
+    <input class="input" id="group-add-search" placeholder="🔍 Ism, sinf yoki ID bo'yicha qidirish" />
+    <div class="panel pick-list" id="group-add-list" style="max-height:50vh;overflow:auto">
+      ${
+        candidates.length
+          ? candidates
+              .map(
+                (student) => `
+                  <label class="pick-item" data-name="${escapeHtml(`${student.name} ${student.class_name} ${student.code || ""}`.toLowerCase())}">
+                    <span class="pick-title">${escapeHtml(student.name)}<small>${escapeHtml(student.class_name)}${
+                      student.group ? ` · hozir: ${escapeHtml(student.group)}` : ""
+                    }</small></span>
+                    <input type="checkbox" value="${student.id}" />
+                  </label>`
+              )
+              .join("")
+          : `<p class="subtitle" style="padding:10px">Qo'shiladigan o'quvchi yo'q — maktabdagi hamma o'quvchi shu guruhda.</p>`
+      }
+    </div>
+    <button class="btn" id="group-add-save" style="margin-top:12px">✅ Qo'shish</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+  const saveButton = sheet.querySelector("#group-add-save");
+  sheet.querySelector("#group-add-search").addEventListener("input", (event) => {
+    const query = event.target.value.trim().toLowerCase();
+    sheet.querySelectorAll("#group-add-list [data-name]").forEach((item) => {
+      item.hidden = Boolean(query) && !item.dataset.name.includes(query);
+    });
+  });
+  sheet.querySelectorAll("#group-add-list input[type=checkbox]").forEach((box) =>
+    box.addEventListener("change", () => {
+      box.checked ? picked.add(Number(box.value)) : picked.delete(Number(box.value));
+      saveButton.textContent = picked.size ? `✅ Qo'shish (${picked.size})` : "✅ Qo'shish";
+    })
+  );
+  saveButton.addEventListener(
+    "click",
+    guarded(async () => {
+      if (!picked.size) throw new Error("Kamida bitta o'quvchini tanlang");
+      const result = await api(`/api/classes/${group.id}/members`, { method: "POST", body: { student_ids: [...picked] } });
+      close();
+      myClassesCache = null;
+      classDetailCache.set(result.class.id, result.class);
+      showToast(`✅ ${result.added} ta o'quvchi qo'shildi${result.moved ? ` (${result.moved} tasi boshqa guruhdan o'tdi)` : ""}`);
+      openClassTab(result.class, "students");
+    })
+  );
 }
 
 function renderCreateClass() {
@@ -2071,7 +2237,9 @@ function openClassSettings(schoolClass, tab) {
     <input class="input" id="sheet-class-name" maxlength="100" value="${escapeHtml(schoolClass.name)}" />
     <button class="btn" id="sheet-save-name" style="margin-top:10px">💾 Nomini saqlash</button>
 
-    <label class="field-label" for="sheet-curator" style="margin-top:16px">🎓 Kurator (sinf rahbari)</label>
+    <label class="field-label" for="sheet-curator" style="margin-top:16px">${
+      schoolClass.is_group ? "👩‍🏫 Guruh o'qituvchisi" : "🎓 Kurator (sinf rahbari)"
+    }</label>
     <select id="sheet-curator">
       <option value="">— Kurator tayinlanmagan —</option>
       ${(currentSchool?.members || [])
@@ -2082,11 +2250,15 @@ function openClassSettings(schoolClass, tab) {
         )
         .join("")}
     </select>
-    <p class="subtitle" style="margin:4px 0 0">Kurator o'quvchilarni qo'shadi va sinfni boshqaradi.</p>
-    <button class="btn" id="sheet-save-curator" style="margin-top:10px">🎓 Kuratorni saqlash</button>
+    <p class="subtitle" style="margin:4px 0 0">${
+      schoolClass.is_group
+        ? "Guruh o'qituvchisi o'quvchilarni maktab ro'yxatidan qo'shadi va guruhdan chiqaradi."
+        : "Kurator o'quvchilarni qo'shadi va sinfni boshqaradi."
+    }</p>
+    <button class="btn" id="sheet-save-curator" style="margin-top:10px">${schoolClass.is_group ? "👩‍🏫 O'qituvchini saqlash" : "🎓 Kuratorni saqlash"}</button>
 
     ${
-      schoolClass.is_director
+      schoolClass.is_director && !schoolClass.is_group
         ? `<label class="field-label" for="sheet-class-fee" style="margin-top:16px">💰 Sinfning oylik narxi (so'm)</label>
            <input class="input" id="sheet-class-fee" type="number" inputmode="numeric" min="0" step="10000"
              value="${schoolClass.monthly_fee ?? ""}" placeholder="${
@@ -2099,7 +2271,7 @@ function openClassSettings(schoolClass, tab) {
         : ""
     }
 
-    ${schoolClass.can_delete ? `<button class="btn btn-ghost" id="sheet-delete-class" style="margin-top:16px">🗑 Sinfni o'chirish</button>` : ""}
+    ${schoolClass.can_delete ? `<button class="btn btn-ghost" id="sheet-delete-class" style="margin-top:16px">🗑 ${schoolClass.is_group ? "Guruhni" : "Sinfni"} o'chirish</button>` : ""}
     <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Yopish</button>
   `);
 
@@ -2307,7 +2479,9 @@ function renderClassAttendanceTab(schoolClass) {
     <div data-class-tab="attendance">
       ${classHeader(schoolClass)}
       <button class="btn att-take-button" id="take-attendance-button">📋 ${
-        (currentSchool?.my_subjects || []).length === 1 ? `${escapeHtml(lessonName(currentSchool.my_subjects[0]))} davomati` : "Davomat olish"
+        schoolClass.is_group
+          ? `${escapeHtml(lessonName(schoolClass.subject))} davomati`
+          : (currentSchool?.my_subjects || []).length === 1 ? `${escapeHtml(lessonName(currentSchool.my_subjects[0]))} davomati` : "Davomat olish"
       }</button>
       <p class="subtitle" style="margin:6px 0 0;text-align:center">👨‍🎓 ${schoolClass.students.length} ta o'quvchi · hamma oldindan "Bor"</p>
       ${filterHtml}
@@ -2497,6 +2671,7 @@ function renderClassStudentsTab(schoolClass) {
               <span class="student-avatar">${initials(student.full_name)}</span>
               <span class="student-info">
                 <b>${student.code ? `<span class="student-number">${student.code}</span> ` : ""}${escapeHtml(student.full_name)}</b>
+                ${student.from_class ? `<small class="subtitle">${escapeHtml(student.from_class)}</small>` : ""}
                 ${
                   student.away
                     ? `<span class="status-chip is-${student.away}" style="margin-top:4px">${
@@ -2511,9 +2686,11 @@ function renderClassStudentsTab(schoolClass) {
         .join("")
     : `<div class="empty-state">
          <div style="font-size:42px">👨‍🎓</div>
-         <p>Sinfda hali o'quvchi yo'q.</p>
+         <p>${schoolClass.is_group ? "Guruhda" : "Sinfda"} hali o'quvchi yo'q.</p>
          <p class="subtitle">${
-           schoolClass.can_manage
+           schoolClass.is_group
+             ? "Tepadagi \"+ Qo'shish\" bilan o'quvchilarni maktab ro'yxatidan tanlang — ular o'z sinfida ham qoladi."
+             : schoolClass.can_manage
              ? "Tepadagi \"+ Qo'shish\" bilan o'quvchilarni qo'shing — bittalab yoki Excel'dan bir yo'la. Ular davomatda va boshqa bo'limlarda o'zi chiqadi."
              : "Tepadagi \"+ Qo'shish\" bilan o'quvchilarni bittalab qo'shing."
          }</p>
@@ -2521,14 +2698,18 @@ function renderClassStudentsTab(schoolClass) {
 
   showPage(`
     <div data-class-tab="students">
-      ${classHeader(schoolClass, `<button type="button" class="share-pill" id="add-student-pill">+ Qo'shish</button>`)}
+      ${classHeader(
+        schoolClass,
+        !schoolClass.is_group || schoolClass.can_manage ? `<button type="button" class="share-pill" id="add-student-pill">+ Qo'shish</button>` : ""
+      )}
+      ${schoolClass.is_group ? `<p class="subtitle" style="margin:0 0 4px">📚 Fan guruhi — ${escapeHtml(schoolClass.subject)}</p>` : ""}
       <p class="subtitle" style="margin:0 0 10px">${schoolClass.students.length} ta o'quvchi${
         hasRating
           ? ` · 🏆 reyting — ${schoolClass.rating_tests} ta test va sinov natijasi bo'yicha (o'rtacha foiz)`
           : " · reyting sinf testlari va sinov natijalaridan chiqadi"
       }</p>
       ${
-        schoolClass.is_director
+        schoolClass.is_director && !schoolClass.is_group
           ? `<button type="button" class="btn btn-ghost" id="code-range-button" style="margin:0 0 12px">🆔 ${
               schoolClass.code_start ? `ID oralig'i: ${schoolClass.code_start}–${schoolClass.code_end} (o'zgartirish)` : "ID kiritish (oraliq belgilash)"
             }</button>`
@@ -2561,7 +2742,9 @@ function renderClassStudentsTab(schoolClass) {
       if (button.dataset.order === "code" && byRating) renderClassStudentsTab(schoolClass);
     })
   );
-  document.getElementById("add-student-pill")?.addEventListener("click", () => openAddStudentSheet(schoolClass));
+  document.getElementById("add-student-pill")?.addEventListener("click", () =>
+    schoolClass.is_group ? openGroupAddSheet(schoolClass) : openAddStudentSheet(schoolClass)
+  );
   document.getElementById("code-range-button")?.addEventListener("click", () => openCodeRangeSheet(schoolClass));
   document.querySelectorAll("[data-student-id]").forEach((card) => {
     card.addEventListener(
@@ -2949,8 +3132,8 @@ async function renderStudentProfile(schoolClass, studentId) {
     ${
       student.can_manage
         ? `<div class="row-between" style="gap:8px;margin-top:16px">
-             <button class="btn btn-ghost" id="edit-student-button" style="margin:0">✏️ Tahrirlash</button>
-             <button class="btn btn-ghost" id="remove-student-button" style="margin:0">🚪 Sinfdan chiqarish</button>
+             ${schoolClass.is_group ? "" : `<button class="btn btn-ghost" id="edit-student-button" style="margin:0">✏️ Tahrirlash</button>`}
+             <button class="btn btn-ghost" id="remove-student-button" style="margin:0">🚪 ${schoolClass.is_group ? "Guruhdan" : "Sinfdan"} chiqarish</button>
            </div>`
         : ""
     }
@@ -2976,10 +3159,12 @@ async function renderStudentProfile(schoolClass, studentId) {
   document.getElementById("remove-student-button")?.addEventListener(
     "click",
     guarded(async () => {
-      if (!(await askConfirm(`${student.full_name} sinfdan chiqarilsinmi? Eski davomatlarda u saqlanib qoladi.`))) return;
+      const unit = schoolClass.is_group ? "guruh" : "sinf";
+      const note = schoolClass.is_group ? " U o'z sinfida qoladi." : "";
+      if (!(await askConfirm(`${student.full_name} ${unit}dan chiqarilsinmi? Eski davomatlarda u saqlanib qoladi.${note}`))) return;
       await api(`/api/classes/${schoolClass.id}/students/${student.id}`, { method: "DELETE" });
       myClassesCache = null;
-      showToast("O'quvchi sinfdan chiqarildi");
+      showToast(`O'quvchi ${unit}dan chiqarildi`);
       await renderClass(schoolClass.id, "students");
     })
   );
@@ -3538,7 +3723,7 @@ function renderAttendanceForm(schoolClass, existing = null) {
   showPage(`
     ${schoolPageHeader(existing ? "Davomatni tahrirlash" : `Davomat — ${schoolClass.name}`, "back-class")}
     ${timesHtml}
-    ${attendanceSubjectFieldHtml(existing ? existing.subject : "")}
+    ${attendanceSubjectFieldHtml(existing ? existing.subject : schoolClass.subject || "")}
     <div class="lesson-time">
       <label>Dars boshlandi<input type="text" class="input time-input" inputmode="numeric" maxlength="5" placeholder="08:00" autocomplete="off" id="lesson-start" value="${lesson.start}" required /></label>
       <span class="slot-times-dash">—</span>
@@ -3547,7 +3732,7 @@ function renderAttendanceForm(schoolClass, existing = null) {
     <div id="att-counts-host">${attendanceCountsHtml(counts())}</div>
     <p class="subtitle" style="margin:4px 0 8px">O'quvchini bosing: Bor → Yo'q → Sababli → Kechikdi</p>
     <div class="panel" style="padding:4px 0" id="att-rows">${rowsHtml()}</div>
-    <button type="button" class="btn btn-ghost" id="att-add-student" style="margin-top:10px">➕ Ro'yxatda yo'q o'quvchini qo'shish</button>
+    ${schoolClass.is_group ? "" : `<button type="button" class="btn btn-ghost" id="att-add-student" style="margin-top:10px">➕ Ro'yxatda yo'q o'quvchini qo'shish</button>`}
     <div class="att-save-bar">
       <button class="btn" id="save-attendance-button" style="margin:0">💾 Saqlash</button>
     </div>
@@ -3577,7 +3762,7 @@ function renderAttendanceForm(schoolClass, existing = null) {
   });
 
   // Ro'yxatda yo'q o'quvchi — shu yerning o'zida sinfga qo'shiladi (har qanday o'qituvchi), belgilar saqlanib qoladi
-  document.getElementById("att-add-student").addEventListener("click", () => {
+  document.getElementById("att-add-student")?.addEventListener("click", () => {
     const { sheet, close } = openSheet(`
       <h3 style="margin:0 0 6px">➕ O'quvchi qo'shish</h3>
       <p class="subtitle" style="margin:0 0 10px">«${escapeHtml(schoolClass.name)}» sinfiga qo'shiladi va davomatda «Bor» bo'lib turadi.</p>
@@ -4544,6 +4729,7 @@ function openSchoolTab(tab) {
   if (tab === "teachers") renderSchoolTeachers(currentSchool);
   else if (tab === "classes-mine") renderSchoolClasses(currentSchool, "mine");
   else if (tab === "classes-all") renderSchoolClasses(currentSchool, "all");
+  else if (tab === "groups") renderSchoolGroups(currentSchool);
   else if (tab === "profile") renderSchoolProfile(currentSchool);
   else renderMySchool(currentSchool);
 }
@@ -4644,6 +4830,7 @@ function renderMySchool(school, { refresh = true } = {}) {
       <div class="school-tiles">
         ${schoolMenuItem("classes-mine", svgIcon("star"), "Mening sinflarim", '<i class="menu-count" data-count="mine">…</i>')}
         ${schoolMenuItem("classes-all", svgIcon("layers"), "Barcha sinflar", '<i class="menu-count" data-count="all">…</i>')}
+        ${schoolMenuItem("groups", svgIcon("users"), "Fan guruhlari", '<i class="menu-count" data-count="groups">…</i>')}
         <span id="school-schedule-tile" style="display:contents">${schoolScheduleTileHtml(schoolOverviewCache)}</span>
         ${schoolMenuItem("announcements", svgIcon("megaphone"), "E'lonlar", "Maktab va sinflar")}
         <span id="school-payments-tile" style="display:contents">${schoolPaymentsTileHtml(schoolOverviewCache)}</span>
@@ -7444,12 +7631,16 @@ function schoolMenuItem(target, icon, title, note, size = "") {
 
 // Maktab ekranidagi "Mening sinflarim" / "Barcha sinflar" soni
 async function fillClassCounts() {
-  const show = (classes) => {
+  const show = (all) => {
+    const classes = all.filter((item) => !item.is_group);
+    const groups = all.filter((item) => item.is_group);
     const mine = classes.filter((item) => item.is_curator).length;
     const mineNode = document.querySelector('[data-count="mine"]');
     const allNode = document.querySelector('[data-count="all"]');
+    const groupsNode = document.querySelector('[data-count="groups"]');
     if (mineNode) mineNode.textContent = mine ? `${mine} ta sinf` : "Hali yo'q";
     if (allNode) allNode.textContent = `${classes.length} ta sinf`;
+    if (groupsNode) groupsNode.textContent = groups.length ? `${groups.length} ta guruh` : "Hali yo'q";
   };
   if (myClassesCache) show(myClassesCache);
   try {

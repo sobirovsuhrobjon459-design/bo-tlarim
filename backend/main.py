@@ -127,6 +127,7 @@ from .database import (
     CreditPurchaseIn,
     EssayScoreIn,
     AdminSchoolDeleteIn,
+    GroupMembersIn,
     FinishIn,
     IS_SQLITE,
     InviteAcceptIn,
@@ -232,11 +233,12 @@ def _add_missing_columns() -> None:
         "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)"},
         "school_classes": {
             "curator_user_id": "INTEGER", "code_start": "INTEGER", "code_end": "INTEGER", "shift_id": "INTEGER",
-            "monthly_fee": "INTEGER",
+            "monthly_fee": "INTEGER", "subject": "VARCHAR(100)",
         },
         "private_schools": {"monthly_fee": "INTEGER DEFAULT 0", "kind": "VARCHAR(10) DEFAULT 'school'",
                             "deleted_at": "TIMESTAMP"},
-        "class_students": {"discount_percent": "INTEGER DEFAULT 0", "student_code": "INTEGER", "added_by_user_id": "INTEGER"},
+        "class_students": {"discount_percent": "INTEGER DEFAULT 0", "student_code": "INTEGER", "added_by_user_id": "INTEGER",
+                           "source_student_id": "INTEGER"},
         "class_tests": {"source_test_id": "INTEGER"},
         "promo_codes": {"per_teacher_limit": "INTEGER DEFAULT 3"},
         "school_members": {
@@ -6388,7 +6390,8 @@ def _school_students_query(members):
         select(ClassStudent)
         .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
         .where(SchoolClass.school_id.in_([member.school_id for member in members]), SchoolClass.deleted_at.is_(None),
-               ClassStudent.removed_at.is_(None), ClassStudent.student_code.is_not(None))
+               ClassStudent.removed_at.is_(None), ClassStudent.student_code.is_not(None),
+               ClassStudent.source_student_id.is_(None))
     )
 
 
@@ -8604,7 +8607,8 @@ def _open_classes(db: Session, school_id: int) -> list[SchoolClass]:
     """Kuratori hali tayinlanmagan sinflar — qo'shilayotgan kurator o'zinikini tanlaydi."""
     return _sorted_classes(db.scalars(
         select(SchoolClass)
-        .where(SchoolClass.school_id == school_id, SchoolClass.deleted_at.is_(None), SchoolClass.curator_user_id.is_(None))
+        .where(SchoolClass.school_id == school_id, SchoolClass.deleted_at.is_(None), SchoolClass.curator_user_id.is_(None),
+               SchoolClass.subject.is_(None))  # fan guruhining o'qituvchisini admin tayinlaydi
     ).all())
 
 
@@ -9104,6 +9108,16 @@ def _assign_student_codes(db: Session, school_id: int) -> None:
         student.student_code = code
         taken.add(code)
         changed = True
+    # Fan guruhidagi o'quvchi — asl o'quvchining ID'si bilan (guruh imtihonida titul shu raqam bilan o'qiladi)
+    by_id = {student.id: (student, school_class) for student, school_class in rows}
+    for student, school_class in rows:
+        if student.source_student_id is None or student.removed_at or school_class.deleted_at:
+            continue
+        source, home = by_id.get(student.source_student_id, (None, None))
+        code = source.student_code if source and not source.removed_at and not home.deleted_at else None
+        if student.student_code != code:
+            student.student_code = code
+            changed = True
     if changed:
         db.commit()
 
@@ -9236,6 +9250,9 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
     view = {
         "id": school_class.id,
         "name": school_class.name,
+        # Fan guruhi (masalan "Ingliz tili") — o'quvchilar maktab ro'yxatidan qo'shiladi, to'lov yo'q
+        "subject": school_class.subject,
+        "is_group": bool(school_class.subject),
         "students_count": len(students),
         "created_at": school_class.created_at,
         "curator": {"user_id": curator.id, "name": curator.full_name} if curator else None,
@@ -9255,7 +9272,17 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
         if school_class.code_start is not None and any(not student.student_code for student in students):
             _assign_student_codes(db, school_class.school_id)
         stats = _student_attendance_stats(db, [student.id for student in students], _attendance_filter(school_class, member))
-        away = _active_status_codes(db, [student.id for student in students])
+        # Guruhdagi o'quvchining holati (uyda, kasal) va sinfi — asl o'quvchidan
+        owners = {student.id: student.source_student_id or student.id for student in students}
+        away_by_owner = _active_status_codes(db, list(set(owners.values())))
+        away = {student_id: away_by_owner.get(owner) for student_id, owner in owners.items()}
+        home_classes = dict(
+            db.execute(
+                select(ClassStudent.id, SchoolClass.name)
+                .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
+                .where(ClassStudent.id.in_([owner for student_id, owner in owners.items() if owner != student_id] or [-1]))
+            ).all()
+        ) if school_class.subject else {}
         rating, rating_tests = _class_rating(db, school_class, member, [student.id for student in students])
         view["rating_tests"] = rating_tests
         view["students"] = [
@@ -9266,6 +9293,7 @@ def _class_view(db: Session, school_class: SchoolClass, with_details: bool = Fal
                 "birth_date": student.birth_date,
                 "stats": stats[student.id],
                 "away": away.get(student.id),  # "home" | "leave" | "sick" | None (maktabda)
+                "from_class": home_classes.get(student.source_student_id),  # guruhda — o'quvchining sinfi
                 "rating": rating.get(student.id),  # {"rank", "avg", "tests"} | None — testda qatnashmagan
             }
             for student in students
@@ -9324,9 +9352,9 @@ def create_class(body: ClassIn, user: User = Depends(get_current_user), db: Sess
         )
     )
     if duplicate:
-        raise HTTPException(status_code=409, detail=f"«{body.name}» nomli sinf maktabda allaqachon bor")
+        raise HTTPException(status_code=409, detail=f"«{body.name}» nomli sinf yoki guruh maktabda allaqachon bor")
 
-    school_class = SchoolClass(school_id=member.school_id, teacher_user_id=user.id, name=body.name)
+    school_class = SchoolClass(school_id=member.school_id, teacher_user_id=user.id, name=body.name, subject=body.subject)
     db.add(school_class)
     db.commit()
     db.refresh(school_class)
@@ -9388,6 +9416,9 @@ def delete_class(class_id: int, user: User = Depends(get_current_user), db: Sess
     """Sinf ro'yxatdan olinadi (faqat admin); o'quvchilar va davomat tarixi bazada qoladi."""
     school_class = _director_class(db, user, class_id)
     school_class.deleted_at = utcnow()
+    if not school_class.subject:
+        for copy in _group_copies(db, [student.id for student in school_class.students]):
+            copy.removed_at = school_class.deleted_at  # o'chirilgan sinf o'quvchilari fan guruhlaridan ham chiqadi
     db.commit()
     return {"ok": True}
 
@@ -9413,6 +9444,7 @@ def clear_class_code_range(class_id: int, user: User = Depends(get_current_user)
         student.student_code = None
     school_class.code_start = school_class.code_end = None
     db.commit()
+    _assign_student_codes(db, school_class.school_id)  # fan guruhlaridagi yozuvlari ham ID'siz qoladi
     logging.getLogger("backend").info("ID oralig'i olib tashlandi: class=%s user=%s (%s ta ID)", class_id, user.id, len(codes))
     db.refresh(school_class)
     return _class_view(db, school_class, with_details=True, member=_active_membership(db, user))
@@ -9469,6 +9501,7 @@ def set_class_code_range(
             if not clash:
                 attempt.sheet_number = student.student_code
     db.commit()
+    _assign_student_codes(db, school_class.school_id)  # fan guruhlaridagi yozuvlari ham yangi ID bilan
     db.refresh(school_class)
     return _class_view(db, school_class, with_details=True, member=_active_membership(db, user))
 
@@ -9500,6 +9533,7 @@ def _add_class_student(db: Session, school_class: SchoolClass, member: SchoolMem
     Kim qo'shgani saqlanadi; kuratordan boshqa odam qo'shsa — kuratorga bot orqali xabar boradi.
     """
 
+    _reject_new_student_in_group(school_class)
     key = _search_key(body.full_name)
     if not body.force and any(_search_key(student.full_name) == key for student in _active_students(school_class)):
         raise HTTPException(status_code=409, detail=f"«{body.full_name}» bu sinfda allaqachon bor. Baribir qo'shilsinmi?")
@@ -9521,6 +9555,102 @@ def _add_class_student(db: Session, school_class: SchoolClass, member: SchoolMem
             f"{student.full_name}ni qo'shdi.\n\nXato bo'lsa, o'quvchi profilidan o'chiring.",
         )
     return student
+
+
+def _reject_new_student_in_group(school_class: SchoolClass) -> None:
+    if school_class.subject:
+        raise HTTPException(status_code=422, detail="Guruhga o'quvchi maktab ro'yxatidan qo'shiladi («Maktabdan qo'shish»)")
+
+
+def _group_copies(db: Session, source_ids: list[int]) -> list[ClassStudent]:
+    """Fan guruhlaridagi (faol) yozuvlari — asl o'quvchilar bo'yicha."""
+    if not source_ids:
+        return []
+    return db.scalars(
+        select(ClassStudent).where(ClassStudent.source_student_id.in_(source_ids), ClassStudent.removed_at.is_(None))
+    ).all()
+
+
+def _group_class(db: Session, user: User, class_id: int) -> tuple[SchoolClass, SchoolMember]:
+    """Fan guruhi — o'quvchi qo'shish/chiqarish: admin, direktor yoki guruh o'qituvchisi."""
+    school_class, member = _school_class(db, user, class_id)
+    if not school_class.subject:
+        raise HTTPException(status_code=400, detail="Bu oddiy sinf — o'quvchi maktab ro'yxatidan faqat fan guruhiga qo'shiladi")
+    if not _can_manage_class(school_class, member):
+        raise HTTPException(status_code=403, detail="Guruhga o'quvchini admin, direktor yoki guruh o'qituvchisi qo'shadi")
+    return school_class, member
+
+
+@app.get("/api/classes/{class_id}/candidates")
+def group_candidates(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Fan guruhiga qo'shish uchun maktab o'quvchilari (sinfi bilan), shu guruhdagilarsiz. Shu fanning
+    boshqa guruhidagilar — o'sha guruh nomi bilan (qo'shilsa, u yerdan bu guruhga o'tadi).
+    """
+
+    school_class, _member = _group_class(db, user, class_id)
+    rows = db.execute(
+        select(ClassStudent, SchoolClass)
+        .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
+        .where(SchoolClass.school_id == school_class.school_id, SchoolClass.deleted_at.is_(None),
+               SchoolClass.subject.is_(None), ClassStudent.removed_at.is_(None), ClassStudent.source_student_id.is_(None))
+    ).all()
+    same_subject = db.execute(
+        select(ClassStudent.source_student_id, SchoolClass.id, SchoolClass.name)
+        .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
+        .where(SchoolClass.school_id == school_class.school_id, SchoolClass.deleted_at.is_(None),
+               func.lower(SchoolClass.subject) == school_class.subject.lower(),
+               ClassStudent.removed_at.is_(None), ClassStudent.source_student_id.is_not(None))
+    ).all()
+    here = {source for source, group_id, _ in same_subject if group_id == school_class.id}
+    elsewhere = {source: name for source, group_id, name in same_subject if group_id != school_class.id}
+    rows = sorted(rows, key=lambda row: (_class_name_key(row[1].name), _uz_sort_key(row[0].full_name), row[0].id))
+    return [
+        {"id": student.id, "name": student.full_name, "class_name": home.name, "code": student.student_code,
+         "group": elsewhere.get(student.id)}
+        for student, home in rows
+        if student.id not in here
+    ]
+
+
+@app.post("/api/classes/{class_id}/members")
+def add_group_members(class_id: int, body: GroupMembersIn, user: User = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
+    """
+    Fan guruhiga maktab o'quvchilarini qo'shish (yotoqxonadagi joylashtirish kabi). O'quvchi o'z sinfida
+    qoladi; guruhda unga bog'langan yozuv paydo bo'ladi (ismi va ID'si sinfidagidan). Bir fanda — bitta
+    guruh: shu fanning boshqa guruhida bo'lsa, o'sha guruhdan bu guruhga o'tadi.
+    """
+
+    school_class, member = _group_class(db, user, class_id)
+    now = utcnow()
+    current = {student.source_student_id for student in _active_students(school_class)}
+    added = moved = 0
+    for student_id in dict.fromkeys(body.student_ids):
+        source = db.get(ClassStudent, student_id)
+        home = db.get(SchoolClass, source.class_id) if source else None
+        if (not source or source.removed_at is not None or source.source_student_id is not None or not home
+                or home.school_id != school_class.school_id or home.deleted_at is not None or home.subject):
+            raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+        if source.id in current:
+            continue
+        for copy, _group in db.execute(
+            select(ClassStudent, SchoolClass)
+            .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
+            .where(ClassStudent.source_student_id == source.id, ClassStudent.removed_at.is_(None),
+                   SchoolClass.id != school_class.id, SchoolClass.deleted_at.is_(None),
+                   func.lower(SchoolClass.subject) == school_class.subject.lower())
+        ).all():
+            copy.removed_at = now
+            moved += 1
+        db.add(ClassStudent(class_id=school_class.id, full_name=source.full_name, birth_date=source.birth_date,
+                            student_code=source.student_code, added_by_user_id=user.id, source_student_id=source.id))
+        current.add(source.id)
+        added += 1
+    db.commit()
+    _assign_student_codes(db, school_class.school_id)  # boshqa guruhdan o'tganlarning eski yozuvi — ID'siz
+    db.refresh(school_class)
+    return {"added": added, "moved": moved, "class": _class_view(db, school_class, with_details=True, member=member)}
 
 
 @app.post("/api/classes/{class_id}/students")
@@ -9552,6 +9682,7 @@ def preview_student_import(
     """
 
     school_class = _managed_class(db, user, class_id)
+    _reject_new_student_in_group(school_class)
     try:
         if body.file_base64:
             try:
@@ -9583,6 +9714,7 @@ def add_students_bulk(
     """Ko'rib chiqilgan ro'yxatni bir yo'la qo'shadi; sinfda bor ismlar takrorlanmaydi."""
 
     school_class = _managed_class(db, user, class_id)
+    _reject_new_student_in_group(school_class)
     existing = {student.full_name.lower() for student in _active_students(school_class)}
 
     added = 0
@@ -9608,8 +9740,12 @@ def edit_student(
     student = db.get(ClassStudent, student_id)
     if not student or student.class_id != school_class.id or student.removed_at is not None:
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    if student.source_student_id is not None:
+        raise HTTPException(status_code=422, detail="Ism-familiya o'quvchining o'z sinfida tahrirlanadi")
     student.full_name = body.full_name
     student.birth_date = body.birth_date
+    for copy in _group_copies(db, [student.id]):
+        copy.full_name, copy.birth_date = student.full_name, student.birth_date
     db.commit()
     db.refresh(school_class)
     return _class_view(db, school_class, with_details=True, member=_active_membership(db, user))
@@ -9794,6 +9930,9 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
     student = db.get(ClassStudent, student_id)
     if not student or student.class_id != school_class.id:
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    # Guruhdagi o'quvchining holati va yotoqxonasi — asl (sinfdagi) yozuvidan
+    owner = db.get(ClassStudent, student.source_student_id) if student.source_student_id else student
+    owner = owner or student
 
     scope = _attendance_filter(school_class, member)
     history_query = (
@@ -9827,14 +9966,17 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
             for aid, taken_at, subject, status in history
         ],
         # O'quvchi markazi: holat, sinf, yotoqxona, natijalar, to'lov
-        "status": _status_view(db, _current_statuses(db, [student.id]).get(student.id)),
-        "status_history": _status_history(db, student.id),
+        "status": _status_view(db, _current_statuses(db, [owner.id]).get(owner.id)),
+        "status_history": _status_history(db, owner.id),
         "can_set_status": _can_set_student_status(db, member, school_class, student),
         "can_manage": _can_manage_class(school_class, member),
         "curator": curator.full_name if curator else None,
-        "dorm": _student_dorm_view(db, student),
+        "dorm": _student_dorm_view(db, owner),
         "results": _student_results(db, student),
-        "payments": _student_payment_summary(db, school_class, student) if _can_see_payments(school_class, member) else None,
+        "payments": (
+            _student_payment_summary(db, school_class, student)
+            if _can_see_payments(school_class, member) and not school_class.subject else None
+        ),
     }
 
 
@@ -9851,8 +9993,8 @@ def set_student_status(class_id: int, student_id: int, body: StudentStatusIn, us
         raise HTTPException(status_code=403, detail="Holatni rahbariyat, sinf kuratori yoki tarbiyachi o'zgartiradi")
     if body.until is not None and body.until < _dorm_today():
         raise HTTPException(status_code=422, detail="Sana o'tib ketgan — bugungi yoki keyingi kunni tanlang")
-    row = StudentStatus(school_id=school_class.school_id, student_id=student.id, status=body.status,
-                        note=body.note, until=body.until, set_by=user.id)
+    row = StudentStatus(school_id=school_class.school_id, student_id=student.source_student_id or student.id,
+                        status=body.status, note=body.note, until=body.until, set_by=user.id)
     db.add(row)
     db.commit()
     return _status_view(db, row)
@@ -9866,6 +10008,9 @@ def remove_student(class_id: int, student_id: int, user: User = Depends(get_curr
     if not student or student.class_id != school_class.id or student.removed_at is not None:
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
     student.removed_at = utcnow()
+    if student.source_student_id is None:
+        for copy in _group_copies(db, [student.id]):  # sinfdan chiqqan o'quvchi fan guruhlaridan ham chiqadi
+            copy.removed_at = student.removed_at
     db.commit()
     _assign_student_codes(db, school_class.school_id)  # ID'si bo'shaydi
     db.refresh(school_class)
@@ -10447,6 +10592,8 @@ def _class_fee(school: PrivateSchool, school_class: SchoolClass, month: str | No
     bo'lsa, o'tgan oylar O'SHA paytdagi narx bilan hisoblanadi.
     """
 
+    if school_class.subject:
+        return 0  # fan guruhi — to'lov o'quvchining sinfi orqali
     month = month or _current_month()
     db = object_session(school)
     changes = _fee_changes(db, school.id) if db else []
@@ -10888,6 +11035,8 @@ def payments_summary(month: str | None = None, user: User = Depends(get_current_
     ).all())
     rows = []
     for school_class in classes:
+        if school_class.subject:
+            continue  # fan guruhi — to'lov sinf orqali
         info = class_payments(school_class.id, month, user, db)
         rows.append({"id": school_class.id, "name": school_class.name, "students": len(info["students"]),
                      "monthly_fee": info["monthly_fee"], "own_fee": school_class.monthly_fee is not None, **info["totals"]})
@@ -10961,7 +11110,7 @@ def search_school_students(q: str = "", user: User = Depends(get_current_user), 
         select(ClassStudent, SchoolClass)
         .join(SchoolClass, ClassStudent.class_id == SchoolClass.id)
         .where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None),
-               ClassStudent.removed_at.is_(None))
+               ClassStudent.removed_at.is_(None), ClassStudent.source_student_id.is_(None))
     ).all()
 
     code = q.strip() if q.strip().isdigit() else None
@@ -11004,7 +11153,10 @@ def school_overview(user: User = Depends(get_current_user), db: Session = Depend
         select(SchoolClass).where(SchoolClass.school_id == school.id, SchoolClass.deleted_at.is_(None))
     ).all())
     curated = [item for item in classes if item.curator_user_id == user.id]
-    students_total = sum(len(_active_students(item)) for item in classes)
+    # Fan guruhlari — o'quvchilari sinflarda allaqachon sanalgan; to'lov va "davomat olinmagan" ham sinf bo'yicha
+    real_classes = [item for item in classes if not item.subject]
+    real_curated = [item for item in curated if not item.subject]
+    students_total = sum(len(_active_students(item)) for item in real_classes)
 
     # Bugun (Toshkent vaqti) — kun boshi UTC'da
     local_now = utcnow() + TASHKENT_OFFSET
@@ -11025,7 +11177,7 @@ def school_overview(user: User = Depends(get_current_user), db: Session = Depend
         marks_present += counts.get("present", 0) + counts.get("late", 0)
 
     # Bugun birorta ham davomat olinmagan sinflar (o'quvchisi bor sinflargina)
-    watched = classes if leader else curated
+    watched = real_classes if leader else real_curated
     taken_ids = {attendance.class_id for attendance in today_attendance}
     missing_attendance = [
         {"id": item.id, "name": item.name}
@@ -11034,7 +11186,7 @@ def school_overview(user: User = Depends(get_current_user), db: Session = Depend
     ]
 
     # Qarzdorlar (joriy oy): rahbariyat — butun maktab, kurator — o'z sinflari
-    payment_classes = classes if _sees_all_finance(member) else curated
+    payment_classes = real_classes if _sees_all_finance(member) else real_curated
     debtors = debt_sum = None
     if payment_classes and any(_class_fee(school, item) > 0 for item in payment_classes):
         month = _current_month()
@@ -11074,7 +11226,7 @@ def school_overview(user: User = Depends(get_current_user), db: Session = Depend
     today_md = (local_now.month, local_now.day)
     birthdays = [
         {"name": student.full_name, "class_name": item.name, "kind": "student"}
-        for item in classes
+        for item in real_classes
         for student in _active_students(item)
         if student.birth_date and (student.birth_date.month, student.birth_date.day) == today_md
     ]
@@ -11101,7 +11253,7 @@ def school_overview(user: User = Depends(get_current_user), db: Session = Depend
         "month_label": _month_label(_current_month()),
         "stats": {
             "students": students_total,
-            "classes": len(classes),
+            "classes": len(real_classes),
             "my_classes": len(curated),
             "lessons_today": len(today_lessons),
             "attendance_percent": round(marks_present / marks_total * 100) if marks_total else None,
@@ -11109,8 +11261,8 @@ def school_overview(user: User = Depends(get_current_user), db: Session = Depend
             "debt_sum": debt_sum,
         },
         "missing_attendance": missing_attendance,
-        "classes_without_curator": sum(1 for item in classes if item.curator_user_id is None) if head else 0,
-        "needs_fee": head and bool(classes) and all(_class_fee(school, item) <= 0 for item in classes),
+        "classes_without_curator": sum(1 for item in real_classes if item.curator_user_id is None) if head else 0,
+        "needs_fee": head and bool(real_classes) and all(_class_fee(school, item) <= 0 for item in real_classes),
         "chart": chart,
         "can": {
             "payments": bool(payment_classes),
@@ -12310,7 +12462,7 @@ def dorm_candidates(user: User = Depends(get_current_user), db: Session = Depend
         select(ClassStudent, SchoolClass)
         .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
         .where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None),
-               ClassStudent.removed_at.is_(None), ClassStudent.id.not_in(placed))
+               ClassStudent.removed_at.is_(None), ClassStudent.id.not_in(placed), ClassStudent.source_student_id.is_(None))
     ).all()
     rows = sorted(rows, key=lambda row: (_class_name_key(row[1].name), row[0].full_name.lower()))
     return [{"id": student.id, "name": student.full_name, "class_name": school_class.name} for student, school_class in rows]
