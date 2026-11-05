@@ -3726,3 +3726,136 @@ button {
   max-width: none;
   cursor: zoom-out;
 }
+
+/* O'quvchi javoblari (batafsil): har savol bitta qatorda, harf bosib o'zgartiriladi */
+.ans-panel {
+  padding: 4px 6px;
+}
+
+.ans-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 6px;
+}
+
+.ans-row + .ans-row {
+  border-top: 1px solid var(--color-border);
+}
+
+.ans-num {
+  width: 28px;
+  flex-shrink: 0;
+  text-align: right;
+  font-weight: 800;
+  font-size: 15px;
+}
+
+.ans-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ans-opt {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.ans-opt:disabled {
+  cursor: default;
+}
+
+.ans-opt.chosen-right {
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #fff;
+}
+
+.ans-opt.chosen-wrong {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+}
+
+.ans-opt.is-key {
+  border-color: #16a34a;
+  box-shadow: inset 0 0 0 2px #16a34a;
+  color: #16a34a;
+}
+
+.ans-status {
+  margin-left: auto;
+  font-size: 18px;
+}
+
+.ans-status.is-empty {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.ans-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 4px 10px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.ans-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ans-dot {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+}
+
+.ans-dot.is-right {
+  background: #16a34a;
+}
+
+.ans-dot.is-wrong {
+  background: #dc2626;
+}
+
+.ans-dot.is-key {
+  box-shadow: inset 0 0 0 3px #16a34a;
+}
+
+.ans-callout {
+  margin: 6px 0 10px;
+  padding: 8px 12px;
+  border: 1px dashed #f59e0b;
+  border-radius: 12px;
+  background: #fff7e6;
+  color: #92400e;
+  font-size: 13px;
+}
+
+.ans-written-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 8px 2px 0;
+  font-size: 15px;
+}
+
+.badge-amber {
+  background: #fff4cc;
+  color: #a16207;
+}

@@ -5952,10 +5952,70 @@ def student_answer_detail(
     test = _get_own_test(db, teacher, test_id)
 
     attempt = db.get(Attempt, attempt_id)
-    if not attempt or attempt.test_id != test.id:
+    if not attempt or attempt.test_id != test.id or attempt.status not in ("done", "pending"):
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
 
-    return _attempt_review(db, test, attempt)
+    return {**_attempt_review(db, test, attempt), "edit": _teacher_answer_sheet(db, test, attempt)}
+
+
+def _teacher_answer_sheet(db: Session, test: Test, attempt: Attempt) -> dict:
+    """
+    O'qituvchining "batafsil" ekrani uchun: har savol — o'quvchi belgilagani, kalit (o'z varianti bo'yicha),
+    variantlar soni; yozma savolda — skanerlangan katak rasmi, bahosi va AI o'qigani. Shuningdek Rasch bali.
+    O'qituvchi qo'shgan (oflayn) o'quvchining javoblarini shu ekranda o'zgartirsa bo'ladi.
+    """
+
+    answers = {
+        answer.question_ref: answer
+        for answer in db.scalars(select(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id)).all()
+    }
+    written = {
+        row.question_ref: row
+        for row in db.scalars(select(WrittenAnswer).where(WrittenAnswer.attempt_id == attempt.id)).all()
+    }
+    items = []
+    if test.mode == "key":
+        overrides = _key_override(db, test, attempt.variant)
+        for kq in test.key_questions:
+            answer = answers.get(kq.number)
+            item = {
+                "ref": kq.number, "label": kq.label or str(kq.number), "type": kq.question_type,
+                "options": kq.option_count, "chosen": (answer.chosen if answer else "") or "",
+                "key": overrides.get(kq.number, kq.correct), "is_correct": bool(answer and answer.is_correct),
+            }
+            row = written.get(kq.number) if kq.question_type == "text" else None
+            if row:
+                item.update({
+                    "image": row.image, "verdict": row.verdict, "blank": row.blank, "ai_text": row.ai_text,
+                    "ai_sure": row.ai_sure, "ai_status": row.ai_status, "auto": bool(row.auto_verdict),
+                })
+            items.append(item)
+    else:
+        for index, question in enumerate(test.questions, start=1):
+            answer = answers.get(question.id)
+            items.append({
+                "ref": question.id, "label": str(index), "type": "single", "options": 4,
+                "chosen": (answer.chosen if answer else "") or "", "key": question.correct,
+                "is_correct": bool(answer and answer.is_correct),
+            })
+
+    row = None
+    uses_rasch = False
+    if attempt.status == "done":
+        report = build_rasch_report(db, test)
+        uses_rasch = bool(report.get("uses_rasch"))
+        row = next((item for item in report["rows"] if item["attempt_id"] == attempt.id), None)
+    return {
+        "editable": attempt.user_id is None,  # o'qituvchi qo'shgan o'quvchi — javoblari o'zgartiriladi
+        "pending": attempt.status != "done",
+        "number": attempt.sheet_number,
+        "variant": attempt.variant or "A",
+        "variants": _variant_names(db, test),
+        "items": items,
+        "uses_rasch": uses_rasch,
+        "ball": row["ball"] if row else None,
+        "grade": row["grade"] if row else None,
+    }
 
 
 def _attempt_review(db: Session, test: Test, attempt: Attempt) -> dict:

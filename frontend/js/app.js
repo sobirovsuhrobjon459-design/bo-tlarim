@@ -15079,23 +15079,19 @@ async function renderTestDetail(testId) {
 
   const studentRow = (student) => `
           <div class="list-row" data-student-id="${student.id}">
-            <div ${student.has_answers ? `class="student-summary" data-detail="${student.id}"` : ""}>
+            <div ${student.has_answers || student.editable ? `class="student-summary" data-detail="${student.id}"` : ""}>
               <b>${student.number ? `<span class="student-number">#${student.number}</span> ` : ""}${escapeHtml(student.name)}${
                 test.variants.length && student.editable ? ` <span class="badge badge-purple">${student.variant || "A"}</span>` : ""
               }</b>
               <p class="subtitle" style="margin:2px 0 0">
                 ${student.has_answers
             ? `✅ ${student.correct}/${test.count} • ${student.percent}% — batafsil ›`
-            : "⏳ Javoblar kiritilmagan"
+            : student.editable ? "⏳ Javoblar kiritilmagan — kiritish ›" : "⏳ Javoblar kiritilmagan"
           }
               </p>
             </div>
             <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
-              ${student.editable
-            ? `${deleteButton("data-delete-student", student.id)}
-                     <button class="icon-button" data-edit-student="${student.id}" title="Javoblarni kiritish">✏️</button>`
-            : ""
-          }
+              ${student.editable ? deleteButton("data-delete-student", student.id) : ""}
             </div>
           </div>`;
 
@@ -15313,48 +15309,264 @@ async function renderTestDetail(testId) {
   });
 }
 
+/*
+  O'quvchining javoblari (test sahifasida o'quvchi bosilganda): ko'rish va tahrirlash bitta ekranda.
+  - 1–35: har savol bitta qatorda — o'quvchi belgilagani bo'yalgan (yashil — to'g'ri, qizil — xato),
+    to'g'ri javob yashil halqa. Harf bosilsa — javob o'zgaradi va ball (foiz, Rasch) darhol qayta hisoblanadi.
+  - 36–45: skanerlangan katak rasmi — har biri alohida qatorda, ostida to'g'ri javob, AI o'qigani va ✓ / ✗.
+  - Javoblari hali kiritilmagan o'quvchida — belgilab, «Saqlash» bosiladi (yangi natija — 1 kredit).
+  O'quvchi o'zi (onlayn) ishlagan bo'lsa — faqat ko'rish.
+*/
 async function renderStudentDetail(testId, attemptId) {
-  const detail = await api(`/api/teacher/tests/${testId}/students/${attemptId}/detail`);
+  const url = `/api/teacher/tests/${testId}/students/${attemptId}/detail`;
+  let detail = await api(url);
+  const edit = detail.edit;
+  const canEdit = edit.editable;
+  const pending = edit.pending;
+  let variant = edit.variant || "A";
+  const items = edit.items;
+  const closed = items.filter((item) => item.type !== "text");
+  const written = items.filter((item) => item.type === "text");
+  const letters = (item) => Array.from({ length: item.options || 4 }, (_, index) => String.fromCharCode(65 + index));
+  const letterSet = (value) => new Set(String(value || "").toUpperCase().split(",").map((part) => part.trim()).filter(Boolean));
+  const keyText = (value) => escapeHtml(String(value || "").split("|").filter(Boolean).map(latexToPlain).join(" yoki "));
+  const span = (list) => (list.length ? `${list[0].label}–${list[list.length - 1].label}` : "");
+  const sameSet = (a, b) => a.size === b.size && [...a].every((letter) => b.has(letter));
 
-  const rows = detail.questions
-    .map(
-      (question) => `
-        <div class="answer-row ${question.is_correct ? "" : "wrong"}">
-          <b>${escapeHtml(question.label)}</b>
-          <span>${question.is_correct ? "✅" : "❌"} ${escapeHtml(latexToPlain(question.chosen))}</span>
-          ${question.is_correct ? "" : `<span class="right-answer">to'g'ri: ${escapeHtml(latexToPlain(question.correct))}</span>`}
-        </div>`
-    )
-    .join("");
+  const statsHtml = () => `
+    <div class="stat-tile"><span class="stat-value">${detail.closed_correct}/${detail.closed_total}</span>Test savollari</div>
+    ${detail.written_total ? `<div class="stat-tile"><span class="stat-value">${detail.written_correct}/${detail.written_total}</span>Yozma javoblar</div>` : ""}
+    <div class="stat-tile"><span class="stat-value">${detail.percent}%</span>Foiz</div>
+    ${
+      detail.edit.uses_rasch && detail.edit.ball !== null && detail.edit.ball !== undefined
+        ? `<div class="stat-tile"><span class="stat-value">${formatNumber(detail.edit.ball)}</span>Rasch ball${detail.edit.grade ? ` · ${escapeHtml(detail.edit.grade)}` : ""}</div>`
+        : ""
+    }
+    ${detail.essay ? `<div class="stat-tile"><span class="stat-value">${detail.essay.score ?? "—"}/${detail.essay.max}</span>Esse</div>` : ""}`;
+
+  const closedRow = (item) => `
+    <div class="ans-row" data-ans-ref="${item.ref}">
+      <span class="ans-num">${escapeHtml(item.label)}</span>
+      <div class="ans-opts">
+        ${letters(item).map((letter) => `<button type="button" class="ans-opt" data-letter="${letter}" ${canEdit ? "" : "disabled"}>${letter}</button>`).join("")}
+      </div>
+      <span class="ans-status"></span>
+    </div>`;
+
+  const writtenCard = (item) => {
+    const hasImage = item.image !== undefined;
+    const ai =
+      item.ai_status === "done"
+        ? `<span>🤖 AI o'qidi: <b>${item.ai_text ? escapeHtml(item.ai_text) : "(bo'sh)"}</b>${
+            item.ai_sure ? "" : ` <span class="written-ai-unsure">· aniq emas</span>`
+          }</span>`
+        : "";
+    return `
+      <div class="written-item" data-ans-ref="${item.ref}">
+        <div class="written-item-head"><b>${escapeHtml(item.label)}</b><span class="badge" data-ans-badge hidden></span></div>
+        ${
+          hasImage
+            ? `<img class="written-item-image" src="${item.image}" alt="${escapeHtml(item.label)} javobi" />`
+            : canEdit
+              ? `<input class="input" data-ans-text maxlength="300" placeholder="O'quvchi javobi" value="${escapeHtml(item.chosen)}" style="margin:0" />`
+              : `<p style="margin:0;font-size:16px"><b>${item.chosen ? escapeHtml(latexToPlain(item.chosen)) : "—"}</b></p>`
+        }
+        <div class="ans-written-info"><span>🔑 To'g'ri javob: <b>${keyText(item.key)}</b></span>${ai}</div>
+        ${
+          hasImage && canEdit && !pending
+            ? `<div class="written-verdict">
+                 <button type="button" class="verdict-button is-right" data-verdict="true">✓ To'g'ri</button>
+                 <button type="button" class="verdict-button is-wrong" data-verdict="false">✗ Xato</button>
+               </div>`
+            : ""
+        }
+      </div>`;
+  };
 
   showPage(`
-    <button class="back-button" data-action="test">←</button>
-    <h2>${escapeHtml(detail.name)}</h2>
-    <div class="stats-grid">
-      <div class="stat-tile">
-        <span class="stat-value">${detail.closed_correct}/${detail.closed_total}</span>Yopiq savollar
-      </div>
-      ${
-        detail.written_total
-          ? `<div class="stat-tile">
-               <span class="stat-value">${detail.written_correct}/${detail.written_total}</span>Yozma javoblar
-             </div>`
-          : ""
-      }
-      <div class="stat-tile"><span class="stat-value">${detail.percent}%</span>Foiz</div>
-      ${
-        detail.essay
-          ? `<div class="stat-tile"><span class="stat-value">${detail.essay.score ?? "—"}/${detail.essay.max}</span>Esse</div>`
-          : ""
-      }
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="test" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">${edit.number ? `<span class="student-number">#${edit.number}</span> ` : ""}${escapeHtml(detail.name)}</h2>
     </div>
-    ${detail.has_sheet ? `<button class="btn btn-ghost" id="student-sheet-button" style="margin-top:4px">🧾 Titul rasmi</button>` : ""}
+    <div class="stats-grid" id="ans-stats">${statsHtml()}</div>
+    ${
+      !canEdit
+        ? ""
+        : pending
+          ? `<div class="notice">Javoblar hali kiritilmagan — belgilab, pastdagi «💾 Saqlash» ni bosing.</div>`
+          : `<div class="ans-callout">Javobni o'zgartirsangiz — ball, foiz va Rasch shu yerning o'zida qayta hisoblanadi</div>`
+    }
+    <div class="row-between" style="gap:10px;margin:4px 0 12px;flex-wrap:wrap">
+      ${detail.has_sheet ? `<button class="btn btn-ghost" id="student-sheet-button" style="margin:0;width:auto;padding:10px 14px">🧾 Titul rasmi</button>` : "<span></span>"}
+      ${canEdit ? variantChipsHtml(edit.variants, variant) : edit.variants.length ? `<span class="subtitle" style="margin:0">Variant: <b>${variant}</b></span>` : ""}
+    </div>
+    ${
+      closed.length
+        ? `<p class="section-label">${span(closed)}: TEST JAVOBLARI${canEdit ? " — HARFNI BOSIB O'ZGARTIRING" : ""}</p>
+           <div class="ans-legend">
+             <span><i class="ans-dot is-right"></i> to'g'ri belgilagan</span>
+             <span><i class="ans-dot is-wrong"></i> xato belgilagan</span>
+             <span><i class="ans-dot is-key"></i> to'g'ri javob</span>
+           </div>
+           <div class="panel ans-panel">${closed.map(closedRow).join("")}</div>`
+        : ""
+    }
+    ${
+      written.length
+        ? `<p class="section-label" style="margin-top:18px">${span(written)}: YOZMA JAVOBLAR</p>${written.map(writtenCard).join("")}`
+        : ""
+    }
     ${detail.essay ? essayGradingHtml(detail.essay) : ""}
-    <h3>Barcha javoblar</h3>
-    ${rows}
+    ${canEdit && pending ? `<div class="sticky-footer"><button class="btn" id="ans-save" style="margin:0">💾 Saqlash</button></div>` : ""}
   `);
 
-  document.querySelector('[data-action="test"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
+  // Har savol holatini chizish (bo'yalgan harflar, ✅/❌, yozma baho va belgilar)
+  const paint = () => {
+    for (const item of closed) {
+      const row = document.querySelector(`.ans-row[data-ans-ref="${item.ref}"]`);
+      const chosen = letterSet(item.chosen);
+      const key = letterSet(item.key);
+      const right = chosen.size > 0 && sameSet(chosen, key);
+      row.querySelectorAll(".ans-opt").forEach((button) => {
+        const letter = button.dataset.letter;
+        button.classList.toggle("chosen-right", chosen.has(letter) && key.has(letter));
+        button.classList.toggle("chosen-wrong", chosen.has(letter) && !key.has(letter));
+        button.classList.toggle("is-key", !right && !chosen.has(letter) && key.has(letter));
+      });
+      const status = row.querySelector(".ans-status");
+      status.textContent = !chosen.size ? "bo'sh" : right ? "✅" : "❌";
+      status.classList.toggle("is-empty", !chosen.size);
+    }
+    for (const item of written) {
+      const card = document.querySelector(`.written-item[data-ans-ref="${item.ref}"]`);
+      const verdict = item.image !== undefined ? item.verdict : item.chosen ? item.is_correct : null;
+      card.classList.toggle("is-right", verdict === true);
+      card.classList.toggle("is-wrong", verdict === false);
+      const badge = card.querySelector("[data-ans-badge]");
+      const label = item.auto && item.verdict !== null
+        ? [item.verdict ? "🤖 AI ✓" : "🤖 AI ✗", item.verdict ? "badge-green" : "badge-red"]
+        : item.image !== undefined && item.verdict === null
+          ? ["⚠️ tekshiring", "badge-amber"]
+          : item.blank
+            ? ["bo'sh", "badge-gray"]
+            : null;
+      badge.hidden = !label;
+      if (label) {
+        badge.textContent = label[0];
+        badge.className = `badge ${label[1]}`;
+      }
+      card.querySelectorAll(".verdict-button").forEach((button) =>
+        button.classList.toggle("selected", String(item.verdict) === button.dataset.verdict)
+      );
+    }
+  };
+  paint();
+
+  // Saqlash: so'rovlar navbat bilan; javobdan keyin ball va holatlar serverdagidek yangilanadi.
+  // O'qituvchi shu orada yana bosgan bo'lishi mumkin — mahalliy javoblar (chosen) ustidan yozilmaydi
+  let queue = Promise.resolve();
+  const answersBody = () =>
+    Object.fromEntries(items.filter((item) => item.chosen).map((item) => [String(item.ref), item.chosen]));
+  const refresh = async () => {
+    detail = await api(url);
+    const fresh = new Map(detail.edit.items.map((item) => [item.ref, item]));
+    for (const item of items) {
+      const server = fresh.get(item.ref);
+      if (!server) continue;
+      const { chosen, ...rest } = server;
+      Object.assign(item, rest);
+    }
+    document.getElementById("ans-stats").innerHTML = statsHtml();
+    paint();
+  };
+  const persist = () => {
+    queue = queue
+      .then(async () => {
+        await api(`/api/teacher/tests/${testId}/students/${attemptId}/answers`, {
+          method: "POST",
+          body: { answers: answersBody(), variant: edit.variants.length ? variant : null },
+        });
+        await refresh();
+      })
+      .catch((error) => showToast(`⚠️ ${error.message}`));
+    return queue;
+  };
+
+  if (canEdit) {
+    document.querySelectorAll(".ans-row").forEach((row) => {
+      const item = closed.find((entry) => String(entry.ref) === row.dataset.ansRef);
+      row.addEventListener("click", (event) => {
+        const button = event.target.closest(".ans-opt");
+        if (!button) return;
+        const chosen = letterSet(item.chosen);
+        const letter = button.dataset.letter;
+        if (item.type === "multi") {
+          if (chosen.has(letter)) chosen.delete(letter);
+          else chosen.add(letter);
+        } else {
+          const had = chosen.has(letter);
+          chosen.clear();
+          if (!had) chosen.add(letter); // tanlangan harf qayta bosilsa — javob o'chadi
+        }
+        item.chosen = letters(item).filter((value) => chosen.has(value)).join(",");
+        telegram?.HapticFeedback?.selectionChanged?.();
+        paint();
+        if (!pending) persist();
+      });
+    });
+    document.querySelectorAll("[data-ans-text]").forEach((input) => {
+      const item = written.find((entry) => String(entry.ref) === input.closest("[data-ans-ref]").dataset.ansRef);
+      input.addEventListener("change", () => {
+        item.chosen = input.value.trim();
+        if (!pending) persist();
+      });
+    });
+    document.querySelectorAll(".written-item .verdict-button").forEach((button) => {
+      const card = button.closest("[data-ans-ref]");
+      const item = written.find((entry) => String(entry.ref) === card.dataset.ansRef);
+      button.addEventListener(
+        "click",
+        guarded(async () => {
+          // Tanlangan bahoni qayta bosish — bekor qilish
+          const verdict = String(item.verdict) === button.dataset.verdict ? null : button.dataset.verdict === "true";
+          item.verdict = verdict;
+          item.auto = false;
+          paint();
+          queue = queue
+            .then(async () => {
+              await api(`/api/teacher/tests/${testId}/written/${item.ref}/${attemptId}`, { method: "POST", body: { verdict } });
+              await refresh();
+            })
+            .catch((error) => showToast(`⚠️ ${error.message}`));
+          await queue;
+        })
+      );
+    });
+    wireVariantChips((name) => {
+      variant = name;
+      if (!pending) persist();
+    });
+    document.getElementById("ans-save")?.addEventListener(
+      "click",
+      guarded(async () => {
+        if (!Object.keys(answersBody()).length) throw new Error("Kamida bitta javobni belgilang");
+        await api(`/api/teacher/tests/${testId}/students/${attemptId}/answers`, {
+          method: "POST",
+          body: { answers: answersBody(), variant: edit.variants.length ? variant : null },
+        });
+        showToast("✅ Javoblar saqlandi");
+        await renderStudentDetail(testId, attemptId);
+      })
+    );
+  }
+
+  document.querySelector('[data-action="test"]').addEventListener(
+    "click",
+    guarded(async () => {
+      await queue; // oxirgi o'zgartirish saqlanmasdan chiqib ketilmasin
+      await renderTestDetail(testId);
+    })
+  );
   document
     .getElementById("student-sheet-button")
     ?.addEventListener("click", guarded(() => openSheetImages(`/api/teacher/tests/${testId}/students/${attemptId}/sheet`)));
