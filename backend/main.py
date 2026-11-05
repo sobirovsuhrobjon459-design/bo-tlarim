@@ -128,6 +128,8 @@ from .database import (
     EssayScoreIn,
     AdminSchoolDeleteIn,
     GroupMembersIn,
+    StudentRemoveIn,
+    UnassignedAssignIn,
     FinishIn,
     IS_SQLITE,
     InviteAcceptIn,
@@ -238,7 +240,8 @@ def _add_missing_columns() -> None:
         "private_schools": {"monthly_fee": "INTEGER DEFAULT 0", "kind": "VARCHAR(10) DEFAULT 'school'",
                             "deleted_at": "TIMESTAMP"},
         "class_students": {"discount_percent": "INTEGER DEFAULT 0", "student_code": "INTEGER", "added_by_user_id": "INTEGER",
-                           "source_student_id": "INTEGER"},
+                           "source_student_id": "INTEGER", "removed_reason": "TEXT", "removed_by_user_id": "INTEGER",
+                           "basket_closed_at": "TIMESTAMP", "reassigned_to_id": "INTEGER"},
         "class_tests": {"source_test_id": "INTEGER"},
         "promo_codes": {"per_teacher_limit": "INTEGER DEFAULT 3"},
         "school_members": {
@@ -10049,12 +10052,23 @@ def set_student_status(class_id: int, student_id: int, body: StudentStatusIn, us
 
 
 @app.delete("/api/classes/{class_id}/students/{student_id}")
-def remove_student(class_id: int, student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """O'quvchi sinfdan chiqariladi; eski davomatlarda u ko'rinib turadi."""
+def remove_student(class_id: int, student_id: int, body: StudentRemoveIn | None = None,
+                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    O'quvchi sinfdan chiqariladi; eski davomatlarda u ko'rinib turadi. Oddiy sinfdan chiqarishda sabab
+    majburiy — o'quvchi "Biriktirilmaganlar" ro'yxatiga tushadi (u yerdan qayta biriktiriladi yoki o'chiriladi).
+    Fan guruhidan chiqarilsa — o'z sinfida qoladi, sabab shart emas.
+    """
     school_class = _managed_class(db, user, class_id)
     student = db.get(ClassStudent, student_id)
     if not student or student.class_id != school_class.id or student.removed_at is not None:
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    reason = body.reason if body else ""
+    if not school_class.subject:
+        if len(reason) < 3:
+            raise HTTPException(status_code=422, detail="Chiqarish sababini yozing (masalan: boshqa maktabga o'tdi)")
+        student.removed_reason = reason
+        student.removed_by_user_id = user.id
     student.removed_at = utcnow()
     if student.source_student_id is None:
         for copy in _group_copies(db, [student.id]):  # sinfdan chiqqan o'quvchi fan guruhlaridan ham chiqadi
@@ -11321,7 +11335,114 @@ def school_overview(user: User = Depends(get_current_user), db: Session = Depend
             "schedule": leader or bool(curated),
         },
         "payment_classes": [{"id": item.id, "name": item.name} for item in payment_classes],
+        # Biriktirilmaganlar (sinfdan sabab bilan chiqarilganlar) — rahbariyatga
+        "unassigned": len(_unassigned_rows(db, school.id)) if leader else None,
     }
+
+
+# ---------- Biriktirilmaganlar: sinfdan chiqarilgan o'quvchilar ----------
+# Oddiy sinfdan sabab bilan chiqarilgan o'quvchi shu ro'yxatga tushadi. Rahbariyat uni qaytadan sinfga
+# biriktiradi (eski sinfiga — tarixi bilan tiklanadi; boshqasiga — u yerda yangi yozuv) yoki o'chiradi.
+
+
+def _unassigned_rows(db: Session, school_id: int) -> list[tuple[ClassStudent, SchoolClass]]:
+    return db.execute(
+        select(ClassStudent, SchoolClass)
+        .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
+        .where(SchoolClass.school_id == school_id, SchoolClass.subject.is_(None), ClassStudent.source_student_id.is_(None),
+               ClassStudent.removed_at.is_not(None), ClassStudent.removed_reason.is_not(None),
+               ClassStudent.basket_closed_at.is_(None))
+        .order_by(ClassStudent.removed_at.desc(), ClassStudent.id.desc())
+    ).all()
+
+
+def _unassigned_member(db: Session, user: User) -> SchoolMember:
+    member = _require_school_member(db, user)
+    if not _is_director(member):
+        raise HTTPException(status_code=403, detail="Biriktirilmaganlar ro'yxatini rahbariyat boshqaradi")
+    return member
+
+
+def _unassigned_student(db: Session, member: SchoolMember, student_id: int) -> tuple[ClassStudent, SchoolClass]:
+    for student, school_class in _unassigned_rows(db, member.school_id):
+        if student.id == student_id:
+            return student, school_class
+    raise HTTPException(status_code=404, detail="O'quvchi biriktirilmaganlar ro'yxatida yo'q")
+
+
+@app.get("/api/schools/unassigned")
+def unassigned_students(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Sinfdan chiqarilgan, hali hech qayerga biriktirilmagan o'quvchilar — sababi va kim chiqargani bilan."""
+
+    member = _unassigned_member(db, user)
+    rows = _unassigned_rows(db, member.school_id)
+    removers = {
+        item.id: item.full_name
+        for item in db.scalars(select(User).where(User.id.in_({student.removed_by_user_id for student, _ in rows} or {-1})))
+    }
+    classes = _sorted_classes(db.scalars(
+        select(SchoolClass).where(SchoolClass.school_id == member.school_id, SchoolClass.deleted_at.is_(None),
+                                  SchoolClass.subject.is_(None))
+    ).all())
+    return {
+        "students": [
+            {
+                "id": student.id, "full_name": student.full_name, "birth_date": student.birth_date,
+                "class_id": school_class.id, "class_name": school_class.name,
+                "class_deleted": school_class.deleted_at is not None,
+                "removed_at": student.removed_at, "removed_by": removers.get(student.removed_by_user_id, ""),
+                "reason": student.removed_reason,
+            }
+            for student, school_class in rows
+        ],
+        "classes": [{"id": item.id, "name": item.name} for item in classes],
+    }
+
+
+@app.post("/api/schools/unassigned/{student_id}/assign")
+def assign_unassigned(student_id: int, body: UnassignedAssignIn, user: User = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
+    """
+    Sinfga qayta biriktirish. Eski sinfiga qaytsa — o'sha yozuv tiklanadi (davomat, natija, ID tarixi bilan);
+    boshqa sinfga — u yerda yangi yozuv ochiladi, eski sinfdagi tarixi o'sha sinfda qoladi.
+    """
+
+    member = _unassigned_member(db, user)
+    student, old_class = _unassigned_student(db, member, student_id)
+    target = db.get(SchoolClass, body.class_id)
+    if (not target or target.school_id != member.school_id or target.deleted_at is not None or target.subject):
+        raise HTTPException(status_code=404, detail="Sinf topilmadi")
+    now = utcnow()
+    if target.id == old_class.id:
+        student.removed_at = None
+        student.removed_reason = None
+        student.removed_by_user_id = None
+        restored = student
+    else:
+        restored = ClassStudent(class_id=target.id, full_name=student.full_name, birth_date=student.birth_date,
+                                discount_percent=student.discount_percent, added_by_user_id=user.id)
+        db.add(restored)
+        db.flush()
+        student.basket_closed_at = now
+        student.reassigned_to_id = restored.id
+    db.commit()
+    _assign_student_codes(db, member.school_id)
+    logging.getLogger("backend").info("Biriktirilmagan o'quvchi sinfga biriktirildi: student=%s class=%s user=%s",
+                                      student.id, target.id, user.id)
+    return {"ok": True, "class_id": target.id, "class_name": target.name, "student_id": restored.id,
+            "restored": restored.id == student.id}
+
+
+@app.post("/api/schools/unassigned/{student_id}/delete")
+def delete_unassigned(student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Biriktirilmaganlardan o'chirish — ro'yxatdan butunlay olinadi; eski davomat va natijalari tarixda qoladi."""
+
+    member = _unassigned_member(db, user)
+    student, _old_class = _unassigned_student(db, member, student_id)
+    student.basket_closed_at = utcnow()
+    db.commit()
+    logging.getLogger("backend").info("Biriktirilmagan o'quvchi o'chirildi: student=%s user=%s", student.id, user.id)
+    return {"ok": True}
 
 
 # ---------- Dars jadvali ----------

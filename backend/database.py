@@ -640,6 +640,13 @@ class ClassStudent(Base):
     discount_percent: Mapped[int] = mapped_column(default=0)
     # Fan guruhidagi o'quvchi — asl (sinfdagi) o'quvchiga havola: ismi, ID'si va holati o'shandan olinadi
     source_student_id: Mapped[int | None] = mapped_column(default=None, index=True)
+    # Sinfdan chiqarilganda: sababi (majburiy) va kim chiqargani. Shunday o'quvchi "Biriktirilmaganlar"
+    # ro'yxatiga tushadi; u yerdan qayta biriktirilsa yoki o'chirilsa — basket_closed_at belgilanadi
+    removed_reason: Mapped[str | None] = mapped_column(Text, default=None)
+    removed_by_user_id: Mapped[int | None] = mapped_column(default=None)
+    basket_closed_at: Mapped[datetime | None] = mapped_column(default=None)
+    # Boshqa sinfga biriktirilganda — o'sha sinfdagi yangi yozuvi
+    reassigned_to_id: Mapped[int | None] = mapped_column(default=None)
 
     school_class: Mapped["SchoolClass"] = relationship(back_populates="students")
 
@@ -1639,6 +1646,23 @@ class ClassIn(BaseModel):
             raise ValueError("Sinf nomini kiriting")
         self.subject = " ".join((self.subject or "").split()) or None
         return self
+
+
+class StudentRemoveIn(BaseModel):
+    """Sinfdan chiqarish sababi (oddiy sinfda majburiy; fan guruhida — ixtiyoriy)."""
+
+    reason: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def normalize(self) -> "StudentRemoveIn":
+        self.reason = " ".join(self.reason.split())
+        return self
+
+
+class UnassignedAssignIn(BaseModel):
+    """Biriktirilmagan o'quvchini qaysi sinfga biriktirish."""
+
+    class_id: int
 
 
 class GroupMembersIn(BaseModel):

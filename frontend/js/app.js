@@ -3199,14 +3199,119 @@ async function renderStudentProfile(schoolClass, studentId) {
   document.getElementById("remove-student-button")?.addEventListener(
     "click",
     guarded(async () => {
-      const unit = schoolClass.is_group ? "guruh" : "sinf";
-      const note = schoolClass.is_group ? " U o'z sinfida qoladi." : "";
-      if (!(await askConfirm(`${student.full_name} ${unit}dan chiqarilsinmi? Eski davomatlarda u saqlanib qoladi.${note}`))) return;
+      if (!schoolClass.is_group) {
+        openRemoveStudentSheet(schoolClass, student);
+        return;
+      }
+      if (!(await askConfirm(`${student.full_name} guruhdan chiqarilsinmi? Eski davomatlarda u saqlanib qoladi. U o'z sinfida qoladi.`))) return;
       await api(`/api/classes/${schoolClass.id}/students/${student.id}`, { method: "DELETE" });
       myClassesCache = null;
-      showToast(`O'quvchi ${unit}dan chiqarildi`);
+      showToast("O'quvchi guruhdan chiqarildi");
       await renderClass(schoolClass.id, "students");
     })
+  );
+}
+
+// Sinfdan chiqarish: sabab majburiy — o'quvchi "Biriktirilmaganlar"ga tushadi (rahbariyat qayta biriktiradi yoki o'chiradi)
+function openRemoveStudentSheet(schoolClass, student) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 6px">🚪 ${escapeHtml(student.full_name)} sinfdan chiqarilsinmi?</h3>
+    <p class="subtitle" style="margin:0 0 12px">O'quvchi «Biriktirilmaganlar» ro'yxatiga tushadi — rahbariyat uni boshqa sinfga biriktiradi yoki o'chiradi. Eski davomat va natijalari saqlanadi.</p>
+    <label class="field-label" for="remove-reason">Nima sababdan chiqarilyapti? <span class="required-mark">*</span></label>
+    <textarea class="input" id="remove-reason" rows="3" maxlength="500" placeholder="Masalan: boshqa maktabga o'tdi, oilaviy sabab, to'lov qilmadi"></textarea>
+    <button class="btn" id="remove-confirm" style="margin-top:12px;background:#d93636;color:#fff">🚪 Chiqarish</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+  const reasonBox = sheet.querySelector("#remove-reason");
+  sheet.querySelector("#remove-confirm").addEventListener(
+    "click",
+    guarded(async () => {
+      const reason = reasonBox.value.trim();
+      if (reason.length < 3) {
+        reasonBox.focus();
+        throw new Error("Chiqarish sababini yozing");
+      }
+      await api(`/api/classes/${schoolClass.id}/students/${student.id}`, { method: "DELETE", body: { reason } });
+      close();
+      myClassesCache = null;
+      schoolOverviewCache = null;
+      showToast("🚪 O'quvchi chiqarildi — «Biriktirilmaganlar»da turibdi");
+      await renderClass(schoolClass.id, "students");
+    })
+  );
+}
+
+function schoolUnassignedTileHtml(overview) {
+  if (overview?.unassigned === null || overview?.unassigned === undefined) return "";
+  const count = overview.unassigned;
+  return schoolMenuItem("unassigned", svgIcon("user"), "Biriktirilmaganlar", count ? `${count} ta o'quvchi` : "Bo'sh", "wide");
+}
+
+/*
+  Biriktirilmaganlar: sinfdan sabab bilan chiqarilgan o'quvchilar. Rahbariyat har birini qaytadan sinfga
+  biriktiradi (eski sinfiga — tarixi bilan tiklanadi) yoki o'chiradi (tarixi bazada qoladi).
+*/
+async function renderUnassigned(school) {
+  currentSchool = school;
+  const data = await api("/api/schools/unassigned");
+  showPage(`
+    <div data-school-tab="unassigned">
+      ${schoolSubHeader("Biriktirilmaganlar")}
+      <p class="subtitle" style="margin:0 0 12px">Sinfdan chiqarilgan o'quvchilar. Ularni qaytadan sinfga biriktiring yoki ro'yxatdan o'chiring.</p>
+      ${
+        data.students.length
+          ? data.students
+              .map(
+                (item) => `
+                  <div class="card" style="display:block;cursor:default;margin-bottom:10px" data-unassigned="${item.id}">
+                    <h3 style="margin:0">${escapeHtml(item.full_name)}</h3>
+                    <p class="subtitle" style="margin:4px 0 0">🏫 ${escapeHtml(item.class_name)}${item.class_deleted ? " (sinf o'chirilgan)" : ""} · ${formatDateTime(item.removed_at)}${
+                      item.removed_by ? ` · ${escapeHtml(item.removed_by)}` : ""
+                    }</p>
+                    <p style="margin:8px 0 0">📝 ${escapeHtml(item.reason)}</p>
+                    <div class="row-between" style="gap:8px;margin-top:12px;align-items:stretch">
+                      <button type="button" class="btn" data-assign="${item.id}" style="margin:0;flex:1">🏫 Sinfga biriktirish</button>
+                      <button type="button" class="btn btn-ghost" data-purge="${item.id}" style="margin:0;flex:1">🗑 O'chirish</button>
+                    </div>
+                  </div>`
+              )
+              .join("")
+          : `<div class="empty-state"><div style="font-size:42px">✅</div><p>Biriktirilmagan o'quvchi yo'q.</p>
+               <p class="subtitle">Sinfdan chiqarilgan o'quvchi shu yerga tushadi.</p></div>`
+      }
+    </div>
+  `);
+  wireSchoolSubPage();
+  const byId = new Map(data.students.map((item) => [item.id, item]));
+  const done = async (message) => {
+    schoolOverviewCache = null;
+    myClassesCache = null;
+    showToast(message);
+    await renderUnassigned(school);
+  };
+  document.querySelectorAll("[data-assign]").forEach((button) =>
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        const item = byId.get(Number(button.dataset.assign));
+        const choices = data.classes.map((cls) => ({ id: cls.id, name: cls.name, note: cls.id === item.class_id ? "eski sinfi — tarixi bilan tiklanadi" : "" }));
+        await pickClassThen(`${item.full_name} — qaysi sinfga?`, Promise.resolve(choices), async (classId) => {
+          const result = await api(`/api/schools/unassigned/${item.id}/assign`, { method: "POST", body: { class_id: classId } });
+          await done(`✅ ${item.full_name} — «${result.class_name}»${result.restored ? " (tarixi bilan tiklandi)" : ""}`);
+        });
+      })
+    )
+  );
+  document.querySelectorAll("[data-purge]").forEach((button) =>
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        const item = byId.get(Number(button.dataset.purge));
+        if (!(await askConfirm(`${item.full_name} ro'yxatdan o'chirilsinmi? Eski davomat va natijalari tarixda qoladi.`))) return;
+        await api(`/api/schools/unassigned/${item.id}/delete`, { method: "POST", body: {} });
+        await done(`🗑 ${item.full_name} o'chirildi`);
+      })
+    )
   );
 }
 
@@ -4770,6 +4875,7 @@ function openSchoolTab(tab) {
   else if (tab === "classes-mine") renderSchoolClasses(currentSchool, "mine");
   else if (tab === "classes-all") renderSchoolClasses(currentSchool, "all");
   else if (tab === "groups") renderSchoolGroups(currentSchool);
+  else if (tab === "unassigned") renderUnassigned(currentSchool);
   else if (tab === "profile") renderSchoolProfile(currentSchool);
   else renderMySchool(currentSchool);
 }
@@ -4875,6 +4981,7 @@ function renderMySchool(school, { refresh = true } = {}) {
         ${schoolMenuItem("announcements", svgIcon("megaphone"), "E'lonlar", "Maktab va sinflar")}
         <span id="school-payments-tile" style="display:contents">${schoolPaymentsTileHtml(schoolOverviewCache)}</span>
         ${isLeader(school) ? schoolMenuItem("results", svgIcon("chart"), "Test natijalari", "Sinflar bo'yicha", "wide") : ""}
+        <span id="school-unassigned-tile" style="display:contents">${schoolUnassignedTileHtml(schoolOverviewCache)}</span>
         ${school.dorm ? schoolMenuItem("dorm", svgIcon("house"), "Yotoqxona", "Xonalar va kechki yo'qlama", "wide") : ""}
         ${schoolMenuItem("teachers", svgIcon("users"), "Xodimlar", `${school.members.length} ta xodim`, "wide")}
       </div>
@@ -5621,6 +5728,7 @@ async function loadSchoolOverview() {
     fill("school-announcements", schoolAnnouncementsHtml(overview));
     fill("school-chart", schoolChartHtml(overview));
     fill("school-payments-tile", schoolPaymentsTileHtml(overview));
+    fill("school-unassigned-tile", schoolUnassignedTileHtml(overview));
     fill("school-schedule-tile", schoolScheduleTileHtml(overview));
   } catch (_) {
     /* holat ko'rinmasa ham bo'limlar ishlaydi */

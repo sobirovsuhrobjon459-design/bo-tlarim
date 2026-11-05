@@ -1919,7 +1919,7 @@ def test_davomat_olish_tahrirlash_va_vaqtlar():
     assert edited["counts"]["late"] == 1 and edited["counts"]["absent"] == 0
 
     # O'quvchi sinfdan chiqarilsa ham eski davomatda turadi
-    client.delete(f"/api/classes/{cid}/students/{ids['Sardor Raximov']}", headers=as_user(701))
+    client.request("DELETE", f"/api/classes/{cid}/students/{ids['Sardor Raximov']}", json={"reason": "Boshqa maktabga o'tdi"}, headers=as_user(701))
     again = client.get(f"/api/attendance/{attendance['id']}", headers=as_user(701)).json()
     assert any(mark["name"] == "Sardor Raximov" for mark in again["marks"])
 
@@ -5681,12 +5681,12 @@ def test_chiqarilgan_oquvchi_idsi_yangisiga_beriladi():
     assert [s["code"] for s in students] == [1030, 1031, 1032]
 
     # Oxirgi (1032) chiqarildi — yangi o'quvchi 1033 emas, 1032 oladi
-    client.delete(f"/api/classes/{cid}/students/{students[2]['id']}", headers=as_user(701))
+    client.request("DELETE", f"/api/classes/{cid}/students/{students[2]['id']}", json={"reason": "Boshqa maktabga o'tdi"}, headers=as_user(701))
     view = client.post(f"/api/classes/{cid}/students", json={"full_name": "Yangi Bola"}, headers=as_user(701)).json()
     assert [(s["full_name"], s["code"]) for s in view["students"]][-1] == ("Yangi Bola", 1032), view["students"]
 
     # O'rtadagi (1030) chiqarilsa ham — bo'sh joy keyingi yangisiga
-    client.delete(f"/api/classes/{cid}/students/{students[0]['id']}", headers=as_user(701))
+    client.request("DELETE", f"/api/classes/{cid}/students/{students[0]['id']}", json={"reason": "Boshqa maktabga o'tdi"}, headers=as_user(701))
     view = client.post(f"/api/classes/{cid}/students", json={"full_name": "Yana Bola"}, headers=as_user(701)).json()
     assert sorted(s["code"] for s in view["students"]) == [1030, 1031, 1032], view["students"]
 
@@ -6652,7 +6652,8 @@ def test_har_bir_oqituvchi_oquvchini_bittalab_qoshadi():
     assert client.put(url, json={"full_name": "Boshqa Ism"}, headers=as_user(704)).status_code == 403
     assert client.delete(url, headers=as_user(704)).status_code == 403
     assert client.post(f"/api/classes/{cid}/students/import/preview", json={"text": "X Y"}, headers=as_user(704)).status_code == 403
-    assert client.delete(url, headers=as_user(702)).status_code == 200
+    # Kurator chiqaradi — sababi bilan (o'quvchi "Biriktirilmaganlar"ga tushadi)
+    assert client.request("DELETE", url, json={"reason": "Boshqa maktabga o'tdi"}, headers=as_user(702)).status_code == 200
 
 
 def test_davomatda_royxatda_yoq_oquvchini_qoshish():
@@ -6931,7 +6932,7 @@ def test_fan_guruhlari_ingliz_tili_darajalari():
     assert client.get(f"/api/classes/{b1['id']}/payments", headers=owner).json()["monthly_fee"] == 0
 
     # Sinfdan chiqarilsa — guruhdan ham
-    assert client.delete(f"/api/classes/{cid}/students/{ids['Valiyev Ali']}", headers=owner).status_code == 200
+    assert client.request("DELETE", f"/api/classes/{cid}/students/{ids['Valiyev Ali']}", json={"reason": "Boshqa maktabga o'tdi"}, headers=owner).status_code == 200
     assert client.get(f"/api/classes/{b1['id']}", headers=teacher).json()["students"] == []
 
 
@@ -6978,3 +6979,65 @@ def test_versiyali_fayl_faqat_mos_versiyada_keshlanadi():
     # Versiyasiz fayl (sw.js) — versiya aytilmaydi, avvalgidek har safar tekshiriladi
     sw = client.get("/sw.js")
     assert "x-asset-version" not in sw.headers and sw.headers["cache-control"] == "no-cache"
+
+
+def test_biriktirilmaganlar_savati():
+    """
+    Sinfdan chiqarishda sabab majburiy; o'quvchi "Biriktirilmaganlar"ga tushadi. Rahbariyat uni boshqa sinfga
+    biriktiradi (yangi yozuv), eski sinfiga qaytaradi (tarixi bilan tiklanadi) yoki o'chiradi.
+    """
+    reset_database()
+    owner = as_user(701)
+    cid = _school_with_class(701)["id"]  # 10/2
+    other = client.post("/api/classes", json={"name": "9-A"}, headers=owner).json()["id"]
+    school = client.get("/api/schools/me", headers=owner).json()["school"]
+    _set_name(704, "Oddiy", "Ustoz")
+    client.post("/api/schools/join", json={"code": current_code(school), "subjects": ["Fizika"], "phone": "93 444 55 04"},
+                headers=as_user(704))
+    view = client.post(f"/api/classes/{cid}/students", json={"full_name": "Valiyev Ali"}, headers=owner).json()
+    view = client.post(f"/api/classes/{cid}/students", json={"full_name": "Karimova Zuhra"}, headers=owner).json()
+    ids = {s["full_name"]: s["id"] for s in view["students"]}
+
+    def remove(class_id, student_id, reason=None):
+        body = {"reason": reason} if reason is not None else None
+        return client.request("DELETE", f"/api/classes/{class_id}/students/{student_id}", json=body, headers=owner)
+
+    # Sababsiz (yoki juda qisqa sabab bilan) chiqarib bo'lmaydi
+    assert remove(cid, ids["Valiyev Ali"]).status_code == 422
+    assert remove(cid, ids["Valiyev Ali"], "ab").status_code == 422
+    assert remove(cid, ids["Valiyev Ali"], "Boshqa maktabga o'tdi").status_code == 200
+
+    # Ro'yxat — rahbariyatga; sababi va kim chiqargani bilan
+    assert client.get("/api/schools/unassigned", headers=as_user(704)).status_code == 403
+    basket = client.get("/api/schools/unassigned", headers=owner).json()
+    assert [(s["full_name"], s["class_name"], s["reason"], s["removed_by"]) for s in basket["students"]] == [
+        ("Valiyev Ali", "10/2", "Boshqa maktabga o'tdi", "Aziza Karimova")], basket
+    assert sorted(item["name"] for item in basket["classes"]) == ["10/2", "9-A"]
+    assert client.get("/api/schools/overview", headers=owner).json()["unassigned"] == 1
+
+    # Boshqa sinfga — u yerda yangi yozuv; ro'yxatdan chiqadi
+    moved = client.post(f"/api/schools/unassigned/{ids['Valiyev Ali']}/assign", json={"class_id": other}, headers=owner).json()
+    assert moved["class_name"] == "9-A" and moved["restored"] is False and moved["student_id"] != ids["Valiyev Ali"], moved
+    assert [s["full_name"] for s in client.get(f"/api/classes/{other}", headers=owner).json()["students"]] == ["Valiyev Ali"]
+    assert [s["full_name"] for s in client.get(f"/api/classes/{cid}", headers=owner).json()["students"]] == ["Karimova Zuhra"]
+    assert client.get("/api/schools/unassigned", headers=owner).json()["students"] == []
+
+    # Eski sinfiga qaytarilsa — o'sha yozuv tiklanadi (tarixi bilan)
+    assert remove(cid, ids["Karimova Zuhra"], "Vaqtincha ketdi").status_code == 200
+    back = client.post(f"/api/schools/unassigned/{ids['Karimova Zuhra']}/assign", json={"class_id": cid}, headers=owner).json()
+    assert back["restored"] is True and back["student_id"] == ids["Karimova Zuhra"], back
+    assert [s["id"] for s in client.get(f"/api/classes/{cid}", headers=owner).json()["students"]] == [ids["Karimova Zuhra"]]
+
+    # O'chirish — ro'yxatdan butunlay olinadi
+    assert remove(other, moved["student_id"], "O'qishni tashladi").status_code == 200
+    assert client.post(f"/api/schools/unassigned/{moved['student_id']}/delete", headers=as_user(704)).status_code == 403
+    assert client.post(f"/api/schools/unassigned/{moved['student_id']}/delete", headers=owner).status_code == 200
+    assert client.get("/api/schools/unassigned", headers=owner).json()["students"] == []
+    assert client.post(f"/api/schools/unassigned/{moved['student_id']}/delete", headers=owner).status_code == 404
+
+    # Fan guruhidan chiqarish — sababsiz, ro'yxatga tushmaydi (o'quvchi o'z sinfida qoladi)
+    group = client.post("/api/classes", json={"name": "Ingliz tili — A1", "subject": "Ingliz tili"}, headers=owner).json()
+    added = client.post(f"/api/classes/{group['id']}/members", json={"student_ids": [ids["Karimova Zuhra"]]}, headers=owner).json()
+    copy_id = added["class"]["students"][0]["id"]
+    assert client.delete(f"/api/classes/{group['id']}/students/{copy_id}", headers=owner).status_code == 200
+    assert client.get("/api/schools/unassigned", headers=owner).json()["students"] == []
