@@ -2246,10 +2246,9 @@ function openSheet(innerHtml, { onClose = null } = {}) {
 
 function openClassSettings(schoolClass, tab) {
   const { sheet, close } = openSheet(`
-    <h3 style="margin:0 0 10px">⚙️ Sinf sozlamalari</h3>
-    <label class="field-label" for="sheet-class-name">Sinf / guruh nomi</label>
+    <h3 style="margin:0 0 10px">⚙️ ${schoolClass.is_group ? "Guruh" : "Sinf"} sozlamalari</h3>
+    <label class="field-label" for="sheet-class-name">${schoolClass.is_group ? "Guruh nomi" : "Sinf / guruh nomi"}</label>
     <input class="input" id="sheet-class-name" maxlength="100" value="${escapeHtml(schoolClass.name)}" />
-    <button class="btn" id="sheet-save-name" style="margin-top:10px">💾 Nomini saqlash</button>
 
     <label class="field-label" for="sheet-curator" style="margin-top:16px">${
       schoolClass.is_group ? "👩‍🏫 Asosiy o'qituvchi" : "🎓 Kurator (sinf rahbari)"
@@ -2269,7 +2268,6 @@ function openClassSettings(schoolClass, tab) {
         ? "Guruh o'qituvchilari o'quvchilarni maktab ro'yxatidan qo'shadi, guruhdan chiqaradi va davomat oladi."
         : "Kurator o'quvchilarni qo'shadi va sinfni boshqaradi."
     }</p>
-    <button class="btn" id="sheet-save-curator" style="margin-top:10px">${schoolClass.is_group ? "👩‍🏫 Asosiy o'qituvchini saqlash" : "🎓 Kuratorni saqlash"}</button>
     ${
       schoolClass.is_group
         ? `<label class="field-label" for="sheet-assistant" style="margin-top:16px">🤝 Yordamchi o'qituvchi</label>
@@ -2281,8 +2279,7 @@ function openClassSettings(schoolClass, tab) {
                    `<option value="${member.user_id}" ${schoolClass.assistant?.user_id === member.user_id ? "selected" : ""}>${escapeHtml(member.name)} — ${subjectsText(member.subjects)}</option>`
                )
                .join("")}
-           </select>
-           <button class="btn" id="sheet-save-assistant" style="margin-top:10px">🤝 Yordamchini saqlash</button>`
+           </select>`
         : ""
     }
 
@@ -2295,80 +2292,78 @@ function openClassSettings(schoolClass, tab) {
              }" />
            <p class="subtitle" style="margin:4px 0 0">Bo'sh qoldirilsa — umumiy oylik summa olinadi. Har sinfning narxi har xil bo'lsa, shu yerda belgilang.</p>
            ${feeMonthFieldHtml("sheet-fee-from-month")}
-           <button class="btn" id="sheet-save-fee" style="margin-top:10px">💰 Narxni saqlash</button>
            <div id="sheet-fee-history"></div>`
         : ""
     }
+
+    <button class="btn" id="sheet-save-all" style="margin-top:18px">💾 Saqlash</button>
 
     ${schoolClass.can_delete ? `<button class="btn btn-ghost" id="sheet-delete-class" style="margin-top:16px">🗑 ${schoolClass.is_group ? "Guruhni" : "Sinfni"} o'chirish</button>` : ""}
     <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Yopish</button>
   `);
 
-  sheet.querySelector("#sheet-save-name").addEventListener(
-    "click",
-    guarded(async () => {
-      const name = sheet.querySelector("#sheet-class-name").value.trim();
-      if (!name) throw new Error("Sinf nomini kiriting");
-      if (name !== schoolClass.name) {
-        const updated = await api(`/api/classes/${schoolClass.id}`, { method: "PUT", body: { name } });
-        myClassesCache = null;
-        showToast(`✅ Nomi o'zgartirildi: ${updated.name}`);
-        openClassTab(updated, tab);
-      }
-      close();
-    })
-  );
-
-  sheet.querySelector("#sheet-save-curator").addEventListener(
-    "click",
-    guarded(async () => {
-      const value = sheet.querySelector("#sheet-curator").value;
-      const updated = await api(`/api/classes/${schoolClass.id}/curator`, {
-        method: "PUT",
-        body: { user_id: value ? Number(value) : null },
-      });
-      myClassesCache = null;
-      const role = schoolClass.is_group ? "Asosiy o'qituvchi" : "Kurator";
-      showToast(updated.curator ? `✅ ${role}: ${updated.curator.name}` : `${role} olib tashlandi`);
-      close();
-      openClassTab(updated, tab);
-    })
-  );
-
-  sheet.querySelector("#sheet-save-assistant")?.addEventListener(
-    "click",
-    guarded(async () => {
-      const value = sheet.querySelector("#sheet-assistant").value;
-      const updated = await api(`/api/classes/${schoolClass.id}/assistant`, {
-        method: "PUT",
-        body: { user_id: value ? Number(value) : null },
-      });
-      myClassesCache = null;
-      showToast(updated.assistant ? `✅ Yordamchi o'qituvchi: ${updated.assistant.name}` : "Yordamchi o'qituvchi olib tashlandi");
-      close();
-      openClassTab(updated, tab);
-    })
-  );
-
   const feeHistoryHolder = sheet.querySelector("#sheet-fee-history");
   if (feeHistoryHolder) loadFeeHistoryInto(feeHistoryHolder, schoolClass.id);
 
-  sheet.querySelector("#sheet-save-fee")?.addEventListener(
+  // Bitta "Saqlash": faqat o'zgargan maydonlar yuboriladi (nomi, kurator/asosiy o'qituvchi, yordamchi, narx)
+  sheet.querySelector("#sheet-save-all").addEventListener(
     "click",
     guarded(async () => {
-      const raw = sheet.querySelector("#sheet-class-fee").value.trim();
-      const value = raw === "" ? null : Math.round(Number(raw));
-      if (value !== null && (!Number.isFinite(value) || value < 0)) throw new Error("Narxni to'g'ri kiriting");
-      const fromMonth = sheet.querySelector("#sheet-fee-from-month").value;
-      const saved = await api(`/api/classes/${schoolClass.id}/fee`, {
-        method: "PUT",
-        body: { monthly_fee: value, from_month: fromMonth },
-      });
-      schoolClass.monthly_fee = saved.monthly_fee;
-      schoolOverviewCache = null;
-      const since = fromMonth === FEE_HISTORY_START ? "barcha oylar uchun" : `${feeMonthName(fromMonth)} dan`;
-      showToast(value === null ? `✅ ${since} umumiy summa olinadi` : `✅ ${money(value)} — ${since}`);
+      const name = sheet.querySelector("#sheet-class-name").value.trim();
+      if (!name) throw new Error(`${schoolClass.is_group ? "Guruh" : "Sinf"} nomini kiriting`);
+      const curatorValue = sheet.querySelector("#sheet-curator").value;
+      const curatorId = curatorValue ? Number(curatorValue) : null;
+      const assistantBox = sheet.querySelector("#sheet-assistant");
+      const initialAssistant = schoolClass.assistant?.user_id ?? null;
+      let assistantId = assistantBox?.value ? Number(assistantBox.value) : null;
+      if (assistantBox && curatorId && curatorId === assistantId) {
+        // Yordamchi asosiy o'qituvchi qilindi va yordamchi tanlovi o'zgarmagan — yordamchi bo'shaydi
+        if (assistantId !== initialAssistant) throw new Error("Asosiy va yordamchi o'qituvchi bir kishi bo'lmasin");
+        assistantId = null;
+      }
+      const feeBox = sheet.querySelector("#sheet-class-fee");
+      let feeValue = null;
+      if (feeBox) {
+        const raw = feeBox.value.trim();
+        feeValue = raw === "" ? null : Math.round(Number(raw));
+        if (feeValue !== null && (!Number.isFinite(feeValue) || feeValue < 0)) throw new Error("Narxni to'g'ri kiriting");
+      }
+
+      let updated = null;
+      const saved = [];
+      if (name !== schoolClass.name) {
+        updated = await api(`/api/classes/${schoolClass.id}`, { method: "PUT", body: { name } });
+        saved.push("nomi");
+      }
+      if (curatorId !== (schoolClass.curator?.user_id ?? null)) {
+        updated = await api(`/api/classes/${schoolClass.id}/curator`, { method: "PUT", body: { user_id: curatorId } });
+        saved.push(schoolClass.is_group ? "asosiy o'qituvchi" : "kurator");
+      }
+      // Server asosiy o'qituvchini yordamchilikdan o'zi olishi mumkin — oxirgi holat bilan solishtiriladi
+      if (assistantBox && assistantId !== ((updated || schoolClass).assistant?.user_id ?? null)) {
+        updated = await api(`/api/classes/${schoolClass.id}/assistant`, { method: "PUT", body: { user_id: assistantId } });
+        saved.push("yordamchi o'qituvchi");
+      }
+      if (feeBox && feeValue !== (schoolClass.monthly_fee ?? null)) {
+        const fromMonth = sheet.querySelector("#sheet-fee-from-month").value;
+        const fee = await api(`/api/classes/${schoolClass.id}/fee`, {
+          method: "PUT",
+          body: { monthly_fee: feeValue, from_month: fromMonth },
+        });
+        schoolClass.monthly_fee = fee.monthly_fee;
+        if (updated) updated.monthly_fee = fee.monthly_fee;
+        schoolOverviewCache = null;
+        saved.push("oylik narx");
+      }
+
       close();
+      if (!saved.length) {
+        showToast("O'zgarish yo'q");
+        return;
+      }
+      myClassesCache = null;
+      showToast(`✅ Saqlandi: ${saved.join(", ")}`);
+      if (updated) openClassTab(updated, tab);
     })
   );
 
