@@ -433,6 +433,13 @@ class WrittenAnswer(Base):
     blank: Mapped[bool] = mapped_column(default=False)  # katak bo'sh (skaner aniqladi) — o'zi ✗
     checked_at: Mapped[datetime | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    # AI (Claude) o'qigan matn va ishonchi. ai_status: None — o'qilmagan, "queued" — navbatda,
+    # "done" — o'qildi, "error" — o'qib bo'lmadi (o'qituvchi o'zi baholaydi)
+    ai_text: Mapped[str | None] = mapped_column(String(300), default=None)
+    ai_sure: Mapped[bool | None] = mapped_column(default=None)
+    ai_status: Mapped[str | None] = mapped_column(String(10), default=None)
+    # Bahoni AI qo'ydi (aniq o'qilgan va kalitga mos — ✓); o'qituvchi o'zgartirsa — False
+    auto_verdict: Mapped[bool] = mapped_column(default=False)
 
 
 class Payment(Base):

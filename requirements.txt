@@ -17,3 +17,4 @@ openpyxl==3.1.5  # o'quvchilar ro'yxatini Excel'dan import qilish
 opencv-python-headless==5.0.0.93  # javoblar varaqasini suratdan o'qish (OMR)
 pypdfium2==4.30.0  # PDF hisobot sahifasini rasmga aylantirish (natijalar rasmi)
 numpy==2.5.4
+anthropic==2.5.0  # yozma javoblarni AI (Claude) bilan o'qish — ANTHROPIC_API_KEY bo'lsa

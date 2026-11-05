@@ -14727,10 +14727,26 @@ async function renderAttachClasses(testId) {
   hamma o'quvchilarning shu katagini ketma-ket ko'rib ✓ yoki ✗ qo'yadi (bo'sh katak o'zi ✗ bo'ladi).
   Baho darhol o'quvchi natijasiga (va Rasch'ga) o'tadi.
 */
+let writtenRefreshTimer = null; // AI o'qiyotganda ro'yxat o'zi yangilanib turadi
+
 async function renderWrittenOverview(testId) {
+  clearTimeout(writtenRefreshTimer);
   const data = await api(`/api/teacher/tests/${testId}/written`);
   const total = data.questions.reduce((sum, question) => sum + question.total, 0);
   const left = data.questions.reduce((sum, question) => sum + question.total - question.checked, 0);
+  const ai = data.ai || {};
+  const aiHtml = !total
+    ? ""
+    : !ai.enabled
+      ? ""
+      : ai.queued
+        ? `<div class="notice is-info">🤖 AI javoblarni o'qimoqda — <b>${ai.queued}</b> ta katak qoldi. Aniq o'qilgan va kalitga
+             mos javoblarga o'zi ✓ qo'yadi, qolganini siz ko'rasiz.</div>`
+        : ai.unread
+          ? `<button class="btn" id="written-ai-button" style="margin:0 0 10px">🤖 AI bilan o'qish (${ai.unread} ta javob)</button>`
+          : ai.auto
+            ? `<p class="subtitle" style="margin:0 4px 10px">🤖 AI <b>${ai.auto}</b> ta javobga o'zi ✓ qo'ydi (savol ichida «🤖» belgisi bilan).</p>`
+            : "";
   showPage(`
     <div class="page-header">
       <button class="back-button" type="button" data-action="back-written" style="margin:0">←</button>
@@ -14740,6 +14756,7 @@ async function renderWrittenOverview(testId) {
       Savolni tanlang — hamma o'quvchilarning shu katagi rasmda chiqadi. Har biriga ✓ yoki ✗ qo'ying,
       natija darhol yangilanadi. Bo'sh katak o'zi ✗ bo'ladi.
     </p>
+    ${aiHtml}
     ${
       total
         ? `<p class="subtitle" style="margin:0 4px 10px">${left ? `⚠️ Baholanmagan: <b>${left}</b> ta` : "✅ Hammasi baholangan"}</p>`
@@ -14762,6 +14779,21 @@ async function renderWrittenOverview(testId) {
   document.querySelectorAll("[data-written-ref]").forEach((button) =>
     button.addEventListener("click", guarded(() => renderWrittenQuestion(testId, Number(button.dataset.writtenRef))))
   );
+  document.getElementById("written-ai-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const { queued } = await api(`/api/teacher/tests/${testId}/written/ai`, { method: "POST" });
+      showToast(queued ? `🤖 ${queued} ta javob AI'ga yuborildi` : "O'qiladigan javob qolmagan");
+      await renderWrittenOverview(testId);
+    })
+  );
+  // AI o'qiyotgan bo'lsa — 4 soniyada bir yangilanadi (shu sahifada turgan paytda)
+  if (ai.queued) {
+    const page = appElement.querySelector(".page");
+    writtenRefreshTimer = setTimeout(() => {
+      if (page.isConnected) renderWrittenOverview(testId).catch(() => {});
+    }, 4000);
+  }
 }
 
 async function renderWrittenQuestion(testId, ref) {
@@ -14784,8 +14816,19 @@ async function renderWrittenQuestion(testId, ref) {
             <b>${item.number ? `<span class="student-number">#${item.number}</span> ` : ""}${escapeHtml(item.name)}</b>
             ${item.variant ? `<span class="badge badge-purple">${item.variant}: ${keyText(item.key)}</span>` : ""}
             ${item.blank ? `<span class="badge badge-gray">bo'sh</span>` : ""}
+            <span class="badge badge-green" data-auto-badge ${item.auto ? "" : "hidden"}>🤖 AI ✓</span>
           </div>
           <img class="written-item-image" src="${item.image}" alt="${escapeHtml(item.name)} javobi" />
+          ${
+            // AI o'qigan matn: o'qituvchi rasm bilan solishtirib tez qaror qiladi
+            item.ai_status === "done"
+              ? `<p class="written-ai">🤖 AI o'qidi: <b>${item.ai_text ? escapeHtml(item.ai_text) : "(bo'sh)"}</b>${
+                  item.ai_sure ? "" : ` <span class="written-ai-unsure">· aniq emas</span>`
+                }</p>`
+              : item.ai_status === "queued"
+                ? `<p class="written-ai">🤖 AI o'qimoqda…</p>`
+                : ""
+          }
           <div class="written-verdict">
             <button type="button" class="verdict-button is-right" data-verdict="true">✓ To'g'ri</button>
             <button type="button" class="verdict-button is-wrong" data-verdict="false">✗ Xato</button>
@@ -14806,6 +14849,7 @@ async function renderWrittenQuestion(testId, ref) {
       const row = document.querySelector(`.written-item[data-attempt="${item.attempt_id}"]`);
       row.classList.toggle("is-right", item.verdict === true);
       row.classList.toggle("is-wrong", item.verdict === false);
+      row.querySelector("[data-auto-badge]").hidden = !item.auto;
       row.querySelectorAll(".verdict-button").forEach((button) =>
         button.classList.toggle("selected", String(item.verdict) === button.dataset.verdict)
       );
@@ -14831,13 +14875,14 @@ async function renderWrittenQuestion(testId, ref) {
         guarded(async () => {
           // Tanlangan bahoni qayta bosish — bekor qilish
           const verdict = String(item.verdict) === button.dataset.verdict ? null : button.dataset.verdict === "true";
-          const before = item.verdict;
+          const before = [item.verdict, item.auto];
           item.verdict = verdict;
+          item.auto = false; // endi o'qituvchi bahosi
           paint();
           try {
             await api(`/api/teacher/tests/${testId}/written/${ref}/${item.attempt_id}`, { method: "POST", body: { verdict } });
           } catch (error) {
-            item.verdict = before;
+            [item.verdict, item.auto] = before;
             paint();
             throw error;
           }

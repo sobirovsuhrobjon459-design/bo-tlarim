@@ -31,6 +31,7 @@ import secrets
 import threading
 import time
 from types import SimpleNamespace
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from html import escape as html_escape
 from xml.sax.saxutils import escape as xml_escape
@@ -275,6 +276,11 @@ def _add_missing_columns() -> None:
             "method": "VARCHAR(10) DEFAULT 'payme'",
             "receipt_file_id": "VARCHAR(200)",
             "click_trans_id": "VARCHAR(50)",
+        },
+        # Yozma javoblarni AI o'qishi (jadval oldingi yangilanishda AI ustunlarisiz yaratilgan)
+        "written_answers": {
+            "ai_text": "VARCHAR(300)", "ai_sure": "BOOLEAN", "ai_status": "VARCHAR(10)",
+            "auto_verdict": "BOOLEAN DEFAULT FALSE",
         },
     }
 
@@ -6739,14 +6745,100 @@ def save_scanned_sheet(
         attempt.variant = body.variant
         db.flush()
     _store_written_images(db, test, attempt, body.written)
-    return _store_offline_answers(db, test, teacher, attempt, body.answers)
+    result = _store_offline_answers(db, test, teacher, attempt, body.answers)
+    if body.written:
+        _queue_ai_reading(db, [attempt.id])  # AI yoqilgan bo'lsa — kataklarni fonda o'qiydi
+    return result
 
 
 # ---------- Yozma javoblar (titulda qo'lda yozilgan) ----------
 # Skaner yozma katakni o'qimaydi — rasm qilib saqlaydi. O'qituvchi savolma-savol (36a: hamma
 # o'quvchilar) rasmga qarab ✓ yoki ✗ qo'yadi; baho natija va Rasch'ga o'tadi. Bo'sh katak o'zi ✗.
+# AI ulangan bo'lsa (ANTHROPIC_API_KEY), kataklarni Claude o'qiydi: aniq o'qilgan va kalitga mos
+# javob — o'zi ✓; qolganlari (shubhali, mos emas) o'qituvchiga AI o'qigan matn bilan ko'rsatiladi.
 
 WRITTEN_IMAGE_LIMIT = 300_000  # bitta katak rasmi (base64 matni) — ko'pi bilan
+_ai_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ai-read")
+_ai_running: set[int] = set()  # hozir AI o'qiyotgan o'quvchilar (bir varaq ikki marta yuborilmasin)
+_ai_lock = threading.Lock()
+
+
+def _queue_ai_reading(db: Session, attempt_ids: list[int]) -> int:
+    """O'quvchilarning hali baholanmagan, bo'sh bo'lmagan kataklari AI navbatiga. Navbatga tushganlar soni."""
+
+    from .ai_reader import ai_enabled
+
+    if not ai_enabled() or not attempt_ids:
+        return 0
+    rows = db.scalars(
+        select(WrittenAnswer).where(
+            WrittenAnswer.attempt_id.in_(attempt_ids), WrittenAnswer.blank.is_(False),
+            WrittenAnswer.verdict.is_(None),
+            or_(WrittenAnswer.ai_status.is_(None), WrittenAnswer.ai_status.in_(("queued", "error"))),
+        )
+    ).all()
+    for row in rows:
+        row.ai_status = "queued"
+    db.commit()
+    for attempt_id in sorted({row.attempt_id for row in rows}):
+        _ai_pool.submit(_ai_read_attempt, attempt_id)
+    return len(rows)
+
+
+def _ai_read_attempt(attempt_id: int) -> None:
+    """Fonda: bitta o'quvchining navbatdagi kataklarini AI o'qiydi, aniq va kalitga mos javobga ✓ qo'yadi."""
+
+    from .ai_reader import AIReadError, read_boxes
+
+    logger = logging.getLogger("backend.ai")
+    with _ai_lock:
+        if attempt_id in _ai_running:
+            return
+        _ai_running.add(attempt_id)
+    try:
+        with SessionLocal() as db:
+            attempt = db.get(Attempt, attempt_id)
+            if not attempt or attempt.status != "done":
+                return
+            test = db.get(Test, attempt.test_id)
+            rows = db.scalars(
+                select(WrittenAnswer).where(WrittenAnswer.attempt_id == attempt_id, WrittenAnswer.ai_status == "queued")
+            ).all()
+            if not rows:
+                return
+            labels = {kq.number: _key_question_label(kq) for kq in test.key_questions}
+            try:
+                read = read_boxes(test.subject, [(labels.get(row.question_ref, str(row.question_ref)), row.image)
+                                                 for row in rows])
+            except AIReadError as error:
+                logger.warning("AI o'qiy olmadi (o'quvchi %s): %s", attempt_id, error)
+                for row in rows:
+                    row.ai_status = "error"
+                db.commit()
+                return
+            overrides = _key_override(db, test, attempt.variant)
+            keys = {kq.number: overrides.get(kq.number, kq.correct) for kq in test.key_questions}
+            db.expire_all()  # AI o'qiyotganda o'qituvchi baho qo'ygan bo'lishi mumkin — bazadagisi olinadi
+            changed = False
+            for row in rows:
+                found = read.get(labels.get(row.question_ref, str(row.question_ref)))
+                if found is None:
+                    row.ai_status = "error"
+                    continue
+                row.ai_text, row.ai_sure = found
+                row.ai_status = "done"
+                if (row.verdict is None and row.ai_sure and row.ai_text
+                        and _text_answer_is_correct(row.ai_text, keys.get(row.question_ref, ""))):
+                    row.verdict, row.auto_verdict, row.checked_at = True, True, utcnow()
+                    changed = True
+            db.commit()
+            if changed:
+                _regrade_attempt(db, test, test.teacher, db.get(Attempt, attempt_id))
+    except Exception:  # noqa: BLE001 — fondagi ish: xato bo'lsa kataklar o'qituvchiga qoladi
+        logger.exception("AI o'qishda kutilmagan xato (o'quvchi %s)", attempt_id)
+    finally:
+        with _ai_lock:
+            _ai_running.discard(attempt_id)
 
 
 def _store_written_images(db: Session, test: Test, attempt: Attempt, images: dict[str, str]) -> None:
@@ -6779,6 +6871,8 @@ def _store_written_images(db: Session, test: Test, attempt: Attempt, images: dic
         row.verdict = False if row.blank else None
         row.checked_at = None
         row.created_at = utcnow()
+        # Yangi rasm — AI ham qaytadan o'qiydi
+        row.ai_text, row.ai_sure, row.ai_status, row.auto_verdict = None, None, None, False
     db.flush()
 
 
@@ -6816,13 +6910,19 @@ def _text_questions(test: Test) -> list[KeyQuestion]:
 def written_overview(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
     """Yozma savollar ro'yxati: har birida nechta rasm, nechtasi baholangan, nechtasi to'g'ri."""
 
+    from .ai_reader import ai_enabled
+
     test = _get_own_test(db, teacher, test_id)
     counts: dict[int, dict[str, int]] = {}
+    queued = unread = auto = 0
     for row, _ in _written_rows(db, test):
         item = counts.setdefault(row.question_ref, {"total": 0, "checked": 0, "correct": 0})
         item["total"] += 1
         item["checked"] += row.verdict is not None
         item["correct"] += row.verdict is True
+        queued += row.ai_status == "queued"
+        unread += row.verdict is None and not row.blank and row.ai_status in (None, "error")
+        auto += bool(row.auto_verdict)
     return {
         "title": test.title,
         "questions": [
@@ -6830,7 +6930,22 @@ def written_overview(test_id: int, teacher: Teacher = Depends(get_current_teache
              **counts.get(kq.number, {"total": 0, "checked": 0, "correct": 0})}
             for kq in _text_questions(test)
         ],
+        # AI: ulanganmi, nechta katak navbatda (o'qilmoqda), nechtasi hali o'qilmagan, nechtasiga o'zi ✓ qo'ydi
+        "ai": {"enabled": ai_enabled(), "queued": queued, "unread": unread, "auto": auto},
     }
+
+
+@app.post("/api/teacher/tests/{test_id}/written/ai")
+def written_ai_read(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """Hali baholanmagan yozma javoblarni AI bilan o'qish (masalan AI ulanishidan oldin skanerlanganlar)."""
+
+    from .ai_reader import ai_enabled
+
+    test = _get_own_test(db, teacher, test_id)
+    if not ai_enabled():
+        raise HTTPException(status_code=400, detail="AI ulanmagan — administrator API kalitini sozlashi kerak")
+    attempt_ids = sorted({attempt.id for _, attempt in _written_rows(db, test)})
+    return {"ok": True, "queued": _queue_ai_reading(db, attempt_ids)}
 
 
 @app.get("/api/teacher/tests/{test_id}/written/{ref}")
@@ -6866,6 +6981,11 @@ def written_question(
                 "image": row.image,
                 "verdict": row.verdict,
                 "blank": row.blank,
+                # AI o'qigani: matn, aniqmi, holati; auto — bahoni AI qo'ygan
+                "ai_text": row.ai_text,
+                "ai_sure": row.ai_sure,
+                "ai_status": row.ai_status,
+                "auto": bool(row.auto_verdict),
             }
             for row, attempt in rows
         ],
@@ -6902,6 +7022,7 @@ def set_written_rest(
                if row.question_ref == ref and row.verdict is None]
     for row, _ in pending:
         row.verdict = body.verdict
+        row.auto_verdict = False
         row.checked_at = utcnow()
     db.flush()
     for _, attempt in pending:
@@ -6926,6 +7047,7 @@ def set_written_verdict(
     if not row:
         raise HTTPException(status_code=404, detail="Yozma javob topilmadi")
     row.verdict = body.verdict
+    row.auto_verdict = False  # endi o'qituvchi bahosi
     row.checked_at = utcnow() if body.verdict is not None else None
     attempt = db.get(Attempt, attempt_id)
     _regrade_attempt(db, test, teacher, attempt)

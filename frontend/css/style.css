@@ -3690,3 +3690,14 @@ button {
   font-size: 13px;
   font-weight: 700;
 }
+
+/* AI o'qigan matn (yozma javob rasmi ostida) */
+.written-ai {
+  margin: 8px 2px 0;
+  font-size: 15px;
+}
+
+.written-ai-unsure {
+  color: #d97706;
+  font-weight: 600;
+}
