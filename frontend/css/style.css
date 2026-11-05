@@ -3706,3 +3706,23 @@ button {
   background: rgba(220, 38, 38, 0.14);
   color: #dc2626;
 }
+
+/* Skanerlangan titul rasmi (o'quvchi natijasida) */
+.sheet-photo-scroll {
+  max-height: 70vh;
+  overflow: auto;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.sheet-photo {
+  display: block;
+  width: 100%;
+  cursor: zoom-in;
+}
+
+.sheet-photo.is-zoomed {
+  width: 230%;
+  max-width: none;
+  cursor: zoom-out;
+}

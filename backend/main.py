@@ -184,6 +184,7 @@ from .database import (
     User,
     WithdrawalRequest,
     WithdrawalRequestIn,
+    SheetImage,
     WrittenAnswer,
     WrittenRestIn,
     WrittenVerdictIn,
@@ -5694,12 +5695,15 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
     _ensure_sheet_numbers(db, test)
 
     students = []
-    for attempt, name in _all_participants(db, test):
+    participants = _all_participants(db, test)
+    with_sheet = _sheet_attempt_ids(db, (attempt.id for attempt, _ in participants))
+    for attempt, name in participants:
         students.append(
             {
                 "id": attempt.id,
                 "name": name,
                 "has_answers": attempt.status == "done",
+                "has_sheet": attempt.id in with_sheet,  # skanerlangan titul rasmi saqlangan
                 "correct": attempt.correct,
                 "wrong": attempt.wrong,
                 "percent": attempt.percent,
@@ -6005,6 +6009,7 @@ def _attempt_review(db: Session, test: Test, attempt: Attempt) -> dict:
         **splits,
         "questions": questions,
         "essay": _essay_review(test, attempt),
+        "has_sheet": bool(_sheet_attempt_ids(db, [attempt.id])),  # skanerlangan titul rasmi bor
     }
 
 
@@ -6745,10 +6750,83 @@ def save_scanned_sheet(
         attempt.variant = body.variant
         db.flush()
     _store_written_images(db, test, attempt, body.written)
+    _store_sheet_images(db, attempt, body.sheet_images)
     result = _store_offline_answers(db, test, teacher, attempt, body.answers)
     if body.written:
         _queue_ai_reading(db, [attempt.id])  # AI yoqilgan bo'lsa — kataklarni fonda o'qiydi
     return result
+
+
+# ---------- Skanerlangan titul rasmi (o'quvchi natijasiga biriktiriladi) ----------
+
+SHEET_IMAGE_LIMIT = 1_500_000  # bitta sahifa rasmi (base64 matni) — ko'pi bilan
+
+
+def _store_sheet_images(db: Session, attempt: Attempt, images: dict[str, str]) -> None:
+    """Titul rasmi (har sahifa): qayta skanerlansa — yangisi bilan almashadi."""
+
+    for key, image in (images or {}).items():
+        try:
+            page = int(key)
+        except ValueError:
+            continue
+        if not 1 <= page <= 10 or not isinstance(image, str) or not image.startswith("data:image/"):
+            continue
+        if len(image) > SHEET_IMAGE_LIMIT:
+            continue
+        db.execute(delete(SheetImage).where(SheetImage.attempt_id == attempt.id, SheetImage.page == page))
+        db.add(SheetImage(attempt_id=attempt.id, page=page, image=image))
+    db.flush()
+
+
+def _sheet_attempt_ids(db: Session, attempt_ids) -> set[int]:
+    """Shu urinishlardan qaysilarining titul rasmi saqlangan."""
+
+    attempt_ids = list(attempt_ids)
+    if not attempt_ids:
+        return set()
+    return set(db.scalars(select(SheetImage.attempt_id).where(SheetImage.attempt_id.in_(attempt_ids)).distinct()).all())
+
+
+def _sheet_pages(db: Session, attempt: Attempt) -> dict:
+    pages = db.scalars(select(SheetImage).where(SheetImage.attempt_id == attempt.id).order_by(SheetImage.page)).all()
+    if not pages:
+        raise HTTPException(status_code=404, detail="Bu natijaning titul rasmi saqlanmagan")
+    return {
+        "name": attempt.offline_name,
+        "pages": [{"page": item.page, "image": item.image, "at": item.created_at} for item in pages],
+    }
+
+
+@app.get("/api/teacher/tests/{test_id}/students/{attempt_id}/sheet")
+def student_sheet_image(
+    test_id: int, attempt_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
+):
+    """O'qituvchi: o'quvchining skanerlangan titul rasmi."""
+
+    test = _get_own_test(db, teacher, test_id)
+    attempt = db.get(Attempt, attempt_id)
+    if not attempt or attempt.test_id != test.id:
+        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    return _sheet_pages(db, attempt)
+
+
+@app.get("/api/classes/{class_id}/students/{student_id}/sheet/{attempt_id}")
+def class_student_sheet_image(
+    class_id: int, student_id: int, attempt_id: int,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """O'quvchi profili: imtihonda skanerlangan titul rasmi (profilni ko'ra oladiganlar uchun)."""
+
+    school_class, _ = _school_class(db, user, class_id)
+    student = db.get(ClassStudent, student_id)
+    if not student or student.class_id != school_class.id:
+        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    attempt = db.get(Attempt, attempt_id)
+    owner_ids = {student.id, student.source_student_id}
+    if not attempt or attempt.class_student_id not in owner_ids or attempt.status != "done":
+        raise HTTPException(status_code=404, detail="Natija topilmadi")
+    return _sheet_pages(db, attempt)
 
 
 # ---------- Yozma javoblar (titulda qo'lda yozilgan) ----------
@@ -10365,6 +10443,15 @@ def _student_results(db: Session, student: ClassStudent) -> list[dict]:
         .join(ClassTest, ClassTest.id == ClassTestScore.test_id)
         .where(ClassTestScore.student_id == student.id, *_live_class_tests())
     ).all()
+    attempts = db.execute(
+        select(Attempt, Test)
+        .join(Test, Test.id == Attempt.test_id)
+        .where(Attempt.class_student_id == student.id, Attempt.status == "done", Test.deleted_at.is_(None))
+    ).all()
+    # Skanerlangan titul rasmi bor natijalar: imtihon (test) → urinish — profilda 🧾 tugmasi
+    with_sheet = _sheet_attempt_ids(db, (attempt.id for attempt, _ in attempts))
+    sheet_by_test = {test.id: attempt.id for attempt, test in attempts if attempt.id in with_sheet}
+
     linked = set()
     for score, test in class_tests:
         if test.source_test_id:
@@ -10376,13 +10463,9 @@ def _student_results(db: Session, student: ClassStudent) -> list[dict]:
             "score": score.score, "max_score": test.max_score,
             "percent": round(score.score / test.max_score * 100, 1) if test.max_score else None,
             "source": "class",
+            "sheet_attempt_id": sheet_by_test.get(test.source_test_id) if test.source_test_id else None,
         })
 
-    attempts = db.execute(
-        select(Attempt, Test)
-        .join(Test, Test.id == Attempt.test_id)
-        .where(Attempt.class_student_id == student.id, Attempt.status == "done", Test.deleted_at.is_(None))
-    ).all()
     for attempt, test in attempts:
         if test.id in linked:
             continue
@@ -10391,6 +10474,7 @@ def _student_results(db: Session, student: ClassStudent) -> list[dict]:
             "title": test.title, "subject": test.subject, "date": (finished + TASHKENT_OFFSET).date(),
             "score": attempt.correct, "max_score": attempt.correct + attempt.wrong,
             "percent": attempt.percent, "source": "center",
+            "sheet_attempt_id": attempt.id if attempt.id in with_sheet else None,
         })
     results.sort(key=lambda item: item["date"], reverse=True)
     return results[:30]

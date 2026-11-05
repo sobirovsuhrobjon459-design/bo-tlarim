@@ -412,6 +412,22 @@ class StudentAnswer(Base):
     is_correct: Mapped[bool] = mapped_column(default=False)
 
 
+class SheetImage(Base):
+    """
+    Skanerlangan titulning rasmi (tekislangan, oq-qora JPEG) — o'quvchi natijasiga biriktiriladi:
+    o'qituvchi va o'quvchi profilini ko'radiganlar keyin asl varaqni ochib ko'ra oladi.
+    Ko'p sahifali titulda har sahifa alohida yozuv. Qayta skanerlansa — yangisi bilan almashadi.
+    """
+
+    __tablename__ = "sheet_images"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    attempt_id: Mapped[int] = mapped_column(ForeignKey("test_attempts.id"), index=True)
+    page: Mapped[int] = mapped_column(default=1)
+    image: Mapped[str] = mapped_column(Text)  # data:image/jpeg;base64,…
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
 class WrittenAnswer(Base):
     """
     Tituldagi yozma javob katagi (36a, 36b …): skaner qirqib olgan rasm va o'qituvchi bahosi.
@@ -1565,6 +1581,8 @@ class SheetScanSaveIn(BaseModel):
     answers: dict[str, str] = {}
     # Yozma javob kataklari rasmi: {savol_kaliti: "data:image/jpeg;base64,…"}
     written: dict[str, str] = {}
+    # Titulning o'zi (tekislangan rasm): {sahifa: "data:image/jpeg;base64,…"} — o'quvchi profiliga saqlanadi
+    sheet_images: dict[str, str] = {}
 
 
 class WrittenVerdictIn(BaseModel):

@@ -710,7 +710,20 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
 
     return {"answers": answers, "questions": result, "name_image": name_image,
             "sheet_number": sheet_number, "sheet_number_status": number_status, "variant": variant,
-            "sheet_code": sheet_code, "written": written}
+            "sheet_code": sheet_code, "written": written, "sheet_image": sheet_photo(warped)}
+
+
+SHEET_PHOTO_SCALE = 1.6  # saqlanadigan titul rasmi: 1 pt = 1,6 piksel (o'qishga yetarli, ~100 KB)
+
+
+def sheet_photo(warped: np.ndarray) -> str | None:
+    """Tekislangan titul — o'quvchi profiliga saqlanadigan oq-qora JPEG (data URL)."""
+
+    gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
+    size = (round(gray.shape[1] * SHEET_PHOTO_SCALE / SCALE), round(gray.shape[0] * SHEET_PHOTO_SCALE / SCALE))
+    gray = cv2.resize(gray, size, interpolation=cv2.INTER_AREA)
+    ok, jpeg = cv2.imencode(".jpg", gray, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    return "data:image/jpeg;base64," + base64.b64encode(jpeg.tobytes()).decode() if ok else None
 
 
 WRITTEN_MARGIN = 3.0  # yozma katak atrofidan qo'shib olinadigan joy (pt): chetga chiqqan yozuv ham kirsin

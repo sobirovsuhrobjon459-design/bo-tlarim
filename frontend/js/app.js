@@ -3093,6 +3093,12 @@ async function renderStudentProfile(schoolClass, studentId) {
                   item.source === "center" ? " · Test markazi" : ""
                 }</small>
               </span>
+              ${
+                // Skanerlangan titul rasmi saqlangan bo'lsa — ochib ko'rish
+                item.sheet_attempt_id
+                  ? `<button type="button" class="icon-button" data-sheet-attempt="${item.sheet_attempt_id}" title="Titul rasmi" aria-label="Titul rasmi">🧾</button>`
+                  : ""
+              }
               <span class="result-score"><b>${formatNumber(item.score)}/${formatNumber(item.max_score)}</b>${
                 item.percent !== null ? `<small>${item.percent}%</small>` : ""
               }</span>
@@ -3182,6 +3188,12 @@ async function renderStudentProfile(schoolClass, studentId) {
   const reload = () => renderStudentProfile(schoolClass, student.id);
   document.querySelector('[data-action="back-students"]').addEventListener("click", guarded(() => renderClass(schoolClass.id, "students")));
   document.getElementById("student-status-button")?.addEventListener("click", () => openStudentStatusSheet(schoolClass, student, reload));
+  document.querySelectorAll("[data-sheet-attempt]").forEach((button) =>
+    button.addEventListener(
+      "click",
+      guarded(() => openSheetImages(`/api/classes/${schoolClass.id}/students/${studentId}/sheet/${button.dataset.sheetAttempt}`))
+    )
+  );
 
   document.querySelector(".student-hub").addEventListener(
     "click",
@@ -12329,6 +12341,9 @@ function mergeScan(scan, collected) {
   // Yozma javob kataklari rasmi (titulda bo'lsa): {savol: {label, image}}
   merged.written = { ...(merged.written || {}) };
   for (const item of scan.written || []) merged.written[String(item.ref)] = { label: item.label, image: item.image };
+  // Titul rasmi (har sahifa) — saqlanganda o'quvchi natijasiga biriktiriladi
+  merged.sheetImages = { ...(merged.sheetImages || {}) };
+  if (scan.sheet_image) merged.sheetImages[String(scan.page)] = scan.sheet_image;
   if (scan.name_image) merged.nameImage = scan.name_image;
   if (scan.page === 1) {
     merged.variants = scan.variants || [];
@@ -13500,7 +13515,12 @@ function sheetWrittenImages(sheet, boxes) {
     .filter(Boolean);
 }
 
-function sheetCropImage(sheet, left, top, width, height, type = "image/png") {
+// Titulning o'zi (tekislangan, oq-qora) — o'quvchi profiliga saqlanadi
+function sheetPhotoImage(sheet) {
+  return sheetCropImage(sheet, 0, 0, sheet.W, sheet.H, "image/jpeg", 0.7);
+}
+
+function sheetCropImage(sheet, left, top, width, height, type = "image/png", quality = 0.8) {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -13515,7 +13535,7 @@ function sheetCropImage(sheet, left, top, width, height, type = "image/png") {
     }
   }
   context.putImageData(image, 0, 0);
-  return type === "image/jpeg" ? canvas.toDataURL(type, 0.8) : canvas.toDataURL(type);
+  return type === "image/jpeg" ? canvas.toDataURL(type, quality) : canvas.toDataURL(type);
 }
 
 // Kamera oynasidagi yo'naltiruvchi ramka: varaqning 4 ta qora burchagi tushishi kerak bo'lgan
@@ -13684,6 +13704,7 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
       positions: undefined,
       highlights: undefined,
       written: sheetWrittenImages(sheet, result.written),
+      sheet_image: sheetPhotoImage(sheet),
       name_image: page === 1 && SHEET_PAGE.nameBox ? sheetNameImage(sheet) : null,
       match: page === 1 ? localSheetMatch(layout, result.sheet_number) : null,
       variants: layout.variants || [],
@@ -14087,6 +14108,7 @@ function renderScanReview(testId, test, scan) {
       sheet_number: scan.sheetNumber || null,
       variant: scan.variants?.length ? scan.variant || "A" : null,
       written: Object.fromEntries(writtenItems.map(([ref, item]) => [ref, item.image])),
+      sheet_images: scan.sheetImages || {},
     };
     const result = scan.local
       ? await saveCheckedSheet(testId, scan, body, scan.match?.name || select?.selectedOptions[0]?.textContent || name)
@@ -14586,7 +14608,13 @@ async function processScanQueue() {
           const written = Object.fromEntries(Object.entries(scan.written || {}).map(([ref, box]) => [ref, box.image]));
           await api(`/api/teacher/tests/${item.testId}/scan/save`, {
             method: "POST",
-            body: { attempt_id: scan.match.id, answers, variant: scan.variants?.length ? scan.variant : null, written },
+            body: {
+              attempt_id: scan.match.id,
+              answers,
+              variant: scan.variants?.length ? scan.variant : null,
+              written,
+              sheet_images: scan.sheetImages || {},
+            },
           });
           await queueDelete(item.id);
           saved += 1;
@@ -15311,16 +15339,39 @@ async function renderStudentDetail(testId, attemptId) {
           : ""
       }
     </div>
+    ${detail.has_sheet ? `<button class="btn btn-ghost" id="student-sheet-button" style="margin-top:4px">🧾 Titul rasmi</button>` : ""}
     ${detail.essay ? essayGradingHtml(detail.essay) : ""}
     <h3>Barcha javoblar</h3>
     ${rows}
   `);
 
   document.querySelector('[data-action="test"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
+  document
+    .getElementById("student-sheet-button")
+    ?.addEventListener("click", guarded(() => openSheetImages(`/api/teacher/tests/${testId}/students/${attemptId}/sheet`)));
   if (detail.essay) bindEssayGrading(testId, attemptId, detail.essay);
 }
 
-const ESSAY_PICK_STYLE = "margin:0;text-align:left;white-space:normal;padding:10px 14px;font-size:14px;font-weight:400;line-height:1.35";
+// Skanerlangan titul rasmi: oynada to'liq; rasm bosilsa — kattalashadi (kichik yozuvni o'qish uchun)
+async function openSheetImages(url) {
+  const data = await api(url);
+  const { sheet } = openSheet(`
+    <h3 style="margin:0 0 4px">🧾 Titul rasmi</h3>
+    <p class="subtitle" style="margin:0 0 10px">${data.name ? `${escapeHtml(data.name)} · ` : ""}rasmni bosing — kattalashadi</p>
+    <div class="sheet-photo-scroll">
+      ${data.pages
+        .map(
+          (page) => `${data.pages.length > 1 ? `<p class="field-label" style="margin:6px 0">${page.page}-sahifa</p>` : ""}
+            <img class="sheet-photo" src="${page.image}" alt="Titul — ${page.page}-sahifa" />`
+        )
+        .join("")}
+    </div>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:10px">Yopish</button>
+  `);
+  sheet.querySelectorAll(".sheet-photo").forEach((image) => image.addEventListener("click", () => image.classList.toggle("is-zoomed")));
+}
+
+const ESSAY_PICK_STYLE ="margin:0;text-align:left;white-space:normal;padding:10px 14px;font-size:14px;font-weight:400;line-height:1.35";
 
 // Esse bahosi: UZBMB mezoni — 12 ta mezon, har biri 0–2 ball (jami 24)
 function essayGradingHtml(essay) {
