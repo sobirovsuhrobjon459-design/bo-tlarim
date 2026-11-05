@@ -32,6 +32,8 @@ log = logging.getLogger("backend.ai")
 
 AI_MODEL = os.getenv("AI_MODEL", "claude-opus-5-5")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+# Asosiy model band yoki cheklovi tugaganda — zaxira (Flash-Lite: yengilroq, odatda bo'sh); "" — zaxirasiz
+GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite")
 GEMINI_URL = (os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com").rstrip("/")
               + "/v1beta/models/{model}:generateContent")
 GEMINI_GAP = float(os.getenv("GEMINI_GAP", "7"))  # so'rovlar orasi (s): bepul tarif ~10 so'rov/daqiqa
@@ -157,9 +159,6 @@ def _gemini_schema(schema):
 
 
 def _read_with_gemini(subject: str, boxes: list[tuple[str, str]]) -> list:
-    import httpx
-
-    global _gemini_last
     parts: list[dict] = [{"text": f"Subject: {subject}. Answer boxes:"}]
     for label, image in boxes:
         media_type, data = _split_data_url(image)
@@ -175,33 +174,19 @@ def _read_with_gemini(subject: str, boxes: list[tuple[str, str]]) -> list:
             "maxOutputTokens": 8192,
         },
     }
-    url = GEMINI_URL.format(model=GEMINI_MODEL)
     headers = {"x-goog-api-key": os.getenv("GEMINI_API_KEY", ""), "Content-Type": "application/json"}
-
-    for attempt in range(4):
-        # Bepul tarif cheklovi: so'rovlar orasida tanaffus (ikki fon oqimi ham shu navbatdan o'tadi)
-        with _gemini_lock:
-            wait = _gemini_last + GEMINI_GAP - time.monotonic()
-            if wait > 0:
-                time.sleep(wait)
-            _gemini_last = time.monotonic()
-            try:
-                response = httpx.post(url, json=body, headers=headers, timeout=90)
-            except httpx.HTTPError as error:
-                raise AIReadError("Gemini bilan aloqa yo'q") from error
-        if response.status_code == 429 and attempt < 3:
-            delay = _retry_delay(response)
-            if delay is None or delay > 70:
-                raise AIReadError("Gemini bepul cheklovi tugadi (kunlik) — ertaga «AI bilan o'qish» ni bosing")
-            log.info("Gemini band (429) — %.0f s kutiladi", delay)
-            time.sleep(delay)
-            continue
-        if response.status_code == 400 and "responseJsonSchema" in response.text and "responseJsonSchema" in body["generationConfig"]:
-            # Bu model sxemani qabul qilmadi — JSON ko'rinishi so'rovning o'zida yozilgan, sxemasiz qayta urinamiz
-            body["generationConfig"].pop("responseJsonSchema")
+    # Asosiy model band (503), topilmadi (404) yoki uning cheklovi tugadi — zaxira model bilan urinib ko'riladi
+    models = [GEMINI_MODEL] + ([GEMINI_FALLBACK_MODEL] if GEMINI_FALLBACK_MODEL not in ("", GEMINI_MODEL) else [])
+    quota_over = False
+    for model in models:
+        response, quota_over = _gemini_call(GEMINI_URL.format(model=model), body, headers)
+        if response.status_code in (404, 429, 500, 502, 503, 504) and model != models[-1]:
+            log.warning("Gemini %s ishlamadi (%s) — zaxira model %s", model, response.status_code, models[-1])
             continue
         break
     if response.status_code != 200:
+        if quota_over:
+            raise AIReadError("Gemini bepul cheklovi tugadi — keyinroq (yoki ertaga) «AI bilan o'qish» ni bosing")
         message = _gemini_error(response)
         log.warning("Gemini xatosi %s: %s", response.status_code, message)
         raise AIReadError(f"Gemini xatosi ({response.status_code}): {message}")
@@ -223,7 +208,52 @@ def _read_with_gemini(subject: str, boxes: list[tuple[str, str]]) -> list:
     return _parse_answers(text)
 
 
-def _retry_delay(response) -> float | None:
+GEMINI_BUSY_WAITS = (5, 15, 30)  # model band (5xx) bo'lsa — shuncha soniya kutib qayta urinish
+
+
+def _gemini_call(url: str, body: dict, headers: dict):
+    """
+    Bitta model bilan so'rov: band (5xx) bo'lsa kutib qayta urinadi, qisqa cheklovda (429) — aytilgan vaqt kutadi.
+    Natija: (javob, cheklov tugadimi).
+    """
+
+    import httpx
+
+    global _gemini_last
+    busy = limited = 0
+    while True:
+        # Bepul tarif cheklovi: so'rovlar orasida tanaffus (ikki fon oqimi ham shu navbatdan o'tadi)
+        with _gemini_lock:
+            wait = _gemini_last + GEMINI_GAP - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            _gemini_last = time.monotonic()
+            try:
+                response = httpx.post(url, json=body, headers=headers, timeout=90)
+            except httpx.HTTPError as error:
+                raise AIReadError("Gemini bilan aloqa yo'q") from error
+        status = response.status_code
+        if status == 429:
+            delay = _retry_delay(response)
+            if delay > 70 or limited >= 3:
+                return response, True  # kunlik (yoki uzoq) cheklov — shu model bilan kutish befoyda
+            log.info("Gemini cheklovi (429) — %.0f s kutiladi", delay)
+            limited += 1
+            time.sleep(delay)
+            continue
+        if status in (500, 502, 503, 504) and busy < len(GEMINI_BUSY_WAITS):
+            log.info("Gemini band (%s) — %s s kutiladi", status, GEMINI_BUSY_WAITS[busy])
+            time.sleep(GEMINI_BUSY_WAITS[busy])
+            busy += 1
+            continue
+        if status == 400 and "responseJsonSchema" in response.text and "responseJsonSchema" in body["generationConfig"]:
+            # Bu model sxemani qabul qilmadi — JSON ko'rinishi so'rovning o'zida yozilgan, sxemasiz qayta urinamiz
+            body["generationConfig"].pop("responseJsonSchema")
+            continue
+        return response, False
+
+
+def _retry_delay(response) -> float:
     """429 javobidagi "retryDelay" ("17s") — qancha kutish kerak; yo'q bo'lsa 20 s."""
 
     try:
