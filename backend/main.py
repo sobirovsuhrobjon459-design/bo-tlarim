@@ -2913,6 +2913,7 @@ def _continuous_style(columns: int, blocks: int, pitch: float = SHEET11_PITCH) -
 # Yozma javoblar bandi (Milliy sertifikat 36–45): doirachalardan keyin, titulning butun enida —
 # har ustunda bitta katak, har 5 qatorli oraliqda (kvadratlar orasida) 2 qator katak
 SHEET12_LINES = 2
+OFFLINE_MAX_OPTIONS = 6  # oflayn testda bir savolning variantlari: titul ustuniga 6 ta doiracha (A–F) sig'adi
 
 
 def _continuous_plan(test: Test, items: list, variants: list[str] | None, written: list | None = None) -> dict:
@@ -5530,6 +5531,11 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         raise HTTPException(status_code=422, detail="Kamida bitta savol kiriting")
     if body.price > 0 and body.enrollment_type == "closed":
         raise HTTPException(status_code=422, detail="Pullik testlar faqat online test sifatida yaratiladi")
+    if body.enrollment_type == "closed" and any(
+        kq.question_type != "text" and kq.option_count > OFFLINE_MAX_OPTIONS for kq in body.key_questions
+    ):
+        # Titulda bir qatorga ko'pi bilan 6 ta doiracha (A–F) sig'adi
+        raise HTTPException(status_code=422, detail=f"Offline testda variantlar ko'pi bilan {OFFLINE_MAX_OPTIONS} ta (A–F)")
     if body.price > 0 and not _can_sell_tests(teacher):
         raise HTTPException(status_code=422, detail="Pullik test uchun avval karta raqamingizni kiriting")
 

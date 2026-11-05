@@ -11268,6 +11268,7 @@ function subjectStructure(subject, typePreset) {
 // o'qituvchining kanalida bo'ladi), farqi — standart savollar tuzilishida.
 // Offline test tituli — ko'pi bilan 120 savol (titul savollar soniga qarab kichrayadi/kattalashadi)
 const OFFLINE_MAX_QUESTIONS = 120;
+const OFFLINE_MAX_OPTIONS = 6; // titulda bir qatorga 6 ta doiracha (A–F) sig'adi
 
 const TEST_TYPES = {
   rash: {
@@ -11405,7 +11406,7 @@ function renderNewTestForm(testType, draft = {}) {
         msFormat
           ? "Offline, Milliy sertifikat formati: test savollari titulda bo'yaladi, yozma javoblar kataklarga yoziladi."
           : offline && !isDtm
-            ? `Offline: barcha savollar A/B/C/D, sonini o'zingiz kiritasiz. ${
+            ? `Offline: savollar va variantlar sonini o'zingiz kiritasiz (2–${OFFLINE_MAX_OPTIONS} variant). ${
                 type === "rash" ? "Milliy sertifikat fanlari." : "Barcha fanlar."
               }`
             : preset.hint
@@ -11508,7 +11509,8 @@ function renderNewTestForm(testType, draft = {}) {
   `;
 
   const testCount = draft.testCount ?? structure.testCount;
-  const optionCount = offline ? 4 : draft.optionCount ?? preset.optionCount;
+  // Oflayn testda ham variantlar soni o'zgaradi: 2–6 (titul ustuniga 6 ta doiracha — A–F sig'adi)
+  const optionCount = offline ? Math.min(OFFLINE_MAX_OPTIONS, Number(draft.optionCount) || 4) : draft.optionCount ?? preset.optionCount;
   const textCount = offline && !msFormat ? 0 : draft.textCount ?? structure.textCount;
 
   const questionsSection = `
@@ -11519,9 +11521,10 @@ function renderNewTestForm(testType, draft = {}) {
           <input class="input" id="field-test-count" type="number" min="0" max="${offline ? OFFLINE_MAX_QUESTIONS : 300}" value="${testCount}"
                  ${offline ? `placeholder="masalan 25"` : ""} style="margin:0" />
         </div>
-        <div style="flex:1;display:${offline ? "none" : "block"}">
+        <div style="flex:1">
           <label class="field-label" for="field-option-count">Variantlar</label>
-          <input class="input" id="field-option-count" type="number" min="2" max="8" value="${optionCount}" style="margin:0" />
+          <input class="input" id="field-option-count" type="number" min="2" max="${offline ? OFFLINE_MAX_OPTIONS : 8}"
+                 value="${optionCount}" style="margin:0" />
         </div>
         <div style="flex:1;display:${preset.allowText && (!offline || msFormat) ? "block" : "none"}">
           <label class="field-label" for="field-text-count">Yozma</label>
@@ -12088,6 +12091,12 @@ async function saveNewTest() {
   }
   if (body.enrollment_type === "closed" && keyRows.length > OFFLINE_MAX_QUESTIONS) {
     throw new Error(`Offline testda ko'pi bilan ${OFFLINE_MAX_QUESTIONS} ta savol bo'ladi (titulga sig'ishi uchun)`);
+  }
+  if (
+    body.enrollment_type === "closed" &&
+    keyRows.some((row) => row.dataset.kind !== "text" && Number(row.dataset.options) > OFFLINE_MAX_OPTIONS)
+  ) {
+    throw new Error(`Offline testda variantlar ko'pi bilan ${OFFLINE_MAX_OPTIONS} ta bo'ladi (A–F) — titulga sig'ishi uchun`);
   }
 
   const emptyRow = keyRows.find((row) => !row.dataset.answer);
