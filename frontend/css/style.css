@@ -3559,3 +3559,134 @@ button {
   border-color: rgba(34, 197, 94, 0.45);
   background: rgba(34, 197, 94, 0.08);
 }
+
+/* Yozma javoblar: titulda qo'lda yozilgan javoblarni baholash (36a, 36b …) */
+.written-questions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(82px, 1fr));
+  gap: 8px;
+}
+
+.written-question {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.written-question b {
+  font-size: 17px;
+}
+
+.written-question small {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.written-question.has-pending {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.written-question.is-done {
+  border-color: rgba(22, 163, 74, 0.5);
+}
+
+.written-key {
+  margin: 0 0 8px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(0, 168, 68, 0.1);
+  font-size: 16px;
+}
+
+.written-item {
+  margin: 0 0 10px;
+  padding: 12px;
+  border: 2px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-surface);
+}
+
+.written-item.is-right {
+  border-color: #16a34a;
+}
+
+.written-item.is-wrong {
+  border-color: #dc2626;
+}
+
+.written-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.written-item-head .badge {
+  margin-left: 0;
+}
+
+.written-item-image,
+.written-scan-item img {
+  display: block;
+  width: 100%;
+  border-radius: 8px;
+  background: #fff;
+  image-rendering: auto;
+}
+
+.written-verdict {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.verdict-button {
+  flex: 1;
+  padding: 12px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.verdict-button.is-right.selected {
+  border-color: #16a34a;
+  background: #16a34a;
+  color: #fff;
+}
+
+.verdict-button.is-wrong.selected {
+  border-color: #dc2626;
+  background: #dc2626;
+  color: #fff;
+}
+
+.written-scan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.written-scan-item {
+  margin: 0;
+}
+
+.written-scan-item figcaption {
+  margin-bottom: 2px;
+  font-size: 13px;
+  font-weight: 700;
+}

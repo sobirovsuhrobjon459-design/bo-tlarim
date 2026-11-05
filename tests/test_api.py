@@ -5115,10 +5115,10 @@ def test_ixcham_titul_savollar_soniga_moslashadi():
     blocks = [bubble["block"] for bubble in layout["bubbles"] if bubble["kind"] in ("single", "id")]
     assert anchors and all(len(block) == 4 and set(block) <= anchors for block in blocks)
 
-    # Yozma savol titulga chiqmaydi (doirachasi yo'q); kodi va burchaklari joyida
+    # Yozma savolning doirachasi yo'q — faqat yozish katagi (12-versiya); kodi va burchaklari joyida
     test_id = create_test(enrollment_type="closed")["id"]
     layout = client.get(f"/api/teacher/tests/{test_id}/scan/layout", headers=as_user(555)).json()
-    assert 4 not in {bubble["ref"] for bubble in layout["bubbles"]}
+    assert {bubble["kind"] for bubble in layout["bubbles"] if bubble["ref"] == 4} == {"write"}
 
     # 25 savol: ID va javoblar o'qiladi
     test_id = closed_test(25)
@@ -5164,7 +5164,7 @@ def test_evalbee_uslubidagi_titul():
     for version, anchor_count, height in ((9, 30, 668), (8, 45, 842)):
         test_id = create_test(enrollment_type="closed", key_questions=questions)["id"]
         with SessionLocal() as session:
-            assert session.get(Test, test_id).sheet_version == 11  # yangi test — eng yangi titul
+            assert session.get(Test, test_id).sheet_version == 12  # yangi test — eng yangi titul
             session.get(Test, test_id).sheet_version = version
             session.commit()
         base = f"/api/teacher/tests/{test_id}"
@@ -5490,7 +5490,7 @@ def test_varaqdagi_oquvchi_raqami_boyicha_taniladi():
                 headers=as_user(555))
     detail = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1, "Birinchi Bola"), (2, "Ikkinchi Bola")]
-    assert detail["sheet_version"] == 11
+    assert detail["sheet_version"] == 12
 
     url = f"/api/teacher/tests/{test_id}/scan"
     photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "0", "id3": "2", 1: "B", 2: "C"})
@@ -5773,7 +5773,7 @@ def test_skaner_natijasi_sinf_natijalariga_yoziladi():
     assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json() == {"added": 0}
     detail = client.get(base, headers=as_user(701)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1001, "Ali Valiyev"), (1002, "Zuhra Karimova")]
-    assert detail["sheet_version"] == 11
+    assert detail["sheet_version"] == 12
 
     # Zuhra (1002) varag'i: 1-savol to'g'ri, 2-savol to'g'ri
     scanned = client.post(f"{base}/scan", json={"image_base64": _sheet_photo(test["id"], {

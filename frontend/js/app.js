@@ -11334,12 +11334,18 @@ function renderNewTestForm(testType, draft = {}) {
   // Offline test — mock emas: o'qituvchi savollar sonini o'zi kiritadi, hammasi A/B/C/D, yozmasiz
   // (titul ixcham chiqadi — savollar soniga qarab bitta A4 ga 2–3 ta)
   const offline = draft.enrollment === "closed" && !draft.paid;
+  // Oflayn Rash testda — Milliy sertifikat formati (ixtiyoriy): 1–35 test (33–35 — A–F) va 36–45 yozma.
+  // Yozma javoblar titulda kataklarga qo'lda yoziladi, skaner ularni rasm qilib saqlaydi, o'qituvchi baholaydi
+  const msAvailable = offline && type === "rash" && (SUBJECT_PRESETS[subject]?.textCount || 0) > 0;
+  const msFormat = msAvailable && Boolean(draft.msFormat);
   // Fan bo'yicha tuzilish faqat Rash testda (Milliy sertifikat mockida) qo'llanadi
-  const structure = offline
-    ? { ...preset, testCount: subject === DTM_SUBJECT ? 90 : "", optionCount: 4, textCount: 0, textParts: 1, partOverrides: {}, fixedParts: {}, options: {}, note: "" }
-    : type === "rash" || isDtm
-      ? subjectStructure(subject, preset)
-      : { ...preset, options: {}, note: "" };
+  const structure = msFormat
+    ? subjectStructure(subject, preset)
+    : offline
+      ? { ...preset, testCount: subject === DTM_SUBJECT ? 90 : "", optionCount: 4, textCount: 0, textParts: 1, partOverrides: {}, fixedParts: {}, options: {}, note: "" }
+      : type === "rash" || isDtm
+        ? subjectStructure(subject, preset)
+        : { ...preset, options: {}, note: "" };
   // Kalitdagi yozma javoblar ham fanga mos klaviatura bilan kiritiladi
   answerKeyboard = SUBJECT_PRESETS[subject]?.keyboard || "math";
 
@@ -11384,11 +11390,13 @@ function renderNewTestForm(testType, draft = {}) {
           .join("")}
       </select>
       <p class="subtitle" style="margin:-6px 0 0">${
-        offline && !isDtm
-          ? `Offline: barcha savollar A/B/C/D, sonini o'zingiz kiritasiz. ${
-              type === "rash" ? "Milliy sertifikat fanlari." : "Barcha fanlar."
-            }`
-          : preset.hint
+        msFormat
+          ? "Offline, Milliy sertifikat formati: test savollari titulda bo'yaladi, yozma javoblar kataklarga yoziladi."
+          : offline && !isDtm
+            ? `Offline: barcha savollar A/B/C/D, sonini o'zingiz kiritasiz. ${
+                type === "rash" ? "Milliy sertifikat fanlari." : "Barcha fanlar."
+              }`
+            : preset.hint
       }</p>
     </div>
 
@@ -11412,6 +11420,18 @@ function renderNewTestForm(testType, draft = {}) {
       </div>
     </div>
     <p class="subtitle" id="subject-note" style="margin:-6px 0 0">${isDtm ? "" : structure.note}</p>
+    <div class="setting-card" id="ms-format-card" style="margin-top:10px;${msAvailable ? "" : "display:none"}">
+      <label class="setting-row">
+        <input type="checkbox" id="field-ms-format" ${msFormat ? "checked" : ""} />
+        <span>
+          <b>📝 Milliy sertifikat formati (yozma javoblar bilan)</b>
+          <p class="subtitle" style="margin:4px 0 0">
+            1–35 test (33–35 — A–F) va yozma savollar. O'quvchi yozma javobni tituldagi katakka qo'lda yozadi,
+            skaner uni rasm qilib saqlaydi, siz rasmga qarab ✓ yoki ✗ qo'yasiz. Natija Rasch bo'yicha.
+          </p>
+        </span>
+      </label>
+    </div>
     <div class="setting-card" id="essay-card" style="margin-top:10px;${SUBJECT_PRESETS[subject]?.essay ? "" : "display:none"}">
       <label class="setting-row">
         <input type="checkbox" id="field-essay" ${offline ? "" : "checked"} />
@@ -11477,7 +11497,7 @@ function renderNewTestForm(testType, draft = {}) {
 
   const testCount = draft.testCount ?? structure.testCount;
   const optionCount = offline ? 4 : draft.optionCount ?? preset.optionCount;
-  const textCount = offline ? 0 : draft.textCount ?? structure.textCount;
+  const textCount = offline && !msFormat ? 0 : draft.textCount ?? structure.textCount;
 
   const questionsSection = `
     <div class="panel">
@@ -11491,7 +11511,7 @@ function renderNewTestForm(testType, draft = {}) {
           <label class="field-label" for="field-option-count">Variantlar</label>
           <input class="input" id="field-option-count" type="number" min="2" max="8" value="${optionCount}" style="margin:0" />
         </div>
-        <div style="flex:1;display:${preset.allowText && !offline ? "block" : "none"}">
+        <div style="flex:1;display:${preset.allowText && (!offline || msFormat) ? "block" : "none"}">
           <label class="field-label" for="field-text-count">Yozma</label>
           <input class="input" id="field-text-count" type="number" min="0" max="300" value="${textCount}" style="margin:0" />
         </div>
@@ -11531,6 +11551,17 @@ function renderNewTestForm(testType, draft = {}) {
 
   const subjectSelect = document.getElementById("field-subject");
 
+  // Oflayn: Milliy sertifikat formati yoqilsa/o'chirilsa — savollar fan tuzilishi bilan qaytadan chiziladi
+  const rerenderWithFormat = (enabled) => {
+    const carried = collectTestFormDraft();
+    delete carried.testCount;
+    delete carried.optionCount;
+    delete carried.textCount;
+    delete carried.answers;
+    renderNewTestForm(type, { ...carried, msFormat: enabled });
+  };
+  document.getElementById("field-ms-format").addEventListener("change", (event) => rerenderWithFormat(event.target.checked));
+
   // Fan almashtirilganda, o'sha fandagi Milliy sertifikat tuzilishi qo'llanadi
   subjectSelect.addEventListener("change", () => {
     document.getElementById("essay-card").style.display = SUBJECT_PRESETS[subjectSelect.value]?.essay ? "" : "none";
@@ -11541,7 +11572,14 @@ function renderNewTestForm(testType, draft = {}) {
       buildKeyQuestionRows();
       return;
     }
-    if (type !== "rash" || offline) return;
+    if (offline) {
+      // Milliy sertifikat formati faqat yozma savolli fanlarda; yoqilgan bo'lsa — yangi fan tuzilishi bilan
+      const canMs = type === "rash" && (SUBJECT_PRESETS[subjectSelect.value]?.textCount || 0) > 0;
+      document.getElementById("ms-format-card").style.display = canMs ? "" : "none";
+      if (msFormat) rerenderWithFormat(canMs);
+      return;
+    }
+    if (type !== "rash") return;
 
     const next = subjectStructure(subjectSelect.value, preset);
     const container = document.getElementById("key-questions-container");
@@ -11804,6 +11842,7 @@ function collectTestFormDraft() {
     testCount: document.getElementById("field-test-count").value,
     optionCount: document.getElementById("field-option-count").value,
     textCount: document.getElementById("field-text-count").value,
+    msFormat: Boolean(document.getElementById("field-ms-format")?.checked),
     answers,
   };
 }
@@ -12287,6 +12326,9 @@ function mergeScan(scan, collected) {
   const merged = collected || { questions: [], nameImage: null, pending: scan.pending_students };
   merged.questions = merged.questions.filter((question) => !scan.questions.some((item) => item.ref === question.ref));
   merged.questions.push(...scan.questions);
+  // Yozma javob kataklari rasmi (titulda bo'lsa): {savol: {label, image}}
+  merged.written = { ...(merged.written || {}) };
+  for (const item of scan.written || []) merged.written[String(item.ref)] = { label: item.label, image: item.image };
   if (scan.name_image) merged.nameImage = scan.name_image;
   if (scan.page === 1) {
     merged.variants = scan.variants || [];
@@ -13039,7 +13081,7 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
   // Har savol qatori chop etilgan halqalari ustiga moslanadi (ustun bo'yicha tepadan pastga)
   const rows = new Map();
   for (const bubble of pageBubbles) {
-    if (bubble.kind === "mark" || bubble.kind === "code" || bubble.kind === "anchor") continue;
+    if (bubble.kind === "mark" || bubble.kind === "code" || bubble.kind === "anchor" || bubble.kind === "write") continue;
     if (!rows.has(bubble.ref)) rows.set(bubble.ref, []);
     rows.get(bubble.ref).push(bubble);
   }
@@ -13081,9 +13123,14 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
   const highlights = []; // bo'yalgan ID va variant doirachalari — natija rasmida sariq halqa
   const idRows = new Map();
   const variantRatios = new Map();
+  const written = []; // yozma javob kataklari: varaqdagi joyi (punktlarda) — rasm qilib qirqiladi
   for (const bubble of pageBubbles) {
     if (bubble.kind === "mark" || bubble.kind === "anchor") continue;
     const [x, y] = placed(bubble);
+    if (bubble.kind === "write") {
+      written.push({ ref: bubble.ref, label: bubble.label, x, y, w: bubble.w, h: bubble.h });
+      continue;
+    }
     if (bubble.kind === "code") {
       // Kod katagi: atrofidagi bir necha joydan eng qorasi (serverdagi _fill_ratio square). Kataklar
       // orasi keng (≈40 pt) — qog'oz bukilib siljigan katak ham topilsin
@@ -13170,6 +13217,7 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
     sheet_code: sheetCode,
     positions,
     highlights,
+    written,
   };
 }
 
@@ -13432,8 +13480,27 @@ function sheetNameImage(sheet) {
   const [x1, y1, x2, y2] = (SHEET_PAGE.nameArea || NAME_BOX).map((value) => Math.round(value * READ_SCALE));
   const left = Math.max(0, x1 - 4);
   const top = Math.max(0, y1 - 4);
-  const width = Math.min(sheet.W, x2 + 4) - left;
-  const height = Math.min(sheet.H, y2 + 4) - top;
+  return sheetCropImage(sheet, left, top, Math.min(sheet.W, x2 + 4) - left, Math.min(sheet.H, y2 + 4) - top);
+}
+
+// Yozma javob kataklari (36a, 36b …) — tekislangan varaqdan JPEG rasm. Skaner ularni o'qimaydi:
+// o'qituvchi keyin «Yozma javoblar» bo'limida rasmga qarab ✓ yoki ✗ qo'yadi
+const WRITTEN_MARGIN = 3; // katak atrofidan qo'shib olinadigan joy (pt) — backend/omr.py bilan bir xil
+
+function sheetWrittenImages(sheet, boxes) {
+  return (boxes || [])
+    .map((box) => {
+      const left = Math.max(0, Math.round((box.x - box.w / 2 - WRITTEN_MARGIN) * READ_SCALE));
+      const top = Math.max(0, Math.round((box.y - box.h / 2 - WRITTEN_MARGIN) * READ_SCALE));
+      const right = Math.min(sheet.W, Math.round((box.x + box.w / 2 + WRITTEN_MARGIN) * READ_SCALE));
+      const bottom = Math.min(sheet.H, Math.round((box.y + box.h / 2 + WRITTEN_MARGIN) * READ_SCALE));
+      if (right - left < 4 || bottom - top < 4) return null;
+      return { ref: box.ref, label: box.label, image: sheetCropImage(sheet, left, top, right - left, bottom - top, "image/jpeg") };
+    })
+    .filter(Boolean);
+}
+
+function sheetCropImage(sheet, left, top, width, height, type = "image/png") {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -13448,7 +13515,7 @@ function sheetNameImage(sheet) {
     }
   }
   context.putImageData(image, 0, 0);
-  return canvas.toDataURL("image/png");
+  return type === "image/jpeg" ? canvas.toDataURL(type, 0.8) : canvas.toDataURL(type);
 }
 
 // Kamera oynasidagi yo'naltiruvchi ramka: varaqning 4 ta qora burchagi tushishi kerak bo'lgan
@@ -13616,6 +13683,7 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
       ...result,
       positions: undefined,
       highlights: undefined,
+      written: sheetWrittenImages(sheet, result.written),
       name_image: page === 1 && SHEET_PAGE.nameBox ? sheetNameImage(sheet) : null,
       match: page === 1 ? localSheetMatch(layout, result.sheet_number) : null,
       variants: layout.variants || [],
@@ -13830,6 +13898,7 @@ function renderScanReview(testId, test, scan) {
   const layout = scanLayouts.get(testId);
   const views = layout?.keys && scan.sheetViews ? Object.entries(scan.sheetViews) : [];
   const currentKey = () => layout.keys[scan.variant || "A"] || layout.keys.A || {};
+  const writtenItems = Object.entries(scan.written || {});
 
   showPage(`
     <div class="page-header">
@@ -13886,9 +13955,30 @@ function renderScanReview(testId, test, scan) {
     <div class="panel scan-grid" id="scan-all" hidden>
       ${scan.questions.filter((question) => !needsCheck.includes(question)).map(questionRow).join("")}
     </div>
-    <p class="subtitle" style="margin:8px 4px 0">Yozma savollar javobini saqlagandan keyin o'quvchilar ro'yxatidan (✏️) kiriting.</p>
+    ${
+      writtenItems.length
+        ? `<button type="button" class="btn btn-ghost" id="scan-toggle-written" style="margin-top:10px">
+             📝 Yozma javoblar (${writtenItems.length}) — ko'rish
+           </button>
+           <div class="panel written-scan-grid" id="scan-written" hidden>
+             ${writtenItems
+               .map(
+                 ([, item]) => `<figure class="written-scan-item"><figcaption>${escapeHtml(item.label)}</figcaption>
+                   <img src="${item.image}" alt="${escapeHtml(item.label)} javobi" /></figure>`
+               )
+               .join("")}
+           </div>
+           <p class="subtitle" style="margin:8px 4px 0">Yozma javoblar rasm bo'lib saqlanadi — keyin test sahifasidagi
+             «📝 Yozma javoblar» bo'limida ✓ yoki ✗ qo'yasiz.</p>`
+        : `<p class="subtitle" style="margin:8px 4px 0">Yozma savollar javobini saqlagandan keyin o'quvchilar ro'yxatidan (✏️) kiriting.</p>`
+    }
   `);
   markUnsaved();
+  document.getElementById("scan-toggle-written")?.addEventListener("click", (event) => {
+    const list = document.getElementById("scan-written");
+    list.hidden = !list.hidden;
+    event.currentTarget.textContent = list.hidden ? `📝 Yozma javoblar (${writtenItems.length}) — ko'rish` : "📝 Yozma javoblarni yopish";
+  });
 
   // Rangli varaq va hisob — javob yoki variant tuzatilganda qayta chiziladi
   const paintViews = () => {
@@ -13996,6 +14086,7 @@ function renderScanReview(testId, test, scan) {
       answers,
       sheet_number: scan.sheetNumber || null,
       variant: scan.variants?.length ? scan.variant || "A" : null,
+      written: Object.fromEntries(writtenItems.map(([ref, item]) => [ref, item.image])),
     };
     const result = scan.local
       ? await saveCheckedSheet(testId, scan, body, scan.match?.name || select?.selectedOptions[0]?.textContent || name)
@@ -14492,9 +14583,10 @@ async function processScanQueue() {
           const answers = Object.fromEntries(
             scan.questions.filter((question) => question.chosen).map((question) => [String(question.ref), question.chosen])
           );
+          const written = Object.fromEntries(Object.entries(scan.written || {}).map(([ref, box]) => [ref, box.image]));
           await api(`/api/teacher/tests/${item.testId}/scan/save`, {
             method: "POST",
-            body: { attempt_id: scan.match.id, answers, variant: scan.variants?.length ? scan.variant : null },
+            body: { attempt_id: scan.match.id, answers, variant: scan.variants?.length ? scan.variant : null, written },
           });
           await queueDelete(item.id);
           saved += 1;
@@ -14626,6 +14718,148 @@ async function renderAttachClasses(testId) {
       await renderTestDetail(testId);
     })
   );
+}
+
+/* ---------- Yozma javoblar: titulda qo'lda yozilgan javoblarni baholash ---------- */
+
+/*
+  Skaner yozma katakni (36a, 36b …) o'qimaydi — rasm qilib saqlaydi. O'qituvchi savolni tanlaydi va
+  hamma o'quvchilarning shu katagini ketma-ket ko'rib ✓ yoki ✗ qo'yadi (bo'sh katak o'zi ✗ bo'ladi).
+  Baho darhol o'quvchi natijasiga (va Rasch'ga) o'tadi.
+*/
+async function renderWrittenOverview(testId) {
+  const data = await api(`/api/teacher/tests/${testId}/written`);
+  const total = data.questions.reduce((sum, question) => sum + question.total, 0);
+  const left = data.questions.reduce((sum, question) => sum + question.total - question.checked, 0);
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-written" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">Yozma javoblar</h2>
+    </div>
+    <p class="subtitle" style="margin:0 4px 12px">
+      Savolni tanlang — hamma o'quvchilarning shu katagi rasmda chiqadi. Har biriga ✓ yoki ✗ qo'ying,
+      natija darhol yangilanadi. Bo'sh katak o'zi ✗ bo'ladi.
+    </p>
+    ${
+      total
+        ? `<p class="subtitle" style="margin:0 4px 10px">${left ? `⚠️ Baholanmagan: <b>${left}</b> ta` : "✅ Hammasi baholangan"}</p>`
+        : `<div class="notice">Hali yozma javob yo'q — avval varaqlarni skanerlang.</div>`
+    }
+    <div class="written-questions">
+      ${data.questions
+        .map((question) => {
+          const rest = question.total - question.checked;
+          const state = rest ? " has-pending" : question.total ? " is-done" : "";
+          const note = !question.total ? "—" : rest ? `${rest} ta qoldi` : `✓ ${question.correct}/${question.total}`;
+          return `<button type="button" class="written-question${state}" data-written-ref="${question.ref}">
+            <b>${escapeHtml(question.label)}</b><small>${note}</small>
+          </button>`;
+        })
+        .join("")}
+    </div>
+  `);
+  document.querySelector('[data-action="back-written"]').addEventListener("click", guarded(() => renderTestDetail(testId)));
+  document.querySelectorAll("[data-written-ref]").forEach((button) =>
+    button.addEventListener("click", guarded(() => renderWrittenQuestion(testId, Number(button.dataset.writtenRef))))
+  );
+}
+
+async function renderWrittenQuestion(testId, ref) {
+  const data = await api(`/api/teacher/tests/${testId}/written/${ref}`);
+  const keyText = (value) => escapeHtml(String(value || "").split("|").filter(Boolean).join(" yoki "));
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-written-question" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">${escapeHtml(data.label)}-savol</h2>
+    </div>
+    <div class="written-key">🔑 To'g'ri javob: <b>${keyText(data.key)}</b></div>
+    <p class="subtitle" id="written-progress" style="margin:0 4px 10px"></p>
+    ${data.items.length ? "" : `<div class="notice">Bu savolga hali javob yo'q — varaqlarni skanerlang.</div>`}
+    <div id="written-items">
+      ${data.items
+        .map(
+          (item) => `
+        <div class="written-item" data-attempt="${item.attempt_id}">
+          <div class="written-item-head">
+            <b>${item.number ? `<span class="student-number">#${item.number}</span> ` : ""}${escapeHtml(item.name)}</b>
+            ${item.variant ? `<span class="badge badge-purple">${item.variant}: ${keyText(item.key)}</span>` : ""}
+            ${item.blank ? `<span class="badge badge-gray">bo'sh</span>` : ""}
+          </div>
+          <img class="written-item-image" src="${item.image}" alt="${escapeHtml(item.name)} javobi" />
+          <div class="written-verdict">
+            <button type="button" class="verdict-button is-right" data-verdict="true">✓ To'g'ri</button>
+            <button type="button" class="verdict-button is-wrong" data-verdict="false">✗ Xato</button>
+          </div>
+        </div>`
+        )
+        .join("")}
+    </div>
+    <button class="btn btn-ghost" id="written-rest" hidden>✗ Qolganlarining hammasi — xato</button>
+    <div class="row-between" style="gap:8px;margin-top:10px">
+      <button class="btn btn-ghost" id="written-prev" style="flex:1;margin:0" ${data.prev ? "" : "disabled"}>‹ Oldingi savol</button>
+      <button class="btn" id="written-next" style="flex:1;margin:0" ${data.next ? "" : "disabled"}>Keyingi savol ›</button>
+    </div>
+  `);
+
+  const paint = () => {
+    for (const item of data.items) {
+      const row = document.querySelector(`.written-item[data-attempt="${item.attempt_id}"]`);
+      row.classList.toggle("is-right", item.verdict === true);
+      row.classList.toggle("is-wrong", item.verdict === false);
+      row.querySelectorAll(".verdict-button").forEach((button) =>
+        button.classList.toggle("selected", String(item.verdict) === button.dataset.verdict)
+      );
+    }
+    const rest = data.items.filter((item) => item.verdict === null).length;
+    const right = data.items.filter((item) => item.verdict === true).length;
+    document.getElementById("written-progress").innerHTML = data.items.length
+      ? rest
+        ? `⏳ Baholanmagan: <b>${rest}</b> / ${data.items.length}`
+        : `✅ Hammasi baholandi · to'g'ri: <b>${right}</b> / ${data.items.length}`
+      : "";
+    const restButton = document.getElementById("written-rest");
+    restButton.hidden = !rest;
+    restButton.textContent = `✗ Qolgan ${rest} tasi — xato`;
+  };
+  paint();
+
+  document.querySelectorAll(".written-item").forEach((row) => {
+    const item = data.items.find((entry) => String(entry.attempt_id) === row.dataset.attempt);
+    row.querySelectorAll(".verdict-button").forEach((button) =>
+      button.addEventListener(
+        "click",
+        guarded(async () => {
+          // Tanlangan bahoni qayta bosish — bekor qilish
+          const verdict = String(item.verdict) === button.dataset.verdict ? null : button.dataset.verdict === "true";
+          const before = item.verdict;
+          item.verdict = verdict;
+          paint();
+          try {
+            await api(`/api/teacher/tests/${testId}/written/${ref}/${item.attempt_id}`, { method: "POST", body: { verdict } });
+          } catch (error) {
+            item.verdict = before;
+            paint();
+            throw error;
+          }
+        })
+      )
+    );
+  });
+  document.getElementById("written-rest").addEventListener(
+    "click",
+    guarded(async () => {
+      const rest = data.items.filter((item) => item.verdict === null).length;
+      if (!(await askConfirm(`Qolgan ${rest} ta javobga ✗ qo'yilsinmi? Keyin har birini alohida o'zgartirish mumkin.`))) return;
+      await api(`/api/teacher/tests/${testId}/written/${ref}/rest`, { method: "POST", body: { verdict: false } });
+      data.items.forEach((item) => {
+        if (item.verdict === null) item.verdict = false;
+      });
+      paint();
+    })
+  );
+  document.querySelector('[data-action="back-written-question"]').addEventListener("click", guarded(() => renderWrittenOverview(testId)));
+  document.getElementById("written-prev").addEventListener("click", guarded(() => data.prev && renderWrittenQuestion(testId, data.prev)));
+  document.getElementById("written-next").addEventListener("click", guarded(() => data.next && renderWrittenQuestion(testId, data.next)));
 }
 
 // Test sahifasidagi ixcham amal tugmasi: ikonka va ostida qisqa nom; to'liq nomi — title va aria-label'da
@@ -14795,6 +15029,21 @@ async function renderTestDetail(testId) {
       isClosedTest && !isFinished ? `<button class="btn scan-main-button" id="scan-sheet-button">📷 Varaqni skanerlash</button>` : ""
     }
     ${isClosedTest ? `<div id="scan-queue-slot"></div>` : ""}
+    ${
+      // Titulda qo'lda yozilgan javoblar (36–45): o'qituvchi rasmga qarab ✓ / ✗ qo'yadi
+      test.written
+        ? homeCard(
+            "📝",
+            "Yozma javoblar",
+            test.written.unchecked
+              ? `⚠️ <b>${test.written.unchecked}</b> ta javob baholanmagan — ✓ yoki ✗ qo'ying`
+              : test.written.total
+                ? "✅ Hammasi baholangan"
+                : "Skanerlangan varaqlardagi qo'lda yozilgan javoblar shu yerda baholanadi",
+            'id="written-review-button" role="button" tabindex="0"'
+          )
+        : ""
+    }
     ${testMenuHtml(test, menuGroups, isClosedTest, isFinished)}
     ${test.broadcast_at ? `<p class="subtitle" style="margin:4px 4px 10px">📢 E'lon qilingan: ${formatDateTime(test.broadcast_at)}</p>` : ""}
 
@@ -14814,6 +15063,7 @@ async function renderTestDetail(testId) {
   `);
 
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
+  document.getElementById("written-review-button")?.addEventListener("click", guarded(() => renderWrittenOverview(testId)));
   wireTestMenu(menuGroups);
   document.getElementById("edit-test-button").addEventListener("click", () => openTestEditSheet(test));
   document

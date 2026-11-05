@@ -611,7 +611,7 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
     # Har savol qatori (va raqam/variant qatori) chop etilgan halqalari bo'yicha tekislanadi
     rows: dict = {}
     for bubble in page_bubbles:
-        if bubble["kind"] not in ("mark", "code", "anchor"):
+        if bubble["kind"] not in ("mark", "code", "anchor", "write"):
             rows.setdefault(bubble["ref"], []).append(bubble)
     # Qatorlar ustun bo'yicha tepadan pastga: har biri eng yaqin tekislangan qatorning
     # siljishidan boshlab qidiriladi — qog'oz silliq egiladi, kuchli bo'rtish ham "kuzatiladi"
@@ -628,11 +628,18 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
         row_shift[ref] = _align_row(maps, centers, row[0]["r"], start, reach=8 if far else 5)
         aligned.append((x0, y0, row_shift[ref]))
 
+    written = []
     for bubble in page_bubbles:
         if bubble["kind"] in ("mark", "anchor"):
             continue
         # PDF koordinatasi pastdan, rasm esa tepadan sanaladi
         x, y = placed(bubble)
+        if bubble["kind"] == "write":
+            # Yozma javob katagi — o'qilmaydi, rasm qilib qirqiladi (o'qituvchi rasmga qarab baholaydi)
+            image = crop_written_box(warped, x, y, bubble["w"], bubble["h"])
+            if image:
+                written.append({"ref": bubble["ref"], "label": bubble["label"], "image": image})
+            continue
         if bubble["kind"] == "code":
             # Imtihon kodi kataklari orasi keng (~40 pt) — bukilib siljigan katak ham topilsin (telefondagidek)
             code_bits[int(bubble["letter"])] = _fill_ratio(binary, x, y, bubble["r"], square=True, reach=0.8)
@@ -703,4 +710,46 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
 
     return {"answers": answers, "questions": result, "name_image": name_image,
             "sheet_number": sheet_number, "sheet_number_status": number_status, "variant": variant,
-            "sheet_code": sheet_code}
+            "sheet_code": sheet_code, "written": written}
+
+
+WRITTEN_MARGIN = 3.0  # yozma katak atrofidan qo'shib olinadigan joy (pt): chetga chiqqan yozuv ham kirsin
+WRITTEN_SCALE = 2.0  # qirqilgan rasm: 1 pt = 2 piksel (o'qishga yetarli, hajmi kichik)
+
+
+def crop_written_box(warped: np.ndarray, x: float, y: float, width: float, height: float) -> str | None:
+    """Tekislangan varaqdan yozma javob katagi (markazi x, y; punktlarda) — JPEG data URL."""
+
+    half_w, half_h = width / 2 + WRITTEN_MARGIN, height / 2 + WRITTEN_MARGIN
+    x1, y1 = max(0, round((x - half_w) * SCALE)), max(0, round((y - half_h) * SCALE))
+    x2, y2 = round((x + half_w) * SCALE), round((y + half_h) * SCALE)
+    crop = warped[y1:y2, x1:x2]
+    if crop.size == 0:
+        return None
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    size = (max(1, round(gray.shape[1] * WRITTEN_SCALE / SCALE)), max(1, round(gray.shape[0] * WRITTEN_SCALE / SCALE)))
+    gray = cv2.resize(gray, size, interpolation=cv2.INTER_AREA)
+    ok, jpeg = cv2.imencode(".jpg", gray, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    return "data:image/jpeg;base64," + base64.b64encode(jpeg.tobytes()).decode() if ok else None
+
+
+def written_is_blank(data_url: str) -> bool:
+    """
+    Yozma katak bo'shmi: katak ichida (chizilgan chegarasi va atrofi hisobga olinmaydi) siyoh deyarli yo'q.
+    Shubha bo'lsa — bo'sh emas (o'qituvchi o'zi ko'radi).
+    """
+
+    try:
+        raw = base64.b64decode(data_url.split(",", 1)[-1])
+        gray = np.asarray(Image.open(io.BytesIO(raw)).convert("L"), np.float32)
+    except Exception:  # noqa: BLE001 — buzilgan rasm: bo'sh deb hisoblanmaydi
+        return False
+    height, width = gray.shape
+    # Chizilgan chegara (qog'oz biroz siljigan bo'lsa ham): eni bo'yicha ~5%, bo'yi bo'yicha ~17% — shu olib tashlanadi
+    inner = gray[round(height * 0.2): round(height * 0.8), round(width * 0.07): round(width * 0.93)]
+    if inner.size < 50:
+        return False
+    paper = float(np.percentile(inner, 90))
+    if paper < 60:  # juda qorong'i surat — aniqlab bo'lmaydi
+        return False
+    return float((inner < paper * 0.62).mean()) < 0.004

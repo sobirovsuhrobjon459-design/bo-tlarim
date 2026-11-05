@@ -183,6 +183,9 @@ from .database import (
     User,
     WithdrawalRequest,
     WithdrawalRequestIn,
+    WrittenAnswer,
+    WrittenRestIn,
+    WrittenVerdictIn,
     add_balance,
     add_credits,
     engine,
@@ -2900,50 +2903,80 @@ def _continuous_style(columns: int, blocks: int, pitch: float = SHEET11_PITCH) -
     }
 
 
-def _continuous_plan(test: Test, items: list, variants: list[str] | None) -> dict:
+# Yozma javoblar bandi (Milliy sertifikat 36–45): doirachalardan keyin, titulning butun enida —
+# har ustunda bitta katak, har 5 qatorli oraliqda (kvadratlar orasida) 2 qator katak
+SHEET12_LINES = 2
+
+
+def _continuous_plan(test: Test, items: list, variants: list[str] | None, written: list | None = None) -> dict:
     """
     11-versiya: savollar bitta sahifaga sig'adigan, titul tik bo'ladigan ustun/qator soni orasidan
     A4 ga eng katta (doirachalar eng yirik) chiqadigani; teng bo'lsa — kamroq ustunlisi.
+
+    written — yozma savollar (36a, 36b …): titul pastida yozish kataklari bandi. Hammasi bitta
+    sahifaga sig'magan bo'lsa — band chizilmaydi (javoblar oldingidek qo'lda kiritiladi).
     """
 
     prefix = 11 + (2 if variants else 0) + 1  # ID (yozish kataklari + 0–9), variant, bo'sh qator
     titles: dict[int, str] = {}  # fan sarlavhalari (hozircha ishlatilmaydi: DTM tituli eski ko'rinishda)
-    best = None
-    for columns in (2, 3, 4):
-        for blocks in range(2, SHEET11_MAX_BLOCKS + 1):
-            rows = blocks * SHEET11_GROUP + 1
-            if rows < prefix + 2:
-                continue
-            pitch = _continuous_pitch(columns, blocks)
-            if pitch < SHEET11_PITCH - 0.01:
-                continue
-            style = _continuous_style(columns, blocks, pitch)
-            if style["height"] / style["width"] < SHEET11_MIN_RATIO:
-                continue
-            pages = _continuous_fill(items, columns, rows, prefix, titles)
-            if len(pages) != 1:
-                continue
-            key = (round(pitch, 2), -columns)
-            if best is None or key > best[0]:
-                best = (key, style, pages)
-            break  # shu ustunlar sonida keyingilari balandroq — oraliq kichikroq
+
+    def search(boxes: int):
+        best = None
+        for columns in (2, 3, 4):
+            # Yozma kataklar: har qatorda ustunlar soncha; har oraliqda SHEET12_LINES qator
+            band = math.ceil(math.ceil(boxes / columns) / SHEET12_LINES) if boxes else 0
+            for blocks in range(2, SHEET11_MAX_BLOCKS + 1 - band):
+                # Band bo'lsa — doirachalar oxirgi kvadratlar chizig'igacha bormaydi (kataklarga tegmasin)
+                rows = blocks * SHEET11_GROUP + (0 if band else 1)
+                if rows < prefix + 2:
+                    continue
+                pitch = _continuous_pitch(columns, blocks + band)
+                if pitch < SHEET11_PITCH - 0.01:
+                    continue
+                style = _continuous_style(columns, blocks + band, pitch)
+                if style["height"] / style["width"] < SHEET11_MIN_RATIO:
+                    continue
+                pages = _continuous_fill(items, columns, rows, prefix, titles)
+                if len(pages) != 1:
+                    continue
+                key = (round(pitch, 2), -columns)
+                if best is None or key > best[0]:
+                    best = (key, style, pages, blocks, columns)
+                break  # shu ustunlar sonida keyingilari balandroq — oraliq kichikroq
+        return best
+
+    best = search(len(written)) if written else None
+    if best is None:
+        written = []
+        best = search(0)
     if best:
-        _, style, pages = best
+        _, style, pages, blocks, columns = best
     else:  # juda ko'p savol — 4 ustunli eng baland titul, bir necha sahifa
         style = _continuous_style(4, SHEET11_MAX_BLOCKS, _continuous_pitch(4, SHEET11_MAX_BLOCKS))
         pages = _continuous_fill(items, 4, SHEET11_MAX_BLOCKS * SHEET11_GROUP + 1, prefix, titles)
+        blocks, columns = SHEET11_MAX_BLOCKS, 4
     return {"continuous": True, "width": style["width"], "height": style["height"], "edge_marks": style["edge_marks"],
-            "pages": pages, "column_width": style["column_width"], "style": style, "reserved": 0, "prefix": prefix}
+            "pages": pages, "column_width": style["column_width"], "style": style, "reserved": 0, "prefix": prefix,
+            # Yozma kataklar (1-sahifada): (savol, ustun, qator) — qatorma-qator, chapdan o'ngga
+            "written": [(item, index % columns, index // columns) for index, item in enumerate(written or [])],
+            "bubble_blocks": blocks}
 
 
 def _evalbee_plan(test: Test, variants: list[str] | None = None, key_override: dict | None = None) -> dict:
     """8–9-versiya: blok qatorlari × ustunlar; 1-ustunning tepasida ID (va variant). 11-versiya — uzluksiz."""
 
-    items = [item for item in _answer_sheet_items(test, key_override) if item[1] != "text"]
+    all_items = _answer_sheet_items(test, key_override)
+    items = [item for item in all_items if item[1] != "text"]
     # DTM tituli (fanlar bo'yicha guruhlangan) o'zgarmaydi — 10-versiyadagidek chiziladi
     dtm_test = len(items) == 90 and bool(score_weights(test.subject, len(items)))
     if (test.sheet_version or 1) >= 11 and not dtm_test:
-        return _continuous_plan(test, items, variants)
+        # Yozma savollar faqat oflayn testda titulga chiziladi (onlayn testda o'quvchi ilovada yozadi).
+        # Faqat 12-versiyadan: oldin chop etilgan titullar o'z joylashuvida qoladi
+        closed = getattr(test, "enrollment_type", None) == "closed"
+        written = [item for item in all_items if item[1] == "text"] if closed and (test.sheet_version or 1) >= 12 else []
+        plan = _continuous_plan(test, items, variants, written)
+        plan["wide_rows"] = (test.sheet_version or 1) >= 12
+        return plan
     reserved = 3 if variants else 2  # 1-ustunda ID (2 blok) va variant (1 blok)
     if (test.sheet_version or 1) >= 9:
         dtm_titles = reserved == 2 and len(items) == 90 and bool(score_weights(test.subject, len(items)))
@@ -3057,6 +3090,11 @@ def _draw_evalbee_card(sheet, test: Test, plan: dict, page: int, with_answers: b
         used = {cell(column, row) for _, column, row, _ in plan["pages"][page - 1]}
         if page == 1:
             used |= {cell(0, row) for row in range(plan["prefix"] - 1)}
+            if plan.get("written"):
+                # Yozma kataklar bandi: har katak o'z oralig'ining 4 kvadrati orasida (skaner shu bo'yicha qirqadi)
+                bands = math.ceil((max(line for _, _, line in plan["written"]) + 1) / SHEET12_LINES)
+                used |= {(column, plan["bubble_blocks"] + band)
+                         for column in range(style["columns"]) for band in range(bands)}
     else:
         used = {(column, block_row) for _, column, block_row, _ in plan["pages"][page - 1]}
         if page == 1:
@@ -3263,6 +3301,22 @@ def _draw_continuous_body(sheet, plan: dict, page: int, student: tuple | None, v
     def text_y(row: int, size: float) -> float:
         return row_y(row) - size * 0.35
 
+    def wide_x(column: int, option: int, options: int) -> float:
+        """
+        5–6 variantli qator (33–35, A–F) ustunga sig'ishi uchun o'ng chetdan joylanadi (kvadratlarga tegmaydi).
+        12-versiyadan; oldingi titullar o'z joylashuvida (chop etilganlari to'g'ri skanerlansin).
+        """
+        if options <= 4 or not plan.get("wide_rows"):
+            return option_x(column, option)
+        right = line_x(column) + column_width - 0.65 * pitch - radius
+        return right - (options - 1 - option) * style["gap"]
+
+    def number_right(column: int, options: int) -> float:
+        """Savol raqamining o'ng cheti: keng qatorda — birinchi doirachadan oldin."""
+        if options <= 4 or not plan.get("wide_rows"):
+            return line_x(column) + label_right
+        return wide_x(column, 0, options) - radius - 0.25 * pitch
+
     if page == 1:
         # O'quvchi ID: 0-qatorda yozish kataklari, ostida 0–9 (4 xona)
         digits = f"{student[0]:04d}" if student else None
@@ -3313,20 +3367,51 @@ def _draw_continuous_body(sheet, plan: dict, page: int, student: tuple | None, v
         elif kind == "letters":
             sheet.setFont("Helvetica-Bold", style["letter_font"])
             for option in range(payload):
-                sheet.drawCentredString(option_x(column, option), text_y(row, style["letter_font"]), chr(65 + option))
+                sheet.drawCentredString(wide_x(column, option, payload), text_y(row, style["letter_font"]), chr(65 + option))
         else:
             label, question_type, options, correct, ref = payload
             corners = block(*cell(column, row))
             sheet.setFont("Helvetica", style["number_font"])
-            sheet.drawRightString(line_x(column) + label_right, text_y(row, style["number_font"]), f"{label}")
+            sheet.drawRightString(number_right(column, options), text_y(row, style["number_font"]), f"{label}")
             correct_letters = set((correct or "").split(","))
             for option in range(options):
                 letter = chr(65 + option)
-                x = option_x(column, option)
+                x = wide_x(column, option, options)
                 filled = with_answers and letter in correct_letters
                 sheet.circle(x, row_y(row), radius, stroke=1, fill=1 if filled else 0)
                 note({"ref": ref, "label": label, "kind": question_type, "letter": letter,
                       "x": x, "y": row_y(row), "r": radius, "block": corners})
+
+    if page == 1 and plan.get("written"):
+        _draw_written_band(sheet, plan, note, block, line_x, line_y)
+
+
+def _draw_written_band(sheet, plan: dict, note, block, line_x, line_y) -> None:
+    """
+    Yozma javob kataklari (36a, 36b …): chapda savol nomi, o'ngida yozish uchun to'rtburchak.
+    Skaner javobni o'qimaydi — katakni rasm qilib qirqib oladi, o'qituvchi rasmga qarab baholaydi.
+    """
+
+    style = plan["style"]
+    pitch = style["row"]
+    line_height = style["step"] / SHEET12_LINES
+    margin = 0.45 * pitch  # kvadratlar chizig'idan va qo'shni qatordan oraliq
+    height = line_height - 2 * margin
+    font_size = style["number_font"]
+    slot = max(stringWidth(item[0], "Helvetica-Bold", font_size) for item, _, _ in plan["written"])
+    sheet.setLineWidth(0.9)
+    sheet.setFont("Helvetica-Bold", font_size)
+    for (label, _, _, _, ref), column, line in plan["written"]:
+        block_row = plan["bubble_blocks"] + line // SHEET12_LINES
+        top = line_y(block_row) - (line % SHEET12_LINES) * line_height - margin
+        label_left = line_x(column) + 0.45 * pitch
+        left = label_left + slot + 0.3 * pitch
+        right = line_x(column + 1) - 0.5 * pitch
+        sheet.drawString(label_left, top - height / 2 - font_size * 0.35, label)
+        sheet.rect(left, top - height, right - left, height, stroke=1, fill=0)
+        note({"ref": ref, "label": label, "kind": "write", "letter": "",
+              "x": (left + right) / 2, "y": top - height / 2, "w": right - left, "h": height, "r": 0,
+              "block": block(column, block_row)})
 
 
 def _draw_sheet_brand(sheet, card_bottom: float) -> None:
@@ -4245,6 +4330,19 @@ def _text_answer_is_correct(student_answer: str, correct: str) -> bool:
     return False
 
 
+def _written_verdicts(db: Session, attempt_id: int) -> dict[int, bool]:
+    """Tituldagi yozma javoblarga o'qituvchi qo'ygan baholar: {savol raqami: to'g'ri/xato} (baholanganlari)."""
+
+    return {
+        ref: verdict
+        for ref, verdict in db.execute(
+            select(WrittenAnswer.question_ref, WrittenAnswer.verdict).where(
+                WrittenAnswer.attempt_id == attempt_id, WrittenAnswer.verdict.is_not(None)
+            )
+        ).all()
+    }
+
+
 def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str, str]) -> int:
     """
     Javoblarni tekshirib, har biri uchun StudentAnswer yozuvini yaratadi.
@@ -4256,6 +4354,11 @@ def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str,
 
     if test.mode == "key":
         overrides = _key_override(db, test, attempt.variant)
+        # Titulda qo'lda yozilgan javoblar: o'qituvchi rasmga qarab qo'ygan baho (✓/✗) kalitdan ustun
+        verdicts = (
+            _written_verdicts(db, attempt.id)
+            if attempt.id and any(kq.question_type == "text" for kq in test.key_questions) else {}
+        )
         for key_question in test.key_questions:
             student_answer = answers.get(str(key_question.number)) or ""
             key_correct = overrides.get(key_question.number, key_question.correct)
@@ -4273,7 +4376,8 @@ def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str,
             elif key_question.question_type == "text":
                 # Yozma javob: yozilish farqlari hisobga olinmaydi (qarang: _normalize_text_answer),
                 # o'qituvchi kiritgan variantlardan biriga mos kelsa yetarli.
-                is_correct = _text_answer_is_correct(student_answer, key_correct)
+                verdict = verdicts.get(key_question.number)
+                is_correct = verdict if verdict is not None else _text_answer_is_correct(student_answer, key_correct)
                 chosen_value = student_answer.strip()[:300] or None
             else:
                 raw_answer = student_answer.upper().replace(" ", "")
@@ -5626,6 +5730,8 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
         "students": students,
         "filled": filled,
         "missing": len(students) - filled,
+        # Titulda qo'lda yozilgan javoblar: {total, unchecked} (yozma savolli oflayn testda)
+        "written": _written_stats(db, test),
     }
 
 
@@ -6632,7 +6738,198 @@ def save_scanned_sheet(
     if body.variant:
         attempt.variant = body.variant
         db.flush()
+    _store_written_images(db, test, attempt, body.written)
     return _store_offline_answers(db, test, teacher, attempt, body.answers)
+
+
+# ---------- Yozma javoblar (titulda qo'lda yozilgan) ----------
+# Skaner yozma katakni o'qimaydi — rasm qilib saqlaydi. O'qituvchi savolma-savol (36a: hamma
+# o'quvchilar) rasmga qarab ✓ yoki ✗ qo'yadi; baho natija va Rasch'ga o'tadi. Bo'sh katak o'zi ✗.
+
+WRITTEN_IMAGE_LIMIT = 300_000  # bitta katak rasmi (base64 matni) — ko'pi bilan
+
+
+def _store_written_images(db: Session, test: Test, attempt: Attempt, images: dict[str, str]) -> None:
+    """Skanerlangan varaqning yozma kataklari: yangi rasm — baho qaytadan qo'yiladi (bo'sh katak — o'zi ✗)."""
+
+    if not images or test.mode != "key":
+        return
+    from .omr import written_is_blank  # og'ir kutubxona (OpenCV) — faqat kerak bo'lganda
+
+    text_refs = {kq.number for kq in test.key_questions if kq.question_type == "text"}
+    existing = {
+        row.question_ref: row
+        for row in db.scalars(select(WrittenAnswer).where(WrittenAnswer.attempt_id == attempt.id)).all()
+    }
+    for key, image in images.items():
+        try:
+            ref = int(key)
+        except ValueError:
+            continue
+        if ref not in text_refs or not isinstance(image, str) or not image.startswith("data:image/"):
+            continue
+        if len(image) > WRITTEN_IMAGE_LIMIT:
+            continue
+        row = existing.get(ref)
+        if row is None:
+            row = WrittenAnswer(attempt_id=attempt.id, question_ref=ref)
+            db.add(row)
+        row.image = image
+        row.blank = written_is_blank(image)
+        row.verdict = False if row.blank else None
+        row.checked_at = None
+        row.created_at = utcnow()
+    db.flush()
+
+
+def _written_rows(db: Session, test: Test):
+    """Testdagi (natijasi bor o'quvchilarning) yozma katak yozuvlari: (WrittenAnswer, Attempt)."""
+
+    return db.execute(
+        select(WrittenAnswer, Attempt)
+        .join(Attempt, Attempt.id == WrittenAnswer.attempt_id)
+        .where(Attempt.test_id == test.id, Attempt.status == "done")
+    ).all()
+
+
+def _written_stats(db: Session, test: Test) -> dict | None:
+    """Test sahifasi uchun: nechta yozma katak saqlangan va nechtasi hali baholanmagan."""
+
+    if test.enrollment_type != "closed" or test.mode != "key":
+        return None
+    if not any(kq.question_type == "text" for kq in test.key_questions):
+        return None
+    total, unchecked = db.execute(
+        select(func.count(), func.count(case((WrittenAnswer.verdict.is_(None), 1))))
+        .select_from(WrittenAnswer)
+        .join(Attempt, Attempt.id == WrittenAnswer.attempt_id)
+        .where(Attempt.test_id == test.id, Attempt.status == "done")
+    ).one()
+    return {"total": total, "unchecked": unchecked}
+
+
+def _text_questions(test: Test) -> list[KeyQuestion]:
+    return [kq for kq in test.key_questions if kq.question_type == "text"]
+
+
+@app.get("/api/teacher/tests/{test_id}/written")
+def written_overview(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """Yozma savollar ro'yxati: har birida nechta rasm, nechtasi baholangan, nechtasi to'g'ri."""
+
+    test = _get_own_test(db, teacher, test_id)
+    counts: dict[int, dict[str, int]] = {}
+    for row, _ in _written_rows(db, test):
+        item = counts.setdefault(row.question_ref, {"total": 0, "checked": 0, "correct": 0})
+        item["total"] += 1
+        item["checked"] += row.verdict is not None
+        item["correct"] += row.verdict is True
+    return {
+        "title": test.title,
+        "questions": [
+            {"ref": kq.number, "label": _key_question_label(kq), "key": kq.correct,
+             **counts.get(kq.number, {"total": 0, "checked": 0, "correct": 0})}
+            for kq in _text_questions(test)
+        ],
+    }
+
+
+@app.get("/api/teacher/tests/{test_id}/written/{ref}")
+def written_question(
+    test_id: int, ref: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
+):
+    """Bitta yozma savol (masalan 36a): hamma o'quvchilarning katak rasmi, bahosi va kalit."""
+
+    test = _get_own_test(db, teacher, test_id)
+    questions = _text_questions(test)
+    index = next((position for position, kq in enumerate(questions) if kq.number == ref), None)
+    if index is None:
+        raise HTTPException(status_code=404, detail="Yozma savol topilmadi")
+    question = questions[index]
+    variants = _test_variants(db, test)
+    rows = [(row, attempt) for row, attempt in _written_rows(db, test) if row.question_ref == ref]
+    rows.sort(key=lambda pair: _uz_sort_key(pair[1].offline_name or ""))
+    return {
+        "ref": ref,
+        "label": _key_question_label(question),
+        "key": question.correct,
+        "prev": questions[index - 1].number if index > 0 else None,
+        "next": questions[index + 1].number if index + 1 < len(questions) else None,
+        "items": [
+            {
+                "attempt_id": attempt.id,
+                "name": attempt.offline_name or "Noma'lum",
+                "number": attempt.sheet_number,
+                # Boshqa variantdagi o'quvchi — o'z variantining kaliti bilan
+                "variant": attempt.variant if attempt.variant and attempt.variant != "A" else None,
+                "key": variants.get(attempt.variant, {}).get(ref, question.correct)
+                if attempt.variant and attempt.variant != "A" else question.correct,
+                "image": row.image,
+                "verdict": row.verdict,
+                "blank": row.blank,
+            }
+            for row, attempt in rows
+        ],
+    }
+
+
+def _regrade_attempt(db: Session, test: Test, teacher: Teacher, attempt: Attempt) -> None:
+    """Saqlangan javoblardan qayta baholash (yozma javob bahosi o'zgardi) va sinf natijasini yangilash."""
+
+    answers = {
+        str(answer.question_ref): answer.chosen or ""
+        for answer in db.scalars(select(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id)).all()
+    }
+    db.execute(delete(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id))
+    _grade_answers(db, attempt, test, answers)
+    _calculate_attempt_score(db, attempt, test)
+    db.commit()
+    try:
+        _sync_class_result(db, test, teacher, attempt)
+    except Exception:  # natija imtihonda saqlangan — sinfga yozilmasa ham yo'qolmaydi
+        db.rollback()
+        logging.getLogger("backend").warning("Sinf natijasiga yozib bo'lmadi", exc_info=True)
+
+
+@app.post("/api/teacher/tests/{test_id}/written/{ref}/rest")
+def set_written_rest(
+    test_id: int, ref: int, body: WrittenRestIn,
+    teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db),
+):
+    """Shu savolda hali baholanmagan kataklarning hammasiga bir xil baho (odatda: qolganlari ✗)."""
+
+    test = _get_own_test(db, teacher, test_id)
+    pending = [(row, attempt) for row, attempt in _written_rows(db, test)
+               if row.question_ref == ref and row.verdict is None]
+    for row, _ in pending:
+        row.verdict = body.verdict
+        row.checked_at = utcnow()
+    db.flush()
+    for _, attempt in pending:
+        _regrade_attempt(db, test, teacher, attempt)
+    return {"ok": True, "updated": len(pending)}
+
+
+@app.post("/api/teacher/tests/{test_id}/written/{ref}/{attempt_id}")
+def set_written_verdict(
+    test_id: int, ref: int, attempt_id: int, body: WrittenVerdictIn,
+    teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db),
+):
+    """O'qituvchi bitta katakka baho qo'yadi (✓ / ✗ / bekor) — o'quvchi natijasi darhol qayta hisoblanadi."""
+
+    test = _get_own_test(db, teacher, test_id)
+    row = db.scalar(
+        select(WrittenAnswer)
+        .join(Attempt, Attempt.id == WrittenAnswer.attempt_id)
+        .where(WrittenAnswer.attempt_id == attempt_id, WrittenAnswer.question_ref == ref,
+               Attempt.test_id == test.id, Attempt.status == "done")
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Yozma javob topilmadi")
+    row.verdict = body.verdict
+    row.checked_at = utcnow() if body.verdict is not None else None
+    attempt = db.get(Attempt, attempt_id)
+    _regrade_attempt(db, test, teacher, attempt)
+    return {"ok": True, "verdict": row.verdict, "correct": attempt.correct, "percent": attempt.percent}
 
 
 @app.post("/api/teacher/tests/{test_id}/close")
@@ -6648,6 +6945,13 @@ def close_test(test_id: int, teacher: Teacher = Depends(get_current_teacher), db
         raise HTTPException(
             status_code=400,
             detail=f"Yakunlash uchun barcha o'quvchilar javobini kiriting — {missing} ta o'quvchi qolgan",
+        )
+    written = _written_stats(db, test)
+    if written and written["unchecked"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Yozma javoblar baholanmagan — {written['unchecked']} ta. "
+                   "Avval «Yozma javoblar» bo'limida ✓ yoki ✗ qo'ying",
         )
 
     test.status = "closed"

@@ -257,8 +257,9 @@ class Test(Base):
     # va pastda imtihon kodi (boshqa imtihon tituli bilan adashmaydi); 4 — o'quvchi ID
     # vertikal 3 ustunda (0–9); 5 — ID 4 xonali (maktab o'quvchilari ID'si 1001, 1002 ...).
     # Eski testlar o'z versiyasida qoladi — oldin chop etilgan varaqlar ham to'g'ri skanerlanishi uchun.
-    # 6 — ixcham; 7 — bloklari kvadratli; 8–10 — EvalBee uslubi; 11 — doirachalar o'lchami va oralig'i doim bir xil
-    sheet_version: Mapped[int] = mapped_column(default=11)
+    # 6 — ixcham; 7 — bloklari kvadratli; 8–10 — EvalBee uslubi; 11 — doirachalar o'lchami va oralig'i doim bir xil;
+    # 12 — yozma savollar uchun pastda yozish kataklari (36a, 36b …), 33–35 (A–F) qatorlari ustunga sig'adi
+    sheet_version: Mapped[int] = mapped_column(default=12)
     # Esse (Ona tili 45): maksimal bali (24). Bo'sh — testda esse yo'q
     essay_max: Mapped[int | None] = mapped_column(default=None)
 
@@ -409,6 +410,29 @@ class StudentAnswer(Base):
     question_ref: Mapped[int] = mapped_column(index=True)
     chosen: Mapped[str | None] = mapped_column(String(300), default=None)
     is_correct: Mapped[bool] = mapped_column(default=False)
+
+
+class WrittenAnswer(Base):
+    """
+    Tituldagi yozma javob katagi (36a, 36b …): skaner qirqib olgan rasm va o'qituvchi bahosi.
+
+    O'quvchi javobni qog'ozga qo'lda yozadi — skaner uni o'qimaydi, faqat katakni rasm qilib saqlaydi.
+    O'qituvchi "Yozma javoblar" bo'limida rasmga qarab ✓ (to'g'ri) yoki ✗ (xato) qo'yadi; baho
+    StudentAnswer.is_correct'ga o'tadi (Rasch ham shundan hisoblaydi). Bo'sh katak o'zi ✗ bo'ladi.
+    question_ref — KeyQuestion.number.
+    """
+
+    __tablename__ = "written_answers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    attempt_id: Mapped[int] = mapped_column(ForeignKey("test_attempts.id"), index=True)
+    question_ref: Mapped[int]
+    image: Mapped[str] = mapped_column(Text)  # data:image/jpeg;base64,…
+    # True — to'g'ri, False — xato, None — hali tekshirilmagan
+    verdict: Mapped[bool | None] = mapped_column(default=None)
+    blank: Mapped[bool] = mapped_column(default=False)  # katak bo'sh (skaner aniqladi) — o'zi ✗
+    checked_at: Mapped[datetime | None] = mapped_column(default=None)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
 class Payment(Base):
@@ -1532,6 +1556,20 @@ class SheetScanSaveIn(BaseModel):
     sheet_number: int | None = Field(default=None, ge=1, le=9999)
     variant: str | None = Field(default=None, pattern="^[A-D]$")
     answers: dict[str, str] = {}
+    # Yozma javob kataklari rasmi: {savol_kaliti: "data:image/jpeg;base64,…"}
+    written: dict[str, str] = {}
+
+
+class WrittenVerdictIn(BaseModel):
+    """Yozma javobga o'qituvchi bahosi: True — to'g'ri, False — xato, None — bahoni olib tashlash."""
+
+    verdict: bool | None = None
+
+
+class WrittenRestIn(BaseModel):
+    """Shu savolda hali baholanmaganlarning hammasiga bir xil baho (odatda ✗)."""
+
+    verdict: bool = False
 
 
 def _clean_phone(value: str | None) -> str | None:
