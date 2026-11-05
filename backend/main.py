@@ -6910,7 +6910,7 @@ def _text_questions(test: Test) -> list[KeyQuestion]:
 def written_overview(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
     """Yozma savollar ro'yxati: har birida nechta rasm, nechtasi baholangan, nechtasi to'g'ri."""
 
-    from .ai_reader import ai_enabled
+    from . import ai_reader
 
     test = _get_own_test(db, teacher, test_id)
     counts: dict[int, dict[str, int]] = {}
@@ -6930,8 +6930,11 @@ def written_overview(test_id: int, teacher: Teacher = Depends(get_current_teache
              **counts.get(kq.number, {"total": 0, "checked": 0, "correct": 0})}
             for kq in _text_questions(test)
         ],
-        # AI: ulanganmi, nechta katak navbatda (o'qilmoqda), nechtasi hali o'qilmagan, nechtasiga o'zi ✓ qo'ydi
-        "ai": {"enabled": ai_enabled(), "queued": queued, "unread": unread, "auto": auto},
+        # AI: ulanganmi (qaysi), nechta katak navbatda (o'qilmoqda), nechtasi hali o'qilmagan,
+        # nechtasiga o'zi ✓ qo'ydi, oxirgi xato (o'qilmagan katak bo'lsa — sababini o'qituvchi ko'radi)
+        "ai": {"enabled": ai_reader.ai_enabled(), "provider": ai_reader.ai_provider(),
+               "queued": queued, "unread": unread, "auto": auto,
+               "error": (ai_reader.last_error or {}).get("message") if unread else None},
     }
 
 

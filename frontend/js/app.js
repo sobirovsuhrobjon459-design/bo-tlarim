@@ -14743,7 +14743,8 @@ async function renderWrittenOverview(testId) {
         ? `<div class="notice is-info">🤖 AI javoblarni o'qimoqda — <b>${ai.queued}</b> ta katak qoldi. Aniq o'qilgan va kalitga
              mos javoblarga o'zi ✓ qo'yadi, qolganini siz ko'rasiz.</div>`
         : ai.unread
-          ? `<button class="btn" id="written-ai-button" style="margin:0 0 10px">🤖 AI bilan o'qish (${ai.unread} ta javob)</button>`
+          ? `${ai.error ? `<div class="notice">🤖 AI o'qiy olmadi: ${escapeHtml(ai.error)}</div>` : ""}
+             <button class="btn" id="written-ai-button" style="margin:0 0 10px">🤖 AI bilan o'qish (${ai.unread} ta javob)</button>`
           : ai.auto
             ? `<p class="subtitle" style="margin:0 4px 10px">🤖 AI <b>${ai.auto}</b> ta javobga o'zi ✓ qo'ydi (savol ichida «🤖» belgisi bilan).</p>`
             : "";
