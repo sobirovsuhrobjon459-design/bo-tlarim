@@ -3701,3 +3701,8 @@ button {
   color: #d97706;
   font-weight: 600;
 }
+
+.badge-red {
+  background: rgba(220, 38, 38, 0.14);
+  color: #dc2626;
+}

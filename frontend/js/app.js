@@ -14728,6 +14728,7 @@ async function renderAttachClasses(testId) {
   Baho darhol o'quvchi natijasiga (va Rasch'ga) o'tadi.
 */
 let writtenRefreshTimer = null; // AI o'qiyotganda ro'yxat o'zi yangilanib turadi
+const writtenAutoTried = new Set(); // sahifa ochilganda AI o'zi ishga tushirilgan testlar (qayta-qayta emas)
 
 async function renderWrittenOverview(testId) {
   clearTimeout(writtenRefreshTimer);
@@ -14735,19 +14736,23 @@ async function renderWrittenOverview(testId) {
   const total = data.questions.reduce((sum, question) => sum + question.total, 0);
   const left = data.questions.reduce((sum, question) => sum + question.total - question.checked, 0);
   const ai = data.ai || {};
+  const providerName = { gemini: "Gemini", anthropic: "Claude" }[ai.provider] || "AI";
+  // AI holati doim ko'rinadi: ulanganmi, nechtasini o'zi tekshirdi, hozir o'qiyaptimi, xato bo'ldimi
   const aiHtml = !total
     ? ""
     : !ai.enabled
-      ? ""
-      : ai.queued
-        ? `<div class="notice is-info">🤖 AI javoblarni o'qimoqda — <b>${ai.queued}</b> ta katak qoldi. Aniq o'qilgan va kalitga
-             mos javoblarga o'zi ✓ qo'yadi, qolganini siz ko'rasiz.</div>`
-        : ai.unread
-          ? `${ai.error ? `<div class="notice">🤖 AI o'qiy olmadi: ${escapeHtml(ai.error)}</div>` : ""}
-             <button class="btn" id="written-ai-button" style="margin:0 0 10px">🤖 AI bilan o'qish (${ai.unread} ta javob)</button>`
-          : ai.auto
-            ? `<p class="subtitle" style="margin:0 4px 10px">🤖 AI <b>${ai.auto}</b> ta javobga o'zi ✓ qo'ydi (savol ichida «🤖» belgisi bilan).</p>`
-            : "";
+      ? `<p class="subtitle" style="margin:0 4px 10px">🤖 AI ulanmagan — yozma javoblarni o'zingiz baholaysiz.</p>`
+      : `<p class="subtitle" style="margin:0 4px 10px">🤖 AI (<b>${providerName}</b>) aniq o'qigan javoblarni o'zi tekshiradi${
+          ai.auto ? ` — <b>${ai.auto}</b> tasini tekshirdi` : ""
+        }. «Aniq emas» deganlari sizga qoladi.</p>
+        ${
+          ai.queued
+            ? `<div class="notice is-info">🤖 AI javoblarni o'qimoqda — <b>${ai.queued}</b> ta katak qoldi…</div>`
+            : ai.unread
+              ? `${ai.error ? `<div class="notice">🤖 AI o'qiy olmadi: ${escapeHtml(ai.error)}</div>` : ""}
+                 <button class="btn" id="written-ai-button" style="margin:0 0 10px">🤖 AI bilan o'qish (${ai.unread} ta javob)</button>`
+              : ""
+        }`;
   showPage(`
     <div class="page-header">
       <button class="back-button" type="button" data-action="back-written" style="margin:0">←</button>
@@ -14780,14 +14785,19 @@ async function renderWrittenOverview(testId) {
   document.querySelectorAll("[data-written-ref]").forEach((button) =>
     button.addEventListener("click", guarded(() => renderWrittenQuestion(testId, Number(button.dataset.writtenRef))))
   );
-  document.getElementById("written-ai-button")?.addEventListener(
-    "click",
-    guarded(async () => {
-      const { queued } = await api(`/api/teacher/tests/${testId}/written/ai`, { method: "POST" });
-      showToast(queued ? `🤖 ${queued} ta javob AI'ga yuborildi` : "O'qiladigan javob qolmagan");
-      await renderWrittenOverview(testId);
-    })
-  );
+  const runAi = async (quiet = false) => {
+    const { queued, graded } = await api(`/api/teacher/tests/${testId}/written/ai`, { method: "POST" });
+    if (!quiet || queued || graded) {
+      showToast(queued ? `🤖 ${queued} ta javob AI'ga yuborildi` : graded ? `🤖 ${graded} ta javob tekshirildi` : "O'qiladigan javob qolmagan");
+    }
+    await renderWrittenOverview(testId);
+  };
+  document.getElementById("written-ai-button")?.addEventListener("click", guarded(() => runAi()));
+  // O'qilmagan javob bo'lsa — AI o'zi boshlaydi (xato bo'lmagan bo'lsa; shu sessiyada bir marta)
+  if (ai.enabled && ai.unread && !ai.queued && !ai.error && !writtenAutoTried.has(testId)) {
+    writtenAutoTried.add(testId);
+    runAi(true).catch(() => {});
+  }
   // AI o'qiyotgan bo'lsa — 4 soniyada bir yangilanadi (shu sahifada turgan paytda)
   if (ai.queued) {
     const page = appElement.querySelector(".page");
@@ -14817,18 +14827,20 @@ async function renderWrittenQuestion(testId, ref) {
             <b>${item.number ? `<span class="student-number">#${item.number}</span> ` : ""}${escapeHtml(item.name)}</b>
             ${item.variant ? `<span class="badge badge-purple">${item.variant}: ${keyText(item.key)}</span>` : ""}
             ${item.blank ? `<span class="badge badge-gray">bo'sh</span>` : ""}
-            <span class="badge badge-green" data-auto-badge ${item.auto ? "" : "hidden"}>🤖 AI ✓</span>
+            <span class="badge" data-auto-badge hidden></span>
           </div>
           <img class="written-item-image" src="${item.image}" alt="${escapeHtml(item.name)} javobi" />
           ${
             // AI o'qigan matn: o'qituvchi rasm bilan solishtirib tez qaror qiladi
             item.ai_status === "done"
               ? `<p class="written-ai">🤖 AI o'qidi: <b>${item.ai_text ? escapeHtml(item.ai_text) : "(bo'sh)"}</b>${
-                  item.ai_sure ? "" : ` <span class="written-ai-unsure">· aniq emas</span>`
+                  item.ai_sure ? "" : ` <span class="written-ai-unsure">· aniq emas — o'zingiz tekshiring</span>`
                 }</p>`
               : item.ai_status === "queued"
                 ? `<p class="written-ai">🤖 AI o'qimoqda…</p>`
-                : ""
+                : item.ai_status === "error"
+                  ? `<p class="written-ai written-ai-unsure">🤖 AI o'qiy olmadi — o'zingiz tekshiring</p>`
+                  : ""
           }
           <div class="written-verdict">
             <button type="button" class="verdict-button is-right" data-verdict="true">✓ To'g'ri</button>
@@ -14850,7 +14862,11 @@ async function renderWrittenQuestion(testId, ref) {
       const row = document.querySelector(`.written-item[data-attempt="${item.attempt_id}"]`);
       row.classList.toggle("is-right", item.verdict === true);
       row.classList.toggle("is-wrong", item.verdict === false);
-      row.querySelector("[data-auto-badge]").hidden = !item.auto;
+      // AI qo'ygan baho: 🤖 AI ✓ (yashil) yoki 🤖 AI ✗ (qizil); o'qituvchi o'zgartirsa — yo'qoladi
+      const badge = row.querySelector("[data-auto-badge]");
+      badge.hidden = !item.auto || item.verdict === null;
+      badge.textContent = item.verdict ? "🤖 AI ✓" : "🤖 AI ✗";
+      badge.className = `badge ${item.verdict ? "badge-green" : "badge-red"}`;
       row.querySelectorAll(".verdict-button").forEach((button) =>
         button.classList.toggle("selected", String(item.verdict) === button.dataset.verdict)
       );

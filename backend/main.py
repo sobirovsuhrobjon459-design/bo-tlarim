@@ -6763,6 +6763,47 @@ _ai_running: set[int] = set()  # hozir AI o'qiyotgan o'quvchilar (bir varaq ikki
 _ai_lock = threading.Lock()
 
 
+def _apply_ai_verdict(row: WrittenAnswer, key: str) -> bool:
+    """
+    AI aniq o'qigan javobga baho: kalitga mos — ✓, mos emas (yoki AI bo'sh deb o'qidi) — ✗.
+    AI "aniq emas" degan bo'lsa yoki o'qituvchi allaqachon baholagan bo'lsa — tegmaydi.
+    """
+
+    if row.verdict is not None or row.ai_status != "done" or not row.ai_sure:
+        return False
+    row.verdict = bool(row.ai_text) and _text_answer_is_correct(row.ai_text, key)
+    row.auto_verdict, row.checked_at = True, utcnow()
+    return True
+
+
+def _apply_saved_ai_verdicts(db: Session, attempt_ids: list[int]) -> int:
+    """
+    AI oldin o'qigan, lekin baholanmay qolgan javoblar (oldingi qoida: faqat ✓ qo'yilardi) — qayta
+    so'rovsiz, saqlangan o'qishi bo'yicha baholanadi. Baholanganlar soni.
+    """
+
+    rows = db.scalars(
+        select(WrittenAnswer).where(
+            WrittenAnswer.attempt_id.in_(attempt_ids), WrittenAnswer.verdict.is_(None),
+            WrittenAnswer.ai_status == "done", WrittenAnswer.ai_sure.is_(True),
+        )
+    ).all()
+    touched: set[int] = set()
+    for row in rows:
+        attempt = db.get(Attempt, row.attempt_id)
+        test = db.get(Test, attempt.test_id)
+        kq = next((item for item in test.key_questions if item.number == row.question_ref), None)
+        key = _key_override(db, test, attempt.variant).get(row.question_ref, kq.correct if kq else "")
+        if _apply_ai_verdict(row, key):
+            touched.add(row.attempt_id)
+    db.commit()
+    for attempt_id in touched:
+        attempt = db.get(Attempt, attempt_id)
+        test = db.get(Test, attempt.test_id)
+        _regrade_attempt(db, test, test.teacher, attempt)
+    return len(rows)
+
+
 def _queue_ai_reading(db: Session, attempt_ids: list[int]) -> int:
     """O'quvchilarning hali baholanmagan, bo'sh bo'lmagan kataklari AI navbatiga. Navbatga tushganlar soni."""
 
@@ -6827,10 +6868,7 @@ def _ai_read_attempt(attempt_id: int) -> None:
                     continue
                 row.ai_text, row.ai_sure = found
                 row.ai_status = "done"
-                if (row.verdict is None and row.ai_sure and row.ai_text
-                        and _text_answer_is_correct(row.ai_text, keys.get(row.question_ref, ""))):
-                    row.verdict, row.auto_verdict, row.checked_at = True, True, utcnow()
-                    changed = True
+                changed |= _apply_ai_verdict(row, keys.get(row.question_ref, ""))
             db.commit()
             if changed:
                 _regrade_attempt(db, test, test.teacher, db.get(Attempt, attempt_id))
@@ -6921,7 +6959,9 @@ def written_overview(test_id: int, teacher: Teacher = Depends(get_current_teache
         item["checked"] += row.verdict is not None
         item["correct"] += row.verdict is True
         queued += row.ai_status == "queued"
-        unread += row.verdict is None and not row.blank and row.ai_status in (None, "error")
+        # AI o'qimagan (yoki xato bergan) va AI aniq o'qib, lekin baholanmay qolgan javoblar
+        unread += row.verdict is None and not row.blank and (
+            row.ai_status in (None, "error") or (row.ai_status == "done" and bool(row.ai_sure)))
         auto += bool(row.auto_verdict)
     return {
         "title": test.title,
@@ -6933,6 +6973,7 @@ def written_overview(test_id: int, teacher: Teacher = Depends(get_current_teache
         # AI: ulanganmi (qaysi), nechta katak navbatda (o'qilmoqda), nechtasi hali o'qilmagan,
         # nechtasiga o'zi ✓ qo'ydi, oxirgi xato (o'qilmagan katak bo'lsa — sababini o'qituvchi ko'radi)
         "ai": {"enabled": ai_reader.ai_enabled(), "provider": ai_reader.ai_provider(),
+               "model": ai_reader.GEMINI_MODEL if ai_reader.ai_provider() == "gemini" else ai_reader.AI_MODEL,
                "queued": queued, "unread": unread, "auto": auto,
                "error": (ai_reader.last_error or {}).get("message") if unread else None},
     }
@@ -6948,7 +6989,8 @@ def written_ai_read(test_id: int, teacher: Teacher = Depends(get_current_teacher
     if not ai_enabled():
         raise HTTPException(status_code=400, detail="AI ulanmagan — administrator API kalitini sozlashi kerak")
     attempt_ids = sorted({attempt.id for _, attempt in _written_rows(db, test)})
-    return {"ok": True, "queued": _queue_ai_reading(db, attempt_ids)}
+    graded = _apply_saved_ai_verdicts(db, attempt_ids)  # AI allaqachon o'qiganlari — qayta so'rovsiz
+    return {"ok": True, "queued": _queue_ai_reading(db, attempt_ids), "graded": graded}
 
 
 @app.get("/api/teacher/tests/{test_id}/written/{ref}")
