@@ -503,6 +503,12 @@ class StaticCacheHeaders:
     bir yilga saqlanadi va ilova qayta ochilganda serverdan umuman so'ralmaydi.
     Rasmlar — bir hafta. sw.js hech qachon keshlanmaydi (yangisi darhol kelsin).
     Javobda Cache-Control allaqachon bo'lsa (masalan, index.html), tegilmaydi.
+
+    Yangilanish paytida (Render eski va yangi serverni bir-ikki daqiqa birga ishlatadi) yangi
+    versiya havolasi eski serverga tushib, ESKI fayl qaytishi mumkin — u bir yilga "o'zgarmas" deb
+    saqlanib, ilova qayta ochilganda ham eski menyu chiqardi. Shuning uchun so'ralgan versiya shu
+    serverdagisiga mos kelmasa — keshlanmaydi; javobda serverdagi versiya (X-Asset-Version) aytiladi,
+    sw.js ham faqat mos versiyani saqlaydi.
     """
 
     def __init__(self, asgi_app):
@@ -514,10 +520,17 @@ class StaticCacheHeaders:
             await self.app(scope, receive, send)
             return
 
+        query = scope.get("query_string", b"").decode("latin-1")
+        served_version = None
         if path == "/sw.js":
             policy = b"no-cache"
-        elif b"v=" in scope.get("query_string", b""):
+        elif "v=" in query:
             policy = b"public, max-age=31536000, immutable"
+            if path in VERSIONED_ASSETS:
+                served_version = _asset_version()
+                requested = dict(item.split("=", 1) for item in query.split("&") if "=" in item).get("v")
+                if requested != served_version:
+                    policy = b"no-store"
         elif path.startswith("/img/"):
             policy = b"public, max-age=604800"
         else:
@@ -526,7 +539,10 @@ class StaticCacheHeaders:
         async def send_with_cache(message):
             if (policy and message["type"] == "http.response.start" and message.get("status") == 200
                     and not any(name.lower() == b"cache-control" for name, _ in message.get("headers", []))):
-                message = {**message, "headers": [*message.get("headers", []), (b"cache-control", policy)]}
+                headers = [*message.get("headers", []), (b"cache-control", policy)]
+                if served_version:
+                    headers.append((b"x-asset-version", served_version.encode()))
+                message = {**message, "headers": headers}
             await send(message)
 
         await self.app(scope, receive, send_with_cache)
@@ -14387,6 +14403,11 @@ def admin_broadcast(body: AdminBroadcastIn, admin: User = Depends(get_current_ad
 
 
 # Barcha boshqa manzillarni frontend papkasidan beradi (index.html, css, js)
+# index.html'dagi versiyali fayllar (havolasiga "?v=..." qo'shiladi; qarang: StaticCacheHeaders)
+VERSIONED_ASSETS = ("/js/app.js", "/js/icons.js", "/css/style.css", "/css/theme-pastel.css", "/css/theme-chittak.css",
+                    "/css/theme-web.css")
+
+
 def _asset_version() -> str:
     """
     Fayllar oxirgi marta o'zgargan vaqtdan qisqa "versiya" yasaydi.
@@ -14398,7 +14419,8 @@ def _asset_version() -> str:
     """
 
     latest = 0.0
-    for path in (FRONTEND_DIR / "js" / "app.js", FRONTEND_DIR / "js" / "icons.js", FRONTEND_DIR / "css" / "style.css", FRONTEND_DIR / "css" / "theme-pastel.css", FRONTEND_DIR / "css" / "theme-chittak.css", FRONTEND_DIR / "css" / "theme-web.css"):
+    for asset in VERSIONED_ASSETS:
+        path = FRONTEND_DIR / asset.lstrip("/")
         if path.exists():
             latest = max(latest, path.stat().st_mtime)
     return format(int(latest), "x")
@@ -14711,8 +14733,7 @@ def serve_index(request: Request):
     origin = f"{scheme}://{request.url.netloc}"
     html = html.replace('content="/img/og-image.jpg"', f'content="{origin}/img/og-image.jpg"')
     version = _asset_version()
-    for asset in ("/js/app.js", "/js/icons.js", "/css/style.css", "/css/theme-pastel.css", "/css/theme-chittak.css",
-                  "/css/theme-web.css"):
+    for asset in VERSIONED_ASSETS:
         html = html.replace(f'"{asset}"', f'"{asset}?v={version}"')
 
     # Fanlar pasporti (backend/subjects.py) — ilova test shablonini va klaviaturani shundan oladi

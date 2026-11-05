@@ -6955,3 +6955,26 @@ def test_fan_guruhlari_ingliz_tili_darajalari():
     # Asosiy o'qituvchi qilib tayinlansa — yordamchilikdan olinadi
     promoted = client.put(f"/api/classes/{a1['id']}/curator", json={"user_id": helper_id}, headers=owner).json()
     assert promoted["curator"]["user_id"] == helper_id and promoted["assistant"] is None, promoted
+
+
+def test_versiyali_fayl_faqat_mos_versiyada_keshlanadi():
+    """
+    Yangilanish paytida yangi versiya havolasi eski serverga tushib, eski fayl bir yilga keshlanib qolmasin:
+    so'ralgan versiya serverdagisiga mos kelsagina — "immutable"; aks holda — no-store. Javobda serverning
+    o'z versiyasi (X-Asset-Version) — sw.js mos kelmaganini keshga yozmaydi.
+    """
+    version = main._asset_version()
+    html = client.get("/").text
+    assert f'/js/app.js?v={version}"' in html and f'/css/style.css?v={version}"' in html
+
+    good = client.get(f"/js/app.js?v={version}")
+    assert good.status_code == 200
+    assert good.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert good.headers["x-asset-version"] == version
+
+    stale = client.get("/css/style.css?v=0000")
+    assert stale.status_code == 200 and stale.headers["cache-control"] == "no-store", stale.headers
+    assert stale.headers["x-asset-version"] == version
+    # Versiyasiz fayl (sw.js) — versiya aytilmaydi, avvalgidek har safar tekshiriladi
+    sw = client.get("/sw.js")
+    assert "x-asset-version" not in sw.headers and sw.headers["cache-control"] == "no-cache"

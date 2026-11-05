@@ -9,7 +9,7 @@
   akkaunt bo'lsa, bir-birining ma'lumotini ko'rmaydi). Faqat GET va faqat JSON.
 */
 
-const CACHE = "chittak-v6";
+const CACHE = "chittak-v7";
 // Faqat bosh sahifa oldindan saqlanadi. js/css esa sahifa so'ragan versiyali
 // manzil bilan ("?v=...") birinchi ochilishda keshga tushadi — versiyasiz
 // nusxalarni alohida yuklash keraksiz trafik edi.
@@ -68,8 +68,12 @@ async function cacheFirst(request) {
   const cached = await cache.match(request);
   if (cached) return cached;
   const response = await fetch(request);
+  const url = new URL(request.url);
+  // Yangilanish paytida yangi versiya havolasiga eski server ESKI faylni berishi mumkin — u keshga yozilmaydi
+  // (server javobdagi X-Asset-Version'da o'z versiyasini aytadi), aks holda eski menyu qotib qolardi
+  const served = response.headers.get("x-asset-version");
+  if (served && url.searchParams.has("v") && served !== url.searchParams.get("v")) return response;
   if (response.ok || response.type === "opaque") {
-    const url = new URL(request.url);
     if (url.searchParams.has("v")) {
       // Yangi versiya keldi — shu faylning eski versiyalari keshda to'planib qolmasin
       const old = await cache.keys();
