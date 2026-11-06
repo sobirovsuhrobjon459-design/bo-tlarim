@@ -3996,3 +3996,52 @@ button {
   object-fit: cover;
   border-radius: 8px;
 }
+
+/* ========== Maktab o'quvchisi kabineti ========== */
+
+.pupil-school-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.pupil-school-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 12px 14px;
+  font: inherit;
+  text-align: left;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.pupil-school-option small {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.pupil-school-card .link-button {
+  flex-shrink: 0;
+  border: 0;
+  background: none;
+  color: var(--color-primary);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pupil-credentials {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-size: 13px;
+  white-space: nowrap;
+}

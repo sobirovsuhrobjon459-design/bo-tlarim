@@ -7075,14 +7075,25 @@ def test_video_darslar_rahbariyat_qoshadi_hamma_korad():
     client.post("/api/videos", json={**body, "url": "https://youtu.be/aaaaaaaaaaa", "title": "Tarix 1",
                                      "subject": "Tarix", "grade": None, "description": ""}, headers=as_user(701))
 
-    # Har qanday foydalanuvchi ko'radi; fan va sinf bo'yicha saralanadi (sinfsiz video — hamma sinflarga)
-    seen = client.get("/api/videos", headers=as_user(801)).json()
+    # Hozircha faqat maktab o'quvchilari ko'radi (login-parol bilan, /api/pupil/videos) — oddiy foydalanuvchi emas
+    assert client.get("/api/videos", headers=as_user(801)).status_code == 403
+    cid = client.post("/api/classes", json={"name": "5-A"}, headers=as_user(701)).json()["id"]
+    client.post(f"/api/classes/{cid}/students", json={"full_name": "Aliyev Vali"}, headers=as_user(701))
+    access = client.get(f"/api/classes/{cid}/pupil-logins", headers=as_user(701)).json()["students"][0]
+    main._pupil_ip_failures.clear()
+    token = client.post("/api/pupil/login", json={"school_id": school.json()["school"]["id"], "login": access["login"],
+                                                  "password": access["password"]}).json()["token"]
+    pupil = {"X-Pupil-Session": token}
+    assert client.get("/api/pupil/videos").status_code == 401
+
+    # Fan va sinf bo'yicha saralanadi (sinfsiz video — hamma sinflarga)
+    seen = client.get("/api/pupil/videos", headers=pupil).json()
     assert {item["name"] for item in seen["subjects"]} == {"Matematika", "Tarix"}
     assert len(seen["videos"]) == 2 and not seen["can_add"] and not seen["videos"][0]["can_manage"]
-    assert [item["title"] for item in client.get("/api/videos?subject=Matematika", headers=as_user(801)).json()["videos"]] == ["Kasrlar"]
-    assert len(client.get("/api/videos?grade=7", headers=as_user(801)).json()["videos"]) == 1  # faqat sinfsiz "Tarix 1"
-    assert [item["title"] for item in client.get("/api/videos?q=qo'shish", headers=as_user(801)).json()["videos"]] == ["Kasrlar"]
-    assert client.post(f"/api/videos/{video['id']}/view", headers=as_user(801)).status_code == 200
+    assert [item["title"] for item in client.get("/api/pupil/videos?subject=Matematika", headers=pupil).json()["videos"]] == ["Kasrlar"]
+    assert len(client.get("/api/pupil/videos?grade=7", headers=pupil).json()["videos"]) == 1  # faqat sinfsiz "Tarix 1"
+    assert [item["title"] for item in client.get("/api/pupil/videos?q=qo'shish", headers=pupil).json()["videos"]] == ["Kasrlar"]
+    assert client.post(f"/api/videos/{video['id']}/view").status_code == 200
 
     # Boshqa odam o'zgartira olmaydi; rahbariyat tahrirlaydi; platforma admini o'chira oladi
     assert client.delete(f"/api/videos/{video['id']}", headers=as_user(801)).status_code == 403
@@ -7091,4 +7102,69 @@ def test_video_darslar_rahbariyat_qoshadi_hamma_korad():
     assert client.delete(f"/api/videos/{video['id']}", headers=as_user(4242)).status_code == 200
     left = client.get("/api/videos", headers=as_user(701)).json()
     assert [item["title"] for item in left["videos"]] == ["Tarix 1"] and left["can_add"]
-    assert left["videos"][0]["views"] == 0
+    assert left["videos"][0]["views"] == 0 and client.get("/api/videos", headers=as_user(4242)).status_code == 200
+
+
+def test_maktab_oquvchisi_login_parol_bilan_oz_kabinetiga_kiradi():
+    """O'quvchi maktabini topadi, maktab bergan login-parol bilan kiradi, o'z parolini o'rnatadi va faqat o'zinikini ko'radi."""
+    reset_database()
+    main._pupil_ip_failures.clear()
+    _set_name(701, "Aziza", "Karimova")
+    _set_name(702, "Boshqa", "Odam")
+    client.post("/api/schools", json={"subjects": ["Matematika"], "region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                      "name": "Ilm maktabi"}, headers=as_user(701))
+    cid = client.post("/api/classes", json={"name": "7-A"}, headers=as_user(701)).json()["id"]
+    client.put(f"/api/classes/{cid}/student-codes", json={"start": 1030, "end": 1040}, headers=as_user(701))
+    for name in ("Aliyev Vali", "Karimova Zuhra"):
+        client.post(f"/api/classes/{cid}/students", json={"full_name": name}, headers=as_user(701))
+
+    # Kurator/rahbariyat ro'yxatni oladi; begona odam — yo'q
+    assert client.get(f"/api/classes/{cid}/pupil-logins", headers=as_user(702)).status_code in (403, 404)
+    logins = client.get(f"/api/classes/{cid}/pupil-logins", headers=as_user(701)).json()
+    vali = next(item for item in logins["students"] if item["name"] == "Aliyev Vali")
+    assert vali["login"] == str(vali["code"]) and len(vali["password"]) == 6 and not vali["changed"]
+    again = client.get(f"/api/classes/{cid}/pupil-logins", headers=as_user(701)).json()
+    assert next(item for item in again["students"] if item["id"] == vali["id"])["password"] == vali["password"]  # o'zgarmaydi
+    assert client.get(f"/api/classes/{cid}/pupil-logins/file", headers=as_user(701)).content[:4] == b"%PDF"
+
+    # Maktabni topish (Telegram shart emas)
+    found = client.get("/api/pupil/schools", params={"q": "ilm"}).json()
+    school_id = found[0]["id"]
+    assert found[0]["name"] == "Ilm maktabi" and client.get("/api/pupil/schools", params={"q": "x"}).json() == []
+
+    login = {"school_id": school_id, "login": vali["login"], "password": vali["password"]}
+    assert client.post("/api/pupil/login", json={**login, "password": "000000" if vali["password"] != "000000" else "111111"}).status_code == 401
+    session = client.post("/api/pupil/login", json=login).json()
+    assert session["must_change"] and session["name"] == "Aliyev Vali" and session["class_name"] == "7-A"
+    pupil = {"X-Pupil-Session": session["token"]}
+
+    me = client.get("/api/pupil/me", headers=pupil).json()
+    assert me["name"] == "Aliyev Vali" and me["must_change"] and me["rating"]["class_size"] == 2
+    assert client.get("/api/pupil/me").status_code == 401
+
+    # O'z parolini o'rnatadi — maktab bergani endi ishlamaydi
+    assert client.post("/api/pupil/password", json={"old_password": "xato", "new_password": "yangi123"}, headers=pupil).status_code == 400
+    assert client.post("/api/pupil/password", json={"old_password": vali["password"], "new_password": "yangi123"},
+                       headers=pupil).status_code == 200
+    assert client.post("/api/pupil/login", json=login).status_code == 401
+    assert client.post("/api/pupil/login", json={**login, "password": "yangi123"}).status_code == 200
+    listed = client.get(f"/api/classes/{cid}/pupil-logins", headers=as_user(701)).json()["students"]
+    assert next(item for item in listed if item["id"] == vali["id"]) ["password"] is None
+
+    # 5 marta xato — vaqtincha yopiladi (to'g'ri parol bilan ham)
+    for _ in range(5):
+        client.post("/api/pupil/login", json={**login, "password": "noto'g'ri"})
+    assert client.post("/api/pupil/login", json={**login, "password": "yangi123"}).status_code == 429
+
+    # Kurator yangi parol beradi: qulf ochiladi, eski seanslar tugaydi
+    reset = client.post(f"/api/classes/{cid}/students/{vali['id']}/pupil-password", headers=as_user(701)).json()
+    assert reset["password"] and not reset["changed"]
+    assert client.get("/api/pupil/me", headers=pupil).status_code == 401
+    fresh = client.post("/api/pupil/login", json={**login, "password": reset["password"]})
+    assert fresh.status_code == 200, fresh.text
+
+    # Sinfdan chiqarilgan o'quvchi kira olmaydi
+    client.request("DELETE", f"/api/classes/{cid}/students/{vali['id']}", json={"reason": "Boshqa maktabga o'tdi"},
+                   headers=as_user(701))
+    assert client.get("/api/pupil/me", headers={"X-Pupil-Session": fresh.json()["token"]}).status_code == 401
+    assert client.post("/api/pupil/login", json={**login, "password": reset["password"]}).status_code == 403

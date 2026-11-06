@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import BigInteger, ForeignKey, String, Text, case, create_engine, update
+from sqlalchemy import BigInteger, ForeignKey, String, Text, UniqueConstraint, case, create_engine, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, object_session, relationship, sessionmaker
 
 # ========== 1) Sozlamalar (.env) ==========
@@ -426,6 +426,44 @@ class SheetImage(Base):
     page: Mapped[int] = mapped_column(default=1)
     image: Mapped[str] = mapped_column(Text)  # data:image/jpeg;base64,…
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class PupilAccount(Base):
+    """
+    Maktab o'quvchisining ilovaga kirishi: o'quvchi maktabini topadi, login va parol bilan kiradi.
+    Login — o'quvchining ID'si (bo'lmasa — maktab ichida takrorlanmaydigan 6 xonali raqam).
+    Boshlang'ich parolni maktab beradi (kurator ro'yxatni chop etadi) va u ochiq saqlanadi — o'quvchi
+    birinchi kirishda o'z parolini o'rnatadi, shundan keyin faqat uning PBKDF2 izi qoladi.
+    Bir akkaunt — bitta o'quvchi (asl sinfidagi yozuvi); o'quvchi va ota-onasi shu login bilan kiradi.
+    """
+
+    __tablename__ = "pupil_accounts"
+    __table_args__ = (UniqueConstraint("school_id", "login"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("class_students.id"), unique=True, index=True)
+    login: Mapped[str] = mapped_column(String(20))
+    initial_password: Mapped[str | None] = mapped_column(String(20), default=None)  # maktab bergan, almashtirilguncha
+    password_hash: Mapped[str | None] = mapped_column(String(200), default=None)  # o'quvchi o'rnatgan parol izi
+    must_change: Mapped[bool] = mapped_column(default=True)
+    failures: Mapped[int] = mapped_column(default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(default=None)
+    last_login_at: Mapped[datetime | None] = mapped_column(default=None)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class PupilSession(Base):
+    """O'quvchi seansi. Tokenning o'zi saqlanmaydi — faqat SHA-256 izi (AppSession kabi)."""
+
+    __tablename__ = "pupil_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("pupil_accounts.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    last_seen_at: Mapped[datetime | None] = mapped_column(default=None)
+    revoked_at: Mapped[datetime | None] = mapped_column(default=None)
 
 
 class VideoLesson(Base):
@@ -1882,6 +1920,21 @@ def youtube_video_id(url: str) -> str | None:
         if match:
             return match.group(1)
     return None
+
+
+class PupilLoginIn(BaseModel):
+    """Maktab o'quvchisining kirishi: maktab, login va parol."""
+
+    school_id: int
+    login: str = Field(min_length=1, max_length=20)
+    password: str = Field(min_length=1, max_length=100)
+
+
+class PupilPasswordIn(BaseModel):
+    """O'quvchi o'z parolini o'rnatadi (birinchi kirishda — majburiy)."""
+
+    old_password: str = Field(max_length=100)
+    new_password: str = Field(min_length=6, max_length=100)
 
 
 class VideoLessonIn(BaseModel):

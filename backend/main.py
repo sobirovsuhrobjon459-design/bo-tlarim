@@ -19,6 +19,7 @@ import asyncio
 import base64
 import binascii
 import contextvars
+import hashlib
 import hmac
 import io
 import json
@@ -185,6 +186,10 @@ from .database import (
     WithdrawalRequest,
     WithdrawalRequestIn,
     SheetImage,
+    PupilAccount,
+    PupilLoginIn,
+    PupilPasswordIn,
+    PupilSession,
     VideoLesson,
     VideoLessonIn,
     WrittenAnswer,
@@ -12923,6 +12928,371 @@ def delete_announcement(announcement_id: int, user: User = Depends(get_current_u
     return {"ok": True}
 
 
+# ---------- Maktab o'quvchisining kabineti: login, parol, davomat, natijalar, reyting, jadval ----------
+# O'quvchi (yoki ota-onasi) ilovada maktabini topib, maktab bergan login-parol bilan kiradi va faqat O'Z
+# ma'lumotlarini ko'radi. Telegram shart emas — seans X-Pupil-Session sarlavhasida keladi.
+
+PUPIL_LOCK_FAILURES = 5  # shuncha xato paroldan keyin akkaunt vaqtincha yopiladi
+PUPIL_LOCK_MINUTES = 15
+PUPIL_IP_LIMIT = 30  # bitta manzildan 15 daqiqada shuncha xato urinish (turli loginlarni terib chiqishga qarshi)
+PUPIL_HASH_ITERATIONS = 60_000
+_pupil_ip_failures: dict[str, list[float]] = {}
+
+
+def _new_pupil_password() -> str:
+    """Maktab beradigan boshlang'ich parol — 6 xonali raqam (chop etiladi, bola oson kiritadi)."""
+    return f"{secrets.randbelow(10**6):06d}"
+
+
+def _hash_pupil_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), PUPIL_HASH_ITERATIONS).hex()
+    return f"pbkdf2${PUPIL_HASH_ITERATIONS}${salt}${digest}"
+
+
+def _pupil_password_ok(account: PupilAccount, password: str) -> bool:
+    if account.initial_password:
+        return hmac.compare_digest(password.strip(), account.initial_password)
+    try:
+        _, iterations, salt, digest = (account.password_hash or "").split("$")
+        candidate = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), int(iterations)).hex()
+    except ValueError:
+        return False
+    return hmac.compare_digest(candidate, digest)
+
+
+def _pupil_token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _pupil_class(db: Session, student: ClassStudent | None) -> SchoolClass | None:
+    """O'quvchining asl sinfi — u hali ro'yxatda bo'lsa (chiqarilgan, sinfi o'chirilgan bo'lsa — None)."""
+    if not student or student.removed_at is not None or student.source_student_id is not None:
+        return None
+    school_class = db.get(SchoolClass, student.class_id)
+    if not school_class or school_class.deleted_at is not None or school_class.subject:
+        return None
+    return school_class
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    return forwarded.split(",")[0].strip() or (request.client.host if request.client else "")
+
+
+def get_current_pupil(x_pupil_session: str = Header(default=""), db: Session = Depends(get_db)) -> SimpleNamespace:
+    session = db.scalar(
+        select(PupilSession).where(PupilSession.token_hash == _pupil_token_hash(x_pupil_session),
+                                   PupilSession.revoked_at.is_(None))
+    ) if x_pupil_session else None
+    account = db.get(PupilAccount, session.account_id) if session else None
+    student = db.get(ClassStudent, account.student_id) if account else None
+    school_class = _pupil_class(db, student)
+    if not school_class:
+        raise HTTPException(status_code=401, detail="Seans tugagan — maktabingizga qaytadan kiring")
+    if not session.last_seen_at or session.last_seen_at < utcnow() - timedelta(hours=1):
+        session.last_seen_at = utcnow()
+        db.commit()
+    return SimpleNamespace(account=account, student=student, school_class=school_class, session=session)
+
+
+def _ensure_pupil_accounts(db: Session, school_class: SchoolClass) -> list[tuple[ClassStudent, PupilAccount]]:
+    """Sinf o'quvchilarining kirish akkauntlari (yo'qlariga — login va boshlang'ich parol beriladi)."""
+
+    _assign_student_codes(db, school_class.school_id)
+    # Ro'yxatdan chiqqan o'quvchilarning akkauntlari o'chadi — login bo'shaydi, eski seanslar ishlamaydi
+    stale = db.scalars(
+        select(PupilAccount)
+        .join(ClassStudent, ClassStudent.id == PupilAccount.student_id)
+        .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
+        .where(PupilAccount.school_id == school_class.school_id,
+               or_(ClassStudent.removed_at.is_not(None), SchoolClass.deleted_at.is_not(None)))
+    ).all()
+    for account in stale:
+        db.execute(delete(PupilSession).where(PupilSession.account_id == account.id))
+        db.delete(account)
+    db.flush()
+
+    students = _active_students(school_class)
+    existing = {
+        account.student_id: account
+        for account in db.scalars(select(PupilAccount).where(PupilAccount.student_id.in_([s.id for s in students] or [-1])))
+    }
+    taken = set(db.scalars(select(PupilAccount.login).where(PupilAccount.school_id == school_class.school_id)).all())
+    rows = []
+    for student in students:
+        account = existing.get(student.id)
+        if account is None:
+            login = str(student.student_code) if student.student_code and str(student.student_code) not in taken else None
+            while login is None or login in taken:
+                login = str(100000 + secrets.randbelow(900000))  # ID'siz o'quvchi — 6 xonali (4 xonali ID'lar bilan to'qnashmaydi)
+            account = PupilAccount(school_id=school_class.school_id, student_id=student.id, login=login,
+                                   initial_password=_new_pupil_password(), must_change=True)
+            db.add(account)
+            taken.add(login)
+        rows.append((student, account))
+    db.commit()
+    return rows
+
+
+def _pupil_login_view(student: ClassStudent, account: PupilAccount) -> dict:
+    return {
+        "id": student.id,
+        "name": student.full_name,
+        "code": student.student_code,
+        "login": account.login,
+        "password": account.initial_password,  # o'quvchi o'z parolini qo'ygan bo'lsa — None
+        "changed": not account.must_change,
+        "last_login_at": account.last_login_at,
+    }
+
+
+def _pupil_logins_class(db: Session, user: User, class_id: int) -> SchoolClass:
+    school_class = _managed_class(db, user, class_id)
+    if school_class.subject:
+        raise HTTPException(status_code=400, detail="Fan guruhida login berilmaydi — o'quvchi uni o'z sinfidan oladi")
+    return school_class
+
+
+@app.get("/api/classes/{class_id}/pupil-logins")
+def class_pupil_logins(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Sinf o'quvchilarining ilovaga kirish ma'lumotlari (kurator va rahbariyat) — chop etib tarqatish uchun."""
+    school_class = _pupil_logins_class(db, user, class_id)
+    school = db.get(PrivateSchool, school_class.school_id)
+    return {
+        "school_name": school.name if school else "",
+        "class_name": school_class.name,
+        "students": [_pupil_login_view(student, account) for student, account in _ensure_pupil_accounts(db, school_class)],
+    }
+
+
+@app.post("/api/classes/{class_id}/students/{student_id}/pupil-password")
+def reset_pupil_password(class_id: int, student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Yangi boshlang'ich parol (o'quvchi unutgan bo'lsa yoki parol begonaga ma'lum bo'lsa) — eski seanslar tugaydi."""
+    school_class = _pupil_logins_class(db, user, class_id)
+    row = next(((student, account) for student, account in _ensure_pupil_accounts(db, school_class) if student.id == student_id), None)
+    if not row:
+        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    student, account = row
+    account.initial_password = _new_pupil_password()
+    account.password_hash = None
+    account.must_change = True
+    account.failures = 0
+    account.locked_until = None
+    db.execute(update(PupilSession).where(PupilSession.account_id == account.id, PupilSession.revoked_at.is_(None))
+               .values(revoked_at=utcnow()))
+    db.commit()
+    return _pupil_login_view(student, account)
+
+
+def pupil_logins_pdf(school_name: str, class_name: str, rows: list[dict]) -> bytes:
+    """Kirish ma'lumotlari — chop etib, qirqib har o'quvchiga beriladi (yoki ota-onalar guruhiga)."""
+
+    styles = _report_styles()
+    buffer = io.BytesIO()
+    document = _brand_document(buffer, f"{class_name} — ilovaga kirish")
+    width = document.width
+    steps = (f"1) Chittak ilovasini oching (chittak.uz yoki Telegram) → «Maktab o'quvchisi».  "
+             f"2) Maktabingizni toping: «{school_name}».  3) Login va parolni kiriting — birinchi kirishda "
+             "o'z parolingizni o'rnatasiz.")
+    header = ["№", "F.I.Sh.", "Login", "Parol"]
+    data = [[Paragraph(f"<font color='white'>{xml_escape(text)}</font>", styles["cell_bold"]) for text in header]]
+    for index, row in enumerate(rows, start=1):
+        data.append([
+            Paragraph(str(index), styles["cell"]),
+            Paragraph(xml_escape(row["name"]), styles["cell"]),
+            Paragraph(f"<b>{xml_escape(row['login'])}</b>", styles["cell"]),
+            Paragraph(f"<b>{xml_escape(row['password'])}</b>" if row["password"] else "o'zi o'rnatgan", styles["cell"]),
+        ])
+    table = Table(data, colWidths=[width * 0.08, width * 0.52, width * 0.18, width * 0.22], repeatRows=1)
+    commands = [("BACKGROUND", (0, 0), (-1, 0), REPORT_TABLE_HEAD), ("LINEBELOW", (0, 0), (-1, -1), 0.6, REPORT_GRID),
+                ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE")]
+    table.setStyle(TableStyle(commands))
+    document.build([
+        Paragraph(xml_escape(f"{class_name} — ilovaga kirish ma'lumotlari"), styles["title"]),
+        Paragraph(xml_escape(school_name), styles["meta"]),
+        Spacer(1, 4),
+        Paragraph(xml_escape(steps), styles["cell"]),
+        Spacer(1, 10),
+        table,
+    ], canvasmaker=_brand_canvas(school_name, f"{class_name} · kirish ma'lumotlari"))
+    return buffer.getvalue()
+
+
+def _pupil_logins_file(db: Session, user: User, class_id: int) -> tuple[str, bytes]:
+    data = class_pupil_logins(class_id, user, db)
+    file_name = f"kirish_{data['class_name']}".replace("/", "-")
+    return file_name, pupil_logins_pdf(data["school_name"], data["class_name"], data["students"])
+
+
+@app.get("/api/classes/{class_id}/pupil-logins/file")
+def class_pupil_logins_file(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    file_name, pdf = _pupil_logins_file(db, user, class_id)
+    return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
+                             headers={"Content-Disposition": f'attachment; filename="{file_name}.pdf"'.encode("ascii", "ignore").decode()})
+
+
+@app.post("/api/classes/{class_id}/pupil-logins/file/send")
+def send_class_pupil_logins(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Kirish ma'lumotlari PDF'i — bot orqali foydalanuvchining o'z chatiga (u yerdan chop etiladi)."""
+    file_name, pdf = _pupil_logins_file(db, user, class_id)
+    _send_pdf_to_telegram(user.tg_id, f"{file_name}.pdf", pdf, "🔑 O'quvchilarning ilovaga kirish ma'lumotlari")
+    return {"ok": True}
+
+
+@app.get("/api/pupil/schools")
+def pupil_school_search(q: str = "", db: Session = Depends(get_db)):
+    """O'quvchi o'z maktabini topadi: nomi, tumani yoki viloyati bo'yicha (kamida 2 harf)."""
+    words = [word for word in q.lower().split() if word][:4]
+    if len(q.strip()) < 2 or not words:
+        return []
+    query = select(PrivateSchool).where(PrivateSchool.deleted_at.is_(None))
+    for word in words:
+        like = f"%{word}%"
+        query = query.where(or_(func.lower(PrivateSchool.name).like(like), func.lower(PrivateSchool.district).like(like),
+                                func.lower(PrivateSchool.region).like(like)))
+    return [
+        {"id": school.id, "name": school.name, "region": school.region, "district": school.district, "kind": school.kind}
+        for school in db.scalars(query.order_by(PrivateSchool.name).limit(20)).all()
+    ]
+
+
+@app.post("/api/pupil/login")
+def pupil_login(body: PupilLoginIn, request: Request, db: Session = Depends(get_db)):
+    ip, now = _client_ip(request), time.monotonic()
+    recent = [moment for moment in _pupil_ip_failures.get(ip, []) if now - moment < PUPIL_LOCK_MINUTES * 60]
+    _pupil_ip_failures[ip] = recent
+    if len(recent) >= PUPIL_IP_LIMIT:
+        raise HTTPException(status_code=429, detail="Juda ko'p urinish — 15 daqiqadan keyin qayta urinib ko'ring")
+
+    account = db.scalar(select(PupilAccount).where(PupilAccount.school_id == body.school_id,
+                                                   PupilAccount.login == body.login.strip()))
+    if account and account.locked_until and account.locked_until > utcnow():
+        minutes = max(1, int((account.locked_until - utcnow()).total_seconds() // 60) + 1)
+        raise HTTPException(status_code=429, detail=f"Parol {PUPIL_LOCK_FAILURES} marta xato kiritildi — {minutes} daqiqadan "
+                                                    "keyin urinib ko'ring yoki kuratoringizdan yangi parol so'rang")
+    if not account or not _pupil_password_ok(account, body.password):
+        _pupil_ip_failures.setdefault(ip, []).append(now)
+        if account:
+            account.failures += 1
+            if account.failures >= PUPIL_LOCK_FAILURES:
+                account.failures = 0
+                account.locked_until = utcnow() + timedelta(minutes=PUPIL_LOCK_MINUTES)
+            db.commit()
+        raise HTTPException(status_code=401, detail="Login yoki parol noto'g'ri")
+    student = db.get(ClassStudent, account.student_id)
+    school_class = _pupil_class(db, student)
+    if not school_class:
+        raise HTTPException(status_code=403, detail="Siz maktab ro'yxatida yo'qsiz — kuratoringizga murojaat qiling")
+
+    token = secrets.token_urlsafe(32)
+    db.add(PupilSession(token_hash=_pupil_token_hash(token), account_id=account.id, last_seen_at=utcnow()))
+    account.failures = 0
+    account.locked_until = None
+    account.last_login_at = utcnow()
+    db.commit()
+    school = db.get(PrivateSchool, school_class.school_id)
+    return {"token": token, "must_change": account.must_change, "name": student.full_name,
+            "class_name": school_class.name, "school_name": school.name if school else ""}
+
+
+@app.post("/api/pupil/password")
+def pupil_set_password(body: PupilPasswordIn, pupil=Depends(get_current_pupil), db: Session = Depends(get_db)):
+    account = pupil.account
+    if not _pupil_password_ok(account, body.old_password):
+        raise HTTPException(status_code=400, detail="Joriy parol noto'g'ri")
+    if body.new_password.strip() != body.new_password or len(set(body.new_password)) < 2:
+        raise HTTPException(status_code=422, detail="Parol bo'sh joysiz va bir xil belgilardan iborat bo'lmasin")
+    if account.initial_password and body.new_password == account.initial_password:
+        raise HTTPException(status_code=422, detail="Yangi parol maktab bergan paroldan boshqacha bo'lsin")
+    account.password_hash = _hash_pupil_password(body.new_password)
+    account.initial_password = None
+    account.must_change = False
+    # Boshqa qurilmalardagi seanslar tugaydi (parol begonaga ma'lum bo'lgan bo'lishi mumkin)
+    db.execute(update(PupilSession).where(PupilSession.account_id == account.id, PupilSession.id != pupil.session.id,
+                                          PupilSession.revoked_at.is_(None)).values(revoked_at=utcnow()))
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/pupil/logout")
+def pupil_logout(pupil=Depends(get_current_pupil), db: Session = Depends(get_db)):
+    pupil.session.revoked_at = utcnow()
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/pupil/me")
+def pupil_home(pupil=Depends(get_current_pupil), db: Session = Depends(get_db)):
+    """O'quvchining o'z kabineti: davomat, natijalar, sinfdagi o'rni, dars jadvali."""
+
+    student, school_class = pupil.student, pupil.school_class
+    school = db.get(PrivateSchool, school_class.school_id)
+    curator = db.get(User, school_class.curator_user_id) if school_class.curator_user_id else None
+    # Fan guruhlaridagi darslar (ingliz tili …) guruhdagi nusxa yozuvida — ular ham hisobga olinadi
+    copies = _group_copies(db, [student.id])
+    ids = [student.id, *(copy.id for copy in copies)]
+
+    stats = {status: 0 for status in ATTENDANCE_LABELS}
+    for item in _student_attendance_stats(db, ids).values():
+        for status in ATTENDANCE_LABELS:
+            stats[status] += item[status]
+    stats["total"] = sum(stats[status] for status in ATTENDANCE_LABELS)
+    attended = stats["present"] + stats["late"]
+    stats["rate"] = round(attended / stats["total"] * 100) if stats["total"] else None
+    history = db.execute(
+        select(Attendance.taken_at, Attendance.subject, AttendanceMark.status)
+        .join(AttendanceMark, AttendanceMark.attendance_id == Attendance.id)
+        .where(AttendanceMark.student_id.in_(ids), Attendance.deleted_at.is_(None))
+        .order_by(Attendance.taken_at.desc())
+        .limit(60)
+    ).all()
+
+    results = []
+    for record in [student, *copies]:
+        results += _student_results(db, record)
+    results.sort(key=lambda item: item["date"], reverse=True)
+
+    # Reyting: faqat o'z o'rni va sinf o'rtachasi (boshqalarning ballari ko'rsatilmaydi)
+    classmates = [item.id for item in _active_students(school_class)]
+    rating, test_count = _class_rating(db, school_class, SimpleNamespace(), classmates)
+    mine = rating.get(student.id)
+    averages = [item["avg"] for item in rating.values()]
+
+    group_classes = {copy.class_id: db.get(SchoolClass, copy.class_id) for copy in copies}
+    slots = [_slot_view(db, slot, school_class.name) for slot in _active_slots(db, class_id=school_class.id)]
+    for class_id, group in group_classes.items():
+        if group and group.deleted_at is None:
+            slots += [_slot_view(db, slot, group.name) for slot in _active_slots(db, class_id=class_id)]
+    slots.sort(key=lambda slot: (slot["weekday"], slot["start_time"]))
+
+    return {
+        "name": student.full_name,
+        "code": student.student_code,
+        "login": pupil.account.login,
+        "must_change": pupil.account.must_change,
+        "class_name": school_class.name,
+        "school_name": school.name if school else "",
+        "curator": curator.full_name if curator else None,
+        "attendance": {
+            "stats": stats,
+            "history": [{"taken_at": taken_at, "subject": subject, "status": status} for taken_at, subject, status in history],
+        },
+        "results": results[:30],
+        "rating": {
+            "rank": mine["rank"] if mine else None,
+            "avg": mine["avg"] if mine else None,
+            "tests": mine["tests"] if mine else 0,
+            "ranked": len(rating),
+            "class_size": len(classmates),
+            "class_avg": round(sum(averages) / len(averages), 1) if averages else None,
+            "test_count": test_count,
+        },
+        "schedule": slots,
+    }
+
+
 # ---------- Video darslar ----------
 # Muassasa rahbariyati (admin, direktor, zam direktor) YouTube havolasi bilan qo'shadi; ilovadagi hamma
 # o'quvchilar bepul ko'radi. Platforma admini istalgan videoni o'chira oladi (nomaqbul bo'lsa).
@@ -12967,12 +13337,29 @@ def list_videos(subject: str = "", grade: int | None = None, q: str = "", mine: 
     """Video darslar: fanlar (soni bilan) va tanlangan fan/sinf/qidiruv bo'yicha videolar (yangisi birinchi).
     mine=true — muassasa rahbariyati uchun: faqat o'z muassasasi videolari (boshqarish sahifasi)."""
 
+    leader_school = _video_leader_school(db, user)
+    if mine and leader_school is None:
+        raise HTTPException(status_code=403, detail="Video darslarni muassasa rahbariyati qo'shadi")
+    # Hozircha video darslar faqat maktab o'quvchilari uchun (ular /api/pupil/videos orqali ko'radi);
+    # bu yerda — muassasa xodimlari (ko'rib chiqish uchun) va platforma admini
+    if not is_admin_tg(user.tg_id) and _active_membership(db, user) is None:
+        raise HTTPException(status_code=403, detail="Video darslar maktab o'quvchilari uchun — «Maktabim» orqali kiring")
+    return _videos_payload(db, subject, grade, q, only_school=leader_school if mine else None,
+                           admin=is_admin_tg(user.tg_id), leader_school=leader_school)
+
+
+@app.get("/api/pupil/videos")
+def pupil_videos(subject: str = "", grade: int | None = None, q: str = "", pupil=Depends(get_current_pupil),
+                 db: Session = Depends(get_db)):
+    """Maktab o'quvchisi (Telegram'siz, login-parol bilan kirgan) uchun ham o'sha video kutubxona."""
+    return _videos_payload(db, subject, grade, q)
+
+
+def _videos_payload(db: Session, subject: str, grade: int | None, q: str, only_school: int | None = None,
+                    admin: bool = False, leader_school: int | None = None) -> dict:
     base = select(VideoLesson).where(VideoLesson.deleted_at.is_(None))
-    if mine:
-        school_id = _video_leader_school(db, user)
-        if school_id is None:
-            raise HTTPException(status_code=403, detail="Video darslarni muassasa rahbariyati qo'shadi")
-        base = base.where(VideoLesson.school_id == school_id)
+    if only_school is not None:
+        base = base.where(VideoLesson.school_id == only_school)
     subjects = db.execute(
         select(VideoLesson.subject, func.count()).where(VideoLesson.id.in_(base.with_only_columns(VideoLesson.id)))
         .group_by(VideoLesson.subject).order_by(func.count().desc(), VideoLesson.subject)
@@ -12991,8 +13378,6 @@ def list_videos(subject: str = "", grade: int | None = None, q: str = "", mine: 
     schools = dict(db.execute(
         select(PrivateSchool.id, PrivateSchool.name).where(PrivateSchool.id.in_({item.school_id for item in items} or {-1}))
     ).all())
-    admin = is_admin_tg(user.tg_id)
-    leader_school = _video_leader_school(db, user)
     return {
         "subjects": [{"name": name, "count": count} for name, count in subjects],
         "videos": [
@@ -13050,8 +13435,9 @@ def delete_video(video_id: int, user: User = Depends(get_current_user), db: Sess
 
 
 @app.post("/api/videos/{video_id}/view")
-def count_video_view(video_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Ko'rishlar soni — video ochilganda (bir martalik so'rov, javobni kutish shart emas)."""
+def count_video_view(video_id: int, db: Session = Depends(get_db)):
+    """Ko'rishlar soni — video ochilganda (bir martalik so'rov, javobni kutish shart emas).
+    Telegram'siz kirgan maktab o'quvchisi ham sanaladi — shuning uchun foydalanuvchi so'ralmaydi."""
     db.execute(update(VideoLesson).where(VideoLesson.id == video_id, VideoLesson.deleted_at.is_(None))
                .values(views=VideoLesson.views + 1))
     db.commit()

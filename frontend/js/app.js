@@ -2758,6 +2758,12 @@ function renderClassStudentsTab(schoolClass) {
             : ""
       }
       ${
+        // O'quvchilar o'z kabinetiga kirishi uchun login va parollar (kurator va rahbariyat)
+        schoolClass.can_manage && !schoolClass.is_group && schoolClass.students.length
+          ? `<button type="button" class="btn btn-ghost" id="pupil-logins-button" style="margin:0 0 12px">🔑 Ilovaga kirish: login va parollar</button>`
+          : ""
+      }
+      ${
         hasRating
           ? `<div class="choice-toggle" id="students-order" style="margin:0 0 12px">
                <button type="button" class="${byRating ? "" : "active"}" data-order="code">📋 Ro'yxat</button>
@@ -2786,6 +2792,7 @@ function renderClassStudentsTab(schoolClass) {
     schoolClass.is_group ? openGroupAddSheet(schoolClass) : openAddStudentSheet(schoolClass)
   );
   document.getElementById("code-range-button")?.addEventListener("click", () => openCodeRangeSheet(schoolClass));
+  document.getElementById("pupil-logins-button")?.addEventListener("click", guarded(() => renderPupilLogins(schoolClass)));
   document.querySelectorAll("[data-student-id]").forEach((card) => {
     card.addEventListener(
       "click",
@@ -5100,9 +5107,428 @@ async function openSchoolMenu(target, classId = null) {
   else openSchoolTab(target);
 }
 
+/* ---------- Maktab o'quvchisining kabineti ----------
+   O'quvchi (yoki ota-onasi) maktabini topadi va maktab bergan login-parol bilan kiradi — Telegram shart emas.
+   Birinchi kirishda o'z parolini o'rnatadi. Kabinetda faqat O'Z ma'lumotlari: davomat, natijalar, sinfdagi
+   o'rni, dars jadvali va video darslar. Seans X-Pupil-Session sarlavhasida yuboriladi (Telegram seansidan alohida).
+   Login va parollarni kurator/rahbariyat sinf sahifasidagi "🔑 Ilovaga kirish" bo'limidan oladi. */
+
+const PUPIL_SESSION_KEY = "pupil-session";
+const PUPIL_SCHOOL_KEY = "pupil-school";
+let pupilSession = "";
+try {
+  pupilSession = localStorage.getItem(PUPIL_SESSION_KEY) || "";
+} catch (_) {
+  /* xotira yopiq — shu seansda ishlaydi */
+}
+
+function setPupilSession(value) {
+  pupilSession = value || "";
+  try {
+    if (pupilSession) localStorage.setItem(PUPIL_SESSION_KEY, pupilSession);
+    else localStorage.removeItem(PUPIL_SESSION_KEY);
+  } catch (_) {
+    /* xotira yopiq */
+  }
+}
+
+async function pupilApi(path, { method = "GET", body } = {}) {
+  const headers = { "X-Pupil-Session": pupilSession };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  let response;
+  try {
+    response = await fetch(path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+  } catch (_) {
+    throw new TypeError("📶 Internet aloqasi uzildi — qayta urinib ko'ring");
+  }
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    const error = new Error(typeof data?.detail === "string" ? data.detail : "Xatolik yuz berdi");
+    error.status = response.status;
+    // Seans tugagan (parol yangilangan, sinfdan chiqarilgan) — qaytadan kirish
+    if (response.status === 401 && path !== "/api/pupil/login") {
+      setPupilSession("");
+      renderPupilLogin(error.message);
+      error.handled = true;
+    }
+    throw error;
+  }
+  return data;
+}
+
+// O'quvchi kabinetidan chiqqanda: Telegram akkaunti bilan kirgan bo'lsa — "O'quvchi" sahifasiga, bo'lmasa — kirish oynasiga
+const pupilIsRoot = () => NEEDS_LOGIN && !appSession;
+const pupilBack = () => (pupilIsRoot() ? renderAppLogin() : renderStudentHome());
+
+function renderPupilEntry() {
+  return pupilSession ? renderPupilHome() : renderPupilLogin();
+}
+
+function savedPupilSchool() {
+  try {
+    return JSON.parse(localStorage.getItem(PUPIL_SCHOOL_KEY) || "null");
+  } catch (_) {
+    return null;
+  }
+}
+
+function renderPupilLogin(errorText = "") {
+  let school = savedPupilSchool();
+  const draw = () => {
+    showPage(`
+      <div class="page-header">
+        <button class="back-button" type="button" data-action="pupil-back" style="margin:0">←</button>
+        <h2 style="margin:0;flex:1">🎒 Maktab o'quvchisi</h2>
+      </div>
+      <p class="subtitle" style="margin-top:0">Maktabingizni toping va maktab bergan <b>login</b> hamda <b>parol</b> bilan kiring.
+        Ularni sinf rahbaringiz (kurator) beradi.</p>
+      ${
+        school
+          ? `<div class="card pupil-school-card" style="cursor:default">
+               <div class="card-icon">🏫</div>
+               <div class="card-body">
+                 <h3 style="margin:0">${escapeHtml(school.name)}</h3>
+                 <p style="margin:2px 0 0">${escapeHtml(school.district)}, ${escapeHtml(school.region)}</p>
+               </div>
+               <button type="button" class="link-button" id="pupil-change-school">O'zgartirish</button>
+             </div>
+             <form id="pupil-login-form" style="display:grid;gap:10px;margin-top:12px">
+               <input class="input" id="pupil-login" inputmode="numeric" autocomplete="username" placeholder="Login (masalan: 1034)" required />
+               <input class="input" id="pupil-password" type="password" autocomplete="current-password" placeholder="Parol" required />
+               <button class="btn" type="submit" style="margin:0">Kirish</button>
+             </form>`
+          : `<input class="input" id="pupil-school-search" type="search" autocomplete="off" enterkeyhint="search"
+                    placeholder="🔍 Maktab nomi yoki tumani" />
+             <div id="pupil-school-results" class="pupil-school-results"></div>`
+      }
+      <p class="subtitle" id="pupil-login-status" style="text-align:center;margin-top:12px;color:#dc2626">${escapeHtml(errorText)}</p>
+      <p class="subtitle" style="text-align:center;margin-top:8px;font-size:13px">Parolni unutdingizmi? Kuratoringiz yangisini beradi.</p>
+    `, { exitRoot: pupilIsRoot() });
+
+    document.querySelector('[data-action="pupil-back"]').addEventListener("click", guarded(pupilBack));
+    document.getElementById("pupil-change-school")?.addEventListener("click", () => {
+      school = null;
+      errorText = "";
+      draw();
+    });
+
+    const search = document.getElementById("pupil-school-search");
+    if (search) {
+      let timer = null;
+      search.focus();
+      search.addEventListener("input", () => {
+        clearTimeout(timer);
+        timer = setTimeout(async () => {
+          const results = document.getElementById("pupil-school-results");
+          const query = search.value.trim();
+          if (query.length < 2) {
+            results.innerHTML = "";
+            return;
+          }
+          let schools = [];
+          try {
+            schools = await (await fetch(`/api/pupil/schools?q=${encodeURIComponent(query)}`)).json();
+          } catch (_) {
+            results.innerHTML = `<p class="subtitle">📶 Internet aloqasi uzildi</p>`;
+            return;
+          }
+          if (search.value.trim() !== query) return; // shu orada yana yozildi
+          results.innerHTML = schools.length
+            ? schools
+                .map(
+                  (item, index) => `
+                    <button type="button" class="pupil-school-option" data-school-index="${index}">
+                      <b>${escapeHtml(item.name)}</b>
+                      <small>${escapeHtml(item.district)}, ${escapeHtml(item.region)}</small>
+                    </button>`
+                )
+                .join("")
+            : `<p class="subtitle">Maktab topilmadi — nomini boshqacha yozib ko'ring</p>`;
+          results.querySelectorAll("[data-school-index]").forEach((button) =>
+            button.addEventListener("click", () => {
+              school = schools[Number(button.dataset.schoolIndex)];
+              try {
+                localStorage.setItem(PUPIL_SCHOOL_KEY, JSON.stringify(school));
+              } catch (_) {
+                /* xotira yopiq */
+              }
+              errorText = "";
+              draw();
+            })
+          );
+        }, 350);
+      });
+    }
+
+    document.getElementById("pupil-login-form")?.addEventListener(
+      "submit",
+      guarded(async (event) => {
+        event.preventDefault();
+        const password = document.getElementById("pupil-password").value;
+        const status = document.getElementById("pupil-login-status");
+        status.textContent = "";
+        try {
+          const result = await pupilApi("/api/pupil/login", {
+            method: "POST",
+            body: { school_id: school.id, login: document.getElementById("pupil-login").value.trim(), password },
+          });
+          setPupilSession(result.token);
+          if (result.must_change) renderPupilPassword({ oldPassword: password, forced: true });
+          else await renderPupilHome();
+        } catch (error) {
+          status.textContent = error.message;
+        }
+      })
+    );
+  };
+  draw();
+}
+
+// O'z parolini o'rnatish: birinchi kirishda majburiy (maktab bergan parol o'rniga)
+function renderPupilPassword({ oldPassword = "", forced = false } = {}) {
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="pupil-password-back" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">🔑 ${forced ? "O'z parolingiz" : "Parolni o'zgartirish"}</h2>
+    </div>
+    <p class="subtitle" style="margin-top:0">${
+      forced
+        ? "Maktab bergan parol o'rniga o'zingiz eslab qoladigan parol qo'ying (kamida 6 belgi). Uni hech kimga aytmang."
+        : "Yangi parol kamida 6 belgidan iborat bo'lsin."
+    }</p>
+    <form id="pupil-password-form" style="display:grid;gap:10px">
+      ${oldPassword ? "" : `<input class="input" id="pupil-old-password" type="password" autocomplete="current-password" placeholder="Hozirgi parol" required />`}
+      <input class="input" id="pupil-new-password" type="password" autocomplete="new-password" minlength="6" placeholder="Yangi parol" required />
+      <input class="input" id="pupil-new-password2" type="password" autocomplete="new-password" minlength="6" placeholder="Yangi parolni takrorlang" required />
+      <button class="btn" type="submit" style="margin:0">💾 Saqlash</button>
+    </form>
+  `, { exitRoot: forced && pupilIsRoot() });
+
+  document.querySelector('[data-action="pupil-password-back"]').addEventListener(
+    "click",
+    guarded(async () => {
+      if (!forced) return renderPupilHome();
+      // Parol o'rnatilmasdan chiqib ketsa — seans yopiladi (keyingi safar yana maktab bergan parol bilan)
+      await pupilApi("/api/pupil/logout", { method: "POST", body: {} }).catch(() => {});
+      setPupilSession("");
+      return pupilBack();
+    })
+  );
+  document.getElementById("pupil-password-form").addEventListener(
+    "submit",
+    guarded(async (event) => {
+      event.preventDefault();
+      const next = document.getElementById("pupil-new-password").value;
+      if (next.length < 6) throw new Error("Parol kamida 6 belgidan iborat bo'lsin");
+      if (next !== document.getElementById("pupil-new-password2").value) throw new Error("Parollar bir xil emas");
+      await pupilApi("/api/pupil/password", {
+        method: "POST",
+        body: { old_password: oldPassword || document.getElementById("pupil-old-password").value, new_password: next },
+      });
+      showToast("✅ Parol saqlandi — endi shu parol bilan kirasiz");
+      await renderPupilHome();
+    })
+  );
+}
+
+async function renderPupilHome() {
+  let me;
+  try {
+    me = await pupilApi("/api/pupil/me");
+  } catch (error) {
+    if (error.handled) return; // seans tugagan — kirish oynasi ochildi
+    throw error;
+  }
+  // Maktab bergan parol hali almashtirilmagan (masalan, oldin chiqib ketgan) — avval o'z parolini qo'yadi
+  if (me.must_change) {
+    renderPupilPassword({ forced: true });
+    return;
+  }
+
+  const stats = me.attendance.stats;
+  const rating = me.rating;
+  const historyHtml = me.attendance.history.length
+    ? me.attendance.history
+        .slice(0, 20)
+        .map(
+          (item) => `
+            <div class="att-row" style="cursor:default">
+              <span class="att-name">${dayLabel(item.taken_at)} · ${timeLabel(item.taken_at)}
+                <small class="subtitle" style="display:block;margin:0">${escapeHtml(lessonName(item.subject))}</small>
+              </span>
+              <span class="att-status ${item.status}">${ATTENDANCE_STATE_BY_ID[item.status].icon} ${ATTENDANCE_STATE_BY_ID[item.status].label}</span>
+            </div>`
+        )
+        .join("")
+    : `<p class="subtitle" style="padding:10px 14px;margin:0">Hali davomat olinmagan.</p>`;
+  const resultsHtml = me.results.length
+    ? me.results
+        .map(
+          (item) => `
+            <div class="att-row" style="cursor:default">
+              <span class="att-name">${escapeHtml(item.title)}
+                <small class="subtitle" style="display:block;margin:0">${plainDate(item.date)}${item.subject ? ` · ${escapeHtml(item.subject)}` : ""}</small>
+              </span>
+              <span class="result-score"><b>${formatNumber(item.score)}/${formatNumber(item.max_score)}</b>${
+                item.percent !== null ? `<small>${item.percent}%</small>` : ""
+              }</span>
+            </div>`
+        )
+        .join("")
+    : `<p class="subtitle" style="padding:10px 14px;margin:0">Hali natija yo'q.</p>`;
+  const days = [...new Set(me.schedule.map((slot) => slot.weekday))];
+  const scheduleHtml = days.length
+    ? days
+        .map((day) => {
+          const slots = me.schedule.filter((slot) => slot.weekday === day);
+          return `
+            <p class="section-label" style="margin:12px 0 6px">${escapeHtml(slots[0].weekday_label)}</p>
+            <div class="panel" style="padding:4px 0">
+              ${slots
+                .map(
+                  (slot) => `
+                    <div class="att-row" style="cursor:default">
+                      <span class="att-name">${escapeHtml(slot.subject || "Dars")}
+                        <small class="subtitle" style="display:block;margin:0">${escapeHtml(slot.teacher_name || "")}</small>
+                      </span>
+                      <span class="subtitle" style="margin:0;white-space:nowrap">${escapeHtml(slot.start_time)}–${escapeHtml(slot.end_time)}</span>
+                    </div>`
+                )
+                .join("")}
+            </div>`;
+        })
+        .join("")
+    : `<p class="subtitle">Dars jadvali hali tuzilmagan.</p>`;
+
+  showPage(`
+    ${
+      pupilIsRoot()
+        ? `<div class="page-header"><h2 style="margin:0;flex:1">🏫 Maktabim</h2></div>`
+        : `<div class="page-header">
+             <button class="back-button" type="button" data-action="pupil-back" style="margin:0">←</button>
+             <h2 style="margin:0;flex:1">🏫 Maktabim</h2>
+           </div>`
+    }
+    <section class="hero-card">
+      <div class="hero-who">
+        <div class="hero-hello">${escapeHtml(me.name)}</div>
+        <div class="hero-chips">
+          <span class="hero-chip is-sun">${escapeHtml(me.class_name)}</span>
+          <span class="hero-chip">${escapeHtml(me.school_name)}</span>
+          ${me.code ? `<span class="hero-chip">ID ${me.code}</span>` : ""}
+        </div>
+      </div>
+    </section>
+    <div class="stats-grid">
+      <div class="stat-tile"><span class="stat-value">${stats.rate === null ? "—" : `${stats.rate}%`}</span>Davomat</div>
+      <div class="stat-tile"><span class="stat-value">${rating.rank ? `${rating.rank}-o'rin` : "—"}</span>Sinfda${rating.rank ? ` (${rating.class_size} ta)` : ""}</div>
+      <div class="stat-tile"><span class="stat-value">${rating.avg === null ? "—" : `${rating.avg}%`}</span>O'rtacha natija</div>
+    </div>
+    ${
+      rating.rank
+        ? `<p class="subtitle" style="margin:8px 0 0">🏆 Reyting sinfning ${rating.test_count} ta test va sinov natijasi bo'yicha
+             (o'rtacha foiz). Sinf o'rtachasi: <b>${rating.class_avg}%</b>${me.curator ? ` · Kurator: ${escapeHtml(me.curator)}` : ""}</p>`
+        : me.curator
+          ? `<p class="subtitle" style="margin:8px 0 0">Kurator: ${escapeHtml(me.curator)}</p>`
+          : ""
+    }
+    <button class="btn btn-ghost" id="pupil-videos" style="margin-top:14px">🎬 Video darslar</button>
+
+    <p class="section-label" style="margin-top:18px">DAVOMAT — ${stats.total} TA DARS</p>
+    ${attendanceCountsHtml(stats)}
+    <div class="panel" style="padding:4px 0;margin-top:8px">${historyHtml}</div>
+
+    <p class="section-label" style="margin-top:18px">NATIJALAR</p>
+    <div class="panel" style="padding:4px 0">${resultsHtml}</div>
+
+    <p class="section-label" style="margin-top:18px">DARS JADVALI</p>
+    ${scheduleHtml}
+
+    <div class="row-between" style="gap:8px;margin-top:20px">
+      <button class="btn btn-ghost" id="pupil-change-password" style="margin:0">🔑 Parolni o'zgartirish</button>
+      <button class="btn btn-ghost" id="pupil-logout" style="margin:0">🚪 Chiqish</button>
+    </div>
+    <p class="subtitle" style="text-align:center;margin-top:10px;font-size:13px">Login: ${escapeHtml(me.login)}</p>
+  `, { exitRoot: pupilIsRoot() });
+
+  document.querySelector('[data-action="pupil-back"]')?.addEventListener("click", guarded(pupilBack));
+  document
+    .getElementById("pupil-videos")
+    .addEventListener("click", guarded(() => renderVideoLibrary(renderPupilHome, { url: "/api/pupil/videos", request: pupilApi })));
+  document.getElementById("pupil-change-password").addEventListener("click", () => renderPupilPassword());
+  document.getElementById("pupil-logout").addEventListener(
+    "click",
+    guarded(async () => {
+      if (!(await askConfirm("Kabinetdan chiqasizmi?"))) return;
+      await pupilApi("/api/pupil/logout", { method: "POST", body: {} }).catch(() => {});
+      setPupilSession("");
+      await pupilBack();
+    })
+  );
+}
+
+// 🏫 Sinf → "🔑 Ilovaga kirish": o'quvchilarning login va parollari (kurator va rahbariyat)
+async function renderPupilLogins(schoolClass) {
+  const data = await api(`/api/classes/${schoolClass.id}/pupil-logins`);
+  const rows = data.students
+    .map(
+      (item) => `
+        <div class="att-row" style="cursor:default">
+          <span class="att-name">${escapeHtml(item.name)}
+            <small class="subtitle" style="display:block;margin:0">${
+              item.last_login_at ? `Oxirgi kirish: ${formatDateTime(item.last_login_at)}` : "Hali kirmagan"
+            }</small>
+          </span>
+          <span class="pupil-credentials">
+            <span>Login: <b>${escapeHtml(item.login)}</b></span>
+            <span>${item.password ? `Parol: <b>${escapeHtml(item.password)}</b>` : "✅ o'z paroli"}</span>
+          </span>
+          <button type="button" class="icon-button" data-pupil-reset="${item.id}" title="Yangi parol" aria-label="Yangi parol">🔄</button>
+        </div>`
+    )
+    .join("");
+
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-pupil-logins" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">🔑 ${escapeHtml(data.class_name)}: login va parollar</h2>
+    </div>
+    <p class="subtitle" style="margin-top:0">O'quvchi (yoki ota-onasi) ilovada «🎒 Maktab o'quvchisi» → maktabni topadi →
+      shu login va parol bilan kiradi va o'z davomati, natijalari va sinfdagi o'rnini ko'radi. Birinchi kirishda o'z parolini
+      o'rnatadi — shundan keyin uning paroli bu yerda ko'rinmaydi. Unutsa — 🔄 bilan yangisini bering.</p>
+    <div class="notice is-info" style="margin:0 0 12px">Har o'quvchiga faqat o'zining login-parolini bering — ro'yxatni umumiy guruhga tashlamang.</div>
+    <button class="btn" id="pupil-logins-pdf">📄 Chop etish uchun ro'yxat (PDF)</button>
+    <div class="panel" style="padding:4px 0;margin-top:12px">${rows || `<p class="subtitle" style="padding:10px 14px;margin:0">Sinfda o'quvchi yo'q.</p>`}</div>
+  `);
+
+  document.querySelector('[data-action="back-pupil-logins"]').addEventListener("click", guarded(() => renderClass(schoolClass.id, "students")));
+  document.getElementById("pupil-logins-pdf").addEventListener(
+    "click",
+    guarded(() =>
+      deliverPdf(
+        `/api/classes/${schoolClass.id}/pupil-logins/file`,
+        `kirish_${data.class_name}.pdf`,
+        "📄 Login va parollar ro'yxati Telegramga yuborildi"
+      )
+    )
+  );
+  document.querySelectorAll("[data-pupil-reset]").forEach((button) =>
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        const student = data.students.find((item) => String(item.id) === button.dataset.pupilReset);
+        if (!(await askConfirm(`${student.name}ga yangi parol berilsinmi? Eski parol va ochiq seanslar ishlamay qoladi.`))) return;
+        const fresh = await api(`/api/classes/${schoolClass.id}/students/${student.id}/pupil-password`, { method: "POST", body: {} });
+        showToast(`🔑 ${student.name}: login ${fresh.login}, yangi parol ${fresh.password}`);
+        await renderPupilLogins(schoolClass);
+      })
+    )
+  );
+}
+
 /* ---------- Video darslar ----------
    Ta'lim muassasasi rahbariyati (admin, direktor, zam direktor) YouTube havolasi bilan qo'shadi;
-   ilovadagi hamma o'quvchilar "O'quvchi → Video darslar" bo'limida fan va sinf bo'yicha bepul ko'radi.
+   hozircha faqat maktab o'quvchilari ko'radi — o'z kabinetida ("🏫 Maktabim" → "Video darslar").
    Video o'zimizning serverda saqlanmaydi — ilova ichida YouTube pleyeri o'ynatadi. */
 
 const youtubeThumb = (id) => `https://i.ytimg.com/vi/${encodeURIComponent(id)}/mqdefault.jpg`;
@@ -5144,11 +5570,11 @@ const gradeOptions = (selected) =>
 // Tanlangan fan, sinf va qidiruv — video ochib qaytganda saqlanib turadi
 const videoFilter = { subject: "", grade: "", q: "" };
 
-async function renderVideoLibrary(back = renderStudentHome) {
+async function renderVideoLibrary(back, source = { url: "/api/videos", request: api }) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(videoFilter)) if (value) params.set(key, value);
   const query = params.toString();
-  const data = await api(`/api/videos${query ? `?${query}` : ""}`);
+  const data = await source.request(`${source.url}${query ? `?${query}` : ""}`);
   const filtered = Boolean(videoFilter.subject || videoFilter.grade || videoFilter.q);
 
   showPage(`
@@ -5189,7 +5615,7 @@ async function renderVideoLibrary(back = renderStudentHome) {
     </div>
   `);
 
-  const reload = guarded(() => renderVideoLibrary(back));
+  const reload = guarded(() => renderVideoLibrary(back, source));
   document.querySelector('[data-action="back-videos"]').addEventListener("click", guarded(back));
   const search = document.getElementById("video-search");
   search.addEventListener("change", () => {
@@ -5208,7 +5634,7 @@ async function renderVideoLibrary(back = renderStudentHome) {
   );
   document.querySelectorAll("[data-video-id]").forEach((card) => {
     const video = data.videos.find((item) => String(item.id) === card.dataset.videoId);
-    card.addEventListener("click", guarded(() => renderVideoPlayer(video, () => renderVideoLibrary(back))));
+    card.addEventListener("click", guarded(() => renderVideoPlayer(video, () => renderVideoLibrary(back, source))));
   });
 }
 
@@ -5256,8 +5682,8 @@ async function renderSchoolVideos() {
       <button class="back-button" type="button" data-action="back-school-home" style="margin:0">←</button>
       <h2 style="margin:0;flex:1">🎬 Video darslar</h2>
     </div>
-    <p class="subtitle" style="margin-top:0">Bu yerda qo'shgan videolaringizni ilovadagi barcha o'quvchilar
-      «O'quvchi → Video darslar» bo'limida bepul ko'radi. Videoni avval YouTube'ga yuklang
+    <p class="subtitle" style="margin-top:0">Bu yerda qo'shgan videolaringizni maktab o'quvchilari o'z kabinetida
+      («🎒 Maktab o'quvchisi» → «Video darslar») bepul ko'radi. Videoni avval YouTube'ga yuklang
       («Havola orqali» — <i>Unlisted</i> bo'lishi ham mumkin), keyin havolasini shu yerga qo'ying.</p>
     <button class="btn" id="video-add">➕ Video qo'shish</button>
     <p class="section-label" style="margin-top:18px">QO'SHILGAN VIDEOLAR — ${data.videos.length}</p>
@@ -5331,7 +5757,7 @@ function openVideoSheet(video, onSaved) {
       if (body.title.length < 3) throw new Error("Video mavzusini yozing");
       await api(video ? `/api/videos/${video.id}` : "/api/videos", { method: video ? "PUT" : "POST", body });
       close();
-      showToast(video ? "✅ Saqlandi" : "✅ Video qo'shildi — o'quvchilar uni «Video darslar» bo'limida ko'radi");
+      showToast(video ? "✅ Saqlandi" : "✅ Video qo'shildi — o'quvchilar uni kabinetidagi «Video darslar»da ko'radi");
       await onSaved();
     })
   );
@@ -9639,11 +10065,11 @@ function drawStudentHome(me, attempts) {
       </div>
       <button class="btn btn-sun" id="find-test-button" type="button">🔍 Yangi test qidirish</button>
     </section>
-    <div class="card video-entry" id="video-lessons-card">
-      <div class="card-icon">🎬</div>
+    <div class="card video-entry" id="pupil-entry-card">
+      <div class="card-icon">🏫</div>
       <div class="card-body">
-        <h3 style="margin:0">Video darslar</h3>
-        <p style="margin:4px 0 0">Fanlar bo'yicha bepul video darslar</p>
+        <h3 style="margin:0">Maktabim</h3>
+        <p style="margin:4px 0 0">Maktab o'quvchisi kabineti: davomat, baholar, reyting, video darslar</p>
       </div>
       <span aria-hidden="true">›</span>
     </div>
@@ -9655,7 +10081,7 @@ function drawStudentHome(me, attempts) {
 
   document.querySelector('[data-action="back"]')?.addEventListener("click", () => loadHome());
   document.getElementById("find-test-button").addEventListener("click", renderTestCodeSearch);
-  document.getElementById("video-lessons-card").addEventListener("click", guarded(() => renderVideoLibrary(renderStudentHome)));
+  document.getElementById("pupil-entry-card").addEventListener("click", guarded(renderPupilEntry));
   document.getElementById("edit-name-button").addEventListener(
     "click",
     guarded(() => renderEditName(me, renderStudentHome))
@@ -17040,12 +17466,14 @@ function renderAppLogin(errorText = "") {
       <p class="subtitle">Telegram akkauntingiz bilan kiring — testlar, natijalar va kreditlar Telegram'dagi bilan bir xil bo'ladi.</p>
     </div>
     <button class="btn" id="app-login-button" style="margin-top:24px">✈️ Telegram orqali kirish</button>
+    <button class="btn btn-ghost" id="pupil-entry-button" style="margin-top:10px">🎒 Maktab o'quvchisi sifatida kirish</button>
     <p class="subtitle" id="app-login-status" style="text-align:center;margin-top:14px">${escapeHtml(errorText)}</p>
     <p style="text-align:center;margin-top:36px">
       <button class="link-button" id="review-login-link" type="button" style="border:0;background:none;color:var(--color-text-muted);font:inherit;font-size:13px;text-decoration:underline;cursor:pointer">Sinov akkaunti bilan kirish</button>
     </p>
   `);
   document.getElementById("app-login-button").addEventListener("click", guarded(startAppLogin));
+  document.getElementById("pupil-entry-button").addEventListener("click", guarded(renderPupilEntry));
   document.getElementById("review-login-link").addEventListener("click", renderReviewLogin);
 }
 
@@ -17197,6 +17625,7 @@ function renderWebLogin(errorText = "") {
             <nav>
               <a href="#lp-features">Imkoniyatlar</a>
               <a href="#lp-how">Qanday ishlaydi</a>
+              <button class="lp-btn lp-btn-sm lp-btn-ghost" type="button" data-pupil-login>🎒 O'quvchi</button>
               <button class="lp-btn lp-btn-sm" type="button" data-lp-login>Telegramda ochish</button>
             </nav>
           </header>
@@ -17208,6 +17637,7 @@ function renderWebLogin(errorText = "") {
                 U ta'lim jarayonini boshqarish, testlarni tekshirish va natijalarni tahlil qilishni bitta tizimda birlashtiradi.</p>
               <div class="lp-actions">
                 <button class="lp-btn" type="button" data-lp-login>Telegramda boshlash</button>
+                <button class="lp-btn lp-btn-ghost" type="button" data-pupil-login>🎒 Maktab o'quvchisi</button>
                 <a class="lp-btn lp-btn-ghost" href="#lp-features">Imkoniyatlarni ko'rish</a>
               </div>
             </div>
@@ -17383,6 +17813,7 @@ function renderWebLogin(errorText = "") {
   document.querySelectorAll("[data-lp-login]").forEach((button) =>
     button.addEventListener("click", () => modal.classList.add("is-open"))
   );
+  document.querySelectorAll("[data-pupil-login]").forEach((button) => button.addEventListener("click", guarded(renderPupilEntry)));
   document.getElementById("lp-modal-close").addEventListener("click", closeModal);
   modal.addEventListener("click", (event) => {
     if (event.target === modal) closeModal();
@@ -17531,7 +17962,8 @@ function startApp() {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
   setTimeout(() => processScanQueue(), 3000);
   if (NEEDS_LOGIN && !appSession) {
-    renderAppLogin();
+    if (pupilSession) renderPupilHome().catch((error) => renderPupilLogin(error.message));
+    else renderAppLogin();
     return;
   }
   loadHome()
