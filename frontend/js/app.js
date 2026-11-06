@@ -14779,6 +14779,26 @@ async function renderAttachClasses(testId) {
   );
 }
 
+// Skanerlashdan oldin: javoblar kaliti to'liq kiritilmagan — eslatma va kalitni kiritishga yo'l
+function openKeyMissingSheet(test, openEditor) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 8px">🔑 Hali javoblarni kiritmagansiz</h3>
+    <p class="subtitle" style="margin:0 0 14px">
+      ${test.key_missing} ta savolning to'g'ri javobi kiritilmagan. Varaqlarni skanerlashdan oldin javoblar kalitini
+      to'liq kiriting — aks holda natijalar noto'g'ri hisoblanadi.
+    </p>
+    <button class="btn" data-key-open style="margin:0 0 8px">🔑 Javoblar kalitini kiritish</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin:0">Yopish</button>
+  `);
+  sheet.querySelector("[data-key-open]").addEventListener(
+    "click",
+    guarded(async () => {
+      close();
+      await openEditor();
+    })
+  );
+}
+
 /* ---------- Yozma javoblar: titulda qo'lda yozilgan javoblarni baholash ---------- */
 
 /*
@@ -15225,7 +15245,17 @@ async function renderTestDetail(testId) {
   // Skaner Android ilovada (APK) va web saytda (brauzer kamerasi yoki surat); Telegram botida — ilovani yuklab olish taklifi
   document
     .getElementById("scan-sheet-button")
-    ?.addEventListener("click", guarded(() => (IN_APP || ON_WEB ? scanSheetPage(testId, test) : showScannerAppOffer())));
+    ?.addEventListener(
+      "click",
+      guarded(() => {
+        // Javoblar kaliti to'liq emas — skaner ochilmaydi (varaqlar noto'g'ri baholanmasin)
+        if (test.key_missing) {
+          openKeyMissingSheet(test, () => renderMainKeyEditor(testId, test, () => renderTestDetail(testId)));
+          return;
+        }
+        return IN_APP || ON_WEB ? scanSheetPage(testId, test) : showScannerAppOffer();
+      })
+    );
   document.getElementById("attach-classes-button-open")?.addEventListener("click", guarded(() => renderAttachClasses(testId)));
   document.getElementById("variants-button")?.addEventListener("click", guarded(() => renderVariantsPage(testId, test)));
   queueAll().then((items) => {
