@@ -4389,7 +4389,8 @@ def _grade_answers(db: Session, attempt: Attempt, test: Test, answers: dict[str,
                 chosen_value = student_answer.strip()[:300] or None
             else:
                 raw_answer = student_answer.upper().replace(" ", "")
-                is_correct = raw_answer == key_correct
+                # Kalit kiritilmagan savol — hech kimga to'g'ri emas (bo'sh javob bo'sh kalitga "mos" kelmasin)
+                is_correct = bool(key_correct) and raw_answer == key_correct
                 chosen_value = raw_answer or None
 
             db.add(
@@ -5748,7 +5749,15 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
         "missing": len(students) - filled,
         # Titulda qo'lda yozilgan javoblar: {total, unchecked} (yozma savolli oflayn testda)
         "written": _written_stats(db, test),
+        # Javoblar kaliti kiritilmagan savollar soni — test sahifasida eslatma ("Javoblarni kiriting")
+        "key_missing": _key_missing(test),
     }
+
+
+def _key_missing(test: Test) -> int:
+    """Kaliti hali kiritilmagan savollar soni (Rash testni kalitsiz saqlash mumkin)."""
+
+    return sum(1 for kq in test.key_questions if not (kq.correct or "").strip()) if test.mode == "key" else 0
 
 
 def _test_has_attempts(db: Session, test: Test) -> bool:
@@ -6459,19 +6468,21 @@ def save_main_key(
 
     key: dict[int, str] = {}
     for kq in test.key_questions:
+        if str(kq.number) not in body.answers:
+            key[kq.number] = kq.correct  # yuborilmagan savol kaliti o'zgarmaydi (faqat bo'sh qiymat tozalaydi)
+            continue
         value = (body.answers.get(str(kq.number)) or "").strip()
         label = _key_question_label(kq)
         if kq.question_type == "text":
-            # Bir nechta to'g'ri javob "|" bilan: "0,5|1/2"
+            # Bir nechta to'g'ri javob "|" bilan: "0,5|1/2". Bo'sh — kalit hali kiritilmagan (keyin kiritiladi)
             value = "|".join(part.strip() for part in value.split("|") if part.strip())
-            if not value:
-                raise HTTPException(status_code=422, detail=f"{label}: to'g'ri javobni yozing")
             key[kq.number] = value[:300]
             continue
         letters = sorted({part.strip().upper() for part in value.split(",") if part.strip()})
         allowed = {chr(65 + index) for index in range(kq.option_count)}
         if not letters:
-            raise HTTPException(status_code=422, detail=f"{label}: to'g'ri javobni belgilang")
+            key[kq.number] = ""  # kalit hali kiritilmagan
+            continue
         if not set(letters) <= allowed or (kq.question_type == "single" and len(letters) != 1):
             raise HTTPException(status_code=422, detail=f"{label}: javob noto'g'ri")
         key[kq.number] = ",".join(letters)
@@ -6913,8 +6924,8 @@ def _apply_ai_verdict(row: WrittenAnswer, key: str) -> bool:
     AI "aniq emas" degan bo'lsa yoki o'qituvchi allaqachon baholagan bo'lsa — tegmaydi.
     """
 
-    if row.verdict is not None or row.ai_status != "done" or not row.ai_sure:
-        return False
+    if row.verdict is not None or row.ai_status != "done" or not row.ai_sure or not (key or "").strip():
+        return False  # kalit hali kiritilmagan bo'lsa ham — kalit kiritilgach baholanadi
     row.verdict = bool(row.ai_text) and _text_answer_is_correct(row.ai_text, key)
     row.auto_verdict, row.checked_at = True, utcnow()
     return True
@@ -7256,6 +7267,12 @@ def close_test(test_id: int, teacher: Teacher = Depends(get_current_teacher), db
         raise HTTPException(
             status_code=400,
             detail=f"Yakunlash uchun barcha o'quvchilar javobini kiriting — {missing} ta o'quvchi qolgan",
+        )
+    if _key_missing(test):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Javoblar kaliti to'liq emas — {_key_missing(test)} ta savolning to'g'ri javobi kiritilmagan. "
+                   "Avval «Kalit → Kalitni tuzatish» da kiriting",
         )
     written = _written_stats(db, test)
     if written and written["unchecked"]:

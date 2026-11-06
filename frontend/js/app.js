@@ -11537,6 +11537,7 @@ function renderNewTestForm(testType, draft = {}) {
       </div>
     </div>
     <div id="key-questions-container" data-default-parts="${structure.textParts}"
+         data-allow-empty="${type === "rash" ? "1" : ""}"
          data-part-overrides='${JSON.stringify(structure.partOverrides || {})}'
          data-fixed-parts='${JSON.stringify(structure.fixedParts || {})}'
          data-option-overrides='${JSON.stringify(structure.options)}'></div>
@@ -11868,6 +11869,7 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
   const defaultOptions = Math.min(8, Math.max(2, Number(document.getElementById("field-option-count").value) || 4));
   const textCount = Math.max(0, Number(document.getElementById("field-text-count").value) || 0);
   const parts = Number(container.dataset.defaultParts) || 1;
+  const allowEmpty = container.dataset.allowEmpty === "1"; // Rash test: kalitsiz ham saqlanadi
   // Yozma ish (Kimyo/Biologiya 41–43): savolga qarab bandlar soni — o'qituvchi [−]/[+] bilan o'zgartiradi
   let partOverrides = {};
   try {
@@ -11922,15 +11924,17 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
     const saved = previous[number] || {};
     const options = Number(saved.options) || Number(optionOverrides[number]) || defaultOptions;
     // Variantlar kamaytirilsa (masalan, 4 dan 3 ga), endi yo'q harf ("D") qolmasin
-    const savedAnswer = String(saved.answer || "A").toUpperCase();
+    // Rash testda kalit keyin kiritilishi mumkin — katak bo'sh ("—") boshlanadi
+    const blank = allowEmpty ? "" : "A";
+    const savedAnswer = String(saved.answer ?? blank).toUpperCase() || blank;
     const fitsOptions = [...savedAnswer.replace(/,/g, "")].every((letter) => letter.charCodeAt(0) - 65 < options);
-    const answer = fitsOptions ? savedAnswer : "A";
+    const answer = fitsOptions ? savedAnswer : blank;
 
     cells.push(`
-      <button class="answer-cell key-row" type="button" data-label="${number}" data-kind="letters"
+      <button class="answer-cell key-row${answer ? "" : " is-empty"}" type="button" data-label="${number}" data-kind="letters"
               data-options="${options}" data-answer="${answer}">
         <span class="cell-number">${number}</span>
-        <span class="cell-letter">${answer}</span>
+        <span class="cell-letter">${answer || "—"}</span>
       </button>`);
   }
 
@@ -11938,7 +11942,11 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
     ? `<p class="section-label">1–${testCount}: TO'G'RI JAVOBLAR</p>
        <div class="panel">
          <div class="answer-grid">${cells.join("")}</div>
-         <p class="subtitle" style="margin:10px 0 0">Javobni almashtirish uchun katakchani bosing.</p>
+         <p class="subtitle" style="margin:10px 0 0">${
+           allowEmpty
+             ? "Katakchani bosing: — → A → B … Javoblarni hozir kiritmasangiz ham bo'ladi — keyin «Kalit → Kalitni tuzatish» da kiritasiz."
+             : "Javobni almashtirish uchun katakchani bosing."
+         }</p>
        </div>`
     : "";
 
@@ -12025,13 +12033,20 @@ function handleAnswerCellTap(event) {
   const cell = event.target.closest(".answer-cell");
   if (!cell) return;
 
-  // Keyingi harfga o'tadi: A -> B -> C -> D -> A (variantlar soniga qarab)
+  // Keyingi harfga o'tadi: A -> B -> C -> D -> A (variantlar soniga qarab).
+  // Rash testda bo'sh holat ham bor: — -> A -> B -> C -> D -> — (kalit keyin kiritilishi mumkin)
   const options = Number(cell.dataset.options) || 4;
-  const current = (cell.dataset.answer || "A").charCodeAt(0) - 65;
-  const next = String.fromCharCode(65 + ((current + 1) % options));
+  const allowEmpty = document.getElementById("key-questions-container")?.dataset.allowEmpty === "1";
+  let next;
+  if (!cell.dataset.answer) next = "A";
+  else {
+    const current = cell.dataset.answer.charCodeAt(0) - 65;
+    next = current + 1 < options ? String.fromCharCode(65 + current + 1) : allowEmpty ? "" : "A";
+  }
 
   cell.dataset.answer = next;
-  cell.querySelector(".cell-letter").textContent = next;
+  cell.querySelector(".cell-letter").textContent = next || "—";
+  cell.classList.toggle("is-empty", !next);
   telegram?.HapticFeedback?.selectionChanged?.();
 }
 
@@ -12099,10 +12114,13 @@ async function saveNewTest() {
     throw new Error(`Offline testda variantlar ko'pi bilan ${OFFLINE_MAX_OPTIONS} ta bo'ladi (A–F) — titulga sig'ishi uchun`);
   }
 
+  // Rash testni kalitsiz ham saqlash mumkin (kalit keyin kiritiladi, test sahifasida eslatma turadi)
+  const allowEmptyKey = document.getElementById("key-questions-container").dataset.allowEmpty === "1";
   const emptyRow = keyRows.find((row) => !row.dataset.answer);
-  if (emptyRow) {
+  if (emptyRow && !allowEmptyKey) {
     throw new Error(`${emptyRow.dataset.label}-savolning to'g'ri javobi belgilanmagan`);
   }
+  const missingKeys = keyRows.filter((row) => !row.dataset.answer).length;
 
   body.key_questions = keyRows.map((row, index) => {
     const answer = row.dataset.answer;
@@ -12130,7 +12148,11 @@ async function saveNewTest() {
       showToast("Bo'limlarni saqlab bo'lmadi — natijalar sahifasida qayta belgilang");
     }
   }
-  showToast(`✅ Test yaratildi! Kodi: ${result.code}`);
+  showToast(
+    missingKeys
+      ? `✅ Test yaratildi! Kodi: ${result.code}. 🔑 ${missingKeys} ta savolning javobi kiritilmagan — keyin kiriting`
+      : `✅ Test yaratildi! Kodi: ${result.code}`
+  );
 
   // Sinf ichidan boshlangan imtihon — o'sha sinfga darhol biriktiriladi
   const forClass = testForClass;
@@ -14474,16 +14496,16 @@ async function renderMainKeyEditor(testId, test, back) {
   document.getElementById("save-key-button").addEventListener(
     "click",
     guarded(async () => {
-      const missing = structure.questions.find((question) => !answers[question.ref].trim());
-      if (missing) throw new Error(`${missing.label}: to'g'ri javobni belgilang`);
+      // Kalitni qisman ham saqlasa bo'ladi — qolganlari keyin kiritiladi (test sahifasida eslatma turadi)
+      const missing = structure.questions.filter((question) => !answers[question.ref].trim()).length;
       const result = await api(`/api/teacher/tests/${testId}/key`, { method: "PUT", body: { answers } });
       unsavedChanges = false;
       showToast(
-        !result.changed
+        (!result.changed
           ? "Kalit o'zgarmadi"
           : result.regraded
             ? `✅ Kalit saqlandi, ${result.regraded} ta natija qayta hisoblandi`
-            : "✅ Kalit saqlandi"
+            : "✅ Kalit saqlandi") + (missing ? ` · 🔑 yana ${missing} ta savol javobsiz` : "")
       );
       await back();
     })
@@ -15125,6 +15147,16 @@ async function renderTestDetail(testId) {
     }
     ${isClosedTest ? `<div id="scan-queue-slot"></div>` : ""}
     ${
+      // Test kalitsiz saqlangan — o'qituvchiga eslatma (kalit kiritilmaguncha natija to'g'ri hisoblanmaydi)
+      test.key_missing
+        ? `<div class="notice key-missing-notice">
+             🔑 <b>Javoblarni kiriting:</b> ${test.key_missing} ta savolning to'g'ri javobi hali kiritilmagan —
+             kiritilmaguncha natijalar to'g'ri hisoblanmaydi va testni yakunlab bo'lmaydi.
+             ${test.mode === "key" ? `<button type="button" class="btn" id="key-missing-button" style="margin:10px 0 0">🔑 Javoblar kalitini kiritish</button>` : ""}
+           </div>`
+        : ""
+    }
+    ${
       // Titulda qo'lda yozilgan javoblar (36–45): o'qituvchi rasmga qarab ✓ / ✗ qo'yadi
       test.written
         ? homeCard(
@@ -15159,6 +15191,9 @@ async function renderTestDetail(testId) {
 
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
   document.getElementById("written-review-button")?.addEventListener("click", guarded(() => renderWrittenOverview(testId)));
+  document
+    .getElementById("key-missing-button")
+    ?.addEventListener("click", guarded(() => renderMainKeyEditor(testId, test, () => renderTestDetail(testId))));
   wireTestMenu(menuGroups);
   document.getElementById("edit-test-button").addEventListener("click", () => openTestEditSheet(test));
   document

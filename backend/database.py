@@ -1341,7 +1341,9 @@ class KeyQuestionIn(BaseModel):
     label: str | None = Field(None, max_length=20)  # masalan "36a"; bo'sh bo'lsa "36-savol"
     question_type: str = Field(pattern="^(single|multi|text)$")
     option_count: int = Field(4, ge=2, le=8)  # "text" turida ishlatilmaydi
-    correct: str = Field(min_length=1, max_length=300)
+    # Bo'sh bo'lishi mumkin: Rash testni javoblar kalitisiz saqlab, kalitni keyin kiritish mumkin
+    # (bo'sh kalitli savol hech kimga to'g'ri sanalmaydi; test sahifasida eslatma turadi)
+    correct: str = Field("", max_length=300)
 
     @model_validator(mode="after")
     def normalize_correct(self) -> "KeyQuestionIn":
@@ -1359,7 +1361,8 @@ class KeyQuestionIn(BaseModel):
 
         letters = sorted({part.strip().upper() for part in self.correct.split(",") if part.strip()})
         if not letters:
-            raise ValueError("to'g'ri javob bo'sh")
+            self.correct = ""  # kalit hali kiritilmagan
+            return self
 
         allowed = {chr(65 + index) for index in range(self.option_count)}
         if not set(letters) <= allowed:

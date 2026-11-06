@@ -5621,7 +5621,8 @@ def test_asosiy_kalitni_tahrirlash_natijalarni_qayta_hisoblaydi():
     questions = client.get(f"{base}/questions", headers=headers).json()["questions"]
     assert [q["correct"] for q in questions] == ["B", "C", "A,C", r"2\sqrt{3}"]
 
-    assert client.put(f"{base}/key", json={"answers": {"1": "B"}}, headers=headers).status_code == 422
+    # Qisman yuborilsa — yuborilmagan savollar kaliti o'zgarmaydi (kalitni bo'laklab kiritish mumkin)
+    assert client.put(f"{base}/key", json={"answers": {"1": "B"}}, headers=headers).json()["changed"] == 0
     assert client.put(f"{base}/key", json={"answers": {"1": "B,C", "2": "D", "3": "A,C", "4": "5"}},
                       headers=headers).status_code == 422  # bitta javobli savolga ikki harf
     assert client.put(f"{base}/key", json={"answers": {"1": "B", "2": "D", "3": "A,C", "4": "5"}},

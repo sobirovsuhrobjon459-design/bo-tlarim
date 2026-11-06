@@ -3859,3 +3859,12 @@ button {
   background: #fff4cc;
   color: #a16207;
 }
+
+/* Test yaratish: kaliti hali kiritilmagan katak ("—") */
+.answer-cell.is-empty .cell-letter {
+  color: var(--color-text-muted);
+}
+
+.key-missing-notice .btn {
+  width: 100%;
+}
