@@ -11282,7 +11282,7 @@ const TEST_TYPES = {
     hint: "Milliy sertifikat uslubida: 35 ta variantli + 10 ta yozma (a, b) savol, 150 daqiqa.",
   },
   boshlangich: {
-    label: "Boshlang'ich test",
+    label: "Oddiy test",
     testCount: 30,
     optionCount: 4,
     textCount: 0,
@@ -12079,7 +12079,7 @@ async function saveNewTest() {
     end_time: localTimeToUtcIso(document.getElementById("field-end-time").value),
     questions: [],
     key_questions: [],
-    // Hisoblash usuli: Rash test — Rasch modeli, Boshlang'ich test — to'g'ri javoblar soni va foiz
+    // Hisoblash usuli: Rash test — Rasch modeli, Oddiy test — to'g'ri javoblar soni va foiz
     test_type: { boshlangich: "boshlangich", dtm: "dtm" }[document.getElementById("field-type").value] || "rash",
     essay: Boolean(SUBJECT_PRESETS[document.getElementById("field-subject").value]?.essay) &&
       document.getElementById("field-essay").checked,
@@ -12170,7 +12170,7 @@ function openTestEditSheet(test, reopenHint = false) {
         : `<label class="field-label">Hisoblash usuli
       <select class="input" id="edit-test-type" style="margin:4px 0 0">
         <option value="rash" ${test.test_type !== "boshlangich" ? "selected" : ""}>Rash test — Rasch balli, A+ … NC daraja</option>
-        <option value="boshlangich" ${test.test_type === "boshlangich" ? "selected" : ""}>Boshlang'ich test — to'g'ri javoblar soni va foiz</option>
+        <option value="boshlangich" ${test.test_type === "boshlangich" ? "selected" : ""}>Oddiy test — to'g'ri javoblar soni va foiz</option>
       </select></label>`
     }
     <label class="field-label">Davomiyligi (daqiqa)
@@ -15857,7 +15857,7 @@ async function renderResultsTab(selectedId) {
   const results = await api(`/api/teacher/tests/${testId}/results`);
   const summary = results.summary;
 
-  // Rash testda — Rasch darajalari (Milliy sertifikat), boshlang'ich testda — faqat foiz
+  // Rash testda — Rasch darajalari (Milliy sertifikat), oddiy testda — faqat foiz
   const usesRasch = Boolean(results.uses_rasch);
   const buckets = (
     usesRasch
@@ -15871,7 +15871,7 @@ async function renderResultsTab(selectedId) {
           { label: "A+", from: 70, to: 101 },
         ]
       : [
-          // Boshlang'ich test — baho yo'q, faqat to'g'ri javoblar foizi
+          // Oddiy test — baho yo'q, faqat to'g'ri javoblar foizi
           { label: "0–55%", from: 0, to: 56 },
           { label: "56–70%", from: 56, to: 71 },
           { label: "71–85%", from: 71, to: 86 },

@@ -1186,7 +1186,7 @@ def build_rasch_report(db: Session, test: Test) -> dict:
     items = _rasch_items(test)
     total_questions = _question_count(test)
     # Rash test — Rasch modeli (Milliy sertifikat uslubidagi ball va A+ … NC daraja);
-    # boshlang'ich test — faqat to'g'ri javoblar soni va foiz, bahosiz (o'qituvchi test turini tanlaydi)
+    # oddiy test (ichki nomi "boshlangich") — faqat to'g'ri javoblar soni va foiz, bahosiz (o'qituvchi test turini tanlaydi)
     uses_rasch = test.test_type != "boshlangich"
 
     correct_refs: dict[int, set[int]] = {attempt.id: set() for attempt, _ in results}
@@ -1259,7 +1259,7 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             "percent": attempt.percent,
             "seconds": attempt.seconds,
             "ball": score,
-            # Boshlang'ich testda daraja ham, baho ham yo'q — to'g'ri javoblar soni va foiz yetarli
+            # Oddiy testda daraja ham, baho ham yo'q — to'g'ri javoblar soni va foiz yetarli
             "grade": grade_for(score) if uses_rasch else None,
             "sections": split_sections(row_matrix, attempt),
             "essay": attempt.essay_score,
@@ -1728,7 +1728,7 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
         middle = ["To'g'ri", "Foiz"] if uses_rasch else ["To'g'ri"]
     total_title, total_of = _total_column(rows, uses_rasch)
     dtm = _is_dtm(rows) and bool(section_names)
-    show_grade = uses_rasch and not dtm  # boshlang'ich testda baho ustuni yo'q
+    show_grade = uses_rasch and not dtm  # oddiy testda baho ustuni yo'q
     header = ["№", "Ism Familiya", *(_dtm_section_titles(middle) if dtm else middle), "Jami ball" if dtm else total_title,
               *(["Baho"] if show_grade else [])]
     # Ko'p bo'limda (Fizika — 6 ta) ustunlar tor: sarlavha kichikroq shriftda,
@@ -7487,10 +7487,10 @@ def _draw_certificate_page(pdf, test: Test, teacher: Teacher, row: dict, section
         field(height - 392, "DTM bali:", f"{row['dtm_ball']:g} / {DTM_MAX_BALL:g}".replace(".", ","), size=12)
     elif row.get("ball") is not None:
         field(height - 392, "Umumiy to'plagan bali:", ball, size=12)
-    else:  # boshlang'ich test — Rasch balli yo'q
+    else:  # oddiy test — Rasch balli yo'q
         field(height - 392, "To'g'ri javoblar:", f"{row['correct']} / {row['total']}", size=12)
     field(height - 416, "To'g'ri javoblar foizi:", f"{row['percent']:g} %  ({row['correct']}/{row['total']})", size=12)
-    if row.get("dtm_ball") is None and row.get("grade"):  # DTM va boshlang'ich testda daraja yo'q
+    if row.get("dtm_ball") is None and row.get("grade"):  # DTM va oddiy testda daraja yo'q
         field(height - 440, "Sertifikat darajasi:", row["grade"], size=13)
     field(height - 464, "Qatnashchilar orasidagi o'rni:", str(row["rank"]))
 
@@ -10815,7 +10815,7 @@ def delete_attendance(attendance_id: int, user: User = Depends(get_current_user)
 
 # ---------- Sinf test natijalari (o'qituvchi kiritadi) ----------
 #
-# Hisoblash — boshlang'ich test rejimida: to'plangan ball / maksimal ball (21/25) va foiz (84%).
+# Hisoblash — oddiy test rejimida: to'plangan ball / maksimal ball (21/25) va foiz (84%).
 # Milliy sertifikat darajalari (A+ … NC) ishlatilmaydi.
 
 

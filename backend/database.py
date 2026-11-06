@@ -1437,7 +1437,7 @@ class TestEditIn(BaseModel):
     duration: int | None = Field(None, ge=1, le=300)
     start_time: datetime | None = None
     end_time: datetime | None = None
-    # Hisoblash usuli: Rasch yoki boshlang'ich (natijalar darhol qayta hisoblanadi)
+    # Hisoblash usuli: Rasch yoki oddiy (natijalar darhol qayta hisoblanadi)
     test_type: Literal["rash", "boshlangich"] | None = None
 
 
