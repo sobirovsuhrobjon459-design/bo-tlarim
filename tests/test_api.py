@@ -7042,3 +7042,53 @@ def test_biriktirilmaganlar_savati():
     copy_id = added["class"]["students"][0]["id"]
     assert client.delete(f"/api/classes/{group['id']}/students/{copy_id}", headers=owner).status_code == 200
     assert client.get("/api/schools/unassigned", headers=owner).json()["students"] == []
+
+
+def test_video_darslar_rahbariyat_qoshadi_hamma_korad():
+    """Video dars: muassasa rahbariyati YouTube havolasi bilan qo'shadi, ilovadagi hamma ko'radi, admin o'chira oladi."""
+    from backend.database import youtube_video_id
+
+    assert youtube_video_id("https://youtu.be/dQw4w9WgXcQ?si=abc") == "dQw4w9WgXcQ"
+    assert youtube_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10s") == "dQw4w9WgXcQ"
+    assert youtube_video_id("https://m.youtube.com/watch?feature=share&v=dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    assert youtube_video_id("https://youtube.com/shorts/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    assert youtube_video_id("https://example.com/video") is None
+
+    reset_database()
+    _set_name(701, "Aziza", "Karimova")
+    _set_name(801, "Oddiy", "Oquvchi")
+    school = client.post("/api/schools", json={"subjects": ["Matematika"], "region": "Toshkent shahri",
+                                               "district": "Chilonzor tumani", "name": "Ilm maktabi"}, headers=as_user(701))
+    assert school.status_code == 200, school.text
+
+    body = {"url": "https://youtu.be/dQw4w9WgXcQ", "title": "Kasrlar", "subject": "Matematika", "grade": 5,
+            "description": "Kasrlarni qo'shish"}
+    # Maktabga a'zo bo'lmagan foydalanuvchi qo'sha olmaydi; noto'g'ri havola — 422
+    assert client.post("/api/videos", json=body, headers=as_user(801)).status_code == 403
+    assert client.post("/api/videos", json={**body, "url": "https://example.com/x"}, headers=as_user(701)).status_code == 422
+
+    created = client.post("/api/videos", json=body, headers=as_user(701))
+    assert created.status_code == 200, created.text
+    video = created.json()
+    assert video["youtube_id"] == "dQw4w9WgXcQ" and video["school_name"] == "Ilm maktabi"
+    assert client.post("/api/videos", json=body, headers=as_user(701)).status_code == 409  # ikki marta emas
+    client.post("/api/videos", json={**body, "url": "https://youtu.be/aaaaaaaaaaa", "title": "Tarix 1",
+                                     "subject": "Tarix", "grade": None, "description": ""}, headers=as_user(701))
+
+    # Har qanday foydalanuvchi ko'radi; fan va sinf bo'yicha saralanadi (sinfsiz video — hamma sinflarga)
+    seen = client.get("/api/videos", headers=as_user(801)).json()
+    assert {item["name"] for item in seen["subjects"]} == {"Matematika", "Tarix"}
+    assert len(seen["videos"]) == 2 and not seen["can_add"] and not seen["videos"][0]["can_manage"]
+    assert [item["title"] for item in client.get("/api/videos?subject=Matematika", headers=as_user(801)).json()["videos"]] == ["Kasrlar"]
+    assert len(client.get("/api/videos?grade=7", headers=as_user(801)).json()["videos"]) == 1  # faqat sinfsiz "Tarix 1"
+    assert [item["title"] for item in client.get("/api/videos?q=qo'shish", headers=as_user(801)).json()["videos"]] == ["Kasrlar"]
+    assert client.post(f"/api/videos/{video['id']}/view", headers=as_user(801)).status_code == 200
+
+    # Boshqa odam o'zgartira olmaydi; rahbariyat tahrirlaydi; platforma admini o'chira oladi
+    assert client.delete(f"/api/videos/{video['id']}", headers=as_user(801)).status_code == 403
+    edited = client.put(f"/api/videos/{video['id']}", json={**body, "title": "Kasrlar (1-dars)"}, headers=as_user(701))
+    assert edited.status_code == 200 and edited.json()["title"] == "Kasrlar (1-dars)"
+    assert client.delete(f"/api/videos/{video['id']}", headers=as_user(4242)).status_code == 200
+    left = client.get("/api/videos", headers=as_user(701)).json()
+    assert [item["title"] for item in left["videos"]] == ["Tarix 1"] and left["can_add"]
+    assert left["videos"][0]["views"] == 0

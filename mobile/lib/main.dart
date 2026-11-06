@@ -146,6 +146,8 @@ class _WebShellState extends State<WebShell> {
                 shouldOverrideUrlLoading: (controller, action) async {
                   final uri = action.request.url;
                   if (uri == null) return NavigationActionPolicy.ALLOW;
+                  // Sahifa ichidagi kadr (masalan, video darsdagi YouTube pleyeri) — tashqariga chiqarilmaydi
+                  if (!action.isForMainFrame) return NavigationActionPolicy.ALLOW;
                   final isOwnSite = ownHosts.contains(uri.host) && (uri.scheme == 'https' || uri.scheme == 'http');
                   final isInternal = uri.scheme == 'about' || uri.scheme == 'blob' || uri.scheme == 'data';
                   if (isOwnSite || isInternal) return NavigationActionPolicy.ALLOW;

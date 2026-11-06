@@ -428,6 +428,29 @@ class SheetImage(Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
+class VideoLesson(Base):
+    """
+    Video dars (YouTube havolasi). Ta'lim muassasasining rahbariyati (admin, direktor, zam direktor)
+    qo'shadi; ilovadagi hamma o'quvchilar "Video darslar" bo'limida bepul ko'radi. Video o'zimizning
+    serverda saqlanmaydi — faqat YouTube ID'si (ilova uni o'z ichida o'ynatadi).
+    """
+
+    __tablename__ = "video_lessons"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
+    added_by: Mapped[int | None] = mapped_column(default=None)
+    title: Mapped[str] = mapped_column(String(200))
+    subject: Mapped[str] = mapped_column(String(100), index=True)
+    grade: Mapped[int | None] = mapped_column(default=None)  # 1–11; bo'sh — hamma sinflar uchun
+    description: Mapped[str] = mapped_column(Text, default="")
+    youtube_id: Mapped[str] = mapped_column(String(20))
+    views: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime | None] = mapped_column(default=None)
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
 class WrittenAnswer(Base):
     """
     Tituldagi yozma javob katagi (36a, 36b …): skaner qirqib olgan rasm va o'qituvchi bahosi.
@@ -1841,6 +1864,44 @@ class ClassTestIn(BaseModel):
         for score in self.scores.values():
             if score is not None and not (0 <= score <= self.max_score):
                 raise ValueError(f"Ball 0 dan {self.max_score:g} gacha bo'lishi kerak")
+        return self
+
+
+YOUTUBE_ID_PATTERNS = (
+    r"(?:youtube\.com|youtube-nocookie\.com)/(?:watch\?(?:.*&)?v=|embed/|shorts/|live/|v/)([A-Za-z0-9_-]{11})",
+    r"youtu\.be/([A-Za-z0-9_-]{11})",
+)
+
+
+def youtube_video_id(url: str) -> str | None:
+    """YouTube havolasidan video ID'si (11 belgi): youtu.be/…, watch?v=…, shorts/…, embed/…, live/…"""
+
+    text = (url or "").strip()
+    for pattern in YOUTUBE_ID_PATTERNS:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+    return None
+
+
+class VideoLessonIn(BaseModel):
+    """Video dars: YouTube havolasi, nomi, fani, sinfi (bo'sh — hamma sinflar) va tavsifi."""
+
+    url: str = Field(max_length=500)
+    title: str = Field(min_length=3, max_length=200)
+    subject: str = Field(min_length=2, max_length=100)
+    grade: int | None = Field(default=None, ge=1, le=11)
+    description: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def normalize(self) -> "VideoLessonIn":
+        self.title = " ".join(self.title.split())
+        self.subject = " ".join(self.subject.split())
+        self.description = self.description.strip()
+        if len(self.title) < 3:
+            raise ValueError("Video nomini yozing")
+        if not youtube_video_id(self.url):
+            raise ValueError("YouTube havolasini kiriting (masalan: https://youtu.be/…)")
         return self
 
 

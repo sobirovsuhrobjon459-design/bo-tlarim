@@ -185,6 +185,8 @@ from .database import (
     WithdrawalRequest,
     WithdrawalRequestIn,
     SheetImage,
+    VideoLesson,
+    VideoLessonIn,
     WrittenAnswer,
     WrittenRestIn,
     WrittenVerdictIn,
@@ -193,6 +195,7 @@ from .database import (
     engine,
     utcnow,
     withdraw_balance,
+    youtube_video_id,
 )
 from bot.bot import run_bot
 from bot.config import WEBAPP_URL
@@ -12916,6 +12919,141 @@ def delete_announcement(announcement_id: int, user: User = Depends(get_current_u
     if not (item.author_user_id == user.id or _is_director(member)):
         raise HTTPException(status_code=403, detail="E'lonni muallifi yoki rahbariyat o'chiradi")
     item.deleted_at = utcnow()
+    db.commit()
+    return {"ok": True}
+
+
+# ---------- Video darslar ----------
+# Muassasa rahbariyati (admin, direktor, zam direktor) YouTube havolasi bilan qo'shadi; ilovadagi hamma
+# o'quvchilar bepul ko'radi. Platforma admini istalgan videoni o'chira oladi (nomaqbul bo'lsa).
+
+VIDEO_LIST_LIMIT = 300
+
+
+def _video_view(item: VideoLesson, school_name: str, can_manage: bool) -> dict:
+    return {
+        "id": item.id,
+        "title": item.title,
+        "subject": item.subject,
+        "grade": item.grade,
+        "description": item.description,
+        "youtube_id": item.youtube_id,
+        "school_name": school_name,
+        "views": item.views,
+        "created_at": item.created_at,
+        "can_manage": can_manage,
+    }
+
+
+def _video_leader_school(db: Session, user: User) -> int | None:
+    """Foydalanuvchi rahbar bo'lgan muassasa (video qo'sha oladi) — bo'lmasa None."""
+    member = _active_membership(db, user)
+    return member.school_id if member and _is_director(member) else None
+
+
+def _can_manage_video(db: Session, user: User, item: VideoLesson) -> bool:
+    if is_admin_tg(user.tg_id):
+        return True
+    member = db.scalar(
+        select(SchoolMember).where(SchoolMember.user_id == user.id, SchoolMember.school_id == item.school_id,
+                                   SchoolMember.left_at.is_(None))
+    )
+    return bool(member and _is_director(member))
+
+
+@app.get("/api/videos")
+def list_videos(subject: str = "", grade: int | None = None, q: str = "", mine: bool = False,
+                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Video darslar: fanlar (soni bilan) va tanlangan fan/sinf/qidiruv bo'yicha videolar (yangisi birinchi).
+    mine=true — muassasa rahbariyati uchun: faqat o'z muassasasi videolari (boshqarish sahifasi)."""
+
+    base = select(VideoLesson).where(VideoLesson.deleted_at.is_(None))
+    if mine:
+        school_id = _video_leader_school(db, user)
+        if school_id is None:
+            raise HTTPException(status_code=403, detail="Video darslarni muassasa rahbariyati qo'shadi")
+        base = base.where(VideoLesson.school_id == school_id)
+    subjects = db.execute(
+        select(VideoLesson.subject, func.count()).where(VideoLesson.id.in_(base.with_only_columns(VideoLesson.id)))
+        .group_by(VideoLesson.subject).order_by(func.count().desc(), VideoLesson.subject)
+    ).all()
+    query = base
+    if subject:
+        query = query.where(VideoLesson.subject == subject)
+    if grade:
+        # Sinfi ko'rsatilmagan video — hamma sinflar uchun
+        query = query.where(or_(VideoLesson.grade == grade, VideoLesson.grade.is_(None)))
+    words = [word for word in q.lower().split() if word][:5]
+    for word in words:
+        like = f"%{word}%"
+        query = query.where(or_(func.lower(VideoLesson.title).like(like), func.lower(VideoLesson.description).like(like)))
+    items = db.scalars(query.order_by(VideoLesson.id.desc()).limit(VIDEO_LIST_LIMIT)).all()
+    schools = dict(db.execute(
+        select(PrivateSchool.id, PrivateSchool.name).where(PrivateSchool.id.in_({item.school_id for item in items} or {-1}))
+    ).all())
+    admin = is_admin_tg(user.tg_id)
+    leader_school = _video_leader_school(db, user)
+    return {
+        "subjects": [{"name": name, "count": count} for name, count in subjects],
+        "videos": [
+            _video_view(item, schools.get(item.school_id, ""), admin or item.school_id == leader_school)
+            for item in items
+        ],
+        "can_add": leader_school is not None,
+    }
+
+
+@app.post("/api/videos")
+def add_video(body: VideoLessonIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    school_id = _video_leader_school(db, user)
+    if school_id is None:
+        raise HTTPException(status_code=403, detail="Video darslarni muassasa rahbariyati (admin, direktor) qo'shadi")
+    youtube_id = youtube_video_id(body.url)
+    if db.scalar(select(VideoLesson.id).where(VideoLesson.school_id == school_id, VideoLesson.youtube_id == youtube_id,
+                                              VideoLesson.deleted_at.is_(None))):
+        raise HTTPException(status_code=409, detail="Bu video allaqachon qo'shilgan")
+    item = VideoLesson(school_id=school_id, added_by=user.id, title=body.title, subject=body.subject, grade=body.grade,
+                       description=body.description, youtube_id=youtube_id)
+    db.add(item)
+    db.commit()
+    school = db.get(PrivateSchool, school_id)
+    return _video_view(item, school.name if school else "", True)
+
+
+def _own_video(db: Session, user: User, video_id: int) -> VideoLesson:
+    item = db.get(VideoLesson, video_id)
+    if not item or item.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Video topilmadi")
+    if not _can_manage_video(db, user, item):
+        raise HTTPException(status_code=403, detail="Videoni uni qo'shgan muassasa rahbariyati o'zgartiradi")
+    return item
+
+
+@app.put("/api/videos/{video_id}")
+def edit_video(video_id: int, body: VideoLessonIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    item = _own_video(db, user, video_id)
+    item.title, item.subject, item.grade, item.description = body.title, body.subject, body.grade, body.description
+    item.youtube_id = youtube_video_id(body.url)
+    item.updated_at = utcnow()
+    db.commit()
+    school = db.get(PrivateSchool, item.school_id)
+    return _video_view(item, school.name if school else "", True)
+
+
+@app.delete("/api/videos/{video_id}")
+def delete_video(video_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    item = _own_video(db, user, video_id)
+    item.deleted_at = utcnow()
+    db.commit()
+    logging.getLogger("backend").info("Video o'chirildi: id=%s school=%s user=%s", item.id, item.school_id, user.id)
+    return {"ok": True}
+
+
+@app.post("/api/videos/{video_id}/view")
+def count_video_view(video_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Ko'rishlar soni — video ochilganda (bir martalik so'rov, javobni kutish shart emas)."""
+    db.execute(update(VideoLesson).where(VideoLesson.id == video_id, VideoLesson.deleted_at.is_(None))
+               .values(views=VideoLesson.views + 1))
     db.commit()
     return {"ok": True}
 
