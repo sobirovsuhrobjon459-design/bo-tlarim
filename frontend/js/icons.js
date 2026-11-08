@@ -456,6 +456,30 @@ const EMOJI_ICONS = {
 "👨‍🏫": [
 "chalkboard-teacher",
 ""
+],
+"➕": [
+"plus",
+""
+],
+"✓": [
+"check",
+""
+],
+"✗": [
+"x",
+""
+],
+"▶️": [
+"play-circle",
+""
+],
+"🤖": [
+"sparkle",
+""
+],
+"🎒": [
+"student",
+""
 ]
 };
 
