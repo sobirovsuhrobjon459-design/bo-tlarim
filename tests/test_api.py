@@ -7168,3 +7168,62 @@ def test_maktab_oquvchisi_login_parol_bilan_oz_kabinetiga_kiradi():
                    headers=as_user(701))
     assert client.get("/api/pupil/me", headers={"X-Pupil-Session": fresh.json()["token"]}).status_code == 401
     assert client.post("/api/pupil/login", json={**login, "password": reset["password"]}).status_code == 403
+
+
+def test_tolov_kalitlari_admin_panelidan_kiritiladi():
+    """
+    Payme/Click kalitlari admin panelidan kiritiladi va darhol kuchga kiradi.
+
+    Eng muhimi: maxfiy kalit javobda ham, zaxira nusxada ham ko'rinmasligi kerak —
+    aks holda u Telegramga yuboriladigan JSON faylga tushib ketardi.
+    """
+    import json as _json
+
+    import backend.main as main
+    from backend.database import AppSetting
+
+    reset_database()
+    admin = as_user(4242)
+
+    # Kalitni kiritish
+    saved = client.post(
+        "/api/admin/payment-settings",
+        headers=admin,
+        json={"payme_merchant_id": "65abc123", "payme_secret_key": "SIR-KALIT", "payme_test_mode": True},
+    )
+    assert saved.status_code == 200, saved.text
+    state = saved.json()
+    assert state["payme"]["merchant_id"] == "65abc123"
+    assert state["payme"]["enabled"] and state["payme"]["test_mode"]
+    assert state["payme"]["merchant_source"] == "db"
+    # Maxfiy kalitning o'zi qaytarilmaydi — faqat "qo'yilgan" degan belgi
+    assert state["payme"]["secret_set"] is True
+    assert "SIR-KALIT" not in _json.dumps(state)
+    assert main.PAYME_MERCHANT_ID == "65abc123" and main.PAYME_SECRET_KEY == "SIR-KALIT"
+    # To'lov havolasi yangi kalit bilan, sinov rejimida yasaladi
+    assert main._build_payme_checkout_url("payment_id", 7, 5000).startswith("https://test.paycom.uz/")
+
+    # Bo'sh yuborilgan maxfiy kalit — "o'zgarishsiz qoldir" degani
+    again = client.post("/api/admin/payment-settings", headers=admin, json={"payme_merchant_id": "65abc123"}).json()
+    assert again["payme"]["secret_set"] is True
+    assert main.PAYME_SECRET_KEY == "SIR-KALIT"
+
+    # Zaxira nusxaga maxfiy kalit TUSHMAYDI
+    with SessionLocal() as session:
+        backup = main.export_database(session).decode("utf-8")
+    assert "SIR-KALIT" not in backup
+    assert AppSetting.__tablename__ not in _json.loads(backup)["tables"]
+
+    # O'chirilsa — bazadagi qiymat bo'shaydi (.env'dagisi qoladi)
+    cleared = client.post(
+        "/api/admin/payment-settings",
+        headers=admin,
+        json={"clear": ["payme_merchant_id", "payme_secret_key", "payme_test_mode"]},
+    )
+    assert cleared.status_code == 200, cleared.text
+    with SessionLocal() as session:
+        assert session.get(AppSetting, "payme_secret_key").value == ""
+
+    # Begona odam na ko'ra oladi, na o'zgartira oladi
+    assert client.get("/api/admin/payment-settings", headers=as_user(1111)).status_code == 403
+    assert client.post("/api/admin/payment-settings", headers=as_user(1111), json={}).status_code == 403

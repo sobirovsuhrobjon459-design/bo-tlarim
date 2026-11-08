@@ -1140,6 +1140,26 @@ class SchoolAnnouncement(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(default=None)
 
 
+class AppSetting(Base):
+    """
+    Admin panelidan kiritiladigan sozlamalar (kalit-qiymat): Payme va Click kalitlari.
+
+    Nega baza? Kalitlar .env'da bo'lsa, ularni o'zgartirish uchun serverga kirib
+    qayta deploy qilish kerak. Bu yerda esa admin ularni ilovaning o'zidan kiritadi.
+    Bazadagi qiymat .env'dagisidan ustun turadi; bo'sh bo'lsa — .env ishlatiladi.
+
+    MUHIM: maxfiy qiymatlar zaxira nusxaga TUSHMAYDI (qarang: export_database) —
+    aks holda ular JSON fayl bo'lib Telegram chatiga chiqib ketardi.
+    """
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_by: Mapped[int | None] = mapped_column(default=None)
+
+
 # ========== 4) API so'rov sxemalari (Pydantic) ==========
 
 
@@ -1574,6 +1594,24 @@ class CardTopUpIn(BaseModel):
 
     credits: int = Field(ge=1, le=100_000)
     receipt_base64: str = Field(min_length=100, max_length=7_000_000)
+
+
+class PaymentSettingsIn(BaseModel):
+    """
+    Admin panelidan kiritiladigan Payme/Click kalitlari.
+
+    Maxfiy kalitlar (secret_key) qaytarib ko'rsatilmaydi, shuning uchun
+    bo'sh qoldirilgan maydon "o'zgarishsiz qoldir" degani. Kalitni butunlay
+    o'chirish uchun alohida `clear` ro'yxati yuboriladi.
+    """
+
+    payme_merchant_id: str | None = Field(default=None, max_length=100)
+    payme_secret_key: str | None = Field(default=None, max_length=200)
+    payme_test_mode: bool | None = None
+    click_service_id: str | None = Field(default=None, max_length=100)
+    click_merchant_id: str | None = Field(default=None, max_length=100)
+    click_secret_key: str | None = Field(default=None, max_length=200)
+    clear: list[str] = Field(default_factory=list)
 
 
 class StudentNamesIn(BaseModel):

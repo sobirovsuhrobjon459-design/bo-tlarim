@@ -9813,9 +9813,85 @@ async function adminPromoView() {
 
 /* ---------- ⚙️ Tizim ---------- */
 
+// To'lov tizimining holati: yoqilgan (yashil) yoki hali sozlanmagan
+function paymentStateBadge(enabled) {
+  return enabled
+    ? `<span class="badge badge-green">Yoqilgan</span>`
+    : `<span class="badge badge-gray">Sozlanmagan</span>`;
+}
+
+// Kalit qayerdan kelgani — admin paneli, server sozlamasi (.env) yoki hali yo'q
+const PAYMENT_SOURCE_NOTE = { db: "admin panelidan", env: "server sozlamasidan", none: "—" };
+
 async function adminSystemView() {
+  const pay = await api("/api/admin/payment-settings");
+
   return {
     html: `
+      <div class="card" style="cursor:default">
+        <div class="card-body">
+          <h3>💳 To'lov tizimlari</h3>
+          <p>
+            Kalit kiritilmaguncha o'quvchi va o'qituvchilar pulni qo'lda — kartaga o'tkazma va chek rasmi
+            bilan to'laydi. Kalit qo'yilgach, to'lov avtomatik bo'ladi: pul tushishi bilan kredit yoziladi
+            va testga ruxsat ochiladi.
+          </p>
+
+          <p class="section-label" style="margin-top:14px">PAYME ${paymentStateBadge(pay.payme.enabled)}</p>
+          <p class="subtitle" style="margin:0 0 10px">
+            Merchant ID: <b>${pay.payme.merchant_id ? escapeHtml(pay.payme.merchant_id) : "—"}</b>
+            · Kalit: <b>${pay.payme.secret_set ? "qo'yilgan" : "yo'q"}</b>
+            ${pay.payme.test_mode ? " · <b>sinov rejimi</b>" : ""}
+            <br />Manba: ${PAYMENT_SOURCE_NOTE[pay.payme.merchant_source]}
+          </p>
+
+          <label class="field-label" for="pay-payme-merchant">Merchant ID (kassa ID'si)</label>
+          <input class="input" id="pay-payme-merchant" autocomplete="off" placeholder="masalan: 65a1f2..."
+                 value="${escapeHtml(pay.payme.merchant_id || "")}" />
+
+          <label class="field-label" for="pay-payme-secret">Secret Key (maxfiy kalit)</label>
+          <input class="input" id="pay-payme-secret" type="password" autocomplete="new-password"
+                 placeholder="${pay.payme.secret_set ? "qo'yilgan — o'zgartirmasangiz bo'sh qoldiring" : "Payme kabinetidan oling"}" />
+
+          <div class="setting-card" style="margin-top:10px">
+            <label class="setting-row" for="pay-payme-test">
+              <input type="checkbox" id="pay-payme-test" ${pay.payme.test_mode ? "checked" : ""} />
+              <span>
+                <b>Sinov rejimi</b>
+                <small style="display:block;color:var(--color-text-muted)">
+                  Haqiqiy pulsiz tekshirish (test.paycom.uz). Sinovdan keyin o'chiring.
+                </small>
+              </span>
+            </label>
+          </div>
+
+          <p class="section-label" style="margin-top:16px">CLICK ${paymentStateBadge(pay.click.enabled)}</p>
+          <label class="field-label" for="pay-click-service">Service ID</label>
+          <input class="input" id="pay-click-service" autocomplete="off" value="${escapeHtml(pay.click.service_id || "")}" />
+          <label class="field-label" for="pay-click-merchant">Merchant ID</label>
+          <input class="input" id="pay-click-merchant" autocomplete="off" value="${escapeHtml(pay.click.merchant_id || "")}" />
+          <label class="field-label" for="pay-click-secret">Secret Key</label>
+          <input class="input" id="pay-click-secret" type="password" autocomplete="new-password"
+                 placeholder="${pay.click.secret_set ? "qo'yilgan — o'zgartirmasangiz bo'sh qoldiring" : "Click kabinetidan oling"}" />
+
+          <button class="btn" id="pay-save" style="margin-top:14px">💾 Saqlash</button>
+          <button class="btn btn-ghost" id="pay-clear" style="margin-top:8px">🗑 Kalitlarni o'chirish</button>
+        </div>
+      </div>
+
+      <div class="card" style="cursor:default">
+        <div class="card-body">
+          <h3>🔗 Kabinetga kiritiladigan manzillar</h3>
+          <p>Payme va Click kabinetida shu manzillarni ko'rsating — to'lov o'tgani haqidagi xabar shu yerga keladi. Bosilsa nusxalanadi.</p>
+          <p class="subtitle" style="margin:8px 0 2px">Payme — Endpoint URL</p>
+          <code class="copy-code" data-copy="${escapeHtml(pay.webhooks.payme)}">${escapeHtml(pay.webhooks.payme)}</code>
+          <p class="subtitle" style="margin:10px 0 2px">Click — Prepare URL</p>
+          <code class="copy-code" data-copy="${escapeHtml(pay.webhooks.click_prepare)}">${escapeHtml(pay.webhooks.click_prepare)}</code>
+          <p class="subtitle" style="margin:10px 0 2px">Click — Complete URL</p>
+          <code class="copy-code" data-copy="${escapeHtml(pay.webhooks.click_complete)}">${escapeHtml(pay.webhooks.click_complete)}</code>
+        </div>
+      </div>
+
       <div class="card" style="cursor:default">
         <div class="card-body">
           <h3>💾 Zaxira nusxa</h3>
@@ -9835,6 +9911,7 @@ async function adminSystemView() {
           <p style="margin:6px 0"><b>🏫 Muassasalar</b> — barcha maktab, o'quv markazi va to'garaklar: qayerda, kimniki, nechta o'quvchi.</p>
           <p style="margin:6px 0"><b>📢 E'lon</b> — o'qituvchilar, xodimlar yoki hammaga bot orqali xabar. Avval o'zingizga sinab ko'ring.</p>
           <p style="margin:6px 0"><b>🎁 Promo</b> — o'qituvchilarga bepul kredit beruvchi kodlar.</p>
+          <p style="margin:6px 0"><b>⚙️ Tizim</b> — Payme/Click kalitlari (onlayn to'lovni yoqadi) va bazaning zaxira nusxasi.</p>
         </div>
       </div>
     `,
@@ -9848,6 +9925,46 @@ async function adminSystemView() {
           } else {
             window.open("/api/admin/backup", "_blank");
           }
+        })
+      );
+
+      const field = (id) => document.getElementById(id).value.trim();
+
+      document.getElementById("pay-save").addEventListener(
+        "click",
+        guarded(async () => {
+          // Bo'sh qoldirilgan maxfiy kalit — "o'zgarishsiz qoldir" degani
+          await api("/api/admin/payment-settings", {
+            method: "POST",
+            body: {
+              payme_merchant_id: field("pay-payme-merchant"),
+              payme_secret_key: field("pay-payme-secret"),
+              payme_test_mode: document.getElementById("pay-payme-test").checked,
+              click_service_id: field("pay-click-service"),
+              click_merchant_id: field("pay-click-merchant"),
+              click_secret_key: field("pay-click-secret"),
+            },
+          });
+          showToast("✅ Saqlandi — to'lov sozlamalari darhol kuchga kirdi");
+          await renderAdminDashboard("system");
+        })
+      );
+
+      document.getElementById("pay-clear").addEventListener(
+        "click",
+        guarded(async () => {
+          const question =
+            "Payme va Click kalitlari o'chirilsinmi?\n\n" +
+            "Shundan keyin onlayn to'lov o'chadi va to'lovlar yana qo'lda (kartaga o'tkazma va chek) qabul qilinadi.";
+          if (!(await askConfirm(question))) return;
+          await api("/api/admin/payment-settings", {
+            method: "POST",
+            body: {
+              clear: ["payme_merchant_id", "payme_secret_key", "click_service_id", "click_merchant_id", "click_secret_key"],
+            },
+          });
+          showToast("🗑 Kalitlar o'chirildi");
+          await renderAdminDashboard("system");
         })
       );
     },

@@ -89,6 +89,7 @@ from .database import (
     WELCOME_CREDITS,
     AppLogin,
     AppSession,
+    AppSetting,
     Referral,
     Attempt,
     Attendance,
@@ -116,6 +117,7 @@ from .database import (
     FeeIn,
     PaymentCancelIn,
     PaymentIn,
+    PaymentSettingsIn,
     PromoCode,
     PromoCreateIn,
     PromoRedeemIn,
@@ -430,6 +432,67 @@ except Exception:  # baza hali tayyor bo'lmasa — ilova baribir ishga tushsin
     logging.getLogger("backend").warning("Promo kodlarni yozib bo'lmadi", exc_info=True)
 
 
+# ========== 1.2) To'lov kalitlari (admin panelidan) ==========
+#
+# Payme va Click kalitlari ikki joydan kelishi mumkin: .env (server muhiti) va
+# baza (admin panelidagi "To'lov tizimlari" bo'limi). Bazadagisi ustun turadi —
+# shunda kalitni almashtirish uchun serverga kirish va qayta deploy shart emas.
+#
+# Kalitlar shu modulning global o'zgaruvchilariga yoziladi, shuning uchun ularni
+# ishlatadigan hamma joy (checkout havolasi, webhook imzosi, "qaysi usul yoqilgan")
+# o'zgarishsiz qolaveradi. Server bitta jarayonda ishlaydi — saqlangan kalit
+# darhol kuchga kiradi.
+
+PAYMENT_SETTING_KEYS = (
+    "payme_merchant_id",
+    "payme_secret_key",
+    "payme_test_mode",
+    "click_service_id",
+    "click_merchant_id",
+    "click_secret_key",
+)
+
+# .env'dagi dastlabki qiymatlar: bazada kalit bo'lmasa yoki o'chirilsa, shular qoladi.
+# Pastdagi funksiya global o'zgaruvchilarni qayta yozgani uchun, asl qiymatlar shu
+# yerda alohida saqlanadi.
+_ENV_PAYMENT_DEFAULTS = {
+    "payme_merchant_id": PAYME_MERCHANT_ID,
+    "payme_secret_key": PAYME_SECRET_KEY,
+    "payme_test_mode": PAYME_TEST_MODE,
+    "click_service_id": CLICK_SERVICE_ID,
+    "click_merchant_id": CLICK_MERCHANT_ID,
+    "click_secret_key": CLICK_SECRET_KEY,
+}
+
+
+def _apply_payment_settings(db: Session) -> None:
+    """Bazadagi kalitlarni kuchga kiritadi (bo'sh bo'lsa — .env'dagisi qoladi)."""
+
+    global PAYME_MERCHANT_ID, PAYME_SECRET_KEY, PAYME_TEST_MODE
+    global CLICK_SERVICE_ID, CLICK_MERCHANT_ID, CLICK_SECRET_KEY
+
+    saved = {row.key: (row.value or "").strip() for row in db.scalars(select(AppSetting)).all()}
+
+    def value_of(key: str) -> str:
+        return saved.get(key) or _ENV_PAYMENT_DEFAULTS[key]
+
+    PAYME_MERCHANT_ID = value_of("payme_merchant_id")
+    PAYME_SECRET_KEY = value_of("payme_secret_key")
+    CLICK_SERVICE_ID = value_of("click_service_id")
+    CLICK_MERCHANT_ID = value_of("click_merchant_id")
+    CLICK_SECRET_KEY = value_of("click_secret_key")
+
+    test_mode = saved.get("payme_test_mode")
+    PAYME_TEST_MODE = test_mode == "1" if test_mode else _ENV_PAYMENT_DEFAULTS["payme_test_mode"]
+
+
+try:
+    with SessionLocal() as _settings_session:
+        _apply_payment_settings(_settings_session)
+except Exception:  # jadval hali yo'q bo'lsa — .env'dagi kalitlar bilan ishlayveradi
+    logging.getLogger("backend").warning("To'lov kalitlarini bazadan o'qib bo'lmadi", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Server ishga tushganda botni va kunlik zaxira nusxa vazifasini ishga tushiradi."""
@@ -618,6 +681,11 @@ def export_database(db: Session) -> bytes:
     }
 
     for table in Base.metadata.sorted_tables:
+        # To'lov kalitlari (app_settings) nusxaga tushmaydi: bu fayl Telegram chatiga
+        # yuboriladi, maxfiy kalit esa u yerda yotmasligi kerak. Baza tiklanganda
+        # kalitlar admin panelidan qaytadan kiritiladi.
+        if table.name == AppSetting.__tablename__:
+            continue
         rows = db.execute(select(table)).mappings().all()
         export["tables"][table.name] = [dict(row) for row in rows]
 
@@ -15105,6 +15173,90 @@ def admin_download_backup(admin: User = Depends(get_current_admin), db: Session 
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="backup_{datetime.now():%Y-%m-%d}.json"'},
     )
+
+
+# ---------- To'lov tizimlari (Payme / Click) sozlamalari ----------
+# Kalitlar bazada saqlanadi va darhol kuchga kiradi (qarang: _apply_payment_settings).
+# Maxfiy kalitning o'zi hech qachon qaytarilmaydi — faqat "qo'yilgan / qo'yilmagan".
+
+
+def _payment_settings_view(db: Session) -> dict:
+    saved = {row.key: (row.value or "").strip() for row in db.scalars(select(AppSetting)).all()}
+    base = WEBAPP_URL.rstrip("/")
+
+    def source(key: str) -> str:
+        """Qiymat qayerdan kelgani: admin panelidan, .env'dan yoki hali yo'q."""
+        if saved.get(key):
+            return "db"
+        return "env" if _ENV_PAYMENT_DEFAULTS[key] else "none"
+
+    providers = _enabled_providers()
+    return {
+        "payme": {
+            "merchant_id": PAYME_MERCHANT_ID,
+            "merchant_source": source("payme_merchant_id"),
+            "secret_set": bool(PAYME_SECRET_KEY),
+            "secret_source": source("payme_secret_key"),
+            "test_mode": PAYME_TEST_MODE,
+            "enabled": "payme" in providers,
+        },
+        "click": {
+            "service_id": CLICK_SERVICE_ID,
+            "merchant_id": CLICK_MERCHANT_ID,
+            "secret_set": bool(CLICK_SECRET_KEY),
+            "enabled": "click" in providers,
+        },
+        # Payme/Click kabinetiga kiritiladigan manzillar
+        "webhooks": {
+            "payme": f"{base}/api/payme/webhook",
+            "click_prepare": f"{base}/api/click/prepare",
+            "click_complete": f"{base}/api/click/complete",
+        },
+    }
+
+
+@app.get("/api/admin/payment-settings")
+def admin_payment_settings(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """To'lov tizimlarining holati: qaysi kalit qo'yilgan, qaysi usul yoqilgan."""
+
+    return _payment_settings_view(db)
+
+
+@app.post("/api/admin/payment-settings")
+def admin_save_payment_settings(body: PaymentSettingsIn, admin: User = Depends(get_current_admin),
+                                db: Session = Depends(get_db)):
+    """
+    Kalitlarni saqlaydi va darhol kuchga kiritadi (serverni qayta ishga tushirish shart emas).
+
+    Bo'sh qoldirilgan maydon — "o'zgarishsiz qoldir". Kalitni butunlay olib
+    tashlash uchun uning nomi `clear` ro'yxatida yuboriladi (shunda .env'dagisi qoladi).
+    """
+
+    updates: dict[str, str] = {}
+    for key in ("payme_merchant_id", "payme_secret_key", "click_service_id", "click_merchant_id", "click_secret_key"):
+        value = (getattr(body, key) or "").strip()
+        if value:
+            updates[key] = value
+    if body.payme_test_mode is not None:
+        updates["payme_test_mode"] = "1" if body.payme_test_mode else "0"
+    for key in body.clear:
+        if key in PAYMENT_SETTING_KEYS:
+            updates[key] = ""
+
+    for key, value in updates.items():
+        row = db.get(AppSetting, key)
+        if row:
+            row.value, row.updated_at, row.updated_by = value, utcnow(), admin.id
+        else:
+            db.add(AppSetting(key=key, value=value, updated_by=admin.id))
+    db.commit()
+
+    _apply_payment_settings(db)
+    # Log'da faqat kalitlarning NOMI — qiymati hech qayerga yozilmaydi
+    logging.getLogger("backend").info(
+        "To'lov sozlamalari yangilandi: %s (admin=%s)", ", ".join(sorted(updates)) or "o'zgarishsiz", admin.id
+    )
+    return _payment_settings_view(db)
 
 
 @app.get("/api/admin/top-students")
