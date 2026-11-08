@@ -1171,13 +1171,25 @@ h2 {
 .ph-warn { color: #e0a100; }
 .ph-late { color: #f07a1a; }
 .ph-star { color: #f2b705; }
+/* Reyting o'rinlari — oltin, kumush, bronza (emoji medal o'rniga) */
+.ph-gold { color: #d99a00; }
+.ph-silver { color: #7e8a94; }
+.ph-bronze { color: #b06c3a; }
 .ph-ok .ph-duo,
 .ph-bad .ph-duo,
 .ph-warn .ph-duo,
 .ph-late .ph-duo,
-.ph-star .ph-duo {
+.ph-star .ph-duo,
+.ph-gold .ph-duo,
+.ph-silver .ph-duo,
+.ph-bronze .ph-duo {
   fill: currentColor !important;
   opacity: 0.25 !important;
+}
+
+/* "Orqaga" strelkasi: o'ngga qaragan ikonka teskari buriladi */
+.ph-back {
+  transform: rotate(180deg);
 }
 
 /* Yashil tugma ichida ikonka tugma matni rangida */
@@ -2123,4 +2135,104 @@ button.tt-cell {
 .result-score small {
   font-size: 12px;
   color: var(--color-text-muted);
+}
+
+/* ========== Video darslar — premium ko'rinish ========== */
+/*
+  Ro'yxatdagi BIRINCHI video kattaroq ko'rinadi (kinoafisha kabi): rasm butun
+  enini egallaydi, matn ostida turadi. Qolganlari ixcham qator bo'lib qoladi.
+*/
+
+.video-list {
+  gap: 12px;
+}
+
+.video-card {
+  padding: 10px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.12s ease;
+}
+
+.video-card:active {
+  transform: scale(0.985);
+}
+
+.video-thumb {
+  width: 116px;
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+}
+
+/* "Ijro" tugmasi — brend ko'kimtir-qora doira, ustida oq uchburchak */
+.video-play {
+  width: 38px;
+  height: 38px;
+  background: rgba(11, 31, 42, 0.82);
+  box-shadow: 0 6px 16px -8px rgba(11, 31, 42, 0.9);
+}
+
+.video-list > .video-card:first-child {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+}
+
+.video-list > .video-card:first-child .video-thumb {
+  width: 100%;
+  border-radius: 0;
+}
+
+.video-list > .video-card:first-child .video-play {
+  width: 48px;
+  height: 48px;
+}
+
+.video-list > .video-card:first-child .video-info {
+  padding: 12px 14px 14px;
+  gap: 5px;
+}
+
+.video-list > .video-card:first-child .video-info b {
+  font-size: 16px;
+}
+
+/* Video dars sahifasi */
+.video-frame {
+  border-radius: var(--radius-md);
+}
+
+.video-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.video-description {
+  margin-top: 14px;
+  border-radius: var(--radius-md);
+  line-height: 1.6;
+}
+
+/* ========== Qidiruv maydoni ========== */
+/*
+  Ilgari placeholder matnining boshida 🔍 emoji turardi — u telefonning o'z
+  emojisi bo'lgani uchun har qurilmada boshqacha, rangli va qo'pol ko'rinardi.
+  Endi maydon ichida ikonka (SVG fon rasmi) turadi, matn esa toza.
+*/
+
+.input.is-search {
+  padding-left: 40px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234f6670' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.6-3.6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 13px center;
+  background-size: 18px 18px;
+}
+
+/* Qidiruv maydonidagi brauzerning o'z "tozalash" tugmasi — ortiqcha */
+.input.is-search::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
 }

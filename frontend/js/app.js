@@ -1994,7 +1994,7 @@ async function openGroupAddSheet(group) {
   const { sheet, close } = openSheet(`
     <h3 style="margin:0 0 6px">+ «${escapeHtml(group.name)}» guruhiga qo'shish</h3>
     <p class="subtitle" style="margin:0 0 10px">O'quvchi o'z sinfida ham qoladi. Shu fanning boshqa guruhidagi o'quvchi qo'shilsa — o'sha guruhdan bu yerga o'tadi.</p>
-    <input class="input" id="group-add-search" placeholder="🔍 Ism, sinf yoki ID bo'yicha qidirish" />
+    <input class="input is-search" id="group-add-search" placeholder="Ism, sinf yoki ID bo'yicha qidirish" />
     <div class="panel pick-list" id="group-add-list" style="max-height:50vh;overflow:auto">
       ${
         candidates.length
@@ -4958,8 +4958,8 @@ function renderMySchool(school, { refresh = true } = {}) {
       </section>
 
       <div class="student-search">
-        <input class="input" id="student-search-input" type="search" autocomplete="off" enterkeyhint="search"
-               placeholder="🔍 O'quvchini qidirish — ism yoki ID" />
+        <input class="input is-search" id="student-search-input" type="search" autocomplete="off" enterkeyhint="search"
+               placeholder="O'quvchini qidirish — ism yoki ID" />
         <div id="student-search-results"></div>
       </div>
       ${
@@ -5197,8 +5197,8 @@ function renderPupilLogin(errorText = "") {
                <input class="input" id="pupil-password" type="password" autocomplete="current-password" placeholder="Parol" required />
                <button class="btn" type="submit" style="margin:0">Kirish</button>
              </form>`
-          : `<input class="input" id="pupil-school-search" type="search" autocomplete="off" enterkeyhint="search"
-                    placeholder="🔍 Maktab nomi yoki tumani" />
+          : `<input class="input is-search" id="pupil-school-search" type="search" autocomplete="off" enterkeyhint="search"
+                    placeholder="Maktab nomi yoki tumani" />
              <div id="pupil-school-results" class="pupil-school-results"></div>`
       }
       <p class="subtitle" id="pupil-login-status" style="text-align:center;margin-top:12px;color:#dc2626">${escapeHtml(errorText)}</p>
@@ -5548,6 +5548,23 @@ const videoMeta = (video) =>
     .map(escapeHtml)
     .join(" · ");
 
+// Video dars sahifasidagi ma'lumot yorliqlari: fan ajratib ko'rsatiladi, qolgani xira
+function videoChipsHtml(video) {
+  const chips = [
+    [video.subject, "badge-green"],
+    [video.grade ? `${video.grade}-sinf` : "Barcha sinflar", "badge-gray"],
+    [video.views ? `${formatNumber(video.views)} ko'rish` : null, "badge-gray"],
+    [video.school_name, "badge-gray"],
+  ];
+  return `
+    <div class="video-chips">
+      ${chips
+        .filter(([text]) => text)
+        .map(([text, badge]) => `<span class="badge ${badge}">${escapeHtml(text)}</span>`)
+        .join("")}
+    </div>`;
+}
+
 function videoCardHtml(video) {
   return `
     <button type="button" class="video-card" data-video-id="${video.id}">
@@ -5583,8 +5600,8 @@ async function renderVideoLibrary(back, source = { url: "/api/videos", request: 
       <h2 style="margin:0;flex:1">🎬 Video darslar</h2>
     </div>
     <div class="video-filters">
-      <input class="input" id="video-search" type="search" autocomplete="off" enterkeyhint="search"
-             placeholder="🔍 Mavzu bo'yicha qidirish" value="${escapeHtml(videoFilter.q)}" />
+      <input class="input is-search" id="video-search" type="search" autocomplete="off" enterkeyhint="search"
+             placeholder="Mavzu bo'yicha qidirish" value="${escapeHtml(videoFilter.q)}" />
       <select class="input" id="video-grade" aria-label="Sinf">
         <option value="">Barcha sinflar</option>
         ${gradeOptions(videoFilter.grade)}
@@ -5650,10 +5667,10 @@ function renderVideoPlayer(video, back) {
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
               referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
     </div>
-    <h3 style="margin:14px 0 4px">${escapeHtml(video.title)}</h3>
-    <p class="subtitle" style="margin:0">${videoMeta(video)}</p>
+    <h3 style="margin:14px 0 10px">${escapeHtml(video.title)}</h3>
+    ${videoChipsHtml(video)}
     ${video.description ? `<div class="panel video-description">${escapeHtml(video.description)}</div>` : ""}
-    <button class="btn btn-ghost" id="video-open-youtube" style="margin-top:14px">▶️ YouTube'da ochish</button>
+    <button class="btn" id="video-open-youtube" style="margin-top:14px">▶️ YouTube'da ochish</button>
     ${video.can_manage ? `<button class="btn btn-ghost" id="video-delete" style="margin-top:8px">🗑 Videoni o'chirish</button>` : ""}
   `);
 
@@ -6281,7 +6298,7 @@ async function openDormPlaceSheet(room) {
   const { sheet, close } = openSheet(`
     <h3 style="margin:0 0 6px">+ ${escapeHtml(dormRoomTitle(room))}ga joylashtirish</h3>
     <p class="subtitle" style="margin:0 0 10px">Bo'sh o'rin: <b id="dorm-free-left">${room.free}</b> ta. Boshqa xonadagi o'quvchi bu ro'yxatda yo'q — avval o'sha xonadan chiqaring.</p>
-    <input class="input" id="dorm-place-search" placeholder="🔍 Ism yoki sinf bo'yicha qidirish" />
+    <input class="input is-search" id="dorm-place-search" placeholder="Ism yoki sinf bo'yicha qidirish" />
     <div class="panel pick-list" id="dorm-place-list" style="max-height:50vh;overflow:auto">
       ${
         candidates.length
@@ -9501,7 +9518,7 @@ async function adminUsersView() {
     html: `
       ${adminHint("Ism, @username yoki Telegram ID bo'yicha qidiring. Odamni bossangiz — uning kartochkasi ochiladi: u yerdan kredit berish yoki xabar yozish mumkin.")}
       <form id="admin-user-search" class="admin-search">
-        <input class="input" id="admin-user-query" type="search" placeholder="🔍 Ism, @username yoki ID" value="${escapeHtml(adminState.userQuery)}" />
+        <input class="input is-search" id="admin-user-query" type="search" placeholder="Ism, @username yoki ID" value="${escapeHtml(adminState.userQuery)}" />
         <button class="btn" type="submit">Qidirish</button>
       </form>
       ${adminChips(filterChips, adminState.userFilter, "user-filter")}
@@ -9674,7 +9691,7 @@ async function adminSchoolsView() {
         <div class="stat-tile">🎒<span class="stat-value">${formatNumber(totals.students)}</span>O'quvchi</div>
       </div>
       <form id="admin-school-search" class="admin-search">
-        <input class="input" id="admin-school-query" type="search" placeholder="🔍 Nomi, viloyat yoki tuman" value="${escapeHtml(adminState.schoolQuery)}" />
+        <input class="input is-search" id="admin-school-query" type="search" placeholder="Nomi, viloyat yoki tuman" value="${escapeHtml(adminState.schoolQuery)}" />
         <button class="btn" type="submit">Qidirish</button>
       </form>
       ${rows || "<p class='subtitle'>Muassasa topilmadi</p>"}
@@ -16001,7 +16018,7 @@ async function renderTestDetail(testId) {
       : ""
     }
 
-    <input class="input" id="student-filter-input" placeholder="🔍 O'quvchi ismi bo'yicha qidirish" />
+    <input class="input is-search" id="student-filter-input" placeholder="O'quvchi ismi bo'yicha qidirish" />
     <h3>O'quvchilar (${test.students.length} ta)</h3>
     <div class="row-between subtitle" style="margin-bottom:10px">
       <span style="color:var(--color-primary)">Javoblari kiritilgan — ${test.filled} ta</span>
@@ -16915,7 +16932,7 @@ function renderParticipantsPage(testId, results, onBack) {
   showPage(`
     <button class="back-button" data-action="back">←</button>
     <h2>${escapeHtml(results.title)} — ishtirokchilar (${results.rows.length})</h2>
-    <input class="input" id="participants-filter" placeholder="🔍 O'quvchini qidirish..." />
+    <input class="input is-search" id="participants-filter" placeholder="O'quvchini qidirish..." />
     <div class="result-cards" id="participants-list"></div>
   `);
   document.querySelector('[data-action="back"]').addEventListener("click", guarded(onBack));
@@ -17234,7 +17251,7 @@ async function renderTestResults(testId) {
     <button class="btn btn-ghost" id="image-button">🖼 RASM (guruhga yuborish uchun)</button>
     <button class="btn btn-ghost" id="excel-button">📊 EXCEL (javoblar va tahlil)</button>
     <h3>Natijalar</h3>
-    <input class="input" id="filter-input" placeholder="🔍 O'quvchini qidirish..." />
+    <input class="input is-search" id="filter-input" placeholder="O'quvchini qidirish..." />
     <div style="overflow-x:auto">
       <table>
         <thead>${

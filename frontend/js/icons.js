@@ -480,6 +480,122 @@ const EMOJI_ICONS = {
 "🎒": [
 "student",
 ""
+],
+"←": [
+"caret-right",
+"back"
+],
+"⬅": [
+"caret-right",
+"back"
+],
+"➡": [
+"caret-right",
+""
+],
+"✕": [
+"x",
+""
+],
+"✖": [
+"x",
+""
+],
+"☑": [
+"check-circle",
+"ok"
+],
+"🟢": [
+"check-circle",
+"ok"
+],
+"🔴": [
+"x-circle",
+"bad"
+],
+"🟧": [
+"warning",
+"warn"
+],
+"🤒": [
+"warning",
+"warn"
+],
+"✋": [
+"warning",
+"warn"
+],
+"⬜": [
+"minus-circle",
+""
+],
+"🏢": [
+"buildings",
+""
+],
+"🛏": [
+"house",
+""
+],
+"🌐": [
+"link-simple",
+""
+],
+"☕": [
+"clock",
+""
+],
+"🌙": [
+"alarm",
+""
+],
+"👀": [
+"magnifying-glass",
+""
+],
+"💡": [
+"sparkle",
+""
+],
+"📘": [
+"books",
+""
+],
+"🎨": [
+"puzzle-piece",
+""
+],
+"❓": [
+"file-text",
+""
+],
+"🔵": [
+"credit-card",
+""
+],
+"↻": [
+"arrows-clockwise",
+""
+],
+"↩": [
+"arrows-clockwise",
+""
+],
+"⇩": [
+"download-simple",
+""
+],
+"🥇": [
+"medal",
+"gold"
+],
+"🥈": [
+"medal",
+"silver"
+],
+"🥉": [
+"medal",
+"bronze"
 ]
 };
 
