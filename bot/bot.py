@@ -472,9 +472,9 @@ async def handle_app_login(callback: CallbackQuery) -> None:
 
     ok, text = await asyncio.to_thread(confirm)
     try:
-        await callback.message.edit_text(text)
+        await callback.message.edit_text(text, parse_mode="HTML")
     except Exception:
-        await callback.message.answer(text)
+        await callback.message.answer(text, parse_mode="HTML")
     await callback.answer("✅ Tasdiqlandi" if ok else "Eskirgan", show_alert=not ok)
 
 

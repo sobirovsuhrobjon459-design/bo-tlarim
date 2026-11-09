@@ -4735,19 +4735,28 @@ def test_android_ilovaga_bot_orqali_kirish():
     started = client.post("/api/app-login").json()
     token = started["token"]
     assert started["link"] == f"https://t.me/test_platform_bot?start=login_{token}", started
-    assert client.get(f"/api/app-login/{token}").json() == {"status": "pending"}
+    # Hali botda tasdiqlanmagan — kod tekshirilmaydi
+    assert client.post(f"/api/app-login/{token}/verify", json={"code": "000000"}).status_code == 400
     assert client.get("/api/me", headers={"X-App-Session": "soxta"}).status_code == 401
 
     with SessionLocal() as session:
         assert main.confirm_app_login(session, "yoq-token", 4242, "Ilova Odam", "ilova")[0] is False
-        assert main.confirm_app_login(session, token, 4242, "Ilova Odam", "ilova")[0] is True
+        ok, text = main.confirm_app_login(session, token, 4242, "Ilova Odam", "ilova")
+        assert ok is True
         assert main.confirm_app_login(session, token, 9999, "Boshqa", None)[0] is False  # qayta tasdiqlab bo'lmaydi
+        code = session.query(AppLogin).filter(AppLogin.token == token).one().code
+        assert code in text and len(code) == 6 and code.isdigit()
 
-    granted = client.get(f"/api/app-login/{token}").json()
-    assert granted["status"] == "ok" and granted["session"], granted
-    assert client.get(f"/api/app-login/{token}").status_code == 410  # seans faqat bir marta
+    # Noto'g'ri kod — rad etiladi, urinish soni oshadi
+    assert client.post(f"/api/app-login/{token}/verify", json={"code": "000000"}).status_code == 400
 
-    headers = {"X-App-Session": granted["session"]}
+    granted = client.post(f"/api/app-login/{token}/verify", json={"code": code})
+    assert granted.status_code == 200, granted.text
+    assert granted.json()["session"]
+    # Seans faqat bir marta beriladi — to'g'ri kod bilan ham ikkinchi marta bo'lmaydi
+    assert client.post(f"/api/app-login/{token}/verify", json={"code": code}).status_code == 410
+
+    headers = {"X-App-Session": granted.json()["session"]}
     me = client.get("/api/me", headers=headers)
     assert me.status_code == 200 and me.json()["tg_id"] == 4242, me.text
     assert client.post("/api/teacher/register", json={"first_name": "Ilova", "last_name": "Odam"}, headers=headers).status_code == 200
@@ -4762,7 +4771,21 @@ def test_android_ilovaga_bot_orqali_kirish():
         login.created_at = login.created_at - timedelta(minutes=11)
         session.commit()
         assert main.confirm_app_login(session, old, 4242, "Ilova Odam", None)[0] is False
-    assert client.get(f"/api/app-login/{old}").status_code == 410
+    assert client.post(f"/api/app-login/{old}/verify", json={"code": "123456"}).status_code == 410
+
+
+def test_android_ilovaga_kirish_bir_necha_notogri_kod_qaytadan_boshlatadi():
+    reset_database()
+    token = client.post("/api/app-login").json()["token"]
+    with SessionLocal() as session:
+        _, text = main.confirm_app_login(session, token, 4242, "Ilova Odam", "ilova")
+    code = text.split("<code>")[1].split("</code>")[0]
+
+    for _ in range(main.APP_LOGIN_MAX_ATTEMPTS - 1):
+        assert client.post(f"/api/app-login/{token}/verify", json={"code": "000000"}).status_code == 400
+    # Oxirgi (beshinchi) noto'g'ri urinish — butunlay yopadi, to'g'ri kod bilan ham kirib bo'lmaydi
+    assert client.post(f"/api/app-login/{token}/verify", json={"code": "000000"}).status_code == 410
+    assert client.post(f"/api/app-login/{token}/verify", json={"code": code}).status_code == 410
 
 
 def test_google_tekshiruvchisi_sinov_akkauntiga_kiradi():

@@ -881,6 +881,10 @@ class AppLogin(Base):
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
     confirmed_at: Mapped[datetime | None] = mapped_column(default=None)
     consumed_at: Mapped[datetime | None] = mapped_column(default=None)
+    # Botda "Tasdiqlash" bosilganda beriladigan 6 xonali kod — foydalanuvchi
+    # shuni saytga/ilovaga qo'lda kiritadi (qarang: confirm_app_login)
+    code: Mapped[str] = mapped_column(String(6), default="")
+    attempts: Mapped[int] = mapped_column(default=0)
 
 
 class AppSession(Base):
@@ -1858,6 +1862,12 @@ class StudentIn(BaseModel):
 class ReviewLoginIn(BaseModel):
     username: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=1, max_length=100)
+
+
+class AppLoginVerifyIn(BaseModel):
+    """Botdan kelgan 6 xonali kodni kiritib, saytda/ilovada kirishni yakunlaydi."""
+
+    code: str = Field(min_length=1, max_length=6)
 
 
 class PromoRedeemIn(BaseModel):

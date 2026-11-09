@@ -17814,10 +17814,8 @@ function renderChannelGate(missing) {
 }
 
 /* ---------- Android ilova: bot orqali kirish ---------- */
-let appLoginPoll = null;
 
 function renderAppLogin(errorText = "") {
-  clearInterval(appLoginPoll);
   // Bosh ekrandagi ilovada reklama sahifasi emas — ilovadagidek oddiy kirish oynasi
   if (ON_WEB && !AS_PWA) {
     renderWebLogin(errorText);
@@ -17843,7 +17841,6 @@ function renderAppLogin(errorText = "") {
 
 // Google Play tekshiruvchisi uchun: Telegram'siz, login va parol bilan demo akkauntga kirish
 function renderReviewLogin() {
-  clearInterval(appLoginPoll);
   showPage(`
     <div style="text-align:center;padding-top:40px">
       <img src="/img/chittak-icon.png" alt="" style="width:72px;height:72px;border-radius:20px;display:block;margin:0 auto">
@@ -17882,6 +17879,54 @@ function renderReviewLogin() {
   );
 }
 
+/*
+  Botdan kelgan 6 xonali kodni kiritish shakli — saytda ham, ilovada ham bir xil
+  ishlaydi. "Tasdiqlash kutilmoqda" kabi fonda kuzatish yo'q: foydalanuvchi
+  botdan kodni ko'chirib, shu yerga qo'lda kiritgach, kirish shu zahoti bo'ladi.
+*/
+function appLoginCodeFormHtml(idPrefix) {
+  return `
+    <form id="${idPrefix}-form" style="margin-top:14px">
+      <label class="field-label" for="${idPrefix}-input">Botdan kelgan 6 xonali kod</label>
+      <input class="input" id="${idPrefix}-input" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+             autocomplete="one-time-code" placeholder="000000"
+             style="text-align:center;letter-spacing:8px;font-size:22px;font-weight:800" />
+      <button class="btn" type="submit" style="margin-top:10px">Kirish</button>
+    </form>`;
+}
+
+function wireAppLoginCodeForm(idPrefix, token, expiresIn, onExpired) {
+  const deadline = Date.now() + expiresIn * 1000;
+  const form = document.getElementById(`${idPrefix}-form`);
+  form.addEventListener(
+    "submit",
+    guarded(async (event) => {
+      event.preventDefault();
+      const code = document.getElementById(`${idPrefix}-input`).value.trim();
+      if (!code) throw new Error("Kodni kiriting");
+      if (Date.now() > deadline) {
+        onExpired("Vaqt tugadi — qaytadan urinib ko'ring.");
+        return;
+      }
+      try {
+        const result = await api(`/api/app-login/${encodeURIComponent(token)}/verify`, { method: "POST", body: { code } });
+        setAppSession(result.session);
+        startApp();
+        // Qaysi akkaunt bilan kirgani darhol ko'rinsin
+        api("/api/me")
+          .then((me) => showToast(`✅ Kirdingiz: ${me.full_name || "foydalanuvchi"}`))
+          .catch(() => {});
+      } catch (error) {
+        if (error.status === 410) {
+          onExpired(error.message);
+          return;
+        }
+        throw error; // 400 (noto'g'ri kod) — guarded() toast qilib ko'rsatadi
+      }
+    })
+  );
+}
+
 async function startAppLogin() {
   const status = document.getElementById("app-login-status");
   const { token, link, expires_in: expiresIn } = await api("/api/app-login", { method: "POST", body: {} });
@@ -17893,36 +17938,15 @@ async function startAppLogin() {
   status.outerHTML = `
     <div class="card" style="cursor:default;display:block;margin-top:20px">
       <p style="margin:0"><b>1.</b> Telegram'da <b>@${escapeHtml(botName)}</b> boti ochiladi.</p>
-      <p style="margin:8px 0 0"><b>2.</b> Botdagi <b>«✅ Tasdiqlash»</b> tugmasini bosing.</p>
-      <p style="margin:8px 0 0"><b>3.</b> Shu ilovaga qayting — kirish o'zi bo'ladi.</p>
+      <p style="margin:8px 0 0"><b>2.</b> Botdagi <b>«✅ Tasdiqlash»</b> tugmasini bosing — bot sizga 6 xonali kod beradi.</p>
+      <p style="margin:8px 0 0"><b>3.</b> Shu kodni pastga kiriting.</p>
       <p class="subtitle" style="margin:12px 0 0">👤 Ilovaga Telegram'da <b>hozir ochiq turgan akkaunt</b> bilan kirasiz.
         Telegram'da bir nechta akkaunt bo'lsa — avval keraklisiga o'ting, so'ng tugmani bosing.</p>
     </div>
     <a class="btn" href="${escapeHtml(link)}" style="margin-top:12px;text-decoration:none">✈️ @${escapeHtml(botName)} ni ochish</a>
-    <p style="text-align:center;margin:22px 0 0;font-size:22px;font-weight:800">⏳ Tasdiqlash kutilmoqda…</p>
+    ${appLoginCodeFormHtml("app-login-code")}
   `;
-
-  const deadline = Date.now() + expiresIn * 1000;
-  clearInterval(appLoginPoll);
-  appLoginPoll = setInterval(async () => {
-    if (Date.now() > deadline) {
-      renderAppLogin("Vaqt tugadi — qaytadan urinib ko'ring.");
-      return;
-    }
-    try {
-      const result = await api(`/api/app-login/${encodeURIComponent(token)}`);
-      if (result.status !== "ok") return;
-      clearInterval(appLoginPoll);
-      setAppSession(result.session);
-      startApp();
-      // Qaysi akkaunt bilan kirgani darhol ko'rinsin
-      api("/api/me")
-        .then((me) => showToast(`✅ Kirdingiz: ${me.full_name || "foydalanuvchi"} (ID ${me.tg_id})`))
-        .catch(() => {});
-    } catch (error) {
-      if (error.status === 410) renderAppLogin(error.message);
-    }
-  }, 2000);
+  wireAppLoginCodeForm("app-login-code", token, expiresIn, (errorText) => renderAppLogin(errorText));
 }
 
 async function appLogout() {
@@ -17957,7 +17981,6 @@ const LP_ICONS = {
 
 // Kirmagan mehmon uchun sayt bosh sahifasi (landing); "Telegramda ochish" tugmalari kirish oynasini ochadi
 function renderWebLogin(errorText = "") {
-  clearInterval(appLoginPoll);
   document.getElementById("web-sidebar")?.remove();
   document.documentElement.classList.remove("web-signed-in");
   const values = [
@@ -18170,10 +18193,7 @@ function renderWebLogin(errorText = "") {
     { exitRoot: true }
   );
   const modal = document.getElementById("lp-modal");
-  const closeModal = () => {
-    clearInterval(appLoginPoll);
-    modal.classList.remove("is-open");
-  };
+  const closeModal = () => modal.classList.remove("is-open");
   document.querySelectorAll("[data-lp-login]").forEach((button) =>
     button.addEventListener("click", () => modal.classList.add("is-open"))
   );
@@ -18213,36 +18233,16 @@ async function startWebLogin() {
     <h2>Botda tasdiqlang</h2>
     <div class="web-steps">
       <p><b>1.</b> Telegram'da <b>@${escapeHtml(botName)}</b> boti ochiladi (ochilmasa — pastdagi tugma).</p>
-      <p><b>2.</b> Botdagi <b>«✅ Tasdiqlash»</b> tugmasini bosing.</p>
-      <p><b>3.</b> Shu sahifaga qayting — kirish o'zi bo'ladi.</p>
+      <p><b>2.</b> Botdagi <b>«✅ Tasdiqlash»</b> tugmasini bosing — bot sizga 6 xonali kod beradi.</p>
+      <p><b>3.</b> Shu kodni pastga kiriting.</p>
     </div>
     <p class="subtitle">👤 Telegram'da <b>hozir ochiq turgan akkaunt</b> bilan kirasiz.</p>
     <a class="btn" href="${escapeHtml(result.link)}" target="_blank" rel="noopener" style="text-decoration:none">✈️ @${escapeHtml(botName)} ni ochish</a>
-    <p class="web-login-status">⏳ Tasdiqlash kutilmoqda…</p>
-    <button class="btn btn-ghost" id="web-login-cancel" type="button">← Orqaga</button>
+    ${appLoginCodeFormHtml("web-login-code")}
+    <button class="btn btn-ghost" id="web-login-cancel" type="button" style="margin-top:8px">← Orqaga</button>
   `;
   document.getElementById("web-login-cancel").addEventListener("click", () => renderWebLogin());
-
-  const deadline = Date.now() + result.expires_in * 1000;
-  clearInterval(appLoginPoll);
-  appLoginPoll = setInterval(async () => {
-    if (Date.now() > deadline) {
-      renderWebLogin("Vaqt tugadi — qaytadan urinib ko'ring.");
-      return;
-    }
-    try {
-      const polled = await api(`/api/app-login/${encodeURIComponent(result.token)}`);
-      if (polled.status !== "ok") return;
-      clearInterval(appLoginPoll);
-      setAppSession(polled.session);
-      startApp();
-      api("/api/me")
-        .then((me) => showToast(`✅ Kirdingiz: ${me.full_name || "foydalanuvchi"}`))
-        .catch(() => {});
-    } catch (error) {
-      if (error.status === 410) renderWebLogin(error.message);
-    }
-  }, 2000);
+  wireAppLoginCodeForm("web-login-code", result.token, result.expires_in, (errorText) => renderWebLogin(errorText));
 }
 
 const WEB_NAV_ICONS = {

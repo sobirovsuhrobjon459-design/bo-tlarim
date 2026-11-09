@@ -88,6 +88,7 @@ from .database import (
     REFERRAL_CREDITS,
     WELCOME_CREDITS,
     AppLogin,
+    AppLoginVerifyIn,
     AppSession,
     AppSetting,
     Referral,
@@ -274,6 +275,7 @@ def _add_missing_columns() -> None:
         },
         "key_questions": {"label": "VARCHAR(20)"},
         "video_lessons": {"duration_seconds": "INTEGER", "test_code": "VARCHAR(10) DEFAULT ''"},
+        "app_logins": {"code": "VARCHAR(6) DEFAULT ''", "attempts": "INTEGER DEFAULT 0"},
         "payments": {
             "payme_transaction_id": "VARCHAR(50)",
             "performed_at": "TIMESTAMP",
@@ -5033,11 +5035,14 @@ def reward_referral(db: Session, user: User) -> None:
     ).start()
 
 
-# ---------- Android ilovaga (APK) bot orqali kirish ----------
-# 1) Ilova POST /api/app-login — bir martalik token va bot havolasini oladi.
-# 2) Foydalanuvchi botda (start=login_TOKEN) "Tasdiqlash"ni bosadi.
-# 3) Ilova GET /api/app-login/TOKEN ni so'rab turadi — tasdiqlangach BIR MARTA seans beriladi.
+# ---------- Android ilovaga va saytga bot orqali kirish ----------
+# 1) Ilova/sayt POST /api/app-login — bir martalik token va bot havolasini oladi.
+# 2) Foydalanuvchi botda (start=login_TOKEN) "Tasdiqlash"ni bosadi — bot unga
+#    bir martalik 6 xonali kod beradi (qarang: confirm_app_login).
+# 3) Foydalanuvchi shu kodni ilova/saytga qo'lda kiritadi — POST .../verify
+#    kodni tekshirib, to'g'ri bo'lsa seans beradi.
 APP_LOGIN_TTL = timedelta(minutes=10)
+APP_LOGIN_MAX_ATTEMPTS = 5
 
 
 @app.post("/api/app-login")
@@ -5056,21 +5061,27 @@ def _app_login_expired(login: AppLogin) -> bool:
     return utcnow() - login.created_at > APP_LOGIN_TTL
 
 
-@app.get("/api/app-login/{token}")
-def poll_app_login(token: str, db: Session = Depends(get_db)):
-    login = db.scalar(select(AppLogin).where(AppLogin.token == token))
+@app.post("/api/app-login/{token}/verify")
+def verify_app_login(token: str, body: AppLoginVerifyIn, db: Session = Depends(get_db)):
+    """Botdan kelgan kodni tekshiradi — to'g'ri bo'lsa, shu yerda (bir marta) seans beradi."""
+
+    login = db.scalar(select(AppLogin).where(AppLogin.token == token).with_for_update())
     if not login or login.consumed_at or _app_login_expired(login):
         raise HTTPException(status_code=410, detail="Kirish havolasi eskirdi — qaytadan urinib ko'ring")
     if not login.confirmed_at:
-        return {"status": "pending"}
-    # Seans faqat bir marta beriladi (ikki so'rov bir vaqtda kelsa ham)
-    claimed = db.execute(
-        update(AppLogin).where(AppLogin.id == login.id, AppLogin.consumed_at.is_(None)).values(consumed_at=utcnow()),
-        execution_options={"synchronize_session": False},
-    ).rowcount
-    if claimed != 1:
-        db.rollback()
-        raise HTTPException(status_code=410, detail="Kirish havolasi eskirdi — qaytadan urinib ko'ring")
+        raise HTTPException(status_code=400, detail="Avval botda «✅ Tasdiqlash»ni bosing")
+
+    code = re.sub(r"\s", "", body.code)
+    if not hmac.compare_digest(code, login.code):
+        login.attempts += 1
+        if login.attempts >= APP_LOGIN_MAX_ATTEMPTS:
+            login.consumed_at = utcnow()  # juda ko'p noto'g'ri urinish — qayta boshlash kerak
+            db.commit()
+            raise HTTPException(status_code=410, detail="Kod bir necha marta noto'g'ri kiritildi — qaytadan boshlang")
+        db.commit()
+        raise HTTPException(status_code=400, detail="Kod noto'g'ri — qaytadan tekshirib ko'ring")
+
+    login.consumed_at = utcnow()
     session_token = secrets.token_urlsafe(32)
     db.add(AppSession(token_hash=app_session_hash(session_token), user_id=login.user_id))
     db.commit()
@@ -5116,16 +5127,24 @@ def app_logout(x_app_session: str = Header(default=""), db: Session = Depends(ge
 
 
 def confirm_app_login(db: Session, token: str, tg_id: int, full_name: str, username: str | None) -> tuple[bool, str]:
-    """Bot: foydalanuvchi "Tasdiqlash"ni bosdi — kirish shu Telegram akkauntiga bog'lanadi."""
+    """
+    Bot: foydalanuvchi "Tasdiqlash"ni bosdi — kirish shu Telegram akkauntiga bog'lanadi
+    va bir martalik 6 xonali kod yaratiladi (foydalanuvchi uni saytga/ilovaga kiritadi).
+    """
 
     login = db.scalar(select(AppLogin).where(AppLogin.token == token))
     if not login or login.confirmed_at or _app_login_expired(login):
         return False, "❗️ Bu kirish so'rovi eskirgan. Saytda yoki ilovada «Kirish»ni qaytadan bosing."
     remember_bot_user(db, tg_id, full_name, username)
     user = db.scalar(select(User).where(User.tg_id == tg_id))
-    login.user_id, login.confirmed_at = user.id, utcnow()
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    login.user_id, login.confirmed_at, login.code = user.id, utcnow(), code
     db.commit()
-    return True, "✅ Tasdiqlandi! Ilovaga yoki saytga qayting — kirish avtomatik bo'ladi."
+    return True, (
+        "✅ <b>Tasdiqlandi!</b>\n\n"
+        f"Tasdiqlash kodingiz: <code>{code}</code>\n\n"
+        "Shu kodni saytda yoki ilovada kiriting — kirish shu bilan yakunlanadi."
+    )
 
 
 def _referral_view(db: Session, teacher: Teacher) -> dict:
