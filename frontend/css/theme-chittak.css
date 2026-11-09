@@ -2236,3 +2236,95 @@ button.tt-cell {
   -webkit-appearance: none;
   appearance: none;
 }
+
+/* ========== Bosh sahifa — logotip qatori va video kartasi ========== */
+
+.home-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.home-brand img {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  display: block;
+}
+
+.home-brand span {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+/* To'q karta: ko'zga tashlanadi, lekin kartalar oqimini buzmaydi */
+.home-video-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 14px;
+  font: inherit;
+  text-align: left;
+  color: var(--ink-text);
+  background: var(--ink);
+  border: 0;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.12s ease;
+}
+
+.home-video-card:active {
+  transform: scale(0.985);
+}
+
+.home-video-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-sm);
+  background: rgba(168, 240, 99, 0.16);
+  color: var(--sun);
+}
+
+.home-video-icon svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+
+.home-video-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.home-video-text b {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.home-video-text small {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.home-video-badge {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--sun);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}

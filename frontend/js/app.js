@@ -1639,7 +1639,25 @@ function homePlacesHtml(data) {
     );
   });
   const label = places.length > 1 ? "MENING MUASSASALARIM" : titles[places[0].kind] || titles.school;
-  return `<p class="section-label">${label}</p>${cards.join("")}`;
+  return `<p class="section-label">${label}</p>${cards.join("")}${homeVideoCardHtml(data)}`;
+}
+
+/*
+  Bosh sahifadagi to'q "Video darslar" kartasi — faqat muassasaga a'zo
+  bo'lganlarga ko'rinadi (video kutubxona ham faqat ularga ochiq).
+*/
+function homeVideoCardHtml(data) {
+  const count = data?.videos || 0;
+  if (!count) return "";
+  return `
+    <button type="button" class="home-video-card" data-home-videos>
+      <span class="home-video-icon">${svgIcon("play-circle")}</span>
+      <span class="home-video-text">
+        <b>Video darslar</b>
+        <small>${formatNumber(count)} ta dars · bepul</small>
+      </span>
+      <span class="home-video-badge">YANGI</span>
+    </button>`;
 }
 
 function drawHomePlaces(container) {
@@ -1649,6 +1667,9 @@ function drawHomePlaces(container) {
   container.querySelectorAll("[data-home-place]").forEach((element) =>
     element.addEventListener("click", guarded(() => enterInstitution(element.dataset.homePlace)))
   );
+  container
+    .querySelector("[data-home-videos]")
+    ?.addEventListener("click", guarded(() => renderVideoLibrary(loadHome)));
 }
 
 async function refreshHomePlaces() {
@@ -1670,6 +1691,10 @@ function renderHome(userName, backendOk) {
   const statusHtml = backendOk ? "" : `<p class="status">Backend bilan aloqa yo'q ❌</p>`;
 
   showPage(`
+    <div class="home-brand fade-up">
+      <img src="/img/chittak-icon.png" alt="" />
+      <span>Chittak</span>
+    </div>
     <h1 class="fade-up">${greeting}</h1>
     <p class="subtitle fade-up" id="home-date">${homeDateText(homeData) || "Bilimingizni sinang va natijangizni kuzating."}</p>
 

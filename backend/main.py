@@ -4836,7 +4836,16 @@ def home_summary(user: User = Depends(get_current_user), db: Session = Depends(g
             "role": member.role, "position": member.position, "classes": len(classes),
             "curated": [item.name for item in classes if item.curator_user_id == user.id],
         })
-    return {"today": local_now.date(), "weekday_label": WEEKDAYS[local_now.weekday()], "places": places}
+    # Muassasaga a'zo bo'lganlar uchun — bosh sahifadagi "Video darslar" kartasi
+    videos = 0
+    if places:
+        videos = db.scalar(select(func.count()).select_from(VideoLesson).where(VideoLesson.deleted_at.is_(None))) or 0
+    return {
+        "today": local_now.date(),
+        "weekday_label": WEEKDAYS[local_now.weekday()],
+        "places": places,
+        "videos": videos,
+    }
 
 
 @app.get("/api/me/attempts/{attempt_id}/review")
