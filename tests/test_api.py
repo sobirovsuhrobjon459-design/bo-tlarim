@@ -7227,3 +7227,47 @@ def test_tolov_kalitlari_admin_panelidan_kiritiladi():
     # Begona odam na ko'ra oladi, na o'zgartira oladi
     assert client.get("/api/admin/payment-settings", headers=as_user(1111)).status_code == 403
     assert client.post("/api/admin/payment-settings", headers=as_user(1111), json={}).status_code == 403
+
+
+def test_video_davomiyligi_va_bosh_sahifadagi_karta():
+    """
+    Dars davomiyligi: pleyer bir marta xabar beradi, keyin hammaga ko'rinadi va
+    qayta yozilmaydi. Bosh sahifadagi "Video darslar" kartasi esa faqat
+    muassasaga a'zo bo'lganlarga (darslar soni bilan) qaytariladi.
+    """
+    reset_database()
+    _set_name(701, "Aziza", "Karimova")
+    _set_name(801, "Oddiy", "Oquvchi")
+    client.post("/api/schools", json={"subjects": ["Matematika"], "region": "Toshkent shahri",
+                                      "district": "Chilonzor tumani", "name": "Ilm maktabi"}, headers=as_user(701))
+    video = client.post("/api/videos", json={"url": "https://youtu.be/dQw4w9WgXcQ", "title": "Kasrlar",
+                                             "subject": "Matematika", "grade": 5, "description": ""},
+                        headers=as_user(701)).json()
+    assert video["duration"] is None
+
+    # Pleyer davomiylikni yuboradi (kirish talab qilinmaydi — Telegram'siz o'quvchi ham ko'radi)
+    assert client.post(f"/api/videos/{video['id']}/duration?seconds=760").status_code == 200
+    # Ikkinchi marta yozilmaydi — birinchi o'lchov qoladi
+    client.post(f"/api/videos/{video['id']}/duration?seconds=99")
+    listed = client.get("/api/videos", headers=as_user(701)).json()["videos"][0]
+    assert listed["duration"] == 760
+
+    # Aqlga sig'maydigan qiymat rad etiladi
+    assert client.post(f"/api/videos/{video['id']}/duration?seconds=0").status_code == 400
+    assert client.post(f"/api/videos/{video['id']}/duration?seconds=999999").status_code == 400
+
+    # Bosh sahifa: maktab a'zosiga darslar soni, begonaga — nol
+    assert client.get("/api/home", headers=as_user(701)).json()["videos"] == 1
+    assert client.get("/api/home", headers=as_user(801)).json()["videos"] == 0
+
+    # Mustahkamlash testining kodi: kichik harf va bo'shliq tozalanadi, noto'g'risi rad etiladi
+    body = {"url": "https://youtu.be/dQw4w9WgXcQ", "title": "Kasrlar", "subject": "Matematika",
+            "grade": 5, "description": "", "test_code": " gy68 "}
+    edited = client.put(f"/api/videos/{video['id']}", json=body, headers=as_user(701))
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["test_code"] == "GY68"
+    assert client.put(f"/api/videos/{video['id']}", json={**body, "test_code": "a!"},
+                      headers=as_user(701)).status_code == 422
+    # Kod bo'sh qoldirilsa — karta ko'rsatilmaydi
+    assert client.put(f"/api/videos/{video['id']}", json={**body, "test_code": ""},
+                      headers=as_user(701)).json()["test_code"] == ""

@@ -5567,6 +5567,85 @@ function youtubeIdFromUrl(url) {
   return match ? match[1] : null;
 }
 
+/*
+  Davomiylik va "qayergacha ko'rilgani".
+
+  Davomiylikni YouTube faqat o'z pleyeri orqali aytadi, shuning uchun uni
+  birinchi ochgan odamning ilovasi o'lchab serverga yuboradi — keyin u
+  hammaga ko'rinadi. Qayergacha ko'rilgani esa SHU QURILMADA qoladi:
+  serverga yuborilmaydi, chunki buning uchun har bir o'quvchini alohida
+  tanib olish kerak bo'lardi (ular Telegram'siz ham kiradi).
+*/
+const VIDEO_PROGRESS_KEY = "chittak-video-progress";
+
+function videoProgressAll() {
+  try {
+    return JSON.parse(localStorage.getItem(VIDEO_PROGRESS_KEY)) || {};
+  } catch (_) {
+    return {}; // xotira yopiq (maxfiy oyna) — progress ko'rsatilmaydi, xolos
+  }
+}
+
+function saveVideoProgress(videoId, seconds) {
+  try {
+    const all = videoProgressAll();
+    all[videoId] = Math.round(seconds);
+    localStorage.setItem(VIDEO_PROGRESS_KEY, JSON.stringify(all));
+  } catch (_) {
+    /* saqlanmasa ham dars ko'rilaveradi */
+  }
+}
+
+/*
+  "Saqlangan darslar" — ko'rilgan ulush kabi, shu qurilmada saqlanadi.
+  Shuning uchun Telegram orqali kirgan o'qituvchi ham, login-parol bilan
+  kirgan maktab o'quvchisi ham bir xil ishlatadi.
+*/
+const VIDEO_SAVED_KEY = "chittak-video-saved";
+
+function savedVideoIds() {
+  try {
+    const list = JSON.parse(localStorage.getItem(VIDEO_SAVED_KEY));
+    return Array.isArray(list) ? list : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function isVideoSaved(videoId) {
+  return savedVideoIds().includes(videoId);
+}
+
+// Saqlangan bo'lsa — ro'yxatdan oladi, bo'lmasa — qo'shadi. Yangi holatni qaytaradi.
+function toggleSavedVideo(videoId) {
+  const list = savedVideoIds();
+  const index = list.indexOf(videoId);
+  if (index === -1) list.push(videoId);
+  else list.splice(index, 1);
+  try {
+    localStorage.setItem(VIDEO_SAVED_KEY, JSON.stringify(list));
+  } catch (_) {
+    /* xotira yopiq — tugma baribir ishlaydi, lekin eslab qolinmaydi */
+  }
+  return index === -1;
+}
+
+// Ko'rilgan ulush (%) — davomiyligi ma'lum bo'lgandagina hisoblanadi
+function videoProgressPercent(video) {
+  const seconds = videoProgressAll()[video.id];
+  if (!seconds || !video.duration) return 0;
+  return Math.min(100, Math.round((seconds / video.duration) * 100));
+}
+
+// 760 -> "12:40",  3725 -> "1:02:05"
+function videoDurationText(seconds) {
+  if (!seconds) return "";
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = String(Math.floor(seconds % 60)).padStart(2, "0");
+  return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${rest}` : `${minutes}:${rest}`;
+}
+
 const videoMeta = (video) =>
   [video.subject, video.grade ? `${video.grade}-sinf` : "Barcha sinflar", video.school_name]
     .filter(Boolean)
@@ -5591,15 +5670,19 @@ function videoChipsHtml(video) {
 }
 
 function videoCardHtml(video) {
+  const duration = videoDurationText(video.duration);
+  const percent = videoProgressPercent(video);
   return `
     <button type="button" class="video-card" data-video-id="${video.id}">
       <span class="video-thumb">
         <img src="${youtubeThumb(video.youtube_id)}" alt="" loading="lazy" />
         <i class="video-play" aria-hidden="true"></i>
+        ${duration ? `<span class="video-duration">${duration}</span>` : ""}
+        ${percent ? `<span class="video-bar"><span style="width:${percent}%"></span></span>` : ""}
       </span>
       <span class="video-info">
         <b>${escapeHtml(video.title)}</b>
-        <small>${videoMeta(video)}</small>
+        <small>${videoMeta(video)}${percent ? ` · ${percent}% ko'rilgan` : ""}</small>
       </span>
     </button>`;
 }
@@ -5609,15 +5692,21 @@ const gradeOptions = (selected) =>
     .map((grade) => `<option value="${grade}" ${String(selected || "") === String(grade) ? "selected" : ""}>${grade}-sinf</option>`)
     .join("");
 
-// Tanlangan fan, sinf va qidiruv — video ochib qaytganda saqlanib turadi
-const videoFilter = { subject: "", grade: "", q: "" };
+// Tanlangan fan, sinf va qidiruv — video ochib qaytganda saqlanib turadi.
+// "saved" — faqat saqlangan darslar (bu qurilmada belgilanganlari).
+const videoFilter = { subject: "", grade: "", q: "", saved: false };
 
 async function renderVideoLibrary(back, source = { url: "/api/videos", request: api }) {
   const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(videoFilter)) if (value) params.set(key, value);
+  for (const [key, value] of Object.entries(videoFilter)) {
+    if (value && key !== "saved") params.set(key, value);
+  }
   const query = params.toString();
   const data = await source.request(`${source.url}${query ? `?${query}` : ""}`);
-  const filtered = Boolean(videoFilter.subject || videoFilter.grade || videoFilter.q);
+  // Saqlanganlar serverda emas, qurilmada belgilangani uchun ro'yxat shu yerda saralanadi
+  const savedCount = data.videos.filter((item) => isVideoSaved(item.id)).length;
+  if (videoFilter.saved) data.videos = data.videos.filter((item) => isVideoSaved(item.id));
+  const filtered = Boolean(videoFilter.subject || videoFilter.grade || videoFilter.q || videoFilter.saved);
 
   showPage(`
     <div class="page-header">
@@ -5642,6 +5731,12 @@ async function renderVideoLibrary(back, source = { url: "/api/videos", request: 
                               data-video-subject="${escapeHtml(item.name)}">${escapeHtml(item.name)} · ${item.count}</button>`
                )
                .join("")}
+             ${
+               savedCount || videoFilter.saved
+                 ? `<button type="button" class="filter-chip${videoFilter.saved ? " active" : ""}" data-video-saved>
+                      💾 Saqlangan · ${savedCount}</button>`
+                 : ""
+             }
            </div>`
         : ""
     }
@@ -5649,9 +5744,11 @@ async function renderVideoLibrary(back, source = { url: "/api/videos", request: 
       ${
         data.videos.map(videoCardHtml).join("") ||
         `<div class="card" style="cursor:default"><div class="card-body"><p>${
-          filtered
-            ? "Bu bo'yicha video topilmadi — boshqa fan yoki sinfni tanlab ko'ring."
-            : "Hozircha video darslar yo'q. Ularni ta'lim muassasalari qo'shib boradi."
+          videoFilter.saved
+            ? "Hali birorta dars saqlanmagan. Darsni ochib, «Saqlash» tugmasini bosing."
+            : filtered
+              ? "Bu bo'yicha video topilmadi — boshqa fan yoki sinfni tanlab ko'ring."
+              : "Hozircha video darslar yo'q. Ularni ta'lim muassasalari qo'shib boradi."
         }</p></div></div>`
       }
     </div>
@@ -5671,40 +5768,143 @@ async function renderVideoLibrary(back, source = { url: "/api/videos", request: 
   document.querySelectorAll("[data-video-subject]").forEach((chip) =>
     chip.addEventListener("click", () => {
       videoFilter.subject = chip.dataset.videoSubject;
+      videoFilter.saved = false;
       reload();
     })
   );
+  document.querySelector("[data-video-saved]")?.addEventListener("click", () => {
+    videoFilter.saved = !videoFilter.saved;
+    reload();
+  });
   document.querySelectorAll("[data-video-id]").forEach((card) => {
     const video = data.videos.find((item) => String(item.id) === card.dataset.videoId);
     card.addEventListener("click", guarded(() => renderVideoPlayer(video, () => renderVideoLibrary(back, source))));
   });
 }
 
+/*
+  YouTube pleyer API'si — davomiylikni o'lchash va qayergacha ko'rilganini
+  eslab qolish uchun. Skript bir marta yuklanadi; internet bo'lmasa yoki
+  yuklanmasa, video baribir oddiygina o'ynaydi (hech narsa buzilmaydi).
+*/
+let youtubeApiPromise = null;
+
+function loadYouTubeApi() {
+  if (youtubeApiPromise) return youtubeApiPromise;
+  youtubeApiPromise = new Promise((resolve, reject) => {
+    if (window.YT?.Player) return resolve(window.YT);
+    const previous = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => {
+      previous?.();
+      resolve(window.YT);
+    };
+    const script = document.createElement("script");
+    script.src = "https://www.youtube.com/iframe_api";
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+  return youtubeApiPromise;
+}
+
+function trackVideoPlayback(video, iframe) {
+  loadYouTubeApi()
+    .then((YT) => {
+      if (!iframe.isConnected) return;
+      const saved = videoProgressAll()[video.id] || 0;
+      let timer = null;
+
+      const player = new YT.Player(iframe, {
+        events: {
+          onReady() {
+            const total = Math.round(player.getDuration?.() || 0);
+            // Davomiylik hali yozilmagan bo'lsa — serverga bir marta yuboramiz
+            if (total && !video.duration) {
+              video.duration = total;
+              api(`/api/videos/${video.id}/duration?seconds=${total}`, { method: "POST" }).catch(() => {});
+            }
+            // Oxirigacha ko'rilmagan bo'lsa — to'xtagan joydan davom etadi
+            if (saved > 10 && total && saved < total - 15) player.seekTo(saved, true);
+          },
+          onStateChange(event) {
+            const PLAYING = 1;
+            clearInterval(timer);
+            if (event.data !== PLAYING) {
+              const seconds = player.getCurrentTime?.();
+              if (seconds) saveVideoProgress(video.id, seconds);
+              return;
+            }
+            timer = setInterval(() => {
+              if (!iframe.isConnected) return clearInterval(timer);
+              const seconds = player.getCurrentTime?.();
+              if (seconds) saveVideoProgress(video.id, seconds);
+            }, 10000);
+          },
+        },
+      });
+    })
+    .catch(() => {
+      /* pleyer API'si yuklanmadi — video oddiy iframe bo'lib o'ynayveradi */
+    });
+}
+
+const videoSaveLabel = (saved) => (saved ? "✅ Saqlangan" : "💾 Saqlash");
+
 function renderVideoPlayer(video, back) {
-  const embed = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.youtube_id)}?rel=0&playsinline=1&modestbranding=1`;
+  const embed =
+    `https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.youtube_id)}` +
+    "?rel=0&playsinline=1&modestbranding=1&enablejsapi=1";
   showPage(`
     <div class="page-header">
       <button class="back-button" type="button" data-action="back-video" style="margin:0">←</button>
       <h2 style="margin:0;flex:1">Video dars</h2>
     </div>
     <div class="video-frame">
-      <iframe src="${embed}" title="${escapeHtml(video.title)}" loading="lazy"
+      <iframe id="video-player" src="${embed}" title="${escapeHtml(video.title)}"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
               referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
     </div>
     <h3 style="margin:14px 0 10px">${escapeHtml(video.title)}</h3>
     ${videoChipsHtml(video)}
+    <div class="video-actions">
+      <button class="btn" id="video-bookmark">${videoSaveLabel(isVideoSaved(video.id))}</button>
+      <button class="btn btn-ghost video-action-icon" id="video-open-youtube" aria-label="YouTube'da ochish">▶️</button>
+    </div>
     ${video.description ? `<div class="panel video-description">${escapeHtml(video.description)}</div>` : ""}
-    <button class="btn" id="video-open-youtube" style="margin-top:14px">▶️ YouTube'da ochish</button>
-    ${video.can_manage ? `<button class="btn btn-ghost" id="video-delete" style="margin-top:8px">🗑 Videoni o'chirish</button>` : ""}
+    ${
+      video.test_code
+        ? `<button type="button" class="video-quiz" id="video-quiz">
+             <span class="video-quiz-icon">${svgIcon("check-circle")}</span>
+             <span class="video-quiz-text">
+               <b>Darsni mustahkamlang</b>
+               <small>Test kodi: ${escapeHtml(video.test_code)}</small>
+             </span>
+             <span class="video-quiz-go" aria-hidden="true">›</span>
+           </button>`
+        : ""
+    }
+    ${video.can_manage ? `<button class="btn btn-ghost" id="video-delete" style="margin-top:12px">🗑 Videoni o'chirish</button>` : ""}
   `);
 
   // Ko'rishlar soni — javobini kutish shart emas
   api(`/api/videos/${video.id}/view`, { method: "POST", body: {} }).catch(() => {});
+  trackVideoPlayback(video, document.getElementById("video-player"));
   document.querySelector('[data-action="back-video"]').addEventListener("click", guarded(back));
   document
     .getElementById("video-open-youtube")
     .addEventListener("click", () => openExternalLink(`https://www.youtube.com/watch?v=${encodeURIComponent(video.youtube_id)}`));
+  document.getElementById("video-bookmark").addEventListener("click", (event) => {
+    const saved = toggleSavedVideo(video.id);
+    event.currentTarget.textContent = videoSaveLabel(saved);
+    showToast(saved ? "💾 Dars saqlandi" : "Saqlanganlardan olindi");
+  });
+  // Darsdan keyingi test — kod bo'yicha ochiladi (o'quvchi kodni qo'lda yozmaydi)
+  document.getElementById("video-quiz")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const test = await api(`/api/tests/${encodeURIComponent(video.test_code)}`);
+      renderTestFound(test);
+    })
+  );
   document.getElementById("video-delete")?.addEventListener(
     "click",
     guarded(async () => {
@@ -5768,6 +5968,10 @@ function openVideoSheet(video, onSaved) {
     <label class="field-label" for="video-description">Qisqacha tavsif (ixtiyoriy)</label>
     <textarea class="input" id="video-description" rows="3" maxlength="2000"
               placeholder="Darsda nimalar o'rganiladi">${video ? escapeHtml(video.description) : ""}</textarea>
+    <label class="field-label" for="video-test-code">Mustahkamlash testi — kodi (ixtiyoriy)</label>
+    <input class="input" id="video-test-code" maxlength="10" autocomplete="off" placeholder="Masalan: GY68"
+           style="text-transform:uppercase" value="${video ? escapeHtml(video.test_code || "") : ""}" />
+    <p class="subtitle" style="margin:4px 0 0">Kod yozilsa, o'quvchi dars ostidagi tugma bilan to'g'ridan-to'g'ri shu testni ochadi.</p>
     <button class="btn" id="video-save" style="margin-top:12px">💾 Saqlash</button>
     ${video ? `<button class="btn btn-ghost" id="video-remove" style="margin-top:8px">🗑 O'chirish</button>` : ""}
     <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
@@ -5794,6 +5998,7 @@ function openVideoSheet(video, onSaved) {
         subject: sheet.querySelector("#video-subject").value,
         grade: Number(sheet.querySelector("#video-grade-pick").value) || null,
         description: sheet.querySelector("#video-description").value.trim(),
+        test_code: sheet.querySelector("#video-test-code").value.trim().toUpperCase(),
       };
       if (!youtubeIdFromUrl(body.url)) throw new Error("YouTube video havolasini qo'ying (masalan: https://youtu.be/…)");
       if (body.title.length < 3) throw new Error("Video mavzusini yozing");

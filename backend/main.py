@@ -273,6 +273,7 @@ def _add_missing_columns() -> None:
             "deleted_by": "INTEGER",
         },
         "key_questions": {"label": "VARCHAR(20)"},
+        "video_lessons": {"duration_seconds": "INTEGER", "test_code": "VARCHAR(10) DEFAULT ''"},
         "payments": {
             "payme_transaction_id": "VARCHAR(50)",
             "performed_at": "TIMESTAMP",
@@ -13387,6 +13388,8 @@ def _video_view(item: VideoLesson, school_name: str, can_manage: bool) -> dict:
         "youtube_id": item.youtube_id,
         "school_name": school_name,
         "views": item.views,
+        "duration": item.duration_seconds,
+        "test_code": item.test_code or "",
         "created_at": item.created_at,
         "can_manage": can_manage,
     }
@@ -13475,7 +13478,7 @@ def add_video(body: VideoLessonIn, user: User = Depends(get_current_user), db: S
                                               VideoLesson.deleted_at.is_(None))):
         raise HTTPException(status_code=409, detail="Bu video allaqachon qo'shilgan")
     item = VideoLesson(school_id=school_id, added_by=user.id, title=body.title, subject=body.subject, grade=body.grade,
-                       description=body.description, youtube_id=youtube_id)
+                       description=body.description, youtube_id=youtube_id, test_code=body.test_code)
     db.add(item)
     db.commit()
     school = db.get(PrivateSchool, school_id)
@@ -13495,6 +13498,7 @@ def _own_video(db: Session, user: User, video_id: int) -> VideoLesson:
 def edit_video(video_id: int, body: VideoLessonIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     item = _own_video(db, user, video_id)
     item.title, item.subject, item.grade, item.description = body.title, body.subject, body.grade, body.description
+    item.test_code = body.test_code
     item.youtube_id = youtube_video_id(body.url)
     item.updated_at = utcnow()
     db.commit()
@@ -13508,6 +13512,28 @@ def delete_video(video_id: int, user: User = Depends(get_current_user), db: Sess
     item.deleted_at = utcnow()
     db.commit()
     logging.getLogger("backend").info("Video o'chirildi: id=%s school=%s user=%s", item.id, item.school_id, user.id)
+    return {"ok": True}
+
+
+@app.post("/api/videos/{video_id}/duration")
+def set_video_duration(video_id: int, seconds: int, db: Session = Depends(get_db)):
+    """
+    Dars davomiyligi — pleyer videoni ochganda bir marta xabar beradi.
+
+    YouTube davomiylikni faqat o'z pleyeri orqali beradi, shuning uchun uni
+    serverda emas, ilovada o'lchab yuboramiz. Bir marta yozilgach qayta
+    o'zgartirilmaydi; "ko'rilgan ulush" esa serverga umuman yuborilmaydi —
+    u foydalanuvchining qurilmasida qoladi.
+    """
+
+    if not 1 <= seconds <= 24 * 60 * 60:
+        raise HTTPException(status_code=400, detail="Davomiylik noto'g'ri")
+    db.execute(
+        update(VideoLesson)
+        .where(VideoLesson.id == video_id, VideoLesson.deleted_at.is_(None), VideoLesson.duration_seconds.is_(None))
+        .values(duration_seconds=seconds)
+    )
+    db.commit()
     return {"ok": True}
 
 

@@ -484,6 +484,11 @@ class VideoLesson(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     youtube_id: Mapped[str] = mapped_column(String(20))
     views: Mapped[int] = mapped_column(default=0)
+    # Dars davomiyligi (soniya) — pleyer videoni ochganda o'zi xabar beradi.
+    # Ko'rilgan ulush esa qurilmaning o'zida saqlanadi (serverga yuborilmaydi).
+    duration_seconds: Mapped[int | None] = mapped_column(default=None)
+    # Darsni mustahkamlash uchun test kodi (ixtiyoriy)
+    test_code: Mapped[str] = mapped_column(String(10), default="")
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     updated_at: Mapped[datetime | None] = mapped_column(default=None)
     deleted_at: Mapped[datetime | None] = mapped_column(default=None)
@@ -1983,16 +1988,21 @@ class VideoLessonIn(BaseModel):
     subject: str = Field(min_length=2, max_length=100)
     grade: int | None = Field(default=None, ge=1, le=11)
     description: str = Field(default="", max_length=2000)
+    # Darsdan keyin yechiladigan test kodi (ixtiyoriy) — o'quvchi dars sahifasidan ochadi
+    test_code: str = Field(default="", max_length=10)
 
     @model_validator(mode="after")
     def normalize(self) -> "VideoLessonIn":
         self.title = " ".join(self.title.split())
         self.subject = " ".join(self.subject.split())
         self.description = self.description.strip()
+        self.test_code = re.sub(r"\s", "", self.test_code).upper()
         if len(self.title) < 3:
             raise ValueError("Video nomini yozing")
         if not youtube_video_id(self.url):
             raise ValueError("YouTube havolasini kiriting (masalan: https://youtu.be/…)")
+        if self.test_code and not re.fullmatch(r"[A-Z0-9]{4,10}", self.test_code):
+            raise ValueError("Test kodi faqat harf va raqamdan iborat bo'ladi")
         return self
 
 

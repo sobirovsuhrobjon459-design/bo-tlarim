@@ -2328,3 +2328,133 @@ button.tt-cell {
   font-weight: 800;
   letter-spacing: 0.02em;
 }
+
+/* Rasm ustidagi davomiylik va ko'rilgan ulush chizig'i */
+.video-duration {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 2px 6px;
+  border-radius: 7px;
+  background: rgba(11, 31, 42, 0.86);
+  color: #ffffff;
+  font-size: 10.5px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+
+.video-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(11, 31, 42, 0.25);
+}
+
+.video-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--green);
+}
+
+.video-list > .video-card:first-child .video-duration {
+  right: 8px;
+  bottom: 8px;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.video-list > .video-card:first-child .video-bar {
+  height: 4px;
+}
+
+/* Dars sahifasidagi amallar qatori: keng "Saqlash" va yonida ikonka tugma */
+.video-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.video-actions .btn {
+  flex: 1;
+  margin: 0;
+}
+
+.video-actions .video-action-icon {
+  flex: 0 0 auto;
+  width: 52px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.video-actions .video-action-icon svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+
+/* "Darsni mustahkamlang" — darsdan keyin yechiladigan test kartasi */
+.video-quiz {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin-top: 12px;
+  padding: 14px;
+  font: inherit;
+  text-align: left;
+  color: var(--color-text);
+  background: var(--lilac);
+  border: 1px solid var(--lilac-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.video-quiz:active {
+  transform: scale(0.985);
+}
+
+.video-quiz-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  color: var(--sun);
+}
+
+.video-quiz-icon svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.video-quiz-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.video-quiz-text b {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.video-quiz-text small {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.video-quiz-go {
+  flex-shrink: 0;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--color-text-muted);
+}
