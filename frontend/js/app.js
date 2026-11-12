@@ -16801,7 +16801,9 @@ async function renderStudentDetail(testId, attemptId) {
     if (bar) bar.hidden = false;
   };
   const saveAnswers = async () => {
-    if (!Object.keys(answersBody()).length) throw new Error("Kamida bitta javobni belgilang");
+    // Yangi o'quvchida bo'sh natija yaratilmasin (token yechiladi). Saqlangan natijani tahrirlashda
+    // esa hamma javob olib tashlansa ham saqlanadi — natija 0 bo'ladi
+    if (pending && !Object.keys(answersBody()).length) throw new Error("Kamida bitta javobni belgilang");
     await queue; // ✓/✗ baholari avval yozib bo'linsin
     await api(`/api/teacher/tests/${testId}/students/${attemptId}/answers`, {
       method: "POST",
