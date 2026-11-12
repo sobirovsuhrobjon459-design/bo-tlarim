@@ -12769,7 +12769,7 @@ function renderNewTestForm(testType, draft = {}) {
   showPage(`
     ${header}
     ${questionsSection}
-    ${channelSettings}
+    ${offline ? "" : channelSettings}
     <div class="sticky-footer">
       <button class="btn" id="save-test-button" style="margin:0">Testni saqlash</button>
     </div>
@@ -12914,7 +12914,7 @@ function renderNewTestForm(testType, draft = {}) {
   });
 
   const channelCheckbox = document.getElementById("field-require-channel");
-  channelCheckbox.addEventListener("change", () => {
+  channelCheckbox?.addEventListener("change", () => {
     document.getElementById("channel-input-wrapper").style.display = channelCheckbox.checked ? "block" : "none";
   });
 
@@ -13077,7 +13077,7 @@ function collectTestFormDraft() {
     paid: document.getElementById("price-toggle").dataset.value === "paid",
     price: document.getElementById("field-price").value,
     duration: document.getElementById("field-duration").value,
-    channel: document.getElementById("field-require-channel").checked
+    channel: document.getElementById("field-require-channel")?.checked
       ? document.getElementById("field-channel").value
       : "",
     testCount: document.getElementById("field-test-count").value,
@@ -13285,8 +13285,9 @@ async function saveNewTest() {
     throw new Error("Test nomini kiriting");
   }
 
-  const requireChannel = document.getElementById("field-require-channel").checked;
-  const channelValue = document.getElementById("field-channel").value.trim();
+  // Oflayn testda kanal bo'limi umuman yo'q (o'quvchi ilovaga kirmaydi)
+  const requireChannel = Boolean(document.getElementById("field-require-channel")?.checked);
+  const channelValue = document.getElementById("field-channel")?.value.trim() || "";
 
   if (requireChannel && channelValue.length < 2) {
     throw new Error("Kanal nomini kiriting (masalan @kanalingiz)");

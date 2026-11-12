@@ -4020,6 +4020,9 @@ DEFAULT_REQUIRED_CHANNELS = [
 def _required_channels(test: Test) -> list[str]:
     """Testda obuna shart bo'lgan barcha kanallar: avval adminlarniki, keyin o'qituvchiniki."""
 
+    # Oflayn test sinfda, titul bilan o'tadi — o'quvchi ilovaga kirmaydi, obuna so'ralmaydi
+    if test.enrollment_type == "closed":
+        return []
     channels = list(DEFAULT_REQUIRED_CHANNELS)
     if test.required_channel and test.required_channel.lower() not in {item.lower() for item in channels}:
         channels.append(test.required_channel)
@@ -5767,7 +5770,8 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
     # Majburiy obuna so'ralgan bo'lsa, bot kanalni haqiqatan tekshira olishini
     # SHU YERDA aniqlaymiz. Aks holda o'qituvchi testni tarqatib yuborgandan
     # keyin, o'quvchilar kira olmay qolganda bilardi.
-    required_channel = _normalize_channel(body.required_channel)
+    # Oflayn (sinfda, titul bilan) testda kanal yo'q — o'quvchi ilovaga kirmaydi.
+    required_channel = None if body.enrollment_type == "closed" else _normalize_channel(body.required_channel)
     if required_channel:
         _ensure_bot_can_check_channel(required_channel)
 

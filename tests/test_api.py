@@ -7442,3 +7442,21 @@ def test_oylik_obuna_karta_orqali_admin_tasdiqlaydi():
     assert any("3 oylik obuna faollashdi" in text for text in telegram.teacher_messages), telegram.teacher_messages
     history = client.get("/api/teacher/credit-purchases", headers=as_user(555)).json()
     assert history[0]["kind"] == "subscription" and history[0]["months"] == 3 and history[0]["status"] == "paid"
+
+
+def test_oflayn_testda_kanalga_majburiy_obuna_yoq():
+    """Oflayn test sinfda, titul bilan o'tadi — kanal yozilmaydi va obuna so'ralmaydi."""
+    reset_database()
+    register_teacher()
+
+    # Kanal yuborilsa ham (eski ilova) — oflayn testga yozilmaydi, bot kanalni tekshirmaydi
+    created = create_test(enrollment_type="closed", required_channel="@mening_kanalim")
+    detail = client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()
+    assert detail["required_channels"] == [], detail["required_channels"]
+    with SessionLocal() as session:
+        assert session.get(main.Test, created["id"]).required_channel is None
+
+    # Onlayn testda adminlar kanali avvalgidek majburiy
+    online = create_test()
+    online_detail = client.get(f"/api/teacher/tests/{online['id']}", headers=as_user(555)).json()
+    assert online_detail["required_channels"] == list(main.DEFAULT_REQUIRED_CHANNELS)
