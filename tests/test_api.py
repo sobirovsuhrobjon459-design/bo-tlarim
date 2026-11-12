@@ -1287,7 +1287,7 @@ def test_tumandagi_maktablar_royxati_va_tanlangan_maktabga_faqat_uning_kodi_bila
     listed = client.get("/api/schools", params=place, headers=as_user(703)).json()
     assert [school["name"] for school in listed] == ["Bilim maktabi", "Ilm maktabi"], listed
     assert all("code" not in school for school in listed), "kod ro'yxatda ko'rinib qoldi"
-    assert listed[1]["teachers"] == 1
+    assert all("teachers" not in school and "students" not in school for school in listed), "son ko'rinib qoldi"
 
     # Boshqa tuman ro'yxatida ko'rinmaydi
     other = client.get("/api/schools", params={"region": "Samarqand viloyati", "district": "Jomboy tumani"},

@@ -4300,17 +4300,23 @@ async function wireLocationSelects({ allDistricts = false, onChange }) {
 
 function schoolListHtml(schools, emptyText) {
   if (!schools.length) return `<p class="subtitle" style="margin:8px 0 0">${emptyText}</p>`;
+  // Faqat nomi va tumani — o'qituvchi/o'quvchi soni ko'rsatilmaydi, begona maktabga kirib bo'lmaydi
   return `
     <div class="panel pick-list">
       ${schools
-        .map(
-          (school, index) => `
-            <button type="button" class="pick-item" data-school-index="${index}">
-              <span class="pick-title">🏫 ${escapeHtml(school.name)}
-                <small>📍 ${escapeHtml(school.district)} · ${school.teachers} ta o'qituvchi${school.is_mine ? " · 👑 sizning maktabingiz" : ""}</small>
-              </span>
-              <span>${school.is_mine ? "›" : "🔒"}</span>
-            </button>`
+        .map((school, index) =>
+          school.is_mine
+            ? `<button type="button" class="pick-item" data-school-index="${index}">
+                 <span class="pick-title">🏫 ${escapeHtml(school.name)}
+                   <small>📍 ${escapeHtml(school.district)} · 👑 sizning maktabingiz</small>
+                 </span>
+                 <span>›</span>
+               </button>`
+            : `<div class="pick-item" style="cursor:default">
+                 <span class="pick-title">🏫 ${escapeHtml(school.name)}
+                   <small>📍 ${escapeHtml(school.district)}</small>
+                 </span>
+               </div>`
         )
         .join("")}
     </div>`;
@@ -4347,32 +4353,6 @@ async function showSchoolsFor(place, container, { emptyText, onPick }) {
   container.innerHTML = schoolListHtml(schools, emptyText);
   container.querySelectorAll("[data-school-index]").forEach((item) => {
     item.addEventListener("click", guarded(() => onPick(schools[Number(item.dataset.schoolIndex)])));
-  });
-}
-
-// 🔑 Maktabga kirish: viloyat/tuman tanlanadi, pastda maktablar ro'yxati
-async function renderJoinBrowser() {
-  showPage(`
-    ${schoolPageHeader("Maktabga kirish", "back-start")}
-    ${locationSelectsHtml({ allDistricts: true })}
-    <p class="section-label" style="margin-top:18px">MAKTABLAR</p>
-    <div id="school-results"><p class="subtitle" style="margin:8px 0 0">Viloyatni tanlang — u yerdagi maktablar shu yerda chiqadi.</p></div>
-    <button type="button" class="btn btn-ghost" id="code-only" style="margin-top:18px">⌨️ Kodim bor — to'g'ridan-to'g'ri kirish</button>
-  `);
-
-  document.querySelector('[data-action="back-start"]').addEventListener("click", renderPrivateSchoolStart);
-  document.getElementById("code-only").addEventListener("click", guarded(() => renderJoinSchool({ onBack: renderJoinBrowser })));
-
-  const results = document.getElementById("school-results");
-  await wireLocationSelects({
-    allDistricts: true,
-    onChange: (place) =>
-      place.region
-        ? showSchoolsFor(place, results, {
-            emptyText: "Bu yerda hali xususiy maktab ro'yxatdan o'tmagan.",
-            onPick: (school) => renderJoinSchool({ school, onBack: renderJoinBrowser }),
-          })
-        : (results.innerHTML = `<p class="subtitle" style="margin:8px 0 0">Viloyatni tanlang — u yerdagi maktablar shu yerda chiqadi.</p>`),
   });
 }
 
@@ -4603,8 +4583,8 @@ async function renderCreateSchool() {
     })
   );
 
-  // Viloyat tanlanishi bilan shu yerda ochilgan maktablar ko'rinadi —
-  // o'qituvchining maktabi bor bo'lsa, yangisini ochmay, unga qo'shiladi.
+  // Viloyat tanlanishi bilan shu yerda ochilgan maktablar ko'rinadi (faqat nomi) —
+  // maktab bor bo'lsa, yangisi ochilmaydi; o'qituvchi faqat taklif havolasi bilan qo'shiladi.
   const existing = document.getElementById("existing-schools");
   await wireLocationSelects({
     onChange: async (place) => {
@@ -4615,11 +4595,12 @@ async function renderCreateSchool() {
       existing.innerHTML = `
         <p class="section-label" style="margin-top:16px">${place.district ? "BU TUMANDA" : "BU VILOYATDA"} OCHILGAN MAKTABLAR</p>
         <div id="existing-list"></div>
-        <p class="subtitle" style="margin:6px 0 0">Maktabingiz ro'yxatda bo'lsa — yangisini ochmang, uni bosib qo'shiling.</p>`;
+        <p class="subtitle" style="margin:6px 0 0">Maktabingiz ro'yxatda bo'lsa — yangisini ochmang: maktab adminidan taklif havolasini so'rang.</p>`;
       await showSchoolsFor(place, document.getElementById("existing-list"), {
         emptyText: "Hali maktab ochilmagan — birinchi bo'lib oching!",
+        // Bosiladigani faqat o'z maktabi — unga qaytish
         onPick: async (school) => {
-          if (await confirmLeave()) await renderJoinSchool({ school, onBack: renderCreateSchool });
+          if (school.is_mine && (await confirmLeave())) renderOwnSchoolReturn(school, renderCreateSchool);
         },
       });
     },
@@ -4673,44 +4654,36 @@ function renderOwnSchoolReturn(school, onBack) {
   );
 }
 
-async function renderJoinSchool({ school: target = null, onBack = renderPrivateSchoolStart, prefillCode = "" } = {}) {
-  if (target?.is_mine) {
-    renderOwnSchoolReturn(target, onBack);
+/*
+  Maktabga qo'shilish — FAQAT taklif havolasi orqali (t.me/bot?start=school_KOD).
+  Kod havoladan keladi va qo'lda yozilmaydi; ro'yxatdan maktab tanlab kirib bo'lmaydi.
+*/
+async function renderJoinSchool({ onBack = renderPrivateSchoolStart, prefillCode = "" } = {}) {
+  const inviteCode = String(prefillCode || "").trim().toUpperCase();
+  if (!inviteCode) {
+    showToast("Maktabga faqat admin yuborgan taklif havolasi orqali qo'shilasiz");
+    await renderPrivateSchoolStart();
     return;
   }
+  const found = await api("/api/schools/lookup", { method: "POST", body: { code: inviteCode } }).catch(() => null);
+  if (!found?.school) {
+    showToast("Taklif havolasi eskirgan yoki noto'g'ri — admindan yangisini so'rang");
+    await renderPrivateSchoolStart();
+    return;
+  }
+  const target = found.school;
   const nameFields = await profileNameFieldsHtml();
-  const founder = target?.founder;
 
   showPage(`
-    ${schoolPageHeader("Maktabga kirish", "back-join")}
-    ${
-      target
-        ? `<div class="card" style="cursor:default">
-             <div class="card-body" style="width:100%">
-               <h3 style="margin:0">🏫 ${escapeHtml(target.name)}</h3>
-               <p class="subtitle" style="margin:4px 0 0">📍 ${escapeHtml(target.region)}, ${escapeHtml(target.district)}</p>
-               <p style="margin:10px 0 0">👤 Admin: <b>${escapeHtml(founder?.name || "—")}</b>
-                 ${founder?.username ? `<span class="subtitle">@${escapeHtml(founder.username)}</span>` : ""}</p>
-               <p class="subtitle" style="margin:8px 0 0">
-                 Maktab kodini admindan oling. "Kod so'rash"ni bossangiz, bot adminga xabar yuboradi
-                 va sizga ham nima qilishni tushuntiradi.
-               </p>
-               <div class="row-between" style="gap:8px;margin-top:10px">
-                 ${
-                   founder?.username
-                     ? `<button type="button" class="btn btn-ghost" id="write-founder" style="margin:0">✉️ Adminga yozish</button>`
-                     : ""
-                 }
-                 <button type="button" class="btn btn-ghost" id="request-code" style="margin:0">🔔 Kod so'rash</button>
-               </div>
-             </div>
-           </div>`
-        : `<p class="subtitle">Maktab kodini maktabingiz admini yoki o'qituvchisidan oling.</p>`
-    }
-
-    <label class="field-label" for="school-code-input">Maktab kodi</label>
-    <input class="input" id="school-code-input" placeholder="Maktab kodi (8 belgi)" maxlength="12" value="${escapeHtml(prefillCode)}"
-           style="text-transform:uppercase;letter-spacing:3px;text-align:center;font-size:18px" />
+    ${schoolPageHeader("Maktabga qo'shilish", "back-join")}
+    <div class="card" style="cursor:default">
+      <div class="card-body" style="width:100%">
+        <h3 style="margin:0">🏫 ${escapeHtml(target.name)}</h3>
+        ${target.region ? `<p class="subtitle" style="margin:4px 0 0">📍 ${escapeHtml(target.region)}${target.district ? `, ${escapeHtml(target.district)}` : ""}</p>` : ""}
+        <p class="subtitle" style="margin:8px 0 0">Siz shu maktabga taklif havolasi orqali qo'shilyapsiz.</p>
+      </div>
+    </div>
+    <input type="hidden" id="school-code-input" value="${escapeHtml(inviteCode)}" />
 
     <p class="section-label" style="margin-top:18px">SIZNING PROFILINGIZ</p>
     ${nameFields}
@@ -4756,7 +4729,7 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
     try {
       const result = await api("/api/schools/lookup", {
         method: "POST",
-        body: { code, school_id: target ? target.id : null },
+        body: { code, school_id: target.id },
       });
       classHolder.innerHTML = result.open_classes.length
         ? `<select id="curator-class-select">
@@ -4781,29 +4754,10 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
       : 'Qaysi fanlardan dars berasiz? <span class="required-mark">*</span>';
     if (isCurator) loadOpenClasses();
   });
-  codeInput.addEventListener("change", () => {
-    if (isCurator) loadOpenClasses();
-  });
   document.querySelector('[data-action="back-join"]').addEventListener(
     "click",
     guarded(async () => {
       if (await confirmLeave()) await onBack();
-    })
-  );
-
-  document.getElementById("write-founder")?.addEventListener("click", () => openExternalLink(founder.link));
-
-  document.getElementById("request-code")?.addEventListener(
-    "click",
-    guarded(async () => {
-      // So'rovda ism ko'rinadi — avval profil ismini saqlab olamiz
-      await saveProfileName();
-      const result = await api(`/api/schools/${target.id}/request-code`, { method: "POST", body: {} });
-      if (result.delivered) {
-        showToast("📨 So'rov adminga yuborildi. Bot sizga ham xabar yozdi.");
-      } else {
-        showToast("Adminga xabar yetmadi — unga to'g'ridan-to'g'ri yozing");
-      }
     })
   );
 
@@ -4826,7 +4780,7 @@ async function renderJoinSchool({ school: target = null, onBack = renderPrivateS
       await saveProfileName();
       const { school } = await api("/api/schools/join", {
         method: "POST",
-        body: { code, subjects, ...staff, school_id: target ? target.id : null, is_curator: isCurator, curator_class_id: curatorClassId },
+        body: { code, subjects, ...staff, school_id: target.id, is_curator: isCurator, curator_class_id: curatorClassId },
       });
       showToast(`✅ "${school.name}" maktabiga qo'shildingiz`);
       renderMySchool(school);

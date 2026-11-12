@@ -9253,7 +9253,7 @@ def list_schools(
             "name": school.name,
             "region": school.region,
             "district": school.district,
-            "teachers": sum(1 for member in school.members if member.left_at is None),
+            # O'qituvchi/o'quvchi soni berilmaydi — ro'yxatda faqat nomi ko'rinadi
             "founder": _founder_contact(db, school),
             "is_mine": school.owner_user_id == user.id,
         }
@@ -9488,7 +9488,8 @@ def lookup_school(body: SchoolCodeIn, user: User = Depends(get_current_user), db
 
     school = _school_by_code(db, user, body.code, body.school_id)
     return {
-        "school": {"id": school.id, "name": school.name, "kind": school.kind or "school"},
+        "school": {"id": school.id, "name": school.name, "kind": school.kind or "school",
+                   "region": school.region, "district": school.district},
         "open_classes": [{"id": item.id, "name": item.name} for item in _open_classes(db, school.id)],
     }
 
