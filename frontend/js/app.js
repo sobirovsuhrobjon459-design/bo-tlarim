@@ -12549,18 +12549,26 @@ function renderNewTestForm(testType, draft = {}) {
   // Offline test — mock emas: o'qituvchi savollar sonini o'zi kiritadi, hammasi A/B/C/D, yozmasiz
   // (titul ixcham chiqadi — savollar soniga qarab bitta A4 ga 2–3 ta)
   const offline = draft.enrollment === "closed" && !draft.paid;
-  // Oflayn Rash testda — Milliy sertifikat formati (ixtiyoriy): 1–35 test (33–35 — A–F) va 36–45 yozma.
-  // Yozma javoblar titulda kataklarga qo'lda yoziladi, skaner ularni rasm qilib saqlaydi, o'qituvchi baholaydi
-  const msAvailable = offline && type === "rash" && (SUBJECT_PRESETS[subject]?.textCount || 0) > 0;
+  /*
+    Rash testda Milliy sertifikat formati — TANLOV (onlayn ham, oflayn ham):
+      • yoqilsa — fan bo'yicha MS tuzilishi (masalan Matematika: 35 test, 33–35 — A–F, 10 ta yozma a/b);
+      • o'chiq bo'lsa — savollar, variantlar va yozmalar sonini o'qituvchi o'zi kiritadi.
+    Ikkala holatda ham natija Rasch modeli bilan hisoblanadi.
+    Oflaynda faqat yozma savolli fanlarda: yozma javob tituldagi katakka qo'lda yoziladi,
+    skaner uni rasm qilib saqlaydi, o'qituvchi baholaydi.
+  */
+  const msAvailable = type === "rash" && (!offline || (SUBJECT_PRESETS[subject]?.textCount || 0) > 0);
   const msFormat = msAvailable && Boolean(draft.msFormat);
-  // Fan bo'yicha tuzilish faqat Rash testda (Milliy sertifikat mockida) qo'llanadi
+  const ownRashFormat = type === "rash" && !msFormat;
   const structure = msFormat
     ? subjectStructure(subject, preset)
     : offline
       ? { ...preset, testCount: subject === DTM_SUBJECT ? 90 : "", optionCount: 4, textCount: 0, textParts: 1, partOverrides: {}, fixedParts: {}, options: {}, note: "" }
-      : type === "rash" || isDtm
-        ? subjectStructure(subject, preset)
-        : { ...preset, options: {}, note: "" };
+      : ownRashFormat
+        ? { ...preset, testCount: "", optionCount: 4, textCount: 0, textParts: 1, partOverrides: {}, fixedParts: {}, options: {}, note: "" }
+        : isDtm
+          ? subjectStructure(subject, preset)
+          : { ...preset, options: {}, note: "" };
   // Kalitdagi yozma javoblar ham fanga mos klaviatura bilan kiritiladi
   answerKeyboard = SUBJECT_PRESETS[subject]?.keyboard || "math";
 
@@ -12606,12 +12614,16 @@ function renderNewTestForm(testType, draft = {}) {
       </select>
       <p class="subtitle" style="margin:-6px 0 0">${
         msFormat
-          ? "Offline, Milliy sertifikat formati: test savollari titulda bo'yaladi, yozma javoblar kataklarga yoziladi."
+          ? offline
+            ? "Offline, Milliy sertifikat formati: test savollari titulda bo'yaladi, yozma javoblar kataklarga yoziladi."
+            : "Milliy sertifikat formati: savollar tuzilishi va vaqt tanlangan fan bo'yicha qo'yiladi. Natija Rasch bo'yicha."
           : offline && !isDtm
             ? `Offline: savollar va variantlar sonini o'zingiz kiritasiz (2–${OFFLINE_MAX_OPTIONS} variant). ${
                 type === "rash" ? "Milliy sertifikat fanlari." : "Barcha fanlar."
               }`
-            : preset.hint
+            : ownRashFormat
+              ? "O'z formatingiz: test savollari, variantlar va yozma savollar sonini o'zingiz kiritasiz. Natija Rasch modeli bilan (ball va daraja)."
+              : preset.hint
       }</p>
     </div>
 
@@ -12639,11 +12651,14 @@ function renderNewTestForm(testType, draft = {}) {
       <label class="setting-row">
         <input type="checkbox" id="field-ms-format" ${msFormat ? "checked" : ""} />
         <span>
-          <b>📝 Milliy sertifikat formati (yozma javoblar bilan)</b>
-          <p class="subtitle" style="margin:4px 0 0">
-            1–35 test (33–35 — A–F) va yozma savollar. O'quvchi yozma javobni tituldagi katakka qo'lda yozadi,
-            skaner uni rasm qilib saqlaydi, siz rasmga qarab ✓ yoki ✗ qo'yasiz. Natija Rasch bo'yicha.
-          </p>
+          <b>📝 Milliy sertifikat formati${offline ? " (yozma javoblar bilan)" : ""}</b>
+          <p class="subtitle" style="margin:4px 0 0">${
+            offline
+              ? `1–35 test (33–35 — A–F) va yozma savollar. O'quvchi yozma javobni tituldagi katakka qo'lda yozadi,
+                 skaner uni rasm qilib saqlaydi, siz rasmga qarab ✓ yoki ✗ qo'yasiz. Natija Rasch bo'yicha.`
+              : `Yoqilsa — savollar soni, variantlar (masalan 33–35 — A–F), yozma savollar (a, b) va vaqt
+                 fan bo'yicha avtomatik qo'yiladi. O'chiq bo'lsa — formatni o'zingiz tuzasiz. Ikkalasida ham natija Rasch bo'yicha.`
+          }</p>
         </span>
       </label>
     </div>
@@ -12683,7 +12698,8 @@ function renderNewTestForm(testType, draft = {}) {
       <input class="input" id="field-end-time" type="datetime-local" value="${offline ? "" : draft.endTime || ""}" />
 
       <label class="field-label" for="field-duration">Davomiyligi (daqiqa)</label>
-      <input class="input" id="field-duration" type="number" min="1" value="${draft.duration ?? (offline ? 60 : preset.duration)}" />
+      <input class="input" id="field-duration" type="number" min="1"
+             value="${draft.duration ?? (offline || ownRashFormat ? 60 : structure.duration || preset.duration)}" />
     </div>
   `;
 
@@ -12721,7 +12737,7 @@ function renderNewTestForm(testType, draft = {}) {
         <div style="flex:1">
           <label class="field-label" for="field-test-count">${offline ? "Nechta test savoli?" : "Test savollari"}</label>
           <input class="input" id="field-test-count" type="number" min="0" max="${offline ? OFFLINE_MAX_QUESTIONS : 300}" value="${testCount}"
-                 ${offline ? `placeholder="masalan 25"` : ""} style="margin:0" />
+                 ${offline || ownRashFormat ? `placeholder="masalan 25"` : ""} style="margin:0" />
         </div>
         <div style="flex:1">
           <label class="field-label" for="field-option-count">Variantlar</label>
@@ -12769,13 +12785,14 @@ function renderNewTestForm(testType, draft = {}) {
 
   const subjectSelect = document.getElementById("field-subject");
 
-  // Oflayn: Milliy sertifikat formati yoqilsa/o'chirilsa — savollar fan tuzilishi bilan qaytadan chiziladi
+  // Milliy sertifikat formati yoqilsa/o'chirilsa — savollar (va vaqt) yangi format bo'yicha qaytadan chiziladi
   const rerenderWithFormat = (enabled) => {
     const carried = collectTestFormDraft();
     delete carried.testCount;
     delete carried.optionCount;
     delete carried.textCount;
     delete carried.answers;
+    delete carried.duration;
     renderNewTestForm(type, { ...carried, msFormat: enabled });
   };
   document.getElementById("field-ms-format").addEventListener("change", (event) => rerenderWithFormat(event.target.checked));
@@ -12797,7 +12814,8 @@ function renderNewTestForm(testType, draft = {}) {
       if (msFormat) rerenderWithFormat(canMs);
       return;
     }
-    if (type !== "rash") return;
+    // O'z formatida savollar sonini o'qituvchi o'zi tuzgan — fan almashsa ham tegilmaydi
+    if (type !== "rash" || !msFormat) return;
 
     const next = subjectStructure(subjectSelect.value, preset);
     const container = document.getElementById("key-questions-container");
@@ -13026,17 +13044,22 @@ function renderNewTestForm(testType, draft = {}) {
   ["field-test-count", "field-text-count"].forEach((id) => {
     document.getElementById(id).addEventListener("input", updateTotalHint);
   });
-  if (offline) {
+  if (offline || ownRashFormat) {
     // Savollar soni yozilishi bilan javob katakchalari chiqadi (kiritilgan javoblar saqlanadi)
-    document.getElementById("field-test-count").addEventListener("input", (event) => {
-      const value = Number(event.target.value);
-      if (value >= 1 && value <= OFFLINE_MAX_QUESTIONS) buildKeyQuestionRows();
-    });
+    ["field-test-count", "field-text-count"].forEach((id) =>
+      document.getElementById(id).addEventListener("input", () => {
+        const tests = Number(document.getElementById("field-test-count").value) || 0;
+        const texts = Number(document.getElementById("field-text-count").value) || 0;
+        if (tests + texts >= 1 && tests <= (offline ? OFFLINE_MAX_QUESTIONS : 300) && texts <= 300) buildKeyQuestionRows();
+      })
+    );
   }
 
   updateTotalHint();
-  // Offline'da savollar soni hali kiritilmagan — "kamida bitta savol" deb ogohlantirilmaydi
-  if (!offline || Number(testCount) > 0) buildKeyQuestionRows(draft.answers);
+  // Offline'da va o'z formatida savollar soni hali kiritilmagan — "kamida bitta savol" deb ogohlantirilmaydi
+  if ((!offline && !ownRashFormat) || (Number(testCount) || 0) + (Number(textCount) || 0) > 0) {
+    buildKeyQuestionRows(draft.answers);
+  }
 }
 
 function collectTestFormDraft() {
