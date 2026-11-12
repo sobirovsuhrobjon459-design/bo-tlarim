@@ -1195,7 +1195,9 @@ const CONFIRM_DANGER_ACTIONS = [
 ];
 let closeActiveConfirm = null; // ochiq tasdiq oynasini "bekor" deb yopadi
 
-function askConfirm(message) {
+// yes/no — tugmalar nomi; dismissed — oyna tashqarisi, Escape yoki "orqaga" bosilganda qaytadigan
+// qiymat (odatda false; "saqlansinmi?" kabi savolda null — "hech biri, sahifada qolaman")
+function askConfirm(message, { yes = null, no = "Bekor qilish", dismissed = false } = {}) {
   closeActiveConfirm?.(false); // oldingisi ochiq qolgan bo'lsa — bekor
   const text = String(message ?? "").trim();
   // Birinchi savol ("…?") — qalin sarlavha, qolgani ostida izoh bo'lib turadi
@@ -1215,8 +1217,8 @@ function askConfirm(message) {
         <p class="confirm-title${title.length > 140 ? " is-long" : ""}" id="confirm-title">${escapeHtml(title)}</p>
         ${details ? `<p class="confirm-text">${escapeHtml(details)}</p>` : ""}
         <div class="confirm-actions">
-          <button type="button" class="btn btn-ghost" data-confirm="no">Bekor qilish</button>
-          <button type="button" class="btn confirm-ok" data-confirm="yes">${danger ? danger[1] : "Ha"}</button>
+          <button type="button" class="btn btn-ghost" data-confirm="no">${escapeHtml(no)}</button>
+          <button type="button" class="btn confirm-ok" data-confirm="yes">${escapeHtml(yes || (danger ? danger[1] : "Ha"))}</button>
         </div>
       </div>`;
     // Ochiq klaviatura yopilsin — oyna to'liq ko'rinsin
@@ -1230,7 +1232,7 @@ function askConfirm(message) {
     const finish = (answer) => {
       if (done) return;
       done = true;
-      if (closeActiveConfirm === finish) closeActiveConfirm = null;
+      if (closeActiveConfirm === dismiss) closeActiveConfirm = null;
       document.removeEventListener("keydown", onKey, true);
       backdrop.style.pointerEvents = "none"; // so'nib borayotgan oyna bosishni ushlamasin
       backdrop.classList.remove("open");
@@ -1243,7 +1245,7 @@ function askConfirm(message) {
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        finish(false);
+        dismiss();
       } else if (event.key === "Tab") {
         // Fokus oynadan tashqariga chiqmasin
         event.preventDefault();
@@ -1251,12 +1253,14 @@ function askConfirm(message) {
         buttons[(index + (event.shiftKey ? -1 : 1) + buttons.length) % buttons.length].focus();
       }
     };
-    closeActiveConfirm = finish;
+    // Oyna tashqarisi, Escape va telefon/Telegram "orqaga" tugmasi — "javob berilmadi"
+    const dismiss = () => finish(dismissed);
+    closeActiveConfirm = dismiss;
     document.addEventListener("keydown", onKey, true);
     backdrop.addEventListener("click", (event) => {
       const button = event.target.closest("[data-confirm]");
       if (button) finish(button.dataset.confirm === "yes");
-      else if (event.target === backdrop) finish(false);
+      else if (event.target === backdrop) dismiss();
     });
     // Enter — xavfsiz tugmada: o'chirishda "Bekor qilish", boshqasida "Ha"
     buttons[danger ? 0 : 1].focus({ preventScroll: true });
@@ -16686,7 +16690,7 @@ async function renderStudentDetail(testId, attemptId) {
         ? ""
         : pending
           ? `<div class="notice">Javoblar hali kiritilmagan — belgilab, pastdagi «💾 Saqlash» ni bosing.</div>`
-          : `<div class="ans-callout">Javobni o'zgartirsangiz — ball, foiz va Rasch shu yerning o'zida qayta hisoblanadi</div>`
+          : `<div class="ans-callout">Javobni o'zgartirsangiz — pastda «💾 Saqlash» chiqadi: bosganingizda ball, foiz va Rasch qayta hisoblanadi</div>`
     }
     <div class="row-between" style="gap:10px;margin:4px 0 12px;flex-wrap:wrap">
       ${detail.has_sheet ? `<button class="btn btn-ghost" id="student-sheet-button" style="margin:0;width:auto;padding:10px 14px">🧾 Titul rasmi</button>` : "<span></span>"}
@@ -16713,7 +16717,13 @@ async function renderStudentDetail(testId, attemptId) {
         : ""
     }
     ${detail.essay ? essayGradingHtml(detail.essay) : ""}
-    ${canEdit && pending ? `<div class="sticky-footer"><button class="btn" id="ans-save" style="margin:0">💾 Saqlash</button></div>` : ""}
+    ${
+      canEdit
+        ? `<div class="sticky-footer" id="ans-save-bar" ${pending ? "" : "hidden"}>
+             <button class="btn" id="ans-save" style="margin:0">💾 ${pending ? "Saqlash" : "O'zgarishlarni saqlash"}</button>
+           </div>`
+        : ""
+    }
   `);
 
   // Har savol holatini chizish (bo'yalgan harflar, ✅/❌, yozma baho va belgilar)
@@ -16758,13 +16768,14 @@ async function renderStudentDetail(testId, attemptId) {
   };
   paint();
 
-  // Saqlash: so'rovlar navbat bilan; javobdan keyin ball va holatlar serverdagidek yangilanadi.
-  // O'qituvchi shu orada yana bosgan bo'lishi mumkin — mahalliy javoblar (chosen) ustidan yozilmaydi
+  // Skanerlangan yozma javobga ✓/✗ — darhol, navbat bilan saqlanadi; javobdan keyin ball serverdagidek
+  // yangilanadi. Mahalliy (hali saqlanmagan) javoblar (chosen) ustidan yozilmaydi
   let queue = Promise.resolve();
   const answersBody = () =>
     Object.fromEntries(items.filter((item) => item.chosen).map((item) => [String(item.ref), item.chosen]));
   const refresh = async () => {
     detail = await api(url);
+    if (!document.getElementById("ans-stats")) return; // sahifadan chiqib ketilgan
     const fresh = new Map(detail.edit.items.map((item) => [item.ref, item]));
     for (const item of items) {
       const server = fresh.get(item.ref);
@@ -16775,17 +16786,29 @@ async function renderStudentDetail(testId, attemptId) {
     document.getElementById("ans-stats").innerHTML = statsHtml();
     paint();
   };
-  const persist = () => {
-    queue = queue
-      .then(async () => {
-        await api(`/api/teacher/tests/${testId}/students/${attemptId}/answers`, {
-          method: "POST",
-          body: { answers: answersBody(), variant: edit.variants.length ? variant : null },
-        });
-        await refresh();
-      })
-      .catch((error) => showToast(`⚠️ ${error.message}`));
-    return queue;
+  /*
+    Javoblar (harflar, yozma javoblar, variant) avtomatik saqlanmaydi: o'zgarish bo'lishi bilan
+    pastda «💾 Saqlash» chiqadi. Saqlamasdan chiqilsa — "O'zgarishlar saqlansinmi?" so'raladi.
+    Ilgari har bosish darhol saqlanardi, yozma javob esa faqat maydondan chiqqanda yozilardi —
+    Telegram yoki telefonning "orqaga" tugmasi bosilsa, tuzatilgan javob yo'qolib qolardi.
+  */
+  let dirty = false;
+  const markDirty = () => {
+    if (dirty) return;
+    dirty = true;
+    markUnsaved(); // pastki menyu yoki chap menyu orqali chiqilsa ham ogohlantiriladi
+    const bar = document.getElementById("ans-save-bar");
+    if (bar) bar.hidden = false;
+  };
+  const saveAnswers = async () => {
+    if (!Object.keys(answersBody()).length) throw new Error("Kamida bitta javobni belgilang");
+    await queue; // ✓/✗ baholari avval yozib bo'linsin
+    await api(`/api/teacher/tests/${testId}/students/${attemptId}/answers`, {
+      method: "POST",
+      body: { answers: answersBody(), variant: edit.variants.length ? variant : null },
+    });
+    dirty = false;
+    showToast("✅ Javoblar saqlandi");
   };
 
   if (canEdit) {
@@ -16807,29 +16830,23 @@ async function renderStudentDetail(testId, attemptId) {
         item.chosen = letters(item).filter((value) => chosen.has(value)).join(",");
         telegram?.HapticFeedback?.selectionChanged?.();
         paint();
-        if (!pending) persist();
+        markDirty();
       });
     });
     /*
       Yozma javob — fanga mos klaviatura bilan (Matematika: √, kasr, daraja; Biologiya: oddiy harflar).
-      Har harfda serverga yuborilmaydi: yozish to'xtagach (yoki maydondan chiqilganda) natija
-      bir marta qayta hisoblanadi. setupMathFields — MathLive kech yuklanib, oddiy maydon
-      almashtirilsa ham shu funksiya yangi maydonga o'tadi.
+      Har harf darhol xotiraga yoziladi (maydondan chiqishni kutmaydi). To'g'ri/xatoligini server
+      hisoblaydi — shuning uchun o'zgargan javobning rangi saqlanguncha olib turiladi.
+      setupMathFields — MathLive kech yuklanib, oddiy maydon almashtirilsa ham shu funksiya o'tadi.
     */
-    let writtenTimer = null;
-    const flushWritten = () => {
-      clearTimeout(writtenTimer);
-      if (!pending) persist();
-    };
     setupMathFields(appElement, (field, value) => {
       const item = written.find((entry) => String(entry.ref) === field.closest("[data-ans-ref]").dataset.ansRef);
       if (!item || item.chosen === value) return;
       item.chosen = value;
-      if (pending) return;
-      clearTimeout(writtenTimer);
-      writtenTimer = setTimeout(flushWritten, 900);
+      item.is_correct = null;
+      paint();
+      markDirty();
     });
-    appElement.querySelectorAll(".written-item .math-input").forEach((field) => field.addEventListener("change", flushWritten));
     document.querySelectorAll(".written-item .verdict-button").forEach((button) => {
       const card = button.closest("[data-ans-ref]");
       const item = written.find((entry) => String(entry.ref) === card.dataset.ansRef);
@@ -16853,17 +16870,12 @@ async function renderStudentDetail(testId, attemptId) {
     });
     wireVariantChips((name) => {
       variant = name;
-      if (!pending) persist();
+      markDirty();
     });
     document.getElementById("ans-save")?.addEventListener(
       "click",
       guarded(async () => {
-        if (!Object.keys(answersBody()).length) throw new Error("Kamida bitta javobni belgilang");
-        await api(`/api/teacher/tests/${testId}/students/${attemptId}/answers`, {
-          method: "POST",
-          body: { answers: answersBody(), variant: edit.variants.length ? variant : null },
-        });
-        showToast("✅ Javoblar saqlandi");
+        await saveAnswers();
         await renderStudentDetail(testId, attemptId);
       })
     );
@@ -16872,7 +16884,16 @@ async function renderStudentDetail(testId, attemptId) {
   document.querySelector('[data-action="test"]').addEventListener(
     "click",
     guarded(async () => {
-      await queue; // oxirgi o'zgartirish saqlanmasdan chiqib ketilmasin
+      if (dirty) {
+        const answer = await askConfirm("O'zgarishlar saqlansinmi? Saqlamasangiz, kiritgan javoblaringiz yo'qoladi.", {
+          yes: "💾 Saqlash",
+          no: "Saqlamaslik",
+          dismissed: null,
+        });
+        if (answer === null) return; // oyna yopildi — sahifada qolamiz
+        if (answer) await saveAnswers();
+      }
+      await queue; // ✓/✗ baholari yozib bo'linsin
       await renderTestDetail(testId);
     })
   );
