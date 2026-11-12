@@ -449,7 +449,7 @@ async def _ask_app_login(message: Message, token: str) -> None:
     await message.answer(
         "📱 <b>Chittak ilovasi yoki saytiga kirish</b>\n\n"
         f"👤 Akkaunt: <b>{account}</b>\n🆔 ID: <code>{user.id}</code>\n\n"
-        "SHU akkaunt bilan kirasiz — testlar, natijalar va kreditlar bir xil bo'ladi. "
+        "SHU akkaunt bilan kirasiz — testlar, natijalar va tokenlar bir xil bo'ladi. "
         "Boshqa akkaunt kerak bo'lsa — Telegram'da o'sha akkauntga o'ting va qaytadan «Kirish»ni bosing.\n\n"
         "⚠️ Faqat HOZIR o'zingiz ilovada yoki saytda «Telegram orqali kirish»ni bosgan bo'lsangiz tasdiqlang. "
         "Bu havolani sizga boshqa odam yuborgan bo'lsa — bosmang.",

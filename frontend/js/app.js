@@ -9343,7 +9343,7 @@ async function refreshHomeInBackground() {
   👑 Admin panel — bo'limlarga ajratilgan:
     Umumiy      — kutilayotgan ishlar, davr bo'yicha o'sish, daromad, reytinglar
     To'lovlar   — karta to'lovlarini tasdiqlash, pul yechish, xaridlar tarixi
-    Odamlar     — foydalanuvchini topish, kredit berish, xabar yozish
+    Odamlar     — foydalanuvchini topish, token berish, xabar yozish
     Muassasalar — barcha maktab/kurs/to'garaklar
     Promo       — promo kodlar
     Tizim       — zaxira nusxa
@@ -9438,7 +9438,7 @@ function adminPeriodTiles(stats) {
       <div class="stat-tile">🏫<span class="stat-value">${value("new_schools")}</span>Yangi muassasa</div>
     </div>
     <div class="row-between admin-line">
-      <span>🎟️ Kredit sotuvidan tushum</span>
+      <span>🎟️ Token sotuvidan tushum</span>
       <b style="color:var(--color-primary)">${value("credits_revenue")} so'm</b>
     </div>`;
 }
@@ -9453,7 +9453,7 @@ async function adminHomeView(stats) {
       ? `<div class="card admin-todo" style="cursor:default">
            <div class="card-body" style="width:100%">
              <h3 style="margin:0 0 6px">⏳ Sizni kutmoqda</h3>
-             ${cardCount ? `<p style="margin:2px 0">💳 <b>${cardCount}</b> ta karta to'lovi — pul tushganini tekshirib, kredit yozing</p>` : ""}
+             ${cardCount ? `<p style="margin:2px 0">💳 <b>${cardCount}</b> ta karta to'lovi — pul tushganini tekshirib, token yozing</p>` : ""}
              ${withdrawCount ? `<p style="margin:2px 0">💸 <b>${withdrawCount}</b> ta pul yechish so'rovi — o'qituvchiga pul o'tkazing</p>` : ""}
              <button class="btn" data-goto-tab="payments" style="margin-top:10px">Ko'rib chiqish →</button>
            </div>
@@ -9504,7 +9504,7 @@ async function adminHomeView(stats) {
         <div class="card-body" style="width:100%">
           <h3>💰 Platforma daromadi</h3>
           <div class="row-between" style="margin-top:6px">
-            <span>🎟️ Kredit sotuvi <span class="subtitle">(${formatNumber(stats.credits_sold)} dona)</span></span>
+            <span>🎟️ Token sotuvi <span class="subtitle">(${formatNumber(stats.credits_sold)} dona)</span></span>
             <b>${formatNumber(stats.credits_revenue)} so'm</b>
           </div>
           <div class="row-between" style="margin-top:6px">
@@ -9560,7 +9560,7 @@ function adminPurchaseRow(purchase) {
           <b>${formatNumber(purchase.amount)} so'm</b>
         </div>
         <p class="subtitle" style="margin:4px 0 0">
-          ${formatNumber(purchase.credits)} kredit • ${PURCHASE_METHOD[purchase.method] || escapeHtml(purchase.method)} •
+          ${purchaseLabel(purchase)} • ${PURCHASE_METHOD[purchase.method] || escapeHtml(purchase.method)} •
           ${formatDateTime(purchase.created_at)}
           <span class="badge ${status.badge}">${status.label}</span>
         </p>
@@ -9575,7 +9575,7 @@ async function adminPaymentsView() {
     api(`/api/admin/payments?status=${encodeURIComponent(adminState.paymentStatus)}`),
   ]);
 
-  // Karta orqali kredit so'rovlari. Asosan admin ularni Telegram'dagi chek
+  // Karta orqali token so'rovlari. Asosan admin ularni Telegram'dagi chek
   // ostidagi tugma bilan tasdiqlaydi — bu yerdagisi zaxira yo'l.
   const cardTopUpRows =
     cardTopUps
@@ -9587,7 +9587,7 @@ async function adminPaymentsView() {
                 <span>${escapeHtml(topUp.teacher)}</span>
                 <b>${formatNumber(topUp.amount)} so'm</b>
               </div>
-              <p>${formatNumber(topUp.credits)} ta kredit • ${formatDateTime(topUp.created_at)}</p>
+              <p>${purchaseLabel(topUp)} • ${formatDateTime(topUp.created_at)}</p>
               ${topUp.has_receipt ? `<button class="btn btn-ghost" data-action="receipt" style="padding:8px">🧾 Chekni ko'rish</button>` : ""}
               <img data-receipt-image alt="" hidden
                    style="max-width:100%;border-radius:10px;margin:8px 0;display:block" />
@@ -9630,14 +9630,14 @@ async function adminPaymentsView() {
   return {
     html: `
       <h3>💳 Karta orqali to'lovlar</h3>
-      ${adminHint("O'qituvchi kredit uchun kartangizga pul o'tkazib, chek yuborgan. Kartangizga pul kelganini tekshiring va «Pul tushdi» ni bosing — kredit darhol yoziladi.")}
+      ${adminHint("O'qituvchi token uchun kartangizga pul o'tkazib, chek yuborgan. Kartangizga pul kelganini tekshiring va «Pul tushdi» ni bosing — token darhol yoziladi.")}
       ${cardTopUpRows}
 
       <h3>💸 Pul yechish so'rovlari</h3>
       ${adminHint("O'qituvchi pullik testlardan yig'ilgan balansini kartasiga so'ramoqda. Avval pulni o'tkazing, keyin «To'landi» ni bosing.")}
       ${withdrawalRows}
 
-      <h3>🧾 Kredit xaridlari tarixi</h3>
+      <h3>🧾 Token xaridlari tarixi</h3>
       ${adminHint("Oxirgi 100 ta xarid. Ismni bossangiz — o'qituvchi kartochkasi ochiladi.")}
       ${adminChips(statusChips, adminState.paymentStatus, "payment-status")}
       ${history.map(adminPurchaseRow).join("") || "<p class='subtitle'>Bu holatda xarid yo'q</p>"}
@@ -9695,9 +9695,9 @@ async function adminPaymentsView() {
         card.querySelector('[data-action="approve"]').addEventListener(
           "click",
           guarded(async () => {
-            if (!(await askConfirm("Kartangizga pul tushganini tekshirdingizmi? Kredit darhol yoziladi."))) return;
+            if (!(await askConfirm("Kartangizga pul tushganini tekshirdingizmi? Token darhol yoziladi."))) return;
             await api(`/api/admin/card-topups/${topUpId}/approve`, { method: "POST", body: {} });
-            showToast("✅ Kredit yozildi, o'qituvchiga xabar ketdi");
+            showToast("✅ Token yozildi, o'qituvchiga xabar ketdi");
             await renderAdminDashboard("payments");
           })
         );
@@ -9746,7 +9746,7 @@ async function adminUsersView() {
 
   return {
     html: `
-      ${adminHint("Ism, @username yoki Telegram ID bo'yicha qidiring. Odamni bossangiz — uning kartochkasi ochiladi: u yerdan kredit berish yoki xabar yozish mumkin.")}
+      ${adminHint("Ism, @username yoki Telegram ID bo'yicha qidiring. Odamni bossangiz — uning kartochkasi ochiladi: u yerdan token berish yoki xabar yozish mumkin.")}
       <form id="admin-user-search" class="admin-search">
         <input class="input is-search" id="admin-user-query" type="search" placeholder="Ism, @username yoki ID" value="${escapeHtml(adminState.userQuery)}" />
         <button class="btn" type="submit">Qidirish</button>
@@ -9791,7 +9791,8 @@ async function openAdminUserSheet(userId) {
   ];
   if (user.is_teacher) {
     facts.push(
-      ["Kredit", `${formatNumber(user.credits)} dona`],
+      ["Token", `${formatNumber(user.credits)} dona`],
+      ["Obuna", parseUtc(user.subscription_until) > new Date() ? `${subscriptionUntilText(user.subscription_until)} gacha` : "yo'q"],
       ["Pul balansi", `${formatNumber(user.balance)} so'm`],
       ["Yaratgan testlari", `${user.tests} ta`],
       ["Jami to'lagan", `${formatNumber(user.paid_total)} so'm`]
@@ -9810,7 +9811,7 @@ async function openAdminUserSheet(userId) {
   const purchases = user.purchases
     .map((purchase) => {
       const status = PURCHASE_STATUS[purchase.status] || { label: purchase.status, badge: "badge-gray" };
-      return `<p style="margin:4px 0">${formatDate(purchase.created_at)} — ${formatNumber(purchase.credits)} kr / ${formatNumber(purchase.amount)} so'm
+      return `<p style="margin:4px 0">${formatDate(purchase.created_at)} — ${purchaseLabel(purchase)} / ${formatNumber(purchase.amount)} so'm
         <span class="badge ${status.badge}">${status.label}</span></p>`;
     })
     .join("");
@@ -9826,14 +9827,14 @@ async function openAdminUserSheet(userId) {
 
     ${
       user.is_teacher
-        ? `<h4 style="margin:16px 0 4px">🎁 Kredit berish yoki ayirish</h4>
+        ? `<h4 style="margin:16px 0 4px">🎁 Token berish yoki ayirish</h4>
            <p class="subtitle" style="margin:0 0 6px">Sovg'a, kompensatsiya yoki xatoni tuzatish uchun. Ayirish uchun minus bilan yozing (masalan −500). Daromad hisobiga kirmaydi.</p>
            <div class="two-fields">
              <input class="input" id="admin-credit-delta" type="number" placeholder="Masalan 1000" />
              <input class="input" id="admin-credit-reason" maxlength="300" placeholder="Sabab (ixtiyoriy)" />
            </div>
            <label class="admin-check"><input type="checkbox" id="admin-credit-notify" checked /> O'qituvchiga Telegramda xabar borsin</label>
-           <button class="btn" id="admin-credit-save" style="margin-top:8px">Kreditni o'zgartirish</button>`
+           <button class="btn" id="admin-credit-save" style="margin-top:8px">Tokenni o'zgartirish</button>`
         : ""
     }
 
@@ -9852,13 +9853,13 @@ async function openAdminUserSheet(userId) {
     "click",
     guarded(async () => {
       const delta = Math.trunc(Number(sheet.querySelector("#admin-credit-delta").value.replace("−", "-")));
-      if (!delta) throw new Error("Kredit sonini yozing (masalan 1000 yoki -500)");
+      if (!delta) throw new Error("Token sonini yozing (masalan 1000 yoki -500)");
       const reason = sheet.querySelector("#admin-credit-reason").value.trim();
       const notify = sheet.querySelector("#admin-credit-notify").checked;
-      const action = delta > 0 ? `${formatNumber(delta)} kredit QO'SHILADI` : `${formatNumber(-delta)} kredit AYIRILADI`;
+      const action = delta > 0 ? `${formatNumber(delta)} token QO'SHILADI` : `${formatNumber(-delta)} token AYIRILADI`;
       if (!(await askConfirm(`${user.name}: ${action}. Davom etasizmi?`))) return;
       const result = await api(`/api/admin/users/${user.id}/credits`, { method: "POST", body: { delta, reason, notify } });
-      showToast(`✅ Endi ${formatNumber(result.credits)} kredit${notify && !result.notified ? " (xabar yetmadi)" : ""}`);
+      showToast(`✅ Endi ${formatNumber(result.credits)} token${notify && !result.notified ? " (xabar yetmadi)" : ""}`);
       close();
       if (adminState.tab === "users") await renderAdminDashboard("users");
     })
@@ -9987,7 +9988,7 @@ async function adminPromoView() {
             <div class="card-body" style="width:100%">
               <div class="row-between">
                 <b>🎁 ${escapeHtml(promo.hint)}</b>
-                <b>+${formatNumber(promo.credits)} kredit</b>
+                <b>+${formatNumber(promo.credits)} token</b>
               </div>
               <p class="subtitle" style="margin:4px 0 0">
                 ${promo.used}${promo.max_uses ? ` / ${promo.max_uses}` : ""} marta ishlatildi • har kim ${promo.per_teacher_limit} martagacha
@@ -10002,7 +10003,7 @@ async function adminPromoView() {
 
   return {
     html: `
-      ${adminHint("Promo kod — o'qituvchiga bepul kredit berish usuli. O'qituvchi kodni «Kredit sotib olish» oynasidagi son maydoniga yozadi va kredit oladi.")}
+      ${adminHint("Promo kod — o'qituvchiga bepul token berish usuli. O'qituvchi kodni «Token sotib olish» oynasidagi son maydoniga yozadi va token oladi.")}
       <div class="card" style="cursor:default">
         <div class="card-body" style="width:100%">
           <h3 style="margin:0 0 8px">+ Yangi promo kod</h3>
@@ -10011,7 +10012,7 @@ async function adminPromoView() {
           <p class="subtitle" style="margin:4px 0 8px">Faqat raqamdan iborat kod kamida 7 xonali bo'lsin.</p>
           <div class="two-fields">
             <div>
-              <label class="field-label" for="promo-new-credits">Necha kredit beradi</label>
+              <label class="field-label" for="promo-new-credits">Necha token beradi</label>
               <input class="input" id="promo-new-credits" type="number" min="1" value="3000" />
             </div>
             <div>
@@ -10041,7 +10042,7 @@ async function adminPromoView() {
           const perTeacher = Number(document.getElementById("promo-new-per-teacher").value) || 3;
           const expires = document.getElementById("promo-new-expires").value || null;
           await api("/api/admin/promo-codes", { method: "POST", body: { code, credits, max_uses: limit, per_teacher_limit: perTeacher, expires_on: expires } });
-          showToast(`✅ Promo kod yaratildi: +${formatNumber(credits)} kredit`);
+          showToast(`✅ Promo kod yaratildi: +${formatNumber(credits)} token`);
           await renderAdminDashboard("promo");
         })
       );
@@ -10071,7 +10072,10 @@ function paymentStateBadge(enabled) {
 const PAYMENT_SOURCE_NOTE = { db: "admin panelidan", env: "server sozlamasidan", none: "—" };
 
 async function adminSystemView() {
-  const pay = await api("/api/admin/payment-settings");
+  const [pay, subscription] = await Promise.all([
+    api("/api/admin/payment-settings"),
+    api("/api/admin/subscription-settings"),
+  ]);
 
   return {
     html: `
@@ -10080,7 +10084,7 @@ async function adminSystemView() {
           <h3>💳 To'lov tizimlari</h3>
           <p>
             Kalit kiritilmaguncha o'quvchi va o'qituvchilar pulni qo'lda — kartaga o'tkazma va chek rasmi
-            bilan to'laydi. Kalit qo'yilgach, to'lov avtomatik bo'ladi: pul tushishi bilan kredit yoziladi
+            bilan to'laydi. Kalit qo'yilgach, to'lov avtomatik bo'ladi: pul tushishi bilan token yoziladi
             va testga ruxsat ochiladi.
           </p>
 
@@ -10128,6 +10132,26 @@ async function adminSystemView() {
 
       <div class="card" style="cursor:default">
         <div class="card-body">
+          <h3>⭐ Oylik obuna narxlari</h3>
+          <p>
+            O'qituvchi token o'rniga obuna sotib olsa, muddat davomida tekshiruvlar cheksiz — token yechilmaydi.
+            Narxi <b>0</b> bo'lgan muddat o'qituvchilarga ko'rsatilmaydi. Yangi narx allaqachon sotilgan obunalarga ta'sir qilmaydi.
+          </p>
+          <p class="subtitle" style="margin:0 0 4px">Hozir obunasi faol: <b>${formatNumber(subscription.active)} ta o'qituvchi</b></p>
+          ${subscription.plans
+            .map(
+              (plan) => `
+                <label class="field-label" for="sub-price-${plan.months}">${plan.months === 12 ? "1 yillik" : `${plan.months} oylik`} obuna (${plan.days} kun), so'm</label>
+                <input class="input" id="sub-price-${plan.months}" data-sub-months="${plan.months}" inputmode="numeric"
+                       autocomplete="off" placeholder="0 — sotilmaydi" value="${plan.price || ""}" />`
+            )
+            .join("")}
+          <button class="btn" id="sub-save" style="margin-top:14px">💾 Narxlarni saqlash</button>
+        </div>
+      </div>
+
+      <div class="card" style="cursor:default">
+        <div class="card-body">
           <h3>🔗 Kabinetga kiritiladigan manzillar</h3>
           <p>Payme va Click kabinetida shu manzillarni ko'rsating — to'lov o'tgani haqidagi xabar shu yerga keladi. Bosilsa nusxalanadi.</p>
           <p class="subtitle" style="margin:8px 0 2px">Payme — Endpoint URL</p>
@@ -10154,10 +10178,10 @@ async function adminSystemView() {
           <h3>❓ Qaysi bo'limda nima bor</h3>
           <p style="margin:6px 0"><b>📊 Umumiy</b> — kutayotgan ishlar, bugun/hafta/oy bo'yicha o'sish, daromad va reytinglar.</p>
           <p style="margin:6px 0"><b>💳 To'lovlar</b> — karta to'lovlarini tasdiqlash, pul yechish so'rovlari, barcha xaridlar tarixi. Qizil raqam — nechta ish kutayotgani.</p>
-          <p style="margin:6px 0"><b>👥 Odamlar</b> — istalgan foydalanuvchini topish; o'qituvchiga kredit berish yoki ayirish; bot orqali xabar yozish.</p>
+          <p style="margin:6px 0"><b>👥 Odamlar</b> — istalgan foydalanuvchini topish; o'qituvchiga token berish yoki ayirish; bot orqali xabar yozish.</p>
           <p style="margin:6px 0"><b>🏫 Muassasalar</b> — barcha maktab, o'quv markazi va to'garaklar: qayerda, kimniki, nechta o'quvchi.</p>
           <p style="margin:6px 0"><b>📢 E'lon</b> — o'qituvchilar, xodimlar yoki hammaga bot orqali xabar. Avval o'zingizga sinab ko'ring.</p>
-          <p style="margin:6px 0"><b>🎁 Promo</b> — o'qituvchilarga bepul kredit beruvchi kodlar.</p>
+          <p style="margin:6px 0"><b>🎁 Promo</b> — o'qituvchilarga bepul token beruvchi kodlar.</p>
           <p style="margin:6px 0"><b>⚙️ Tizim</b> — Payme/Click kalitlari (onlayn to'lovni yoqadi) va bazaning zaxira nusxasi.</p>
         </div>
       </div>
@@ -10176,6 +10200,21 @@ async function adminSystemView() {
       );
 
       const field = (id) => document.getElementById(id).value.trim();
+
+      document.getElementById("sub-save").addEventListener(
+        "click",
+        guarded(async () => {
+          const prices = {};
+          document.querySelectorAll("[data-sub-months]").forEach((input) => {
+            const digits = input.value.replace(/\s/g, "");
+            if (digits && !/^\d+$/.test(digits)) throw new Error("Narxni faqat raqam bilan yozing");
+            prices[input.dataset.subMonths] = Number(digits) || 0;
+          });
+          await api("/api/admin/subscription-settings", { method: "POST", body: { prices } });
+          showToast("✅ Obuna narxlari saqlandi");
+          await renderAdminDashboard("system");
+        })
+      );
 
       document.getElementById("pay-save").addEventListener(
         "click",
@@ -11476,15 +11515,15 @@ async function submitTeacherRegister() {
 /*
   Referal: o'qituvchi havolasini tarqatadi. Havola orqali kelgan yangi odam
   @sukhrobmath kanaliga obuna bo'lib, o'qituvchi bo'lib ro'yxatdan o'tsa —
-  havola egasiga kredit (server beradi, bot xabar qiladi).
+  havola egasiga token (server beradi, bot xabar qiladi).
 */
 function referralCardHtml(referral) {
   return `
     <div class="card tone-peach" style="cursor:default">
       <div class="card-body" style="width:100%">
-        <div class="row-between"><span class="card-title-row"><span class="card-title-icon">🤝</span>Do'stlarni taklif qiling</span><b style="font-size:18px">+${referral.reward} kredit</b></div>
-        <p>Havolangiz orqali kelgan har bir yangi odam kanalga obuna bo'lib, o'qituvchi sifatida ro'yxatdan o'tsa — sizga ${referral.reward} kredit.</p>
-        <p class="subtitle" style="margin:6px 0 0">👥 Taklif qilinganlar: <b>${referral.invited}</b> · ✅ O'qituvchi bo'ldi: <b>${referral.joined}</b> · 🎫 Olingan: <b>${referral.earned}</b> kredit</p>
+        <div class="row-between"><span class="card-title-row"><span class="card-title-icon">🤝</span>Do'stlarni taklif qiling</span><b style="font-size:18px">+${referral.reward} token</b></div>
+        <p>Havolangiz orqali kelgan har bir yangi odam kanalga obuna bo'lib, o'qituvchi sifatida ro'yxatdan o'tsa — sizga ${referral.reward} token.</p>
+        <p class="subtitle" style="margin:6px 0 0">👥 Taklif qilinganlar: <b>${referral.invited}</b> · ✅ O'qituvchi bo'ldi: <b>${referral.joined}</b> · 🎫 Olingan: <b>${referral.earned}</b> token</p>
         ${
           referral.link
             ? `<div class="contact-actions" style="margin-top:10px">
@@ -11587,9 +11626,16 @@ function drawTeacherDashboard(me, stats, tests) {
     </div>
     <div class="card tone-lilac" style="cursor:default">
       <div class="card-body" style="width:100%">
-        <div class="row-between"><span class="card-title-row"><span class="card-title-icon">🎫</span>Kredit balansi</span><b style="font-size:18px">${stats.credits} ta</b></div>
-        <p>Har bir o'quvchi natijasi uchun 1 kredit sarflanadi (bepul testlarda)</p>
-        <button class="btn" id="buy-credit-button">🛒 Kredit sotib olish</button>
+        ${
+          stats.subscription_active
+            ? `<div class="row-between"><span class="card-title-row"><span class="card-title-icon">⭐</span>Oylik obuna faol</span>
+                 <span class="badge badge-green">${subscriptionUntilText(stats.subscription_until)} gacha</span></div>
+               <p>Tekshiruvlar cheksiz — token yechilmaydi. Token: <b>${formatNumber(stats.credits)} ta</b> (obuna tugagach ishlatiladi)</p>
+               <button class="btn" id="buy-credit-button">🛒 Obunani uzaytirish yoki token olish</button>`
+            : `<div class="row-between"><span class="card-title-row"><span class="card-title-icon">🎫</span>Token balansi</span><b style="font-size:18px">${formatNumber(stats.credits)} ta</b></div>
+               <p>Har bir o'quvchi natijasi uchun 1 token sarflanadi (bepul testlarda). Yoki oylik obuna oling — tekshiruv cheksiz.</p>
+               <button class="btn" id="buy-credit-button">🛒 Token yoki obuna sotib olish</button>`
+        }
       </div>
     </div>
     ${stats.referral ? referralCardHtml(stats.referral) : ""}
@@ -11608,7 +11654,10 @@ function drawTeacherDashboard(me, stats, tests) {
   document.getElementById("withdraw-button")?.addEventListener("click", guarded(renderWithdrawalForm));
   document.getElementById("test-payments-button").addEventListener("click", guarded(renderTestPaymentsPage));
   document.getElementById("card-settings-button").addEventListener("click", () => openCardSettingsSheet(renderTeacherDashboard));
-  document.getElementById("buy-credit-button").addEventListener("click", guarded(renderCreditPurchaseForm));
+  // Obunasi faol o'qituvchi uchun oyna obuna tabida ochiladi (uzaytirish uchun)
+  document
+    .getElementById("buy-credit-button")
+    .addEventListener("click", guarded(() => renderCreditPurchaseForm(stats.subscription_active ? "subscription" : purchaseTab)));
   document.getElementById("referral-share-button")?.addEventListener("click", () => shareReferral(stats.referral));
   document.getElementById("referral-copy-button")?.addEventListener(
     "click",
@@ -11633,7 +11682,7 @@ function drawTeacherDashboard(me, stats, tests) {
 
 /*
   O'qituvchining kartasi — pullik test pullari shu kartaga to'g'ridan-to'g'ri
-  o'tkaziladi (platforma pulni ushlamaydi, kredit ishlatilmaydi).
+  o'tkaziladi (platforma pulni ushlamaydi, token ishlatilmaydi).
 */
 async function openCardSettingsSheet(onSaved) {
   const current = await api("/api/teacher/card");
@@ -11910,16 +11959,60 @@ async function renderWithdrawalForm() {
   );
 }
 
-async function renderCreditPurchaseForm() {
+// Obuna tugash sanasi: "12-dekabr 2026"
+function subscriptionUntilText(isoString) {
+  const date = parseUtc(isoString);
+  return date ? `${date.getDate()}-${FEE_MONTH_NAMES[date.getMonth()].toLowerCase()} ${date.getFullYear()}` : "";
+}
+
+// Xarid nomi tarixda va tasdiqlashda: "50 ta token" yoki "3 oylik obuna"
+const purchaseLabel = (purchase) =>
+  purchase.kind === "subscription" ? `⭐ ${purchase.months} oylik obuna` : `🎫 ${formatNumber(purchase.credits)} ta token`;
+
+const planTitle = (months) => (months === 12 ? "1 yil" : `${months} oy`);
+
+/*
+  Token yoki oylik obuna sotib olish. O'qituvchi o'zi tanlaydi:
+    • Token — 1 tekshiruv = 1 token (optom chegirma bilan);
+    • Oylik obuna — muddat davomida tekshiruv cheksiz, token yechilmaydi.
+  Ikkala tab bir sahifada turadi (almashtirganda qayta yuklanmaydi); pastdagi
+  to'lov qismi (karta / Payme / Click) tanlangan narsani to'laydi.
+*/
+let purchaseTab = "tokens";
+let purchasePlan = null;
+
+async function renderCreditPurchaseForm(tab = purchaseTab) {
+  purchaseTab = tab;
   const [balanceInfo, history] = await Promise.all([
     api("/api/teacher/balance"),
     api("/api/teacher/credit-purchases"),
   ]);
+  const plans = balanceInfo.subscription_plans || [];
+  if (!plans.some((plan) => plan.months === purchasePlan)) purchasePlan = plans[0]?.months ?? null;
 
   const tierRows = balanceInfo.credit_price_tiers
     .map((tier) => {
       const range = tier.to ? `${tier.from}-${tier.to} ta` : `${tier.from}+ ta`;
-      return `<p>${range} kredit: ${formatNumber(tier.price_per_credit)} so'm/kredit</p>`;
+      return `<p>${range} token: ${formatNumber(tier.price_per_credit)} so'm/token</p>`;
+    })
+    .join("");
+
+  // Uzoq muddatli obuna 1 oylikka nisbatan qancha arzon — admin qo'ygan narxlardan hisoblanadi
+  const monthly = plans.find((plan) => plan.months === 1)?.price;
+  const planCards = plans
+    .map((plan) => {
+      const perMonth = Math.round(plan.price / plan.months);
+      const saving = monthly && plan.months > 1 ? Math.round((1 - perMonth / monthly) * 100) : 0;
+      return `
+        <button type="button" class="plan-card${plan.months === purchasePlan ? " selected" : ""}" data-plan-months="${plan.months}">
+          <span class="plan-radio" aria-hidden="true"></span>
+          <span class="plan-card-main">
+            <b>${planTitle(plan.months)}</b>
+            <small>${plan.months > 1 ? `oyiga ${formatNumber(perMonth)} so'm · ` : ""}${plan.days} kun cheksiz tekshiruv</small>
+          </span>
+          ${saving > 0 ? `<span class="plan-save">−${saving}%</span>` : ""}
+          <span class="plan-card-price">${formatNumber(plan.price)} so'm</span>
+        </button>`;
     })
     .join("");
 
@@ -11929,14 +12022,14 @@ async function renderCreditPurchaseForm() {
     cancelled: "❌ Rad etildi",
     failed: "⚠️ Chek yetib bormadi",
   };
-  const methodIcons = { card: "💳", payme: "🅿️" };
+  const methodIcons = { card: "💳", payme: "🅿️", click: "🔵" };
 
   const historyRows =
     history
       .map(
         (purchase) => `
           <div class="card row-between" style="cursor:default">
-            <span>${methodIcons[purchase.method] || ""} ${purchase.credits} ta kredit (${formatNumber(purchase.amount)} so'm)</span>
+            <span>${methodIcons[purchase.method] || ""} ${purchaseLabel(purchase)} (${formatNumber(purchase.amount)} so'm)</span>
             <b>${statusLabels[purchase.status] || purchase.status}</b>
           </div>`
       )
@@ -11953,8 +12046,8 @@ async function renderCreditPurchaseForm() {
           <h3>💳 Karta orqali</h3>
           ${
             hasPendingCard
-              ? `<p>⏳ Oldingi to'lovingiz tekshirilmoqda. Admin tasdiqlagach, kredit hisobingizga
-                 o'zi tushadi va bot sizga xabar beradi.</p>`
+              ? `<p>⏳ Oldingi to'lovingiz tekshirilmoqda. Admin tasdiqlagach, xaridingiz o'zi
+                 kuchga kiradi va bot sizga xabar beradi.</p>`
               : `
                 <p><b>1.</b> ${(balanceInfo.admin_cards || []).length > 1 ? "Quyidagi kartalardan biriga" : "Quyidagi kartaga"} <b id="card-amount">—</b> o'tkazing:</p>
                 ${(balanceInfo.admin_cards || [balanceInfo.admin_card])
@@ -11968,7 +12061,7 @@ async function renderCreditPurchaseForm() {
                        style="display:block;text-align:center;cursor:pointer">🧾 Chek rasmini tanlash</label>
                 <img id="receipt-preview" alt="" hidden
                      style="max-width:100%;max-height:220px;border-radius:10px;margin:6px 0;display:block" />
-                <p style="margin-top:8px"><b>3.</b> Yuboring — admin tekshirgach, kredit o'zi tushadi.</p>
+                <p style="margin-top:8px"><b>3.</b> Yuboring — admin tekshirgach, xaridingiz o'zi kuchga kiradi.</p>
                 <button class="btn" id="send-receipt-button">📤 Chekni yuborish</button>`
           }
         </div>
@@ -11976,7 +12069,7 @@ async function renderCreditPurchaseForm() {
     : "";
 
   // Avtomatik to'lov: karta ma'lumoti faqat to'lov tizimi sahifasida kiritiladi,
-  // to'lov o'tishi bilan kredit o'zi tushadi
+  // to'lov o'tishi bilan xarid o'zi kuchga kiradi
   const paymeSection = [
     balanceInfo.payme_enabled
       ? `<button class="btn ${balanceInfo.card_enabled ? "btn-ghost" : ""}" data-pay-provider="payme">🅿️ Payme orqali to'lash</button>`
@@ -11989,29 +12082,60 @@ async function renderCreditPurchaseForm() {
   const noMethods =
     !balanceInfo.card_enabled && !balanceInfo.payme_enabled && !balanceInfo.click_enabled
       ? `<div class="card" style="cursor:default"><div class="card-body">
-           <p>To'lov usullari hali sozlanmagan. Kredit olish uchun admin bilan bog'laning.</p>
+           <p>To'lov usullari hali sozlanmagan. Token yoki obuna olish uchun admin bilan bog'laning.</p>
          </div></div>`
       : "";
 
+  const status = balanceInfo.subscription_active
+    ? `Obuna faol: <b>${subscriptionUntilText(balanceInfo.subscription_until)} gacha</b> · Token: <b>${formatNumber(balanceInfo.credits)} ta</b>`
+    : `Token: <b>${formatNumber(balanceInfo.credits)} ta</b> · Obuna yo'q`;
+
   showPage(`
     <button class="back-button" data-action="dashboard">←</button>
-    <h2>Kredit sotib olish</h2>
-    <p class="subtitle">Joriy kredit: <b>${formatNumber(balanceInfo.credits)} ta</b>. Necha dona sotib olmoqchisiz?</p>
-    <input class="input" id="credit-count-input" type="text" inputmode="numeric" autocomplete="off"
-           placeholder="Kredit miqdori" value="50" />
-    <p class="subtitle" id="credit-price-line">Jami narx: <b id="credit-price-preview">—</b></p>
-    <div class="card" style="cursor:default">
-      <div class="card-body">
-        <h3>Narxlash tizimi</h3>
-        ${tierRows}
-      </div>
+    <h2>Token yoki obuna</h2>
+    <p class="subtitle">${status}</p>
+
+    <div class="purchase-tabs" role="tablist">
+      <button type="button" role="tab" class="purchase-tab${tab === "tokens" ? " active" : ""}" data-purchase-tab="tokens">🎫 Token</button>
+      <button type="button" role="tab" class="purchase-tab${tab === "subscription" ? " active" : ""}" data-purchase-tab="subscription">⭐ Oylik obuna</button>
     </div>
-    ${cardSection}
-    ${paymeSection}
-    ${noMethods}
+
+    <section data-purchase-panel="tokens" ${tab === "tokens" ? "" : "hidden"}>
+      <p class="subtitle">1 tekshiruv = 1 token. Necha dona sotib olmoqchisiz?</p>
+      <input class="input" id="credit-count-input" type="text" inputmode="numeric" autocomplete="off"
+             placeholder="Token miqdori" value="50" />
+      <p class="subtitle" id="credit-price-line">Jami narx: <b id="credit-price-preview">—</b></p>
+      <div class="card" style="cursor:default">
+        <div class="card-body">
+          <h3>Narxlash tizimi</h3>
+          ${tierRows}
+        </div>
+      </div>
+    </section>
+
+    <section data-purchase-panel="subscription" ${tab === "subscription" ? "" : "hidden"}>
+      ${
+        plans.length
+          ? `<p class="subtitle">Obuna muddatida tekshiruvlar <b>cheksiz</b> — token umuman yechilmaydi.${
+              balanceInfo.subscription_active ? " Yangi obuna hozirgisining qolgan kunlariga qo'shiladi." : ""
+            }</p>
+             <div class="plan-grid">${planCards}</div>`
+          : `<div class="card" style="cursor:default"><div class="card-body">
+               <p>Oylik obuna hozircha sotilmayapti. Hozircha token sotib olishingiz mumkin.</p>
+             </div></div>`
+      }
+    </section>
+
+    <div id="purchase-pay" ${tab === "subscription" && !plans.length ? "hidden" : ""}>
+      <p class="section-label" style="margin-top:18px">TO'LOV — <span id="purchase-summary">—</span></p>
+      ${cardSection}
+      ${paymeSection}
+      ${noMethods}
+    </div>
+
     <h3>Buyurtmalar tarixi</h3>
     ${historyRows}
-    ${supportCardHtml("To'lov yoki kredit bo'yicha muammo bo'lsa — yozing")}
+    ${supportCardHtml("To'lov, token yoki obuna bo'yicha muammo bo'lsa — yozing")}
   `);
 
   document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
@@ -12019,12 +12143,13 @@ async function renderCreditPurchaseForm() {
   const creditInput = document.getElementById("credit-count-input");
   const pricePreview = document.getElementById("credit-price-preview");
   const cardAmount = document.getElementById("card-amount");
+  const summary = document.getElementById("purchase-summary");
 
   /*
     Yashirin promo kod: shu maydonga yoziladi. Hech qanday tugma yoki belgi
     chiqmaydi — yozuv promo kodga o'xshasa (harf qatnashsa yoki 7+ xonali son)
     va 5 soniya hech narsa yozilmasa, kod jimgina tekshiriladi. To'g'ri bo'lsa —
-    kredit tushadi; noto'g'ri bo'lsa — hech narsa ko'rinmaydi.
+    token tushadi; noto'g'ri bo'lsa — hech narsa ko'rinmaydi.
   */
   const PROMO_IDLE_MS = 5000;
   const looksLikePromo = (value) => /[a-z]/i.test(value) || value.replace(/\s/g, "").length >= 7;
@@ -12037,7 +12162,7 @@ async function renderCreditPurchaseForm() {
     try {
       const result = await api("/api/teacher/promo", { method: "POST", body: { code } });
       telegram?.HapticFeedback?.notificationOccurred?.("success");
-      showToast(`🎉 +${formatNumber(result.credits_added)} kredit! Hozir: ${formatNumber(result.credits)} ta`);
+      showToast(`🎉 +${formatNumber(result.credits_added)} token! Hozir: ${formatNumber(result.credits)} ta`);
       await renderCreditPurchaseForm();
     } catch (_) {
       /* noto'g'ri kod — jim; hech qanday ishora berilmaydi */
@@ -12057,33 +12182,62 @@ async function renderCreditPurchaseForm() {
     return credits * tier.price_per_credit;
   };
 
-  const updatePricePreview = () => {
+  const readCredits = () => {
     const credits = Number(creditInput.value) || 0;
-    if (credits < 1) {
-      pricePreview.textContent = "—";
-      if (cardAmount) cardAmount.textContent = "—";
-      return;
+    if (credits < 1) throw new Error("Token sonini kiriting");
+    if (credits > 100000) throw new Error("Bir martada eng ko'pi 100 000 ta token");
+    return credits;
+  };
+
+  // Hozir nima to'lanayapti: tanlangan tab bo'yicha token soni yoki obuna muddati
+  const currentOrder = () => {
+    if (purchaseTab === "subscription") {
+      const plan = plans.find((item) => item.months === purchasePlan);
+      if (!plan) throw new Error("Obuna muddatini tanlang");
+      return { body: { months: plan.months }, amount: plan.price, label: `${planTitle(plan.months)}lik obuna` };
     }
-    if (credits > 100000) {
-      pricePreview.textContent = "bir martada eng ko'pi 100 000 ta";
-      if (cardAmount) cardAmount.textContent = "—";
-      return;
+    const credits = readCredits();
+    return { body: { credits }, amount: priceFor(credits), label: `${formatNumber(credits)} ta token` };
+  };
+
+  // Narx va kartaga o'tkaziladigan summa — admin chekni aynan shu summa bilan solishtiradi
+  const updateAmounts = () => {
+    const credits = Number(creditInput.value) || 0;
+    pricePreview.textContent =
+      credits < 1 ? "—" : credits > 100000 ? "bir martada eng ko'pi 100 000 ta" : `${formatNumber(priceFor(credits))} so'm`;
+    let text = "—";
+    try {
+      const order = currentOrder();
+      text = `${formatNumber(order.amount)} so'm`;
+      summary.textContent = `${order.label}, ${text}`;
+    } catch (_) {
+      summary.textContent = "—";
     }
-    const text = `${formatNumber(priceFor(credits))} so'm`;
-    pricePreview.textContent = text;
-    // Kartaga aynan shu summa o'tkazilishi kerak — admin chekni shu bilan solishtiradi
     if (cardAmount) cardAmount.textContent = text;
   };
 
-  creditInput.addEventListener("input", updatePricePreview);
-  updatePricePreview();
+  creditInput.addEventListener("input", updateAmounts);
+  updateAmounts();
 
-  const readCredits = () => {
-    const credits = Number(creditInput.value) || 0;
-    if (credits < 1) throw new Error("Kredit sonini kiriting");
-    if (credits > 100000) throw new Error("Bir martada eng ko'pi 100 000 ta kredit");
-    return credits;
-  };
+  document.querySelectorAll("[data-purchase-tab]").forEach((button) =>
+    button.addEventListener("click", () => {
+      purchaseTab = button.dataset.purchaseTab;
+      document.querySelectorAll("[data-purchase-tab]").forEach((item) => item.classList.toggle("active", item === button));
+      document.querySelectorAll("[data-purchase-panel]").forEach((panel) => {
+        panel.hidden = panel.dataset.purchasePanel !== purchaseTab;
+      });
+      document.getElementById("purchase-pay").hidden = purchaseTab === "subscription" && !plans.length;
+      updateAmounts();
+    })
+  );
+
+  document.querySelectorAll("[data-plan-months]").forEach((card) =>
+    card.addEventListener("click", () => {
+      purchasePlan = Number(card.dataset.planMonths);
+      document.querySelectorAll("[data-plan-months]").forEach((item) => item.classList.toggle("selected", item === card));
+      updateAmounts();
+    })
+  );
 
   // --- Karta orqali ---
   const receiptInput = document.getElementById("receipt-input");
@@ -12113,9 +12267,9 @@ async function renderCreditPurchaseForm() {
   document.getElementById("send-receipt-button")?.addEventListener(
     "click",
     guarded(async () => {
-      const credits = readCredits();
+      const order = currentOrder();
       if (!receiptData) throw new Error("Avval chek rasmini tanlang");
-      if (!(await askConfirm(`${credits} ta kredit uchun chek yuborilsinmi?`))) return;
+      if (!(await askConfirm(`${order.label} (${formatNumber(order.amount)} so'm) uchun chek yuborilsinmi?`))) return;
 
       const button = document.getElementById("send-receipt-button");
       button.disabled = true;
@@ -12124,7 +12278,7 @@ async function renderCreditPurchaseForm() {
       try {
         await api("/api/teacher/card-topups", {
           method: "POST",
-          body: { credits, receipt_base64: receiptData },
+          body: { ...order.body, receipt_base64: receiptData },
         });
       } catch (error) {
         button.disabled = false;
@@ -12132,23 +12286,23 @@ async function renderCreditPurchaseForm() {
         throw error;
       }
 
-      showToast("✅ Chek yuborildi. Admin tasdiqlagach, kredit o'zi tushadi");
+      showToast("✅ Chek yuborildi. Admin tasdiqlagach, xaridingiz o'zi kuchga kiradi");
       await renderCreditPurchaseForm();
     })
   );
 
-  // --- Payme orqali ---
+  // --- Payme / Click orqali ---
   document.querySelectorAll("[data-pay-provider]").forEach((button) => {
     button.addEventListener(
       "click",
       guarded(async () => {
-        const credits = readCredits();
+        const order = currentOrder();
         const purchase = await api("/api/teacher/credit-purchases", {
           method: "POST",
-          body: { credits, provider: button.dataset.payProvider },
+          body: { ...order.body, provider: button.dataset.payProvider },
         });
         openExternalLink(purchase.checkout_url);
-        showToast("💳 To'lov sahifasi ochildi — to'lov o'tishi bilan kredit o'zi tushadi");
+        showToast("💳 To'lov sahifasi ochildi — to'lov o'tishi bilan xaridingiz o'zi kuchga kiradi");
       })
     );
   });
@@ -12369,7 +12523,7 @@ function renderNewTestKindChoice(draft = {}, testType = "rash") {
     <h3 style="margin:4px 0 4px">O'quvchilardan test uchun pul olasizmi?</h3>
     <p class="subtitle" style="margin:0 0 14px">Keyin ham o'zgartirish mumkin.</p>
     ${roleCard("kind-paid", "💰", "PULLIK TEST", paidTestHint())}
-    ${roleCard("kind-free", "🆓", "BEPUL TEST", "O'quvchilar bepul ishlaydi — har bir natija uchun sizdan 1 kredit")}
+    ${roleCard("kind-free", "🆓", "BEPUL TEST", "O'quvchilar bepul ishlaydi — har bir natija uchun sizdan 1 token")}
   `);
   wireTeacherChrome("create");
   document.querySelector('[data-action="kind-paid"]').addEventListener("click", () =>
@@ -12424,7 +12578,7 @@ function renderNewTestForm(testType, draft = {}) {
         <p class="subtitle" style="margin:2px 0 0">${
           draft.paid
             ? paidTestHint()
-            : "O'quvchilar bepul ishlaydi — har natija uchun 1 kredit"
+            : "O'quvchilar bepul ishlaydi — har natija uchun 1 token"
         }</p>
       </div>
       <button type="button" class="share-pill" id="change-kind-button">O'zgartirish</button>
@@ -16427,7 +16581,7 @@ async function renderTestDetail(testId) {
   - 1–35: har savol bitta qatorda — o'quvchi belgilagani bo'yalgan (yashil — to'g'ri, qizil — xato),
     to'g'ri javob yashil halqa. Harf bosilsa — javob o'zgaradi va ball (foiz, Rasch) darhol qayta hisoblanadi.
   - 36–45: skanerlangan katak rasmi — har biri alohida qatorda, ostida to'g'ri javob, AI o'qigani va ✓ / ✗.
-  - Javoblari hali kiritilmagan o'quvchida — belgilab, «Saqlash» bosiladi (yangi natija — 1 kredit).
+  - Javoblari hali kiritilmagan o'quvchida — belgilab, «Saqlash» bosiladi (yangi natija — 1 token).
   O'quvchi o'zi (onlayn) ishlagan bo'lsa — faqat ko'rish.
 */
 async function renderStudentDetail(testId, attemptId) {
@@ -17825,7 +17979,7 @@ function renderAppLogin(errorText = "") {
     <div style="text-align:center;padding-top:40px">
       <img src="/img/chittak-icon.png" alt="" style="width:88px;height:88px;border-radius:24px;display:block;margin:0 auto">
       <h1 style="margin:12px 0 8px">Chittak</h1>
-      <p class="subtitle">Telegram akkauntingiz bilan kiring — testlar, natijalar va kreditlar Telegram'dagi bilan bir xil bo'ladi.</p>
+      <p class="subtitle">Telegram akkauntingiz bilan kiring — testlar, natijalar va tokenlar Telegram'dagi bilan bir xil bo'ladi.</p>
     </div>
     <button class="btn" id="app-login-button" style="margin-top:24px">✈️ Telegram orqali kirish</button>
     <button class="btn btn-ghost" id="pupil-entry-button" style="margin-top:10px">🎒 Maktab o'quvchisi sifatida kirish</button>
@@ -18071,7 +18225,7 @@ function renderWebLogin(errorText = "") {
                       )
                       .join("")}
                   </div>
-                  <div class="lp-mini lp-mini-credit"><b>Kredit balansi</b><strong>74 <small>ta</small></strong></div>
+                  <div class="lp-mini lp-mini-credit"><b>Token balansi</b><strong>74 <small>ta</small></strong></div>
                   <div class="lp-phone-nav">
                     <span class="is-on">${LP_ICONS.school}</span>
                     <span>${LP_ICONS.sheet}</span>
@@ -18182,7 +18336,7 @@ function renderWebLogin(errorText = "") {
       <div class="lp-modal${errorText ? " is-open" : ""}" id="lp-modal">
         <div class="web-login-card" id="web-login-card">
           <h2>Kirish</h2>
-          <p class="subtitle">Telegram akkauntingiz bilan kiring — testlar, natijalar va kreditlar botdagi bilan bir xil bo'ladi.</p>
+          <p class="subtitle">Telegram akkauntingiz bilan kiring — testlar, natijalar va tokenlar botdagi bilan bir xil bo'ladi.</p>
           <button class="btn" id="web-login-button" type="button">✈️ Telegram orqali kirish</button>
           <p class="web-login-status" id="web-login-status">${escapeHtml(errorText)}</p>
           <button class="btn btn-ghost" id="lp-modal-close" type="button">Yopish</button>

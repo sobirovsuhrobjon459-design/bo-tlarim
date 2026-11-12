@@ -320,7 +320,7 @@ def test_admin_odamlar_muassasalar_va_kredit():
         url = f"/api/admin/users/{teacher_user_id}/credits"
         response = client.post(url, json={"delta": 1000, "reason": "Sovg'a"}, headers=admin)
         assert response.status_code == 200 and response.json()["credits"] == before + 1000, response.text
-        assert sent and sent[-1][0] == 555 and "1 000 kredit" in sent[-1][1] and "Sovg'a" in sent[-1][1], sent
+        assert sent and sent[-1][0] == 555 and "1 000 token" in sent[-1][1] and "Sovg'a" in sent[-1][1], sent
         # Ayirishda noldan pastga tushmaydi
         assert client.post(url, json={"delta": -10**6, "notify": False}, headers=admin).json()["credits"] == 0
         assert client.post(url, json={"delta": 0}, headers=admin).status_code == 422
@@ -7235,7 +7235,8 @@ def test_tolov_kalitlari_admin_panelidan_kiritiladi():
     with SessionLocal() as session:
         backup = main.export_database(session).decode("utf-8")
     assert "SIR-KALIT" not in backup
-    assert AppSetting.__tablename__ not in _json.loads(backup)["tables"]
+    saved_settings = _json.loads(backup)["tables"].get(AppSetting.__tablename__, [])
+    assert not any(row["key"] in main.PAYMENT_SETTING_KEYS for row in saved_settings)
 
     # O'chirilsa — bazadagi qiymat bo'shaydi (.env'dagisi qoladi)
     cleared = client.post(
@@ -7294,3 +7295,150 @@ def test_video_davomiyligi_va_bosh_sahifadagi_karta():
     # Kod bo'sh qoldirilsa — karta ko'rsatilmaydi
     assert client.put(f"/api/videos/{video['id']}", json={**body, "test_code": ""},
                       headers=as_user(701)).json()["test_code"] == ""
+
+
+# ========== Oylik obuna (token o'rniga cheksiz tekshiruv) ==========
+
+
+def _set_subscription_prices(prices: dict) -> dict:
+    response = client.post("/api/admin/subscription-settings", json={"prices": prices}, headers=as_user(4242))
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _set_teacher(tg_id: int = 555, **values) -> None:
+    from backend.database import User
+
+    session = SessionLocal()
+    try:
+        teacher = session.scalars(
+            main.select(Teacher).join(User, User.id == Teacher.user_id).where(User.tg_id == tg_id)
+        ).one()
+        for name, value in values.items():
+            setattr(teacher, name, value)
+        session.commit()
+    finally:
+        session.close()
+
+
+def _subscription_days_left(tg_id: int = 555) -> float:
+    from datetime import datetime
+
+    until = client.get("/api/teacher/balance", headers=as_user(tg_id)).json()["subscription_until"]
+    if not until:
+        return 0
+    return (datetime.fromisoformat(until) - main.utcnow()).total_seconds() / 86400
+
+
+def test_oylik_obuna_narxlarini_admin_belgilaydi():
+    """Narxni admin belgilaydi; narxi 0 bo'lgan muddat o'qituvchiga ko'rsatilmaydi va sotilmaydi."""
+    reset_database()
+    register_teacher()
+
+    # Faqat admin
+    assert client.post("/api/admin/subscription-settings", json={"prices": {"1": 1}},
+                       headers=as_user(555)).status_code == 403
+    # Bunday muddat yo'q / manfiy narx — rad etiladi
+    assert client.post("/api/admin/subscription-settings", json={"prices": {"2": 5000}},
+                       headers=as_user(4242)).status_code == 422
+    assert client.post("/api/admin/subscription-settings", json={"prices": {"1": -5}},
+                       headers=as_user(4242)).status_code == 422
+
+    saved = _set_subscription_prices({"1": 99_000, "3": 0, "12": 900_000})
+    assert {plan["months"]: plan["price"] for plan in saved["plans"]} == {1: 99_000, 3: 0, 12: 900_000}
+
+    info = client.get("/api/teacher/balance", headers=as_user(555)).json()
+    assert [(plan["months"], plan["price"]) for plan in info["subscription_plans"]] == [(1, 99_000), (12, 900_000)]
+    assert info["subscription_active"] is False and info["subscription_until"] is None
+
+    # Sotilmaydigan muddat, ikkalasi birga yoki hech biri — rad etiladi
+    assert client.post("/api/teacher/credit-purchases", json={"months": 3}, headers=as_user(555)).status_code == 409
+    assert client.post("/api/teacher/credit-purchases", json={"months": 1, "credits": 10},
+                       headers=as_user(555)).status_code == 422
+    assert client.post("/api/teacher/credit-purchases", json={}, headers=as_user(555)).status_code == 422
+
+    # Narxlar zaxira nusxada saqlanadi (to'lov kalitlaridan farqli)
+    with SessionLocal() as session:
+        backup = main.export_database(session).decode("utf-8")
+    assert "sub_price_1" in backup
+
+
+def test_oylik_obuna_payme_orqali_va_token_yechilmaydi():
+    """Obuna Payme to'lovidan keyin faollashadi; amal qilgan muddatda token yechilmaydi."""
+    from datetime import timedelta
+
+    reset_database()
+    register_teacher()
+    _set_subscription_prices({"1": 99_000, "12": 900_000})
+    _set_teacher(credits=3)
+
+    purchase = client.post("/api/teacher/credit-purchases", json={"months": 1}, headers=as_user(555)).json()
+    assert purchase["kind"] == "subscription" and purchase["amount"] == 99_000, purchase
+    account = {"purchase_id": str(purchase["id"])}
+    amount = purchase["amount"] * 100
+    assert payme("CheckPerformTransaction", {"account": account, "amount": amount})["result"]["allow"]
+    payme("CreateTransaction", {"id": "tx-obuna", "time": 1, "account": account, "amount": amount})
+    assert _subscription_days_left() == 0, "to'lovdan oldin obuna faollashib ketdi"
+
+    payme("PerformTransaction", {"id": "tx-obuna"})
+    assert 29.9 < _subscription_days_left() <= 30, _subscription_days_left()
+    assert credits_of() == 3, "obuna tokenlarga tegmasligi kerak"
+
+    # Obuna faol: o'quvchi natijasi ham, o'qituvchi kiritgan javob ham token olmaydi
+    open_test = create_test()
+    closed_test = create_test(enrollment_type="closed")
+    started = client.post(f"/api/tests/{open_test['code']}/start", json={}, headers=as_user(901)).json()
+    client.post(f"/api/attempts/{started['attempt_id']}/finish", json={"answers": {"1": "B"}}, headers=as_user(901))
+    client.post(f"/api/teacher/tests/{closed_test['id']}/students", json={"names": ["Hasan Hasanov"]},
+                headers=as_user(555))
+    student_id = client.get(f"/api/teacher/tests/{closed_test['id']}", headers=as_user(555)).json()[
+        "students"][0]["id"]
+    answered = client.post(f"/api/teacher/tests/{closed_test['id']}/students/{student_id}/answers",
+                           json={"answers": {"1": "B"}}, headers=as_user(555))
+    assert answered.status_code == 200, answered.text
+    assert credits_of() == 3, f"obuna faol bo'lsa ham token yechildi: {credits_of()}"
+
+    # Token 0 bo'lsa ham obuna bilan yangi o'quvchi testni boshlay oladi
+    _set_teacher(credits=0)
+    assert client.post(f"/api/tests/{open_test['code']}/start", json={}, headers=as_user(902)).status_code == 200
+
+    # Obuna tugamay turib yana 12 oy olinsa — qolgan kunlarga QO'SHILADI
+    second = client.post("/api/teacher/credit-purchases", json={"months": 12}, headers=as_user(555)).json()
+    account = {"purchase_id": str(second["id"])}
+    payme("CreateTransaction", {"id": "tx-yillik", "time": 2, "account": account, "amount": second["amount"] * 100})
+    payme("PerformTransaction", {"id": "tx-yillik"})
+    assert 394.9 < _subscription_days_left() <= 395, _subscription_days_left()
+
+    # Pul qaytarilsa — o'sha kunlar olib qo'yiladi
+    payme("CancelTransaction", {"id": "tx-yillik", "reason": 5})
+    assert 29.9 < _subscription_days_left() <= 30, _subscription_days_left()
+
+    # Obuna tugadi — yana tokendan yechiladi, token yo'q bo'lsa test boshlanmaydi
+    _set_teacher(subscription_until=main.utcnow() - timedelta(minutes=1))
+    assert client.post(f"/api/tests/{open_test['code']}/start", json={}, headers=as_user(903)).status_code == 402
+
+
+def test_oylik_obuna_karta_orqali_admin_tasdiqlaydi():
+    reset_database()
+    register_teacher()
+    _set_subscription_prices({"3": 270_000})
+
+    with TelegramStub() as telegram:
+        response = client.post("/api/teacher/card-topups",
+                               json={"months": 3, "receipt_base64": FAKE_RECEIPT}, headers=as_user(555))
+        assert response.status_code == 200, response.text
+        assert response.json()["amount"] == 270_000 and response.json()["kind"] == "subscription"
+        # Admin chekda nima sotib olinganini ko'radi
+        assert "3 oylik obuna" in telegram.receipts[0] and "270 000 so'm" in telegram.receipts[0], telegram.receipts
+        assert _subscription_days_left() == 0
+
+        purchase_id = response.json()["id"]
+        listed = client.get("/api/admin/card-topups", headers=as_user(4242)).json()
+        assert listed[0]["label"] == "3 oylik obuna", listed
+        approved = client.post(f"/api/admin/card-topups/{purchase_id}/approve", headers=as_user(4242))
+
+    assert approved.status_code == 200, approved.text
+    assert 89.9 < _subscription_days_left() <= 90, _subscription_days_left()
+    assert any("3 oylik obuna faollashdi" in text for text in telegram.teacher_messages), telegram.teacher_messages
+    history = client.get("/api/teacher/credit-purchases", headers=as_user(555)).json()
+    assert history[0]["kind"] == "subscription" and history[0]["months"] == 3 and history[0]["status"] == "paid"

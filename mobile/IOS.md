@@ -45,5 +45,5 @@ iPhone'ga **TestFlight** ilovasini o'rnatib, taklif orqali Chittak'ni o'rnating.
 - Skrinshotlar: iPhone 6.9" (1320×2868) — kamida 3 ta.
 - Maxfiylik siyosati havolasi (chittak.uz'dagi hujjat), qo'llab-quvvatlash havolasi.
 - **App Review Information**: tekshiruvchi kira oladigan sinov hisobi (Telegram'siz kirish yo'li) — busiz rad etiladi.
-- **Pullik testlar / kredit sotish**: Apple raqamli kontent uchun faqat o'z to'lov tizimini (In-App Purchase)
+- **Pullik testlar / token sotish**: Apple raqamli kontent uchun faqat o'z to'lov tizimini (In-App Purchase)
   talab qiladi (3.1.1-qoida). iOS ilovada Click/Payme orqali to'lov ko'rinsa, rad etiladi.

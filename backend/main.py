@@ -183,6 +183,8 @@ from .database import (
     Test,
     TestIn,
     TestEditIn,
+    SUBSCRIPTION_PLAN_DAYS,
+    SubscriptionSettingsIn,
     TeacherCardIn,
     TestCardPaymentIn,
     User,
@@ -248,7 +250,8 @@ def _add_missing_columns() -> None:
             "class_student_id": "INTEGER", "essay_text": "TEXT", "essay_score": "INTEGER",
         },
         "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)"},
-        "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)"},
+        "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)",
+                     "subscription_until": "TIMESTAMP"},
         "school_classes": {
             "curator_user_id": "INTEGER", "code_start": "INTEGER", "code_end": "INTEGER", "shift_id": "INTEGER",
             "monthly_fee": "INTEGER", "subject": "VARCHAR(100)", "assistant_user_id": "INTEGER",
@@ -287,6 +290,8 @@ def _add_missing_columns() -> None:
             "reminder_count": "INTEGER DEFAULT 0",
         },
         "credit_purchases": {
+            "kind": "VARCHAR(15) DEFAULT 'tokens'",
+            "months": "INTEGER DEFAULT 0",
             "method": "VARCHAR(10) DEFAULT 'payme'",
             "receipt_file_id": "VARCHAR(200)",
             "click_trans_id": "VARCHAR(50)",
@@ -684,12 +689,14 @@ def export_database(db: Session) -> bytes:
     }
 
     for table in Base.metadata.sorted_tables:
-        # To'lov kalitlari (app_settings) nusxaga tushmaydi: bu fayl Telegram chatiga
-        # yuboriladi, maxfiy kalit esa u yerda yotmasligi kerak. Baza tiklanganda
-        # kalitlar admin panelidan qaytadan kiritiladi.
-        if table.name == AppSetting.__tablename__:
-            continue
         rows = db.execute(select(table)).mappings().all()
+        # To'lov kalitlari nusxaga tushmaydi: bu fayl Telegram chatiga yuboriladi,
+        # maxfiy kalit esa u yerda yotmasligi kerak. Ular HAMMASI chiqariladi (faqat
+        # maxfiylari emas): tiklangan bazada Merchant ID bo'lib, kalit bo'lmasa, Payme
+        # yoqilgandek ko'rinardi, lekin to'lov tasdig'i qabul qilinmay pul osilib qolardi.
+        # Baza tiklanganda kalitlar admin panelidan qaytadan kiritiladi.
+        if table.name == AppSetting.__tablename__:
+            rows = [row for row in rows if row["key"] not in PAYMENT_SETTING_KEYS]
         export["tables"][table.name] = [dict(row) for row in rows]
 
     # default=str — sana/vaqt qiymatlarini matnga aylantiradi
@@ -877,7 +884,7 @@ def _warn_if_storage_is_temporary() -> None:
     message = (
         "🚨 DIQQAT: server vaqtinchalik SQLite bazasida ishlayapti!\n\n"
         "Render'da bu baza har deploy va uyqudan uyg'onishda O'CHIB KETADI — "
-        "o'qituvchilar, kreditlar, to'lovlar va ballar yo'qoladi.\n\n"
+        "o'qituvchilar, tokenlar, to'lovlar va ballar yo'qoladi.\n\n"
         "Render → Environment bo'limida DATABASE_URL ga doimiy PostgreSQL manzilini qo'ying."
     )
     logging.getLogger("backend").error(message)
@@ -3731,7 +3738,7 @@ def _get_own_test(db: Session, teacher: Teacher, test_id: int) -> Test:
 
 # Test kodini taxmin qilib topishdan himoya. Kod qisqa (4 belgi) — cheklovsiz
 # bo'lsa, begona odam kodlarni ketma-ket sinab, boshqalarning testlarini topib,
-# savollarini ko'rishi va o'qituvchining kreditini sarflashi mumkin edi.
+# savollarini ko'rishi va o'qituvchining tokenini sarflashi mumkin edi.
 # O'quvchi kodni adashib yozishi tabiiy, shuning uchun chegara kengroq.
 # Muvaffaqiyatli kirish hisobni tozalamaydi — aks holda ma'lum bitta kodni
 # oralab kiritib, cheklovni chetlab o'tish mumkin bo'lardi.
@@ -3767,8 +3774,8 @@ def _is_paid(db: Session, user: User, test: Test) -> bool:
     return payment is not None
 
 
-# Kredit narxi qancha ko'p sotib olinsa, shuncha arzonlashadi (optom chegirma).
-# Har bir qator: (eng kami, eng ko'pi yoki None=cheksiz, 1 dona kredit narxi so'mda)
+# Token narxi qancha ko'p sotib olinsa, shuncha arzonlashadi (optom chegirma).
+# Har bir qator: (eng kami, eng ko'pi yoki None=cheksiz, 1 dona token narxi so'mda)
 CREDIT_PRICE_TIERS = [
     (1, 100, 1200),
     (101, 150, 1000),
@@ -3788,11 +3795,109 @@ def _teacher_share(amount: int) -> int:
 
 
 def _calculate_credit_price(credit_count: int) -> int:
-    """Kredit sonining jami narxini optom chegirma jadvali bo'yicha hisoblaydi."""
+    """Token sonining jami narxini optom chegirma jadvali bo'yicha hisoblaydi."""
     for low, high, price_per_credit in CREDIT_PRICE_TIERS:
         if credit_count >= low and (high is None or credit_count <= high):
             return credit_count * price_per_credit
     return credit_count * CREDIT_PRICE_TIERS[0][2]
+
+
+# ---------- Oylik obuna ----------
+# O'qituvchi YOKI token sotib oladi (1 tekshiruv = 1 token), YOKI oylik obuna —
+# obuna muddatida token umuman yechilmaydi. Obuna narxlarini admin panelda admin
+# belgilaydi (AppSetting: "sub_price_1", "sub_price_3", "sub_price_12");
+# narx 0 bo'lsa — shu muddat sotilmaydi.
+
+
+def _subscription_price_key(months: int) -> str:
+    return f"sub_price_{months}"
+
+
+def _subscription_prices(db: Session) -> dict[int, int]:
+    """Har bir obuna muddatining narxi: {1: 99000, 3: 0, 12: 900000} (0 — sotilmaydi)."""
+
+    keys = {_subscription_price_key(months): months for months in SUBSCRIPTION_PLAN_DAYS}
+    prices = {months: 0 for months in SUBSCRIPTION_PLAN_DAYS}
+    for row in db.scalars(select(AppSetting).where(AppSetting.key.in_(keys))).all():
+        try:
+            prices[keys[row.key]] = max(0, int(row.value or 0))
+        except ValueError:
+            pass  # buzilgan qiymat — shu muddat sotilmaydi
+    return prices
+
+
+def _subscription_plans(db: Session) -> list[dict]:
+    """O'qituvchiga ko'rsatiladigan obuna turlari — faqat narxi belgilanganlari."""
+
+    return [
+        {"months": months, "days": SUBSCRIPTION_PLAN_DAYS[months], "price": price}
+        for months, price in _subscription_prices(db).items()
+        if price > 0
+    ]
+
+
+def _subscription_active(teacher: Teacher) -> bool:
+    return bool(teacher.subscription_until and teacher.subscription_until > utcnow())
+
+
+def _charges_tokens(test: Test, teacher: Teacher) -> bool:
+    """Bu natija uchun token yechiladimi: bepul testda — ha, faqat oylik obunasi faol bo'lmasa."""
+    return test.price == 0 and not _subscription_active(teacher)
+
+
+def _purchase_label(purchase: CreditPurchase) -> str:
+    """Xarid nomi: "50 ta token" yoki "3 oylik obuna"."""
+    if purchase.kind == "subscription":
+        return f"{purchase.months} oylik obuna"
+    return f"{purchase.credits} ta token"
+
+
+def _new_purchase(db: Session, teacher: Teacher, choice, method: str) -> CreditPurchase:
+    """Token yoki obuna xaridini yaratadi; narxni server o'zi hisoblaydi (frontendga ishonilmaydi)."""
+
+    if choice.months:
+        price = _subscription_prices(db).get(choice.months, 0)
+        if price <= 0:
+            raise HTTPException(status_code=409, detail="Bu obuna hozircha sotilmaydi")
+        return CreditPurchase(teacher_id=teacher.id, kind="subscription", months=choice.months, credits=0,
+                              amount=price, method=method)
+    return CreditPurchase(teacher_id=teacher.id, kind="tokens", credits=choice.credits,
+                          amount=_calculate_credit_price(choice.credits), method=method)
+
+
+def _grant_purchase(purchase: CreditPurchase) -> None:
+    """To'langan xaridni kuchga kiritadi: token qo'shiladi yoki obuna muddati uzayadi."""
+
+    teacher = purchase.teacher
+    if purchase.kind != "subscription":
+        add_credits(teacher, purchase.credits)
+        return
+    # Qatorni qulflaymiz: bir vaqtda ikki to'lov tushsa, biri ikkinchisining kunlarini bosib ketmasin
+    object_session(teacher).refresh(teacher, with_for_update=True)
+    # Obuna hali tugamagan bo'lsa — qolgan kunlariga qo'shiladi, tugagan bo'lsa — bugundan boshlanadi
+    start = max(utcnow(), teacher.subscription_until or utcnow())
+    teacher.subscription_until = start + timedelta(days=SUBSCRIPTION_PLAN_DAYS[purchase.months])
+
+
+def _revoke_purchase(purchase: CreditPurchase) -> None:
+    """Bekor qilingan (pul qaytarilgan) xarid: berilgan token yoki obuna kunlari olib qo'yiladi."""
+
+    teacher = purchase.teacher
+    if purchase.kind != "subscription":
+        add_credits(teacher, -purchase.credits)
+        return
+    object_session(teacher).refresh(teacher, with_for_update=True)
+    if teacher.subscription_until:
+        teacher.subscription_until -= timedelta(days=SUBSCRIPTION_PLAN_DAYS[purchase.months])
+
+
+def _purchase_granted_text(purchase: CreditPurchase, teacher: Teacher) -> str:
+    """Xarid kuchga kirgach o'qituvchiga boradigan xabar."""
+
+    if purchase.kind == "subscription":
+        until = (teacher.subscription_until + TASHKENT_OFFSET).strftime("%d.%m.%Y")
+        return f"⭐ {purchase.months} oylik obuna faollashdi — {until} gacha tekshiruvlar cheksiz, token yechilmaydi."
+    return f"Hisobingizga {purchase.credits} ta token qo'shildi.\nJoriy token: {teacher.credits} ta"
 
 
 def _build_payme_checkout_url(account_field: str, order_id: int, amount: int) -> str:
@@ -3800,7 +3905,7 @@ def _build_payme_checkout_url(account_field: str, order_id: int, amount: int) ->
     Payme'ning hosted to'lov sahifasiga olib boruvchi havolani yaratadi (amount — so'mda).
 
     account_field — Payme buyurtmani qaysi nom bilan qaytarishi:
-      "purchase_id" — o'qituvchining kredit xaridi (CreditPurchase)
+      "purchase_id" — o'qituvchining token xaridi (CreditPurchase)
       "payment_id"  — o'quvchining pullik testga to'lovi (Payment)
     """
 
@@ -4525,12 +4630,12 @@ def _calculate_attempt_score(db: Session, attempt: Attempt, test: Test) -> None:
 def _finalize_attempt(db: Session, attempt: Attempt, test: Test, answers: dict[str, str]) -> int:
     """
     Urinishni yakunlaydi: javoblarni tekshiradi, natijani hisoblaydi va
-    bepul testda o'qituvchidan 1 kredit yechadi. Savollar sonini qaytaradi.
+    bepul testda o'qituvchidan 1 token yechadi. Savollar sonini qaytaradi.
 
     Uch joyda ishlatiladi — o'quvchi "YAKUNLASH" ni bosganda, vaqti tugab
     qolgan urinish fon vazifasida avtomatik tekshirilganda, va o'quvchi
     allaqachon tugab ketgan urinish bilan qaytib kelganda. Hammasi bitta
-    funksiyada bo'lgani uchun kredit hisobi hech qachon chalkashmaydi.
+    funksiyada bo'lgani uchun token hisobi hech qachon chalkashmaydi.
     """
 
     # Qayta yakunlanmasligi uchun: eski javoblar o'rniga yangilari yoziladi
@@ -4546,11 +4651,12 @@ def _finalize_attempt(db: Session, attempt: Attempt, test: Test, answers: dict[s
     attempt.seconds = int(min((attempt.finished_at - attempt.started_at).total_seconds(), test.duration * 60))
     attempt.saved_answers = None  # natija StudentAnswer'da — qoralamani saqlashning hojati yo'q
 
-    # Bepul testda har bir yakunlangan natija o'qituvchidan 1 kredit oladi.
-    # max(0, ...) — kredit test BOSHLANGANDA tekshiriladi, lekin oradagi vaqtda
+    # Bepul testda har bir yakunlangan natija o'qituvchidan 1 token oladi
+    # (oylik obunasi faol bo'lsa — olinmaydi).
+    # max(0, ...) — token test BOSHLANGANDA tekshiriladi, lekin oradagi vaqtda
     # o'qituvchi uni boshqa joyda sarflab yuborishi mumkin; shunda balans
-    # manfiyga tushib, o'qituvchi keyin sotib olgan kreditini yo'qotardi.
-    if test.price == 0:
+    # manfiyga tushib, o'qituvchi keyin sotib olgan tokenini yo'qotardi.
+    if _charges_tokens(test, test.teacher):
         add_credits(test.teacher, -1)
 
     return total_questions
@@ -4894,7 +5000,7 @@ _promo_failures: dict[int, list[float]] = {}
 
 @app.post("/api/teacher/promo")
 def redeem_promo(body: PromoRedeemIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
-    """O'qituvchi promo kod kiritadi — kredit oladi. Har bir kod bitta o'qituvchiga bir marta."""
+    """O'qituvchi promo kod kiritadi — token oladi. Har bir kod bitta o'qituvchiga bir marta."""
 
     now = time.monotonic()
     recent = [moment for moment in _promo_failures.get(teacher.id, []) if now - moment < PROMO_WINDOW_SECONDS]
@@ -4925,7 +5031,7 @@ def redeem_promo(body: PromoRedeemIn, teacher: Teacher = Depends(get_current_tea
     add_credits(teacher, promo.credits)
     db.commit()
     _promo_failures.pop(teacher.id, None)
-    logging.getLogger("backend").info("Promo kod ishlatildi: promo=%s teacher=%s +%s kredit", promo.id, teacher.id, promo.credits)
+    logging.getLogger("backend").info("Promo kod ishlatildi: promo=%s teacher=%s +%s token", promo.id, teacher.id, promo.credits)
     return {"credits_added": promo.credits, "credits": teacher.credits, "used": used_by_me + 1, "limit": limit}
 
 
@@ -4944,7 +5050,7 @@ def register_teacher(
 
     user.full_name = f"{body.first_name.strip()} {body.last_name.strip()}".strip()
 
-    # Yangi o'qituvchi darhol ishlay boshlashi uchun sovg'a kreditlar beriladi
+    # Yangi o'qituvchi darhol ishlay boshlashi uchun sovg'a tokenlar beriladi
     db.add(Teacher(user_id=user.id, credits=WELCOME_CREDITS))
     db.commit()
     reward_referral(db, user)
@@ -4955,7 +5061,7 @@ def register_teacher(
 # ---------- Referal ----------
 # O'qituvchi o'z havolasini tarqatadi. Havola orqali botga BIRINCHI marta kirgan
 # odam shu o'qituvchiga bog'lanadi. U @sukhrobmath kanaliga obuna bo'lib,
-# o'qituvchi sifatida ro'yxatdan o'tsa — havola egasiga REFERRAL_CREDITS kredit.
+# o'qituvchi sifatida ro'yxatdan o'tsa — havola egasiga REFERRAL_CREDITS token.
 
 
 def referral_link(teacher: Teacher) -> str | None:
@@ -4986,7 +5092,7 @@ def remember_bot_user(db: Session, tg_id: int, full_name: str, username: str | N
 
 
 def _subscribed_to_default_channels(tg_id: int) -> bool:
-    """Adminlar kanaliga obunami — QAT'IY: tekshirib bo'lmasa ham "yo'q" (kredit keyinroq beriladi)."""
+    """Adminlar kanaliga obunami — QAT'IY: tekshirib bo'lmasa ham "yo'q" (token keyinroq beriladi)."""
 
     if not DEFAULT_REQUIRED_CHANNELS or not BOT_TOKEN or BOT_TOKEN == "your_bot_token_here":
         return True
@@ -5001,7 +5107,7 @@ def _subscribed_to_default_channels(tg_id: int) -> bool:
 def reward_referral(db: Session, user: User) -> None:
     """
     Taklif qilingan odam o'qituvchi bo'lgan va kanalga obuna bo'lsa — havola egasiga
-    kredit (bir marta). Shartlar hali bajarilmagan bo'lsa, keyingi kirishda yana tekshiriladi.
+    token (bir marta). Shartlar hali bajarilmagan bo'lsa, keyingi kirishda yana tekshiriladi.
     """
 
     try:
@@ -5010,7 +5116,7 @@ def reward_referral(db: Session, user: User) -> None:
             return
         if not _subscribed_to_default_channels(user.tg_id):
             return
-        # Ikki so'rov bir vaqtda kelsa ham kredit faqat bir marta beriladi
+        # Ikki so'rov bir vaqtda kelsa ham token faqat bir marta beriladi
         claimed = db.execute(
             update(Referral)
             .where(Referral.id == referral.id, Referral.rewarded_at.is_(None))
@@ -5026,11 +5132,11 @@ def reward_referral(db: Session, user: User) -> None:
         referrer_chat, name = referrer.user.tg_id, user.full_name or "Yangi o'qituvchi"
     except Exception:
         db.rollback()
-        logging.getLogger("backend").warning("Referal krediti berilmadi", exc_info=True)
+        logging.getLogger("backend").warning("Referal tokeni berilmadi", exc_info=True)
         return
     threading.Thread(
         target=_send_bot_text,
-        args=(referrer_chat, f"🎉 Siz taklif qilgan {name} o'qituvchi sifatida qo'shildi — sizga +{REFERRAL_CREDITS} kredit!"),
+        args=(referrer_chat, f"🎉 Siz taklif qilgan {name} o'qituvchi sifatida qo'shildi — sizga +{REFERRAL_CREDITS} token!"),
         daemon=True,
     ).start()
 
@@ -5177,6 +5283,8 @@ def teacher_overview(teacher: Teacher = Depends(get_current_teacher), db: Sessio
         "max": max((a.percent for a in attempts), default=0),
         "balance": teacher.balance,
         "credits": teacher.credits,
+        "subscription_until": teacher.subscription_until,
+        "subscription_active": _subscription_active(teacher),
         "referral": _referral_view(db, teacher),
         # Pullik test: karta kiritilganmi va nechta chek tasdiq kutyapti
         "card": _teacher_card_view(teacher),
@@ -5188,12 +5296,15 @@ def teacher_overview(teacher: Teacher = Depends(get_current_teacher), db: Sessio
 
 
 @app.get("/api/teacher/balance")
-def teacher_balance(teacher: Teacher = Depends(get_current_teacher)):
-    """O'qituvchining joriy pul va kredit balansi, hamda to'ldirish uchun kerakli ma'lumotlar."""
+def teacher_balance(teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """O'qituvchining joriy pul va token balansi, obunasi hamda sotib olish uchun kerakli ma'lumotlar."""
 
     return {
         "balance": teacher.balance,
         "credits": teacher.credits,
+        "subscription_until": teacher.subscription_until,
+        "subscription_active": _subscription_active(teacher),
+        "subscription_plans": _subscription_plans(db),
         "admin_card": ADMIN_CARD_NUMBER,
         "admin_cards": _admin_cards(),
         "credit_price_tiers": CREDIT_PRICE_TIERS_DISPLAY,
@@ -5288,10 +5399,10 @@ def list_own_withdrawal_requests(teacher: Teacher = Depends(get_current_teacher)
 
 @app.get("/api/teacher/credit-price")
 def preview_credit_price(credits: int, teacher: Teacher = Depends(get_current_teacher)):
-    """O'qituvchi qancha kredit sotib olmoqchi ekanini yozganda, narxini jonli ko'rsatish uchun."""
+    """O'qituvchi qancha token sotib olmoqchi ekanini yozganda, narxini jonli ko'rsatish uchun."""
 
     if credits < 1:
-        raise HTTPException(status_code=422, detail="Kredit soni kamida 1 bo'lishi kerak")
+        raise HTTPException(status_code=422, detail="Token soni kamida 1 bo'lishi kerak")
     return {"credits": credits, "amount": _calculate_credit_price(credits)}
 
 
@@ -5299,40 +5410,43 @@ def preview_credit_price(credits: int, teacher: Teacher = Depends(get_current_te
 def create_credit_purchase(
     body: CreditPurchaseIn, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
 ):
-    """Kredit sotib olish buyurtmasini yaratadi va tanlangan tizimning (Payme/Click) to'lov havolasini qaytaradi."""
+    """Token yoki obuna buyurtmasini yaratadi va tanlangan tizimning (Payme/Click) to'lov havolasini qaytaradi."""
 
     _require_provider(body.provider)
-    amount = _calculate_credit_price(body.credits)
-    purchase = CreditPurchase(teacher_id=teacher.id, credits=body.credits, amount=amount, method=body.provider)
+    purchase = _new_purchase(db, teacher, body, method=body.provider)
     db.add(purchase)
     db.commit()
 
     return {
         "id": purchase.id,
+        "kind": purchase.kind,
+        "months": purchase.months,
+        "label": _purchase_label(purchase),
         "credits": purchase.credits,
         "amount": purchase.amount,
-        "checkout_url": _checkout_url(body.provider, purchase, amount),
+        "checkout_url": _checkout_url(body.provider, purchase, purchase.amount),
     }
 
 
 @app.get("/api/teacher/credit-purchases")
 def list_own_credit_purchases(teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
-    """O'qituvchining o'zi yaratgan kredit sotib olish buyurtmalari tarixi."""
+    """O'qituvchining o'zi yaratgan token sotib olish buyurtmalari tarixi."""
 
     purchases = db.scalars(
         select(CreditPurchase).where(CreditPurchase.teacher_id == teacher.id).order_by(CreditPurchase.id.desc())
     ).all()
     return [
-        {"id": p.id, "credits": p.credits, "amount": p.amount, "status": p.status, "method": p.method}
+        {"id": p.id, "kind": p.kind, "months": p.months, "credits": p.credits, "amount": p.amount,
+         "status": p.status, "method": p.method}
         for p in purchases
     ]
 
 
-# ========== 5.1) Karta orqali kredit sotib olish ==========
+# ========== 5.1) Karta orqali token sotib olish ==========
 #
 # O'qituvchi admin kartasiga o'zi pul o'tkazadi va chek rasmini yuboradi.
 # Bot chekni admin'ga ✅/❌ tugmalari bilan yuboradi; admin tasdiqlasa,
-# o'qituvchiga kredit avtomatik yoziladi va unga xabar boradi.
+# o'qituvchiga token avtomatik yoziladi va unga xabar boradi.
 #
 # Nega to'liq avtomatik emas: Uzcard/Humo shaxsiy kartaga tushgan pulni
 # bot tekshira oladigan ochiq API bermaydi. Chekni soxtalashtirish oson,
@@ -5395,10 +5509,10 @@ def _format_sum(amount: int) -> str:
 
 def _card_topup_caption(purchase: CreditPurchase, teacher: Teacher) -> str:
     return (
-        "💳 Karta orqali kredit so'rovi\n\n"
+        "💳 Karta orqali to'lov\n\n"
         f"O'qituvchi: {teacher.user.full_name}\n"
         f"Telegram ID: {teacher.user.tg_id}\n"
-        f"Kredit: {purchase.credits} ta\n"
+        f"Xarid: {_purchase_label(purchase)}\n"
         f"Summa: {_format_sum(purchase.amount)} so'm\n\n"
         "Kartangizga shu summa tushganini tekshirib, tasdiqlang."
     )
@@ -5474,7 +5588,7 @@ def decide_card_topup(db: Session, purchase_id: int, approve: bool) -> tuple[boo
     paneli. Mantiq bitta joyda bo'lgani uchun ikkala yo'l ham bir xil ishlaydi.
 
     Faqat "pending" holatdagi so'rov o'zgaradi — shuning uchun tugma ikki
-    marta bosilsa ham kredit ikki marta yozilmaydi.
+    marta bosilsa ham token ikki marta yozilmaydi.
 
     (muvaffaqiyatli_mi, admin'ga ko'rsatiladigan matn) qaytaradi.
     """
@@ -5493,19 +5607,11 @@ def decide_card_topup(db: Session, purchase_id: int, approve: bool) -> tuple[boo
     if approve:
         purchase.status = "paid"
         purchase.performed_at = utcnow()
-        add_credits(teacher, purchase.credits)
+        _grant_purchase(purchase)
         db.commit()
 
-        _notify_teacher(
-            teacher,
-            f"✅ To'lovingiz tasdiqlandi!\n\n"
-            f"Hisobingizga {purchase.credits} ta kredit qo'shildi.\n"
-            f"Joriy kredit: {teacher.credits} ta",
-        )
-        return True, (
-            f"✅ Tasdiqlandi: {teacher.user.full_name} — {purchase.credits} kredit ({amount_text} so'm)\n"
-            f"Uning krediti endi: {teacher.credits} ta"
-        )
+        _notify_teacher(teacher, f"✅ To'lovingiz tasdiqlandi!\n\n{_purchase_granted_text(purchase, teacher)}")
+        return True, f"✅ Tasdiqlandi: {teacher.user.full_name} — {_purchase_label(purchase)} ({amount_text} so'm)"
 
     purchase.status = "cancelled"
     purchase.cancelled_at = utcnow()
@@ -5517,7 +5623,7 @@ def decide_card_topup(db: Session, purchase_id: int, approve: bool) -> tuple[boo
         "Chek noto'g'ri yoki kartaga pul tushmagan bo'lishi mumkin. "
         "Savol bo'lsa, admin bilan bog'laning.",
     )
-    return True, f"❌ Rad etildi: {teacher.user.full_name} — {purchase.credits} kredit ({amount_text} so'm)"
+    return True, f"❌ Rad etildi: {teacher.user.full_name} — {_purchase_label(purchase)} ({amount_text} so'm)"
 
 
 @app.post("/api/teacher/card-topups")
@@ -5545,9 +5651,7 @@ def create_card_topup(
         )
 
     image, mime, extension = _decode_receipt(body.receipt_base64)
-    amount = _calculate_credit_price(body.credits)
-
-    purchase = CreditPurchase(teacher_id=teacher.id, credits=body.credits, amount=amount, method="card")
+    purchase = _new_purchase(db, teacher, body, method="card")
     db.add(purchase)
     db.commit()
 
@@ -5562,7 +5666,8 @@ def create_card_topup(
         db.commit()
         raise HTTPException(status_code=502, detail="Chek yuborilmadi, bir ozdan keyin qayta urinib ko'ring")
 
-    return {"id": purchase.id, "credits": purchase.credits, "amount": purchase.amount, "status": purchase.status}
+    return {"id": purchase.id, "kind": purchase.kind, "months": purchase.months, "credits": purchase.credits,
+            "amount": purchase.amount, "status": purchase.status}
 
 
 def _participant_key_expression():
@@ -6256,8 +6361,8 @@ def save_student_answers(
     """
     O'qituvchi o'quvchining javoblarini kiritadi — bot ularni avtomatik tekshiradi.
 
-    Bepul testda har bir YANGI natija uchun o'qituvchidan 1 kredit yechiladi
-    (javoblarni keyin tahrirlash qo'shimcha kredit talab qilmaydi).
+    Bepul testda har bir YANGI natija uchun o'qituvchidan 1 token yechiladi
+    (javoblarni keyin tahrirlash qo'shimcha token talab qilmaydi).
     """
 
     test = _get_own_test(db, teacher, test_id)
@@ -6294,13 +6399,13 @@ def _saved_result(test: Test, attempt: Attempt) -> dict:
 def _store_offline_answers(db: Session, test: Test, teacher: Teacher, attempt: Attempt, answers: dict[str, str]) -> dict:
     """O'qituvchi kiritgan (yoki skanerlangan) javoblarni tekshirib saqlaydi."""
 
-    db.refresh(attempt, with_for_update=True)  # ikki marta yuborilsa ham kredit bir marta yechilsin
+    db.refresh(attempt, with_for_update=True)  # ikki marta yuborilsa ham token bir marta yechilsin
 
-    # Har bir YANGI o'quvchi natijasi o'qituvchidan 1 kredit oladi (bepul testlarda).
-    # Javoblarni keyin tahrirlash qo'shimcha kredit talab qilmaydi.
+    # Har bir YANGI o'quvchi natijasi o'qituvchidan 1 token oladi (bepul testlarda).
+    # Javoblarni keyin tahrirlash qo'shimcha token talab qilmaydi.
     was_filled = attempt.status == "done"
-    if test.price == 0 and not was_filled and teacher.credits <= 0:
-        raise HTTPException(status_code=402, detail="Krediti tugagan — avval kredit sotib oling")
+    if _charges_tokens(test, teacher) and not was_filled and teacher.credits <= 0:
+        raise HTTPException(status_code=402, detail="Tokeningiz tugagan — token yoki oylik obuna sotib oling")
 
     # Qayta kiritilsa, eski javoblar o'rniga yangilari yoziladi.
     db.execute(delete(StudentAnswer).where(StudentAnswer.attempt_id == attempt.id))
@@ -6310,7 +6415,7 @@ def _store_offline_answers(db: Session, test: Test, teacher: Teacher, attempt: A
     attempt.status = "done"
     attempt.finished_at = utcnow()
 
-    if test.price == 0 and not was_filled:
+    if _charges_tokens(test, teacher) and not was_filled:
         add_credits(teacher, -1)
 
     db.commit()
@@ -6626,7 +6731,7 @@ def delete_variant(test_id: int, name: str, teacher: Teacher = Depends(get_curre
 # ---------- Javoblar varaqasini skanerlash ----------
 # O'qituvchi o'quvchi bo'yagan varaqni suratga oladi → skaner javoblarni o'qiydi
 # (backend/omr.py) → o'qituvchi ekranda tekshirib, ismni yozib saqlaydi.
-# Saqlash oddiy "javoblarni kiritish" bilan bir xil: kredit, baholash, natijalar.
+# Saqlash oddiy "javoblarni kiritish" bilan bir xil: token, baholash, natijalar.
 
 
 def _paper_test(db: Session, teacher: Teacher, test_id: int) -> Test:
@@ -8313,7 +8418,7 @@ def pay_for_test(code: str, provider: str = "payme", user: User = Depends(get_cu
 
 # ========== 6.1) Pullik test: o'quvchi o'qituvchining kartasiga to'laydi ==========
 #
-# Platforma pulni ushlamaydi va kredit ishlatilmaydi: o'quvchi pulni o'qituvchining
+# Platforma pulni ushlamaydi va token ishlatilmaydi: o'quvchi pulni o'qituvchining
 # kartasiga o'zi o'tkazadi va chek rasmini yuboradi. Chek botda o'qituvchiga
 # ✅/❌ tugmalari bilan boradi; o'qituvchi kartasiga pul tushganini ko'rib
 # tasdiqlaydi — shundagina o'quvchiga test ochiladi va unga xabar boradi.
@@ -8701,7 +8806,7 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
     Har bir o'quvchiga BITTA urinish beriladi. Ilgari tugatilgan urinish
     e'tiborga olinmasdi va har bosishda yangisi ochilardi — o'quvchi javoblarni
     yodlab, 100% olguncha qayta-qayta ishlab, reytingni ma'nosiz qilib qo'yardi
-    (va har urinish o'qituvchining kreditini yeyardi).
+    (va har urinish o'qituvchining tokenini yeyardi).
 
     To'g'ri javoblar hech qachon yuborilmaydi — aks holda o'quvchi ularni
     brauzerning so'rovlar oynasidan ko'rib olishi mumkin.
@@ -8747,12 +8852,12 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
         )
 
     if not attempt:
-        # Bepul testda har bir natija o'qituvchidan 1 kredit oladi —
-        # krediti bo'lmasa, yangi urinish boshlanmaydi.
-        if test.price == 0 and test.teacher.credits <= 0:
+        # Bepul testda har bir natija o'qituvchidan 1 token oladi —
+        # tokeni bo'lmasa, yangi urinish boshlanmaydi.
+        if _charges_tokens(test, test.teacher) and test.teacher.credits <= 0:
             raise HTTPException(
                 status_code=402,
-                detail="O'qituvchining krediti tugagan, hozircha bu testni boshlab bo'lmaydi",
+                detail="O'qituvchining tokeni tugagan, hozircha bu testni boshlab bo'lmaydi",
             )
 
         attempt = Attempt(test_id=test.id, user_id=user.id)
@@ -8803,7 +8908,7 @@ def _get_own_attempt(db: Session, user: User, attempt_id: int) -> Attempt:
 
     # Qulflanadi: "YAKUNLASH" ikki marta bosilsa, ikkinchi so'rov birinchisi
     # tugashini kutadi va urinishni allaqachon yakunlangan holda ko'radi —
-    # o'qituvchidan kredit ikki marta yechilmaydi.
+    # o'qituvchidan token ikki marta yechilmaydi.
     attempt = db.get(Attempt, attempt_id, with_for_update=True)
     if not attempt or attempt.user_id != user.id:
         raise HTTPException(status_code=404, detail="Urinish topilmadi")
@@ -14577,7 +14682,7 @@ def _require_provider(provider: str) -> None:
 
 
 def _click_order_ref(order) -> str:
-    """Click'ga yuboriladigan buyurtma raqami: c12 — kredit xaridi, t34 — test to'lovi."""
+    """Click'ga yuboriladigan buyurtma raqami: c12 — token xaridi, t34 — test to'lovi."""
     return f"{'c' if isinstance(order, CreditPurchase) else 't'}{order.id}"
 
 
@@ -14604,7 +14709,7 @@ def _checkout_url(provider: str, order, amount: int) -> str:
 #
 # Click to'lovni ikki bosqichda tasdiqlaydi: Prepare (buyurtma bormi, summa
 # to'g'rimi) va Complete (pul yechildi). Har so'rov MD5 imzo bilan keladi —
-# imzo noto'g'ri bo'lsa, hech narsa o'zgarmaydi. Kredit/balans faqat Complete
+# imzo noto'g'ri bo'lsa, hech narsa o'zgarmaydi. Token/balans faqat Complete
 # muvaffaqiyatli bo'lgandagina yoziladi (Payme bilan bir xil mantiq).
 
 CLICK_ERRORS = {
@@ -14746,7 +14851,7 @@ def _payme_check_auth(request: Request) -> bool:
 
     # MUHIM: kalit sozlanmagan bo'lsa, hech kimni o'tkazmaymiz. Aks holda
     # hmac.compare_digest("", "") -> True bo'lib, istalgan odam soxta "to'lov
-    # bo'ldi" xabarini yuborib, o'ziga tekinga kredit yozdirib olardi.
+    # bo'ldi" xabarini yuborib, o'ziga tekinga token yozdirib olardi.
     if not PAYME_SECRET_KEY:
         logging.getLogger("backend").warning("Payme webhook so'rovi keldi, lekin PAYME_SECRET_KEY sozlanmagan")
         return False
@@ -14770,13 +14875,13 @@ def _payme_state(status: str) -> int:
 # (status, amount, payme_transaction_id, created_at, performed_at, cancelled_at),
 # shuning uchun quyidagi funksiyalar ikkalasi bilan ham bir xil ishlaydi:
 #
-#   CreditPurchase — o'qituvchining kredit xaridi,     account: {"purchase_id": ...}
+#   CreditPurchase — o'qituvchining token xaridi,     account: {"purchase_id": ...}
 #   Payment        — o'quvchining pullik testga to'lovi, account: {"payment_id": ...}
 PAYME_ORDER_MODELS = {"purchase_id": CreditPurchase, "payment_id": Payment}
 
 
 def _payme_find_order_by_account(params: dict, db: Session):
-    """So'rovdagi "account" bo'yicha buyurtmani topadi (kredit xaridi yoki testga to'lov)."""
+    """So'rovdagi "account" bo'yicha buyurtmani topadi (token xaridi yoki testga to'lov)."""
 
     account = params.get("account") or {}
 
@@ -14791,7 +14896,7 @@ def _payme_find_order_by_account(params: dict, db: Session):
 
         # Karta orqali qilingan xaridni Payme to'lay olmaydi — u admin
         # tasdig'ini kutadi. Aks holda bitta buyurtma ikki yo'l bilan (chek +
-        # Payme) ikki marta kredit olishi mumkin edi.
+        # Payme) ikki marta token olishi mumkin edi.
         if isinstance(order, CreditPurchase) and order.method != "payme":
             return None
         # O'qituvchi kartasiga chek bilan qilingan to'lovni ham Payme to'lay olmaydi
@@ -14815,7 +14920,7 @@ def _payme_find_order_by_transaction(params: dict, db: Session):
         return None
 
     for model in PAYME_ORDER_MODELS.values():
-        # Qulflanadi: Payme bir so'rovni qayta yuborsa ham kredit ikki marta yozilmaydi
+        # Qulflanadi: Payme bir so'rovni qayta yuborsa ham token ikki marta yozilmaydi
         order = db.scalar(select(model).where(model.payme_transaction_id == payme_id).with_for_update())
         if order:
             return order
@@ -14834,12 +14939,12 @@ def _payme_apply_paid(order) -> None:
     """
     To'lov haqiqatan o'tganda bajariladi.
 
-    Kredit xaridida — o'qituvchiga kredit yoziladi.
+    Token/obuna xaridida — o'qituvchiga token yoziladi yoki obunasi uzayadi.
     Testga to'lovda — o'qituvchi balansiga ulushi qo'shiladi (qolgani platformada).
     """
 
     if isinstance(order, CreditPurchase):
-        add_credits(order.teacher, order.credits)
+        _grant_purchase(order)
         return
 
     share = _teacher_share(order.amount)
@@ -14858,7 +14963,7 @@ def _payme_revert_paid(order) -> None:
     """To'lov bekor qilinganda (pul qaytarilganda) yozilgani orqaga olinadi."""
 
     if isinstance(order, CreditPurchase):
-        add_credits(order.teacher, -order.credits)
+        _revoke_purchase(order)
         return
 
     add_balance(order.test.teacher, -_teacher_share(order.amount))
@@ -14997,7 +15102,7 @@ PAYME_METHOD_HANDLERS = {
 
 @app.post("/api/payme/webhook")
 async def payme_webhook(request: Request, db: Session = Depends(get_db)):
-    """Payme Merchant API — kredit va testga to'lov hodisalari shu yerga keladi."""
+    """Payme Merchant API — token va testga to'lov hodisalari shu yerga keladi."""
 
     try:
         body = await request.json()
@@ -15030,13 +15135,13 @@ def admin_overview(admin: User = Depends(get_current_admin), db: Session = Depen
 
     Platformaning daromadi IKKI manbadan keladi va ularni aralashtirmaslik kerak:
 
-    1) Kredit sotuvi — o'qituvchilar kredit sotib oladi. Bu pul to'liq
+    1) Token sotuvi — o'qituvchilar token sotib oladi. Bu pul to'liq
        platformaga tegishli (100%).
     2) Pullik testlar — o'quvchi to'laydi, uning faqat komissiya qismi
        ({PLATFORM_COMMISSION_PERCENT}%) platformada qoladi, qolgani o'qituvchiniki.
 
     Ilgari bu yerda faqat testga to'lovlarning TO'LIQ summasi ko'rsatilardi:
-    ya'ni asosiy daromad (kredit sotuvi) umuman hisoblanmas, test to'lovi esa
+    ya'ni asosiy daromad (token sotuvi) umuman hisoblanmas, test to'lovi esa
     o'qituvchining ulushi bilan birga, oshirib ko'rsatilardi.
     """
 
@@ -15165,7 +15270,7 @@ def admin_toggle_promo(promo_id: int, admin: User = Depends(get_current_admin), 
 @app.get("/api/admin/teachers")
 def admin_list_teachers(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
     """
-    Barcha o'qituvchilar ro'yxati: kim qancha kredit sotib olgan, qancha
+    Barcha o'qituvchilar ro'yxati: kim qancha token sotib olgan, qancha
     test yaratgan, balansida qancha pul bor.
 
     Ko'p o'qituvchili platformada eng faol (va eng ko'p to'lov qiladigan)
@@ -15313,6 +15418,44 @@ def admin_save_payment_settings(body: PaymentSettingsIn, admin: User = Depends(g
     return _payment_settings_view(db)
 
 
+# ---------- Oylik obuna narxlari ----------
+
+
+def _subscription_settings_view(db: Session) -> dict:
+    return {
+        "plans": [
+            {"months": months, "days": SUBSCRIPTION_PLAN_DAYS[months], "price": price}
+            for months, price in _subscription_prices(db).items()
+        ],
+        # Obunasi hozir faol o'qituvchilar soni — admin narxni o'zgartirishdan oldin ko'rsin
+        "active": db.scalar(select(func.count()).select_from(Teacher).where(Teacher.subscription_until > utcnow())) or 0,
+    }
+
+
+@app.get("/api/admin/subscription-settings")
+def admin_subscription_settings(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Har bir obuna muddatining narxi (0 — bu muddat o'qituvchilarga ko'rsatilmaydi)."""
+
+    return _subscription_settings_view(db)
+
+
+@app.post("/api/admin/subscription-settings")
+def admin_save_subscription_settings(body: SubscriptionSettingsIn, admin: User = Depends(get_current_admin),
+                                     db: Session = Depends(get_db)):
+    """Obuna narxlarini saqlaydi — darhol kuchga kiradi. Allaqachon sotilgan obunalarga ta'sir qilmaydi."""
+
+    for months, price in body.prices.items():
+        key = _subscription_price_key(months)
+        row = db.get(AppSetting, key)
+        if row:
+            row.value, row.updated_at, row.updated_by = str(price), utcnow(), admin.id
+        else:
+            db.add(AppSetting(key=key, value=str(price), updated_by=admin.id))
+    db.commit()
+    logging.getLogger("backend").info("Obuna narxlari yangilandi: %s (admin=%s)", body.prices, admin.id)
+    return _subscription_settings_view(db)
+
+
 @app.get("/api/admin/top-students")
 def admin_top_students(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
     """Kamida bitta testni tugatgan o'quvchilarning, barcha testlar bo'yicha o'rtacha natijasiga ko'ra reytingi."""
@@ -15408,6 +15551,9 @@ def admin_list_card_topups(admin: User = Depends(get_current_admin), db: Session
         {
             "id": purchase.id,
             "teacher": purchase.teacher.user.full_name,
+            "kind": purchase.kind,
+            "months": purchase.months,
+            "label": _purchase_label(purchase),
             "credits": purchase.credits,
             "amount": purchase.amount,
             "created_at": purchase.created_at,
@@ -15453,7 +15599,7 @@ def admin_card_topup_receipt(
 
 @app.post("/api/admin/card-topups/{purchase_id}/approve")
 def admin_approve_card_topup(purchase_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
-    """Kartaga pul tushgani tasdiqlanadi — o'qituvchiga kredit yoziladi."""
+    """Kartaga pul tushgani tasdiqlanadi — o'qituvchiga token yoziladi."""
 
     ok, message = decide_card_topup(db, purchase_id, approve=True)
     if not ok:
@@ -15463,7 +15609,7 @@ def admin_approve_card_topup(purchase_id: int, admin: User = Depends(get_current
 
 @app.post("/api/admin/card-topups/{purchase_id}/reject")
 def admin_reject_card_topup(purchase_id: int, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
-    """To'lov rad etiladi — kredit yozilmaydi, o'qituvchiga xabar boradi."""
+    """To'lov rad etiladi — token yozilmaydi, o'qituvchiga xabar boradi."""
 
     ok, message = decide_card_topup(db, purchase_id, approve=False)
     if not ok:
@@ -15472,7 +15618,7 @@ def admin_reject_card_topup(purchase_id: int, admin: User = Depends(get_current_
 
 
 class AdminCreditsIn(BaseModel):
-    """Admin o'qituvchiga kredit qo'shadi (musbat) yoki ayiradi (manfiy). Sabab xabarda ko'rsatiladi."""
+    """Admin o'qituvchiga token qo'shadi (musbat) yoki ayiradi (manfiy). Sabab xabarda ko'rsatiladi."""
 
     delta: int = Field(ge=-1_000_000, le=1_000_000)
     reason: str = Field(default="", max_length=300)
@@ -15494,6 +15640,7 @@ def _admin_user_row(user: User, teacher: Teacher | None, school_name: str | None
         "created_at": user.created_at,
         "is_teacher": teacher is not None,
         "credits": teacher.credits if teacher else None,
+        "subscription_until": teacher.subscription_until if teacher else None,
         "balance": teacher.balance if teacher else None,
         "school": school_name,
     }
@@ -15599,6 +15746,9 @@ def admin_user_detail(user_id: int, admin: User = Depends(get_current_admin), db
         data["purchases"] = [
             {
                 "id": purchase.id,
+                "kind": purchase.kind,
+                "months": purchase.months,
+                "label": _purchase_label(purchase),
                 "credits": purchase.credits,
                 "amount": purchase.amount,
                 "status": purchase.status,
@@ -15615,20 +15765,20 @@ def admin_adjust_credits(
     user_id: int, body: AdminCreditsIn, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)
 ):
     """
-    O'qituvchiga qo'lda kredit qo'shish yoki ayirish (masalan, sovg'a yoki xato
+    O'qituvchiga qo'lda token qo'shish yoki ayirish (masalan, sovg'a yoki xato
     to'lovni tuzatish). Sotuv hisobiga kirmaydi — daromad statistikasi o'zgarmaydi.
     """
 
     if body.delta == 0:
-        raise HTTPException(status_code=422, detail="Kredit soni 0 bo'lmasin")
+        raise HTTPException(status_code=422, detail="Token soni 0 bo'lmasin")
     teacher = db.scalar(select(Teacher).where(Teacher.user_id == user_id))
     if not teacher:
-        raise HTTPException(status_code=404, detail="Bu foydalanuvchi o'qituvchi emas — kredit faqat o'qituvchiga beriladi")
+        raise HTTPException(status_code=404, detail="Bu foydalanuvchi o'qituvchi emas — token faqat o'qituvchiga beriladi")
 
     add_credits(teacher, body.delta)
     db.commit()
     logging.getLogger("backend").info(
-        "Admin %s kredit o'zgartirdi: user=%s delta=%s sabab=%r", admin.id, user_id, body.delta, body.reason
+        "Admin %s token o'zgartirdi: user=%s delta=%s sabab=%r", admin.id, user_id, body.delta, body.reason
     )
 
     notified = False
@@ -15637,9 +15787,9 @@ def admin_adjust_credits(
         amount = f"{abs(body.delta):,}".replace(",", " ")
         total = f"{teacher.credits:,}".replace(",", " ")
         if body.delta > 0:
-            text = f"🎁 Hisobingizga {amount} kredit qo'shildi.{reason}\nJami: {total} kredit"
+            text = f"🎁 Hisobingizga {amount} token qo'shildi.{reason}\nJami: {total} token"
         else:
-            text = f"ℹ️ Hisobingizdan {amount} kredit yechildi.{reason}\nQoldi: {total} kredit"
+            text = f"ℹ️ Hisobingizdan {amount} token yechildi.{reason}\nQoldi: {total} token"
         notified = _telegram_send_message(teacher.user.tg_id, text)
     return {"ok": True, "credits": teacher.credits, "notified": notified}
 
@@ -15752,7 +15902,7 @@ def admin_delete_school(school_id: int, body: AdminSchoolDeleteIn, admin: User =
 def admin_payment_history(
     status: str = "all", admin: User = Depends(get_current_admin), db: Session = Depends(get_db)
 ):
-    """Kredit xaridlari tarixi (oxirgi 100 ta): Payme, Click va karta orqali, har qanday holatda."""
+    """Token xaridlari tarixi (oxirgi 100 ta): Payme, Click va karta orqali, har qanday holatda."""
 
     query = select(CreditPurchase).options(selectinload(CreditPurchase.teacher).selectinload(Teacher.user))
     if status != "all":
@@ -15763,6 +15913,9 @@ def admin_payment_history(
             "id": purchase.id,
             "teacher": purchase.teacher.user.full_name,
             "user_id": purchase.teacher.user_id,
+            "kind": purchase.kind,
+            "months": purchase.months,
+            "label": _purchase_label(purchase),
             "credits": purchase.credits,
             "amount": purchase.amount,
             "status": purchase.status,
@@ -15969,10 +16122,10 @@ Xizmatdan foydalanish yoki to'lov qilish — oferta shartlarini to'liq qabul qil
   <li>Xizmat Telegram Mini App orqali, internet mavjud bo'lganda ko'rsatiladi.</li>
 </ul>
 
-<h2>3. Kreditlar va narxlar</h2>
-<p>Bepul testda har bir o'quvchi natijasi uchun o'qituvchi hisobidan 1 kredit yechiladi. Kredit narxi (1 dona uchun):</p>
+<h2>3. Tokenlar va narxlar</h2>
+<p>Bepul testda har bir o'quvchi natijasi uchun o'qituvchi hisobidan 1 token yechiladi. Token narxi (1 dona uchun):</p>
 <table>{tiers}</table>
-<p>Narx sotib olinadigan kreditlar soniga qarab yuqoridagi jadval bo'yicha hisoblanadi va to'lovdan oldin ko'rsatiladi.</p>
+<p>Narx sotib olinadigan tokenlar soniga qarab yuqoridagi jadval bo'yicha hisoblanadi va to'lovdan oldin ko'rsatiladi.</p>
 
 <h2>4. Pullik testlar</h2>
 <p>O'qituvchi o'z testiga {_format_sum(TEST_PRICE_MIN)} — {_format_sum(TEST_PRICE_MAX)} so'm oralig'ida narx belgilashi mumkin.
@@ -15983,12 +16136,12 @@ To'lov Payme yoki Click orqali amalga oshirilganda, to'lov summasining {share}% 
 <ul>
   <li>To'lovlar Payme yoki Click to'lov tizimlari orqali, O'zbekiston so'mida qabul qilinadi.</li>
   <li>Karta ma'lumotlari faqat to'lov tizimi sahifasida kiritiladi; Ijrochi ularni ko'rmaydi va saqlamaydi.</li>
-  <li>To'lov tasdiqlangach, kredit yoki testga ruxsat avtomatik beriladi.</li>
+  <li>To'lov tasdiqlangach, token yoki testga ruxsat avtomatik beriladi.</li>
 </ul>
 
 <h2>6. Pulni qaytarish</h2>
 <ul>
-  <li>Sotib olingan, lekin ishlatilmagan kreditlar uchun to'lovdan keyin 14 kun ichida murojaat qilinsa, ishlatilmagan qism uchun pul qaytariladi.</li>
+  <li>Sotib olingan, lekin ishlatilmagan tokenlar uchun to'lovdan keyin 14 kun ichida murojaat qilinsa, ishlatilmagan qism uchun pul qaytariladi.</li>
   <li>Texnik nosozlik sababli xizmat ko'rsatilmagan bo'lsa (masalan, to'lov o'tdi, lekin test ochilmadi), pul to'liq qaytariladi.</li>
   <li>Pul to'lov qilingan kartaga, to'lov tizimi qoidalariga ko'ra 3–10 ish kuni ichida qaytariladi.</li>
 </ul>

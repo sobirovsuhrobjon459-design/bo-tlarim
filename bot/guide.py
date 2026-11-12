@@ -42,7 +42,7 @@ Test yakunlangach: <b>O'quvchi</b> → <b>Yakunlangan testlar</b> → <b>📊 Na
 _TEST_CREATE = """🧑‍🏫 <b>TEST YARATISH</b>
 
 1️⃣ PLAY → <b>Test markazi</b> → <b>O'qituvchi</b> → ism-familiyangizni kiriting.
-   🎁 Birinchi kirishda hisobingizga <b>8000 kredit</b> sovg'a qilinadi.
+   🎁 Birinchi kirishda hisobingizga <b>8000 token</b> sovg'a qilinadi.
 2️⃣ <b>➕ Yangi test yaratish</b>:
    • test nomi, fan, davomiyligi;
    • boshlanish/tugash vaqti (ixtiyoriy);
@@ -66,9 +66,9 @@ _TEST_RESULTS = """📊 <b>NATIJALAR VA SERTIFIKAT</b>
 💡 Rasch balli qatnashchilarga nisbatan hisoblanadi — qatnashchi qancha ko'p bo'lsa, ball shuncha aniq."""
 
 
-_CREDITS = """🎫 <b>KREDIT</b>
+_CREDITS = """🎫 <b>TOKEN</b>
 
-<b>Bepul</b> testda har bir o'quvchi natijasi uchun <b>1 kredit</b> sarflanadi. <b>Pullik</b> testda kredit sarflanmaydi.
+<b>Bepul</b> testda har bir o'quvchi natijasi uchun <b>1 token</b> sarflanadi. <b>Pullik</b> testda token sarflanmaydi.
 
 💳 <b>Pullik test qanday ishlaydi:</b>
 1️⃣ Bosh sahifada <b>➕ Karta qo'shish</b> — karta raqamingiz va ism-familiyangiz.
@@ -77,11 +77,13 @@ _CREDITS = """🎫 <b>KREDIT</b>
 4️⃣ Kartangizga pul tushganini tekshirib <b>✅ Ruxsat berish</b> ni bosing — o'sha o'quvchi testga kira oladi va unga xabar boradi.
 Pul to'g'ridan-to'g'ri sizga tushadi, platforma ushlamaydi. Ilovada ham: <b>🧾 Cheklar</b> — o'quvchi profili, cheki va ruxsat tugmalari bitta joyda.
 
-• <b>🛒 Kredit sotib olish</b> — qancha ko'p olsangiz, shuncha arzon:
+Token yoki obuna — tanlov sizda (<b>🛒 Token yoki obuna sotib olish</b> oynasida):
+• <b>🎫 Token</b> — 1 tekshiruv = 1 token. Qancha ko'p olsangiz, shuncha arzon:
   1–100 ta — 1 200 so'm, 101–150 — 1 000, 151–300 — 650, 301–500 — 500, 501+ — 450 so'm (1 dona).
-• <b>🎁 Promo kod</b> — kodingiz bo'lsa, uni <b>Kredit sotib olish</b> oynasidagi maydonga yozing — qo'shimcha kredit olasiz.
+• <b>⭐ Oylik obuna</b> — obuna muddatida tekshiruvlar <b>cheksiz</b>, token umuman yechilmaydi. Muddatlar va narxlar oynaning o'zida.
+• <b>🎁 Promo kod</b> — kodingiz bo'lsa, uni oynaning Token bo'limidagi maydonga yozing — qo'shimcha token olasiz.
 
-<b>Kreditim tugadi?</b> Kredit tugasa, o'quvchilar testni boshlay olmaydi — oldindan to'ldirib qo'ying."""
+<b>Tokenim tugadi?</b> Token tugasa (va obuna bo'lmasa), o'quvchilar testni boshlay olmaydi — oldindan to'ldirib qo'ying yoki obuna oling."""
 
 
 _MENTOR = """💻 <b>ONLINE MENTOR UCHUN</b>

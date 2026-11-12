@@ -1183,7 +1183,11 @@ html.web-mode body:has(.lp) {
   inset: 0;
   z-index: 100;
   display: none;
-  place-items: center;
+  /* Oyna ekrandan uzun bo'lsa — yuqoridan boshlanib aylantiriladi; qisqa bo'lsa —
+     pastdagi margin:auto uni o'rtaga qo'yadi. Ilgari "center" bilan uzun oynaning
+     tepasi va pasti (6 xonali kod maydoni) kesilib, umuman ko'rinmay qolardi. */
+  place-items: start center;
+  overflow-y: auto;
   padding: 16px;
   background: rgba(5, 20, 28, 0.7);
   backdrop-filter: blur(4px);
@@ -1191,6 +1195,10 @@ html.web-mode body:has(.lp) {
 
 .lp-modal.is-open {
   display: grid;
+}
+
+.lp-modal > * {
+  margin-block: auto;
 }
 
 /* Planshet va telefon */

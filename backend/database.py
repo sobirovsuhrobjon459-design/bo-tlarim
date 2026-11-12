@@ -70,16 +70,16 @@ def is_admin_tg(tg_id: int | None) -> bool:
 # Pullik testda o'quvchi to'laganda, platforma ushlab qoladigan foiz (qolgani o'qituvchiga boradi).
 PLATFORM_COMMISSION_PERCENT = int(os.getenv("PLATFORM_COMMISSION_PERCENT") or 20)
 
-# Yangi o'qituvchi ro'yxatdan o'tganda beriladigan sovg'a kreditlar.
-# Har bir bepul test natijasi uchun 1 kredit sarflanadi.
+# Yangi o'qituvchi ro'yxatdan o'tganda beriladigan sovg'a tokenlar.
+# Har bir bepul test natijasi uchun 1 token sarflanadi.
 WELCOME_CREDITS = int(os.getenv("WELCOME_CREDITS") or 8000)
-# Referal: taklif qilingan odam o'qituvchi bo'lsa, havola egasiga beriladigan kredit
+# Referal: taklif qilingan odam o'qituvchi bo'lsa, havola egasiga beriladigan token
 REFERRAL_CREDITS = int(os.getenv("REFERRAL_CREDITS") or 10)
 
 # O'qituvchilarga pul balansini to'ldirish uchun ko'rsatiladigan karta raqami.
 ADMIN_CARD_NUMBER = os.getenv("ADMIN_CARD_NUMBER", "")
 
-# Payme Merchant API ma'lumotlari (kredit sotib olish uchun). Payme Business
+# Payme Merchant API ma'lumotlari (token sotib olish uchun). Payme Business
 # kabinetidan olinadi: https://business.payme.uz
 PAYME_MERCHANT_ID = os.getenv("PAYME_MERCHANT_ID", "")
 PAYME_SECRET_KEY = os.getenv("PAYME_SECRET_KEY", "")
@@ -153,8 +153,12 @@ class Teacher(Base):
     # Pul balansi: pullik testlardan tushgan ulush shu yerga qo'shiladi (pul, so'mda).
     balance: Mapped[int] = mapped_column(default=0)
 
-    # Kredit balansi: bepul testda har bir o'quvchi natijasi uchun 1 dona sarflanadi.
+    # Token balansi: bepul testda har bir o'quvchi natijasi uchun 1 dona sarflanadi.
     credits: Mapped[int] = mapped_column(default=0)
+
+    # Oylik obuna: shu vaqtgacha token umuman yechilmaydi (cheksiz tekshiruv).
+    # O'qituvchi token yoki obunadan birini o'zi tanlab sotib oladi.
+    subscription_until: Mapped[datetime | None] = mapped_column(default=None)
 
     # Pullik test: o'quvchi pulni shu kartaga TO'G'RIDAN-TO'G'RI o'tkazadi va chek
     # yuboradi, o'qituvchi tasdiqlaydi (platforma pulni ushlamaydi).
@@ -167,12 +171,12 @@ class Teacher(Base):
     tests: Mapped[list["Test"]] = relationship(back_populates="teacher")
 
 
-# Kredit va pul balansi faqat shu funksiyalar orqali o'zgaradi.
+# Token va pul balansi faqat shu funksiyalar orqali o'zgaradi.
 #
 # Nega "teacher.credits += n" emas: u holda server avval qiymatni o'qib, keyin
 # bazaga TAYYOR raqamni yozadi. Ikki so'rov bir vaqtda kelsa (masalan Payme
-# 1000 kredit yozayotganda o'quvchi testni tugatsa), biri ikkinchisining
-# yozganini ustidan bosib, o'qituvchi sotib olgan krediti yo'qolardi.
+# 1000 token yozayotganda o'quvchi testni tugatsa), biri ikkinchisining
+# yozganini ustidan bosib, o'qituvchi sotib olgan tokeni yo'qolardi.
 # Bu yerda hisob bazaning o'zida bajariladi: "credits = credits + n".
 
 
@@ -189,7 +193,7 @@ def _adjust_teacher(teacher: "Teacher", column: str, delta: int) -> None:
 
 
 def add_credits(teacher: "Teacher", delta: int) -> None:
-    """O'qituvchi kreditini atomar o'zgartiradi (manfiy delta — yechish, 0 dan pastga tushmaydi)."""
+    """O'qituvchi tokenini atomar o'zgartiradi (manfiy delta — yechish, 0 dan pastga tushmaydi)."""
     _adjust_teacher(teacher, "credits", delta)
 
 
@@ -579,16 +583,20 @@ class WithdrawalRequest(Base):
 
 class CreditPurchase(Base):
     """
-    O'qituvchining kredit sotib olish buyurtmasi — Payme orqali to'lanadi.
+    O'qituvchining xaridi: token yoki oylik obuna (Payme, Click yoki karta orqali).
 
-    Payme'ning Merchant API'si (webhook) shu yozuvni "pending" -> "paid"
-    holatiga o'tkazadi va shunda teacher.credits oshiriladi.
+    To'lov tasdiqlanganda (Payme/Click webhook yoki admin chekni ko'rib) yozuv
+    "pending" -> "paid" bo'ladi va xarid kuchga kiradi: tokenda — teacher.credits
+    oshadi, obunada — teacher.subscription_until uzayadi (qarang: _grant_purchase).
     """
 
     __tablename__ = "credit_purchases"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     teacher_id: Mapped[int] = mapped_column(ForeignKey("teachers.id"), index=True)
+    # "tokens" — token paketi (credits ta); "subscription" — months oylik obuna (credits = 0)
+    kind: Mapped[str] = mapped_column(String(15), default="tokens")
+    months: Mapped[int] = mapped_column(default=0)
     credits: Mapped[int]
     amount: Mapped[int]  # so'm
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | paid | cancelled
@@ -847,7 +855,7 @@ class ClassTestScore(Base):
 
 class PromoCode(Base):
     """
-    Promo kod — o'qituvchi kiritsa, kredit oladi. Kodning o'zi saqlanmaydi,
+    Promo kod — o'qituvchi kiritsa, token oladi. Kodning o'zi saqlanmaydi,
     faqat SHA-256 izi (code_hash): baza yoki kod ochilib qolsa ham promo kod
     bilinmaydi. hint — adminga ko'rsatish uchun ("51…09").
     """
@@ -906,8 +914,8 @@ class Referral(Base):
     """
     Referal: o'qituvchi o'z havolasi (t.me/bot?start=ref_ID) bilan yangi odam olib keldi.
     Taklif qilingan odam @sukhrobmath kanaliga obuna bo'lib, o'qituvchi sifatida
-    ro'yxatdan o'tganda havola egasiga REFERRAL_CREDITS kredit beriladi (bir marta).
-    HECH QACHON o'chirilmaydi — kim kimni olib kelgani va berilgan kredit tarixi.
+    ro'yxatdan o'tganda havola egasiga REFERRAL_CREDITS token beriladi (bir marta).
+    HECH QACHON o'chirilmaydi — kim kimni olib kelgani va berilgan token tarixi.
     """
 
     __tablename__ = "referrals"
@@ -1584,25 +1592,57 @@ class WithdrawalRequestIn(BaseModel):
     card_number: str = Field(min_length=8, max_length=50)
 
 
-class CreditPurchaseIn(BaseModel):
-    """O'qituvchi kredit sotib olmoqchi bo'lganda yuboriladi."""
+# Oylik obuna muddatlari: necha oy -> necha kun. Narxini admin panelda admin belgilaydi.
+SUBSCRIPTION_PLAN_DAYS = {1: 30, 3: 90, 12: 365}
 
-    credits: int = Field(ge=1, le=100_000)
+
+class _PurchaseChoice(BaseModel):
+    """Xarid: YOKI token (credits ta), YOKI oylik obuna (months oy) — ikkisidan aynan bittasi."""
+
+    credits: int | None = Field(default=None, ge=1, le=100_000)
+    months: int | None = None
+
+    @model_validator(mode="after")
+    def one_of(self):
+        if (self.credits is None) == (self.months is None):
+            raise ValueError("Token sonini yoki obuna muddatini tanlang")
+        if self.months is not None and self.months not in SUBSCRIPTION_PLAN_DAYS:
+            raise ValueError("Bunday obuna muddati yo'q")
+        return self
+
+
+class CreditPurchaseIn(_PurchaseChoice):
+    """O'qituvchi token yoki obuna sotib olmoqchi bo'lganda (Payme/Click) yuboriladi."""
+
     provider: Literal["payme", "click"] = "payme"
 
 
-class CardTopUpIn(BaseModel):
+class CardTopUpIn(_PurchaseChoice):
     """
-    Karta orqali kredit sotib olish: o'qituvchi admin kartasiga pul o'tkazgach,
-    chek rasmini yuboradi.
+    Karta orqali token yoki obuna sotib olish: o'qituvchi admin kartasiga pul
+    o'tkazgach, chek rasmini yuboradi.
 
     Rasm base64 matn ko'rinishida keladi (oddiy JSON so'rovda) — fayl yuklash
     uchun qo'shimcha kutubxona kerak bo'lmasligi uchun. Frontend rasmni
     yuborishdan oldin kichraytiradi, shuning uchun ~7 MB chegara yetarli.
     """
 
-    credits: int = Field(ge=1, le=100_000)
     receipt_base64: str = Field(min_length=100, max_length=7_000_000)
+
+
+class SubscriptionSettingsIn(BaseModel):
+    """Admin panelidan: har bir obuna muddatining narxi (so'm). 0 — bu muddat sotilmaydi."""
+
+    prices: dict[int, int] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def valid_plans(self):
+        for months, price in self.prices.items():
+            if months not in SUBSCRIPTION_PLAN_DAYS:
+                raise ValueError("Bunday obuna muddati yo'q")
+            if not 0 <= price <= 100_000_000:
+                raise ValueError("Narx noto'g'ri")
+        return self
 
 
 class PaymentSettingsIn(BaseModel):
@@ -1875,7 +1915,7 @@ class PromoRedeemIn(BaseModel):
 
 
 class PromoCreateIn(BaseModel):
-    """Admin promo kod yaratadi: kod, beriladigan kredit, ixtiyoriy chegara va muddat."""
+    """Admin promo kod yaratadi: kod, beriladigan token, ixtiyoriy chegara va muddat."""
 
     code: str = Field(min_length=4, max_length=40)
     credits: int = Field(default=3000, ge=1, le=1_000_000)
@@ -1888,7 +1928,7 @@ class PromoCreateIn(BaseModel):
         self.code = re.sub(r"\s", "", self.code).upper()
         if not re.fullmatch(r"[A-Z0-9_-]{4,40}", self.code):
             raise ValueError("Kod faqat harf, raqam, - va _ dan iborat bo'lsin (4-40 belgi)")
-        # Kod kredit miqdori maydoniga yoziladi: faqat raqamli kod miqdor bilan adashmasligi kerak
+        # Kod token miqdori maydoniga yoziladi: faqat raqamli kod miqdor bilan adashmasligi kerak
         if self.code.isdigit() and len(self.code) < 7:
             raise ValueError("Faqat raqamdan iborat kod kamida 7 xonali bo'lsin (yoki harf qo'shing)")
         return self
