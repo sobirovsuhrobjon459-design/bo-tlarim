@@ -6178,7 +6178,12 @@ def student_answer_detail(
     if not attempt or attempt.test_id != test.id or attempt.status not in ("done", "pending"):
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
 
-    return {**_attempt_review(db, test, attempt), "edit": _teacher_answer_sheet(db, test, attempt)}
+    return {
+        **_attempt_review(db, test, attempt),
+        "edit": _teacher_answer_sheet(db, test, attempt),
+        # Yozma javobni qo'lda kiritish klaviaturasi: "math" (√, kasr) yoki "text" (oddiy harflar)
+        "keyboard": subject_keyboard(test.subject),
+    }
 
 
 def _teacher_answer_sheet(db: Session, test: Test, attempt: Attempt) -> dict:

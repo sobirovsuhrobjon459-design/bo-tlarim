@@ -3582,6 +3582,8 @@ def test_yopiq_test_oqimi_toliq():
     assert answer_detail["correct"] == 3, answer_detail
     assert answer_detail["closed_total"] + answer_detail["written_total"] == answer_detail["total"]
     assert len(answer_detail["questions"]) == 4
+    # Yozma javobni qo'lda kiritishda fanga mos klaviatura (Matematika — matematik)
+    assert answer_detail["keyboard"] == "math", answer_detail.get("keyboard")
 
     # 6) Ikkinchi o'quvchi ham kiritilgach, test yakunlanadi
     client.post(

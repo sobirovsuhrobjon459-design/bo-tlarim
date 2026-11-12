@@ -16611,6 +16611,7 @@ async function renderTestDetail(testId) {
 async function renderStudentDetail(testId, attemptId) {
   const url = `/api/teacher/tests/${testId}/students/${attemptId}/detail`;
   let detail = await api(url);
+  answerKeyboard = detail.keyboard || "math";
   const edit = detail.edit;
   const canEdit = edit.editable;
   const pending = edit.pending;
@@ -16659,7 +16660,7 @@ async function renderStudentDetail(testId, attemptId) {
           hasImage
             ? `<img class="written-item-image" src="${item.image}" alt="${escapeHtml(item.label)} javobi" />`
             : canEdit
-              ? `<input class="input" data-ans-text maxlength="300" placeholder="O'quvchi javobi" value="${escapeHtml(item.chosen)}" style="margin:0" />`
+              ? mathFieldHtml(item.chosen, `placeholder="O'quvchi javobi" style="margin:0"`)
               : `<p style="margin:0;font-size:16px"><b>${item.chosen ? escapeHtml(latexToPlain(item.chosen)) : "—"}</b></p>`
         }
         <div class="ans-written-info"><span>🔑 To'g'ri javob: <b>${keyText(item.key)}</b></span>${ai}</div>
@@ -16704,7 +16705,11 @@ async function renderStudentDetail(testId, attemptId) {
     }
     ${
       written.length
-        ? `<p class="section-label" style="margin-top:18px">${span(written)}: YOZMA JAVOBLAR</p>${written.map(writtenCard).join("")}`
+        ? `<p class="section-label" style="margin-top:18px">${span(written)}: YOZMA JAVOBLAR</p>${
+            canEdit && written.some((item) => item.image === undefined)
+              ? `<p class="subtitle answer-hint" style="margin:-4px 0 10px">${answerInputHint()}</p>`
+              : ""
+          }${written.map(writtenCard).join("")}`
         : ""
     }
     ${detail.essay ? essayGradingHtml(detail.essay) : ""}
@@ -16805,13 +16810,26 @@ async function renderStudentDetail(testId, attemptId) {
         if (!pending) persist();
       });
     });
-    document.querySelectorAll("[data-ans-text]").forEach((input) => {
-      const item = written.find((entry) => String(entry.ref) === input.closest("[data-ans-ref]").dataset.ansRef);
-      input.addEventListener("change", () => {
-        item.chosen = input.value.trim();
-        if (!pending) persist();
-      });
+    /*
+      Yozma javob — fanga mos klaviatura bilan (Matematika: √, kasr, daraja; Biologiya: oddiy harflar).
+      Har harfda serverga yuborilmaydi: yozish to'xtagach (yoki maydondan chiqilganda) natija
+      bir marta qayta hisoblanadi. setupMathFields — MathLive kech yuklanib, oddiy maydon
+      almashtirilsa ham shu funksiya yangi maydonga o'tadi.
+    */
+    let writtenTimer = null;
+    const flushWritten = () => {
+      clearTimeout(writtenTimer);
+      if (!pending) persist();
+    };
+    setupMathFields(appElement, (field, value) => {
+      const item = written.find((entry) => String(entry.ref) === field.closest("[data-ans-ref]").dataset.ansRef);
+      if (!item || item.chosen === value) return;
+      item.chosen = value;
+      if (pending) return;
+      clearTimeout(writtenTimer);
+      writtenTimer = setTimeout(flushWritten, 900);
     });
+    appElement.querySelectorAll(".written-item .math-input").forEach((field) => field.addEventListener("change", flushWritten));
     document.querySelectorAll(".written-item .verdict-button").forEach((button) => {
       const card = button.closest("[data-ans-ref]");
       const item = written.find((entry) => String(entry.ref) === card.dataset.ansRef);
