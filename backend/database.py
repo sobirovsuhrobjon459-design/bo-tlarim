@@ -6,7 +6,7 @@ Ma'lumotlar bazasi fayli: .env sozlamalari, bazaga ulanish, barcha jadvallar
 import os
 import re
 from typing import Literal
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -910,6 +910,13 @@ class AppSession(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     revoked_at: Mapped[datetime | None] = mapped_column(default=None)
+    # "Faol qurilmalar" uchun: oxirgi faollik (90 kun ishlatilmasa — seans o'zi tugaydi) va qurilma (User-Agent)
+    last_seen_at: Mapped[datetime | None] = mapped_column(default=None)
+    user_agent: Mapped[str] = mapped_column(String(300), default="")
+
+
+# Shuncha vaqt ishlatilmagan ilova/sayt seansi o'zi tugaydi — qurilmadan avtomatik chiqiladi
+APP_SESSION_IDLE_LIMIT = timedelta(days=90)
 
 
 class Referral(Base):

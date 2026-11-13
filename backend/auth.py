@@ -26,12 +26,17 @@ from .database import (
     BOT_TOKEN,
     DEV_MODE,
     WELCOME_CREDITS,
+    APP_SESSION_IDLE_LIMIT,
     AppSession,
     SchoolMember,
     SessionLocal,
     Teacher,
     User,
+    utcnow,
 )
+
+# Seansning oxirgi faolligi har so'rovda emas, shuncha vaqtda bir marta yoziladi (bazaga ortiqcha yuk bo'lmasin)
+APP_SESSION_TOUCH_SECONDS = 10 * 60
 
 INIT_DATA_MAX_AGE_SECONDS = 24 * 60 * 60  # 1 kun
 
@@ -117,6 +122,7 @@ def get_current_user(
     x_dev_user: str = Header(default=""),
     db: Session = Depends(get_db),
     x_app_session: str = Header(default=""),
+    user_agent: str = Header(default=""),
 ) -> User:
     """
     So'rov header'idagi Telegram initData'ni tekshiradi va shu foydalanuvchini
@@ -139,6 +145,18 @@ def get_current_user(
         user = db.get(User, session.user_id) if session else None
         if not user:
             raise HTTPException(status_code=401, detail="Seans tugagan — ilovaga qaytadan kiring")
+        now = utcnow()
+        last_active = session.last_seen_at or session.created_at
+        if now - last_active > APP_SESSION_IDLE_LIMIT:
+            # 90 kun ishlatilmagan qurilma — avtomatik chiqariladi
+            session.revoked_at = now
+            db.commit()
+            raise HTTPException(status_code=401, detail="Bu qurilmada 90 kundan beri kirilmagan — qaytadan kiring")
+        if not session.last_seen_at or (now - session.last_seen_at).total_seconds() > APP_SESSION_TOUCH_SECONDS:
+            session.last_seen_at = now
+            if user_agent and not session.user_agent:
+                session.user_agent = user_agent[:300]
+            db.commit()
         return user
     elif DEV_MODE and x_dev_user:
         # Faqat lokal sinov uchun: Telegram'siz, oddiy brauzerda tekshirish imkoni

@@ -2260,6 +2260,122 @@ button.tt-cell {
   color: var(--ink);
 }
 
+/* Bosh sahifa: o'ng yuqoridagi akkaunt (avatar) tugmasi */
+.home-account {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(0, 168, 68, 0.35);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.home-account:active {
+  transform: scale(0.94);
+}
+
+/* ---------- Akkaunt oynasi ---------- */
+.account-card {
+  align-items: center;
+}
+
+.account-balance {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.account-stat {
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: #fff;
+  border: 1px solid #dcefe2;
+}
+
+.account-stat small {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.account-stat b {
+  display: block;
+  margin-top: 4px;
+  font-size: 18px;
+  color: var(--ink);
+}
+
+.account-stat.is-active b {
+  color: #00a844;
+}
+
+.account-buy {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.account-buy .btn {
+  padding: 12px 8px;
+  font-size: 15px;
+}
+
+.device-list {
+  display: grid;
+  gap: 0;
+  padding: 4px 14px;
+}
+
+.device-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.device-row + .device-row {
+  border-top: 1px solid #e6f2ea;
+}
+
+.device-icon {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 168, 68, 0.1);
+  color: #00a844;
+}
+
+.device-icon svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+
+.device-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.device-main small {
+  display: block;
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+}
+
+.device-revoke {
+  width: auto;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
 /* To'q karta: ko'zga tashlanadi, lekin kartalar oqimini buzmaydi */
 .home-video-card {
   display: flex;

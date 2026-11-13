@@ -1701,6 +1701,9 @@ function renderHome(userName, backendOk) {
     <div class="home-brand fade-up">
       <img src="/img/chittak-icon.png" alt="" />
       <span>Chittak</span>
+      <button type="button" class="home-account" id="home-account-button" aria-label="Akkaunt" title="Akkaunt">
+        ${memberAvatarHtml({ name: userName, photo_url: homeSnapshot?.photo_url || telegram?.initDataUnsafe?.user?.photo_url }, 42)}
+      </button>
     </div>
     <h1 class="fade-up">${greeting}</h1>
     <p class="subtitle fade-up" id="home-date">${homeDateText(homeData) || "Bilimingizni sinang va natijangizni kuzating."}</p>
@@ -1716,15 +1719,9 @@ function renderHome(userName, backendOk) {
 
     ${statusHtml}
     ${supportCardHtml(undefined, { bottom: true })}
-    ${
-      NEEDS_LOGIN && appSession
-        ? `<p class="subtitle" style="text-align:center;margin:16px 0 0">👤 Kirgan akkaunt: <b>${escapeHtml(userName || "—")}</b>${homeSnapshot?.tg_id ? ` · ID ${homeSnapshot.tg_id}` : ""}</p>
-           <button class="btn btn-ghost" id="app-logout-button" style="margin-top:8px">🚪 Akkauntdan chiqish</button>`
-        : ""
-    }
   `);
 
-  document.getElementById("app-logout-button")?.addEventListener("click", guarded(appLogout));
+  document.getElementById("home-account-button").addEventListener("click", guarded(renderAccount));
   renderWebSidebar("home", userName);
 
   document.querySelector('[data-action="school-folder"]').addEventListener("click", renderSchoolFolder);
@@ -18260,6 +18257,118 @@ async function startAppLogin() {
   wireAppLoginCodeForm("app-login-code", token, expiresIn, (errorText) => renderAppLogin(errorText));
 }
 
+/*
+  Akkaunt (bosh sahifaning o'ng yuqorisidagi avatar): profil, o'qituvchining token balansi va obunasi
+  (sotib olish shu yerdan), faol qurilmalar — 90 kun ishlatilmagan qurilmadan avtomatik chiqiladi.
+*/
+async function renderAccount() {
+  const account = await api("/api/me/account");
+  const deviceIcon = (label) => svgIcon(/Windows|Mac|Linux/.test(label) ? "keyboard" : "device-mobile");
+
+  const balanceHtml = account.is_teacher
+    ? `<p class="section-label" style="margin-top:20px">BALANS</p>
+       <div class="account-balance">
+         <div class="account-stat">
+           <small>Tokenlar</small>
+           <b>${formatNumber(account.credits)} ta</b>
+         </div>
+         <div class="account-stat${account.subscription_active ? " is-active" : ""}">
+           <small>Oylik obuna</small>
+           <b>${account.subscription_active ? `${subscriptionUntilText(account.subscription_until)} gacha` : "Yo'q"}</b>
+         </div>
+       </div>
+       <div class="account-buy">
+         <button class="btn" type="button" data-buy="tokens" style="margin:0">🎫 Token sotib olish</button>
+         <button class="btn btn-ghost" type="button" data-buy="subscription" style="margin:0">⭐ Obuna olish</button>
+       </div>`
+    : `<p class="section-label" style="margin-top:20px">BALANS</p>
+       <div class="panel">
+         <p class="subtitle" style="margin:0">Token va oylik obuna — o'qituvchilar uchun (test yaratish va tekshirish).</p>
+         <button class="btn btn-ghost" type="button" id="account-become-teacher" style="margin:10px 0 0">O'qituvchi bo'limiga o'tish</button>
+       </div>`;
+
+  const telegramRow = account.via_telegram
+    ? `<div class="device-row">
+         <span class="device-icon">${svgIcon("telegram-logo")}</span>
+         <span class="device-main"><b>Telegram</b> <span class="badge badge-green">Shu qurilma</span>
+           <small>Telegram ichida doim o'z Telegram akkauntingiz bilan kirasiz</small></span>
+       </div>`
+    : "";
+  const sessionRows = account.sessions
+    .map(
+      (item) => `
+        <div class="device-row">
+          <span class="device-icon">${deviceIcon(item.device)}</span>
+          <span class="device-main"><b>${escapeHtml(item.device)}</b>${item.is_current ? ` <span class="badge badge-green">Shu qurilma</span>` : ""}
+            <small>${item.is_current ? "Hozir faol" : `Oxirgi faollik: ${formatDateTime(item.last_seen_at)}`} · kirilgan: ${plainDate(item.created_at)}</small></span>
+          ${item.is_current ? "" : `<button type="button" class="btn btn-ghost device-revoke" data-revoke-session="${item.id}">Chiqarish</button>`}
+        </div>`
+    )
+    .join("");
+  const others = account.sessions.filter((item) => !item.is_current).length;
+
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="home" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">Akkaunt</h2>
+    </div>
+
+    <div class="card account-card" style="cursor:default">
+      ${memberAvatarHtml({ name: account.full_name, photo_url: account.photo_url || telegram?.initDataUnsafe?.user?.photo_url }, 56)}
+      <div class="card-body">
+        <h3 style="margin:0">${escapeHtml(account.full_name || "—")}</h3>
+        <p class="subtitle" style="margin:4px 0 0">${account.username ? `@${escapeHtml(account.username)} · ` : ""}Telegram ID ${account.tg_id}</p>
+      </div>
+    </div>
+
+    ${balanceHtml}
+
+    <p class="section-label" style="margin-top:20px">FAOL QURILMALAR</p>
+    <div class="panel device-list">
+      ${telegramRow}${sessionRows || (telegramRow ? "" : `<p class="subtitle" style="margin:0">Faol qurilma yo'q</p>`)}
+    </div>
+    ${
+      others
+        ? `<button class="btn btn-ghost" type="button" id="revoke-other-sessions" style="margin-top:10px">🚪 Boshqa barcha qurilmalardan chiqish</button>`
+        : ""
+    }
+    <p class="subtitle" style="margin:8px 4px 0;font-size:13px">${account.idle_days} kun ishlatilmagan qurilmadan avtomatik chiqiladi.</p>
+
+    ${
+      NEEDS_LOGIN && appSession
+        ? `<button class="btn btn-danger" type="button" id="account-logout" style="margin-top:22px">🚪 Akkauntdan chiqish</button>`
+        : ""
+    }
+  `);
+
+  document.querySelector('[data-action="home"]').addEventListener("click", guarded(loadHome));
+  document.querySelectorAll("[data-buy]").forEach((button) =>
+    button.addEventListener("click", guarded(() => renderCreditPurchaseForm(button.dataset.buy)))
+  );
+  document.getElementById("account-become-teacher")?.addEventListener("click", guarded(enterTeacherArea));
+  document.querySelectorAll("[data-revoke-session]").forEach((button) =>
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        if (!(await askConfirm("Shu qurilmadan chiqarilsinmi? U yerda qaytadan kirish kerak bo'ladi."))) return;
+        await api(`/api/me/sessions/${button.dataset.revokeSession}/revoke`, { method: "POST", body: {} });
+        showToast("✅ Qurilmadan chiqarildi");
+        await renderAccount();
+      })
+    )
+  );
+  document.getElementById("revoke-other-sessions")?.addEventListener(
+    "click",
+    guarded(async () => {
+      if (!(await askConfirm(`Boshqa ${others} ta qurilmadan chiqarilsinmi? Shu qurilmada kirgan holda qolasiz.`))) return;
+      const { revoked } = await api("/api/me/sessions/revoke-others", { method: "POST", body: {} });
+      showToast(`✅ ${revoked} ta qurilmadan chiqarildi`);
+      await renderAccount();
+    })
+  );
+  document.getElementById("account-logout")?.addEventListener("click", guarded(appLogout));
+}
+
 async function appLogout() {
   if (!(await askConfirm("Akkauntdan chiqasizmi?"))) return;
   try {
@@ -18584,6 +18693,7 @@ function renderWebSidebar(active, userName) {
         if (!(await confirmLeave())) return;
         sidebar.querySelectorAll("[data-web-nav]").forEach((el) => el.classList.toggle("active", el === item));
         if (target === "home") await loadHome();
+        else if (target === "account") await renderAccount();
         else if (target === "school-folder") renderSchoolFolder();
         else if (target === "tests") renderTestFolder();
         else if (target === "admin") {
@@ -18607,6 +18717,7 @@ function renderWebSidebar(active, userName) {
     </nav>
     <div class="web-account">
       ${name ? `<p class="web-account-name">👤 ${escapeHtml(name)}</p>` : ""}
+      ${item("account", svgIcon("user"), "Akkaunt")}
       ${item("logout", WEB_NAV_ICONS.logout, "Chiqish")}
     </div>
   `;

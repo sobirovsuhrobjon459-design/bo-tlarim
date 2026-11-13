@@ -7539,3 +7539,67 @@ def test_maktab_admini_maktabni_3_kundan_keyin_ochiradi():
         assert any("o'chirildi" in text for _, text in sent), sent
     finally:
         main._send_bot_text = original
+
+
+def _app_session_for(tg_id: int, user_agent: str) -> str:
+    """Bot orqali kirish (ilova/sayt) — berilgan qurilmadan seans ochadi."""
+    from backend.database import AppLogin
+
+    token = client.post("/api/app-login").json()["token"]
+    with SessionLocal() as session:
+        main.confirm_app_login(session, token, tg_id, "Ilova Odam", "ilova")
+        code = session.query(AppLogin).filter(AppLogin.token == token).one().code
+    granted = client.post(f"/api/app-login/{token}/verify", json={"code": code}, headers={"User-Agent": user_agent})
+    assert granted.status_code == 200, granted.text
+    return granted.json()["session"]
+
+
+def test_akkaunt_faol_qurilmalar_va_90_kunlik_muddat():
+    """Akkaunt: qurilmalar ro'yxati, bittasidan / boshqa hammasidan chiqish, 90 kun faol bo'lmasa — avtomatik chiqish."""
+    from datetime import timedelta
+
+    from backend.database import AppSession
+
+    reset_database()
+    phone = _app_session_for(4242, "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120 Mobile TestWayApp/1.0")
+    laptop = _app_session_for(4242, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36")
+    tablet = _app_session_for(4242, "Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) Safari/604.1")
+
+    account = client.get("/api/me/account", headers={"X-App-Session": phone}).json()
+    assert account["via_telegram"] is False and account["idle_days"] == 90
+    devices = {item["device"]: item for item in account["sessions"]}
+    assert set(devices) == {"Chittak ilovasi · Android", "Chrome · Windows", "Safari · iPad"}, devices
+    assert devices["Chittak ilovasi · Android"]["is_current"] is True
+    assert devices["Chrome · Windows"]["is_current"] is False
+
+    # O'qituvchi bo'lsa — token va obuna ham ko'rinadi
+    assert account["is_teacher"] is False and account["credits"] is None
+    client.post("/api/teacher/register", json={"first_name": "Ilova", "last_name": "Odam"}, headers={"X-App-Session": phone})
+    account = client.get("/api/me/account", headers={"X-App-Session": phone}).json()
+    assert account["is_teacher"] is True and account["credits"] == main.WELCOME_CREDITS, account
+
+    # Begona odam boshqaning qurilmasini chiqara olmaydi
+    other = _app_session_for(5151, "Firefox/120")
+    tablet_id = devices["Safari · iPad"]["id"]
+    assert client.post(f"/api/me/sessions/{tablet_id}/revoke", headers={"X-App-Session": other}).status_code == 404
+    # Bitta qurilmadan chiqarish
+    assert client.post(f"/api/me/sessions/{tablet_id}/revoke", headers={"X-App-Session": phone}).status_code == 200
+    assert client.get("/api/me", headers={"X-App-Session": tablet}).status_code == 401
+
+    # Boshqa hammasidan chiqish — shu qurilma qoladi
+    result = client.post("/api/me/sessions/revoke-others", headers={"X-App-Session": phone}).json()
+    assert result["revoked"] == 1, result
+    assert client.get("/api/me", headers={"X-App-Session": laptop}).status_code == 401
+    assert client.get("/api/me", headers={"X-App-Session": phone}).status_code == 200
+
+    # 90 kundan ko'p ishlatilmagan qurilma — avtomatik chiqiladi va ro'yxatda ko'rinmaydi
+    with SessionLocal() as session:
+        row = session.scalar(main.select(AppSession).where(AppSession.token_hash == main.app_session_hash(phone)))
+        row.last_seen_at = main.utcnow() - timedelta(days=91)
+        session.commit()
+    expired = client.get("/api/me", headers={"X-App-Session": phone})
+    assert expired.status_code == 401 and "90" in expired.json()["detail"], expired.text
+
+    # Telegram ichidan (seanssiz) — "Telegram" qatori, ilova seanslari ro'yxati bo'sh
+    via_telegram = client.get("/api/me/account", headers=as_user(4242)).json()
+    assert via_telegram["via_telegram"] is True and via_telegram["sessions"] == [], via_telegram

@@ -87,6 +87,7 @@ from .database import (
     PLATFORM_COMMISSION_PERCENT,
     REFERRAL_CREDITS,
     WELCOME_CREDITS,
+    APP_SESSION_IDLE_LIMIT,
     AppLogin,
     AppLoginVerifyIn,
     AppSession,
@@ -279,6 +280,7 @@ def _add_missing_columns() -> None:
         "key_questions": {"label": "VARCHAR(20)"},
         "video_lessons": {"duration_seconds": "INTEGER", "test_code": "VARCHAR(10) DEFAULT ''"},
         "app_logins": {"code": "VARCHAR(6) DEFAULT ''", "attempts": "INTEGER DEFAULT 0"},
+        "app_sessions": {"last_seen_at": "TIMESTAMP", "user_agent": "VARCHAR(300) DEFAULT ''"},
         "payments": {
             "payme_transaction_id": "VARCHAR(50)",
             "performed_at": "TIMESTAMP",
@@ -5175,7 +5177,8 @@ def _app_login_expired(login: AppLogin) -> bool:
 
 
 @app.post("/api/app-login/{token}/verify")
-def verify_app_login(token: str, body: AppLoginVerifyIn, db: Session = Depends(get_db)):
+def verify_app_login(token: str, body: AppLoginVerifyIn, db: Session = Depends(get_db),
+                     user_agent: str = Header(default="")):
     """Botdan kelgan kodni tekshiradi — to'g'ri bo'lsa, shu yerda (bir marta) seans beradi."""
 
     login = db.scalar(select(AppLogin).where(AppLogin.token == token).with_for_update())
@@ -5196,7 +5199,8 @@ def verify_app_login(token: str, body: AppLoginVerifyIn, db: Session = Depends(g
 
     login.consumed_at = utcnow()
     session_token = secrets.token_urlsafe(32)
-    db.add(AppSession(token_hash=app_session_hash(session_token), user_id=login.user_id))
+    db.add(AppSession(token_hash=app_session_hash(session_token), user_id=login.user_id,
+                      last_seen_at=utcnow(), user_agent=user_agent[:300]))
     db.commit()
     return {"status": "ok", "session": session_token}
 
@@ -5211,7 +5215,7 @@ REVIEW_TG_ID = -100
 
 
 @app.post("/api/review-login")
-def review_login(body: ReviewLoginIn, db: Session = Depends(get_db)):
+def review_login(body: ReviewLoginIn, db: Session = Depends(get_db), user_agent: str = Header(default="")):
     import hashlib
 
     password_hash = hashlib.sha256(body.password.encode()).hexdigest()
@@ -5221,7 +5225,8 @@ def review_login(body: ReviewLoginIn, db: Session = Depends(get_db)):
     remember_bot_user(db, REVIEW_TG_ID, "Demo o'qituvchi", None)
     user = db.scalar(select(User).where(User.tg_id == REVIEW_TG_ID))
     session_token = secrets.token_urlsafe(32)
-    db.add(AppSession(token_hash=app_session_hash(session_token), user_id=user.id))
+    db.add(AppSession(token_hash=app_session_hash(session_token), user_id=user.id,
+                      last_seen_at=utcnow(), user_agent=user_agent[:300]))
     db.commit()
     return {"status": "ok", "session": session_token}
 
@@ -5237,6 +5242,125 @@ def app_logout(x_app_session: str = Header(default=""), db: Session = Depends(ge
         )
         db.commit()
     return {"ok": True}
+
+
+# ---------- Akkaunt: profil, token balansi va obuna, faol qurilmalar ----------
+
+
+def _device_label(user_agent: str) -> str:
+    """User-Agent'dan odam o'qiydigan nom: "Chittak ilovasi · Android", "Chrome · Windows"."""
+
+    agent = user_agent or ""
+    if "iPhone" in agent:
+        system = "iPhone"
+    elif "iPad" in agent:
+        system = "iPad"
+    elif "Android" in agent:
+        system = "Android"
+    elif "Windows" in agent:
+        system = "Windows"
+    elif "Mac OS" in agent or "Macintosh" in agent:
+        system = "Mac"
+    elif "Linux" in agent:
+        system = "Linux"
+    else:
+        system = ""
+
+    if "TestWayApp" in agent:
+        app = "Chittak ilovasi"
+    elif "YaBrowser" in agent:
+        app = "Yandex Browser"
+    elif "Edg/" in agent:
+        app = "Edge"
+    elif "OPR/" in agent or "Opera" in agent:
+        app = "Opera"
+    elif "Firefox/" in agent:
+        app = "Firefox"
+    elif "Chrome/" in agent or "CriOS/" in agent:
+        app = "Chrome"
+    elif "Safari/" in agent:
+        app = "Safari"
+    else:
+        app = "Brauzer" if agent else "Noma'lum qurilma"
+    return f"{app} · {system}" if system else app
+
+
+def _active_app_sessions(db: Session, user: User) -> list[AppSession]:
+    """Foydalanuvchining amaldagi seanslari (bekor qilinmagan va 90 kundan beri ishlatilmagan emas)."""
+
+    cutoff = utcnow() - APP_SESSION_IDLE_LIMIT
+    sessions = db.scalars(
+        select(AppSession).where(AppSession.user_id == user.id, AppSession.revoked_at.is_(None))
+    ).all()
+    active = [item for item in sessions if (item.last_seen_at or item.created_at) > cutoff]
+    active.sort(key=lambda item: item.last_seen_at or item.created_at, reverse=True)
+    return active
+
+
+@app.get("/api/me/account")
+def my_account(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    x_app_session: str = Header(default=""),
+):
+    """Akkaunt oynasi: profil, (o'qituvchi bo'lsa) token va obuna, faol qurilmalar."""
+
+    teacher = db.scalar(select(Teacher).where(Teacher.user_id == user.id))
+    current_hash = app_session_hash(x_app_session) if x_app_session else ""
+    return {
+        "full_name": user.full_name,
+        "username": user.username,
+        "tg_id": user.tg_id,
+        "photo_url": user.photo_url,
+        "is_teacher": teacher is not None,
+        "credits": teacher.credits if teacher else None,
+        "subscription_until": teacher.subscription_until if teacher else None,
+        "subscription_active": _subscription_active(teacher) if teacher else False,
+        # Telegram ichida (Mini App) — seans yo'q, Telegram akkaunti bilan kirilgan
+        "via_telegram": not x_app_session,
+        "idle_days": APP_SESSION_IDLE_LIMIT.days,
+        "sessions": [
+            {
+                "id": item.id,
+                "device": _device_label(item.user_agent),
+                "created_at": item.created_at,
+                "last_seen_at": item.last_seen_at or item.created_at,
+                "is_current": bool(current_hash) and hmac.compare_digest(item.token_hash, current_hash),
+            }
+            for item in _active_app_sessions(db, user)
+        ],
+    }
+
+
+@app.post("/api/me/sessions/{session_id}/revoke")
+def revoke_my_session(session_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Bitta qurilmadan chiqarish (faqat o'z seansini)."""
+
+    session = db.get(AppSession, session_id)
+    if not session or session.user_id != user.id or session.revoked_at is not None:
+        raise HTTPException(status_code=404, detail="Qurilma topilmadi")
+    session.revoked_at = utcnow()
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/me/sessions/revoke-others")
+def revoke_other_sessions(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    x_app_session: str = Header(default=""),
+):
+    """Shu qurilmadan boshqa hamma qurilmalardan chiqarish (Telegram ichidan — barcha ilova/sayt seanslari)."""
+
+    current_hash = app_session_hash(x_app_session) if x_app_session else ""
+    now = utcnow()
+    revoked = 0
+    for session in _active_app_sessions(db, user):
+        if session.token_hash != current_hash:
+            session.revoked_at = now
+            revoked += 1
+    db.commit()
+    return {"ok": True, "revoked": revoked}
 
 
 def confirm_app_login(db: Session, token: str, tg_id: int, full_name: str, username: str | None) -> tuple[bool, str]:
