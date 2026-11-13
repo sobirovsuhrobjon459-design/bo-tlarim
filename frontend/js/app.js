@@ -2773,25 +2773,28 @@ function renderClassStudentsTab(schoolClass) {
       )}
       ${schoolClass.is_group ? `<p class="subtitle" style="margin:0 0 4px">📚 Fan guruhi — ${escapeHtml(schoolClass.subject)}</p>` : ""}
       <p class="subtitle" style="margin:0 0 10px">${schoolClass.students.length} ta o'quvchi${
+        schoolClass.code_start ? ` · ID: ${schoolClass.code_start}–${schoolClass.code_end}` : ""
+      }${
         hasRating
           ? ` · 🏆 reyting — ${schoolClass.rating_tests} ta test va sinov natijasi bo'yicha (o'rtacha foiz)`
           : " · reyting sinf testlari va sinov natijalaridan chiqadi"
       }</p>
-      ${
-        schoolClass.is_director && !schoolClass.is_group
-          ? `<button type="button" class="btn btn-ghost" id="code-range-button" style="margin:0 0 12px">🆔 ${
-              schoolClass.code_start ? `ID oralig'i: ${schoolClass.code_start}–${schoolClass.code_end} (o'zgartirish)` : "ID kiritish (oraliq belgilash)"
-            }</button>`
-          : schoolClass.code_start
-            ? `<p class="subtitle" style="margin:0 0 10px">🆔 ID oralig'i: ${schoolClass.code_start}–${schoolClass.code_end}</p>`
-            : ""
-      }
-      ${
-        // O'quvchilar o'z kabinetiga kirishi uchun login va parollar (kurator va rahbariyat)
-        schoolClass.can_manage && !schoolClass.is_group && schoolClass.students.length
-          ? `<button type="button" class="btn btn-ghost" id="pupil-logins-button" style="margin:0 0 12px">🔑 Ilovaga kirish: login va parollar</button>`
-          : ""
-      }
+      ${(() => {
+        // Ikki tugma bir qatorda, teng yarimdan: 1) ID oralig'i (admin), 2) login va parollar (kurator va rahbariyat)
+        const buttons = [
+          schoolClass.is_director && !schoolClass.is_group
+            ? `<button type="button" class="btn btn-ghost" id="code-range-button" style="margin:0;padding:12px 8px;font-size:14px;line-height:1.25">🆔 ${
+                schoolClass.code_start ? "ID oralig'i" : "ID kiritish"
+              }</button>`
+            : "",
+          schoolClass.can_manage && !schoolClass.is_group && schoolClass.students.length
+            ? `<button type="button" class="btn btn-ghost" id="pupil-logins-button" style="margin:0;padding:12px 8px;font-size:14px;line-height:1.25">🔑 Login va parollar</button>`
+            : "",
+        ].filter(Boolean);
+        return buttons.length
+          ? `<div style="display:grid;grid-template-columns:repeat(${buttons.length},minmax(0,1fr));gap:10px;margin:0 0 12px">${buttons.join("")}</div>`
+          : "";
+      })()}
       ${
         hasRating
           ? `<div class="choice-toggle" id="students-order" style="margin:0 0 12px">
