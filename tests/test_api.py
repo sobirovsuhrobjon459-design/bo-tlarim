@@ -7630,3 +7630,48 @@ def test_har_qanday_test_kalitsiz_saqlanadi_onlayn_kalitsiz_boshlanmaydi():
     assert saved.status_code == 200, saved.text
     started = client.post(f"/api/tests/{online['code']}/start", headers=as_user(900))
     assert started.status_code == 200, started.text
+
+
+def test_payme_order_id_va_fiskal_chek():
+    """Payme: bitta account parametri (order_id), CheckPerformTransaction'da fiskal chek (MXIK, QQS)."""
+    import base64 as _b64
+
+    reset_database()
+    register_teacher()
+    before = credits_of()
+    purchase = client.post("/api/teacher/credit-purchases", json={"credits": 50, "provider": "payme"},
+                           headers=as_user(555)).json()
+    # To'lov havolasida ac.order_id=c<raqam>
+    encoded = purchase["checkout_url"].rsplit("/", 1)[1]
+    assert f"ac.order_id=c{purchase['id']}" in _b64.b64decode(encoded).decode(), _b64.b64decode(encoded)
+
+    account = {"order_id": f"c{purchase['id']}"}
+    amount = purchase["amount"] * 100
+    checked = payme("CheckPerformTransaction", {"account": account, "amount": amount})["result"]
+    assert checked["allow"] is True
+    item = checked["detail"]["items"][0]
+    assert checked["detail"]["receipt_type"] == 0
+    assert item["code"] == "10305008003000000" and item["package_code"] == "1546532", item
+    assert item["vat_percent"] == 0 and item["count"] == 1 and item["price"] == amount, item
+    assert "50 ta token" in item["title"], item
+
+    payme("CreateTransaction", {"id": "tx-order", "time": 1, "account": account, "amount": amount})
+    payme("PerformTransaction", {"id": "tx-order"})
+    assert credits_of() == before + 50
+    # Noto'g'ri order_id — buyurtma topilmadi
+    wrong = payme("CheckPerformTransaction", {"account": {"order_id": "x1"}, "amount": amount})
+    assert wrong["error"]["code"] == -31050, wrong
+
+    # Admin MXIK, o'lchov birligi va QQS'ni o'zgartira oladi; MXIK 17 raqam bo'lishi shart
+    admin = as_user(4242)
+    bad = client.post("/api/admin/payment-settings", headers=admin, json={"payme_mxik": "123"})
+    assert bad.status_code == 422, bad.text
+    saved = client.post("/api/admin/payment-settings", headers=admin,
+                        json={"payme_mxik": "10305008003000001", "payme_package_code": "999", "payme_vat_percent": 12}).json()
+    assert saved["payme"]["mxik"] == "10305008003000001" and saved["payme"]["vat_percent"] == 12, saved["payme"]
+    other = client.post("/api/teacher/credit-purchases", json={"credits": 10, "provider": "payme"}, headers=as_user(555)).json()
+    detail = payme("CheckPerformTransaction", {"account": {"order_id": f"c{other['id']}"}, "amount": other["amount"] * 100})
+    item = detail["result"]["detail"]["items"][0]
+    assert item["code"] == "10305008003000001" and item["package_code"] == "999" and item["vat_percent"] == 12, item
+    client.post("/api/admin/payment-settings", headers=admin,
+                json={"clear": ["payme_mxik", "payme_package_code", "payme_vat_percent"]})

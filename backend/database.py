@@ -1669,6 +1669,10 @@ class PaymentSettingsIn(BaseModel):
     click_service_id: str | None = Field(default=None, max_length=100)
     click_merchant_id: str | None = Field(default=None, max_length=100)
     click_secret_key: str | None = Field(default=None, max_length=200)
+    # Payme fiskal cheki: xizmatning MXIK (IKPU) kodi, o'lchov birligi (qadoq) kodi va QQS foizi
+    payme_mxik: str | None = Field(default=None, max_length=20)
+    payme_package_code: str | None = Field(default=None, max_length=20)
+    payme_vat_percent: int | None = Field(default=None, ge=0, le=100)
     clear: list[str] = Field(default_factory=list)
 
 

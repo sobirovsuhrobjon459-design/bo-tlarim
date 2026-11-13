@@ -460,7 +460,16 @@ PAYMENT_SETTING_KEYS = (
     "click_service_id",
     "click_merchant_id",
     "click_secret_key",
+    "payme_mxik",
+    "payme_package_code",
+    "payme_vat_percent",
 )
+
+# Payme fiskal cheki uchun standart qiymatlar (admin panelidan o'zgartiriladi):
+# MXIK — "Dasturiy ta'minot / platforma xizmati"; QQS — 0 (YaTT QQS to'lovchisi emas)
+PAYME_MXIK = os.getenv("PAYME_MXIK", "10305008003000000")
+PAYME_PACKAGE_CODE = os.getenv("PAYME_PACKAGE_CODE", "1546532")
+PAYME_VAT_PERCENT = os.getenv("PAYME_VAT_PERCENT", "0")
 
 # .env'dagi dastlabki qiymatlar: bazada kalit bo'lmasa yoki o'chirilsa, shular qoladi.
 # Pastdagi funksiya global o'zgaruvchilarni qayta yozgani uchun, asl qiymatlar shu
@@ -472,6 +481,9 @@ _ENV_PAYMENT_DEFAULTS = {
     "click_service_id": CLICK_SERVICE_ID,
     "click_merchant_id": CLICK_MERCHANT_ID,
     "click_secret_key": CLICK_SECRET_KEY,
+    "payme_mxik": PAYME_MXIK,
+    "payme_package_code": PAYME_PACKAGE_CODE,
+    "payme_vat_percent": PAYME_VAT_PERCENT,
 }
 
 
@@ -480,6 +492,7 @@ def _apply_payment_settings(db: Session) -> None:
 
     global PAYME_MERCHANT_ID, PAYME_SECRET_KEY, PAYME_TEST_MODE
     global CLICK_SERVICE_ID, CLICK_MERCHANT_ID, CLICK_SECRET_KEY
+    global PAYME_MXIK, PAYME_PACKAGE_CODE, PAYME_VAT_PERCENT
 
     saved = {row.key: (row.value or "").strip() for row in db.scalars(select(AppSetting)).all()}
 
@@ -491,6 +504,9 @@ def _apply_payment_settings(db: Session) -> None:
     CLICK_SERVICE_ID = value_of("click_service_id")
     CLICK_MERCHANT_ID = value_of("click_merchant_id")
     CLICK_SECRET_KEY = value_of("click_secret_key")
+    PAYME_MXIK = value_of("payme_mxik")
+    PAYME_PACKAGE_CODE = value_of("payme_package_code")
+    PAYME_VAT_PERCENT = value_of("payme_vat_percent")
 
     test_mode = saved.get("payme_test_mode")
     PAYME_TEST_MODE = test_mode == "1" if test_mode else _ENV_PAYMENT_DEFAULTS["payme_test_mode"]
@@ -3906,7 +3922,7 @@ def _purchase_granted_text(purchase: CreditPurchase, teacher: Teacher) -> str:
     return f"Hisobingizga {purchase.credits} ta token qo'shildi.\nJoriy token: {teacher.credits} ta"
 
 
-def _build_payme_checkout_url(account_field: str, order_id: int, amount: int) -> str:
+def _build_payme_checkout_url(account_field: str, order_id: int | str, amount: int) -> str:
     """
     Payme'ning hosted to'lov sahifasiga olib boruvchi havolani yaratadi (amount — so'mda).
 
@@ -14971,8 +14987,8 @@ def _build_click_checkout_url(order, amount: int) -> str:
 def _checkout_url(provider: str, order, amount: int) -> str:
     if provider == "click":
         return _build_click_checkout_url(order, amount)
-    field = "purchase_id" if isinstance(order, CreditPurchase) else "payment_id"
-    return _build_payme_checkout_url(field, order.id, amount)
+    # Payme'da bitta account parametri — order_id: "c12" (token/obuna xaridi) yoki "t34" (testga to'lov)
+    return _build_payme_checkout_url("order_id", _click_order_ref(order), amount)
 
 
 # ========== 6.10) Click webhook (SHOP API: Prepare + Complete) ==========
@@ -15155,8 +15171,18 @@ def _payme_find_order_by_account(params: dict, db: Session):
 
     account = params.get("account") or {}
 
-    for field, model in PAYME_ORDER_MODELS.items():
-        raw_id = account.get(field)
+    # Asosiy: order_id ("c12" — token/obuna xaridi, "t34" — testga to'lov).
+    # Eski havolalardagi purchase_id / payment_id ham qabul qilinadi.
+    candidates = []
+    order_ref = str(account.get("order_id") or "").strip().lower()
+    if order_ref:
+        model = {"c": CreditPurchase, "t": Payment}.get(order_ref[:1])
+        if not model:
+            return None
+        candidates.append((model, order_ref[1:]))
+    candidates += [(model, account.get(field)) for field, model in PAYME_ORDER_MODELS.items()]
+
+    for model, raw_id in candidates:
         if raw_id in (None, ""):
             continue
         try:
@@ -15201,8 +15227,7 @@ def _payme_find_order_by_transaction(params: dict, db: Session):
 def _payme_account_of(order) -> dict:
     """Buyurtmani Payme tushunadigan "account" ko'rinishida qaytaradi."""
 
-    field = "purchase_id" if isinstance(order, CreditPurchase) else "payment_id"
-    return {field: str(order.id)}
+    return {"order_id": _click_order_ref(order)}
 
 
 def _payme_apply_paid(order) -> None:
@@ -15239,6 +15264,29 @@ def _payme_revert_paid(order) -> None:
     add_balance(order.test.teacher, -_teacher_share(order.amount))
 
 
+def _payme_receipt_detail(order) -> dict:
+    """
+    Payme fiskal cheki uchun ma'lumot: bitta qator — xizmat nomi, narxi (tiyinda),
+    MXIK kodi, o'lchov birligi kodi va QQS foizi (admin panelida o'zgartiriladi).
+    """
+
+    if isinstance(order, CreditPurchase):
+        title = f"Chittak platformasi: {_purchase_label(order)}"
+    else:
+        title = f"Chittak platformasi: «{order.test.title}» testi"
+    return {
+        "receipt_type": 0,
+        "items": [{
+            "title": title[:128],
+            "price": order.amount * 100,
+            "count": 1,
+            "code": PAYME_MXIK,
+            "package_code": PAYME_PACKAGE_CODE,
+            "vat_percent": int(PAYME_VAT_PERCENT or 0),
+        }],
+    }
+
+
 def _payme_check_perform_transaction(request_id, params: dict, db: Session) -> JSONResponse:
     order = _payme_find_order_by_account(params, db)
     if not order:
@@ -15248,7 +15296,8 @@ def _payme_check_perform_transaction(request_id, params: dict, db: Session) -> J
     if params.get("amount") != order.amount * 100:
         return _payme_error(request_id, -31001, "Summa mos kelmadi")
 
-    return _payme_result(request_id, {"allow": True})
+    # Fiskal chek ma'lumoti (MXIK, o'lchov birligi, QQS) — Payme chekni shundan chiqaradi
+    return _payme_result(request_id, {"allow": True, "detail": _payme_receipt_detail(order)})
 
 
 def _payme_create_transaction(request_id, params: dict, db: Session) -> JSONResponse:
@@ -15628,6 +15677,10 @@ def _payment_settings_view(db: Session) -> dict:
             "secret_source": source("payme_secret_key"),
             "test_mode": PAYME_TEST_MODE,
             "enabled": "payme" in providers,
+            # Fiskal chek
+            "mxik": PAYME_MXIK,
+            "package_code": PAYME_PACKAGE_CODE,
+            "vat_percent": int(PAYME_VAT_PERCENT or 0),
         },
         "click": {
             "service_id": CLICK_SERVICE_ID,
@@ -15668,6 +15721,19 @@ def admin_save_payment_settings(body: PaymentSettingsIn, admin: User = Depends(g
             updates[key] = value
     if body.payme_test_mode is not None:
         updates["payme_test_mode"] = "1" if body.payme_test_mode else "0"
+    # Fiskal chek: MXIK — 17 ta raqam, o'lchov birligi kodi — faqat raqam
+    mxik = (body.payme_mxik or "").strip()
+    if mxik:
+        if not re.fullmatch(r"\d{17}", mxik):
+            raise HTTPException(status_code=422, detail="MXIK kodi 17 ta raqamdan iborat bo'lishi kerak")
+        updates["payme_mxik"] = mxik
+    package_code = (body.payme_package_code or "").strip()
+    if package_code:
+        if not re.fullmatch(r"\d{1,20}", package_code):
+            raise HTTPException(status_code=422, detail="O'lchov birligi kodi faqat raqamlardan iborat bo'ladi")
+        updates["payme_package_code"] = package_code
+    if body.payme_vat_percent is not None:
+        updates["payme_vat_percent"] = str(body.payme_vat_percent)
     for key in body.clear:
         if key in PAYMENT_SETTING_KEYS:
             updates[key] = ""

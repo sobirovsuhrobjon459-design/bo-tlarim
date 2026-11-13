@@ -10142,6 +10142,17 @@ async function adminSystemView() {
             </label>
           </div>
 
+          <p class="subtitle" style="margin:14px 0 0"><b>Fiskal chek</b> — Payme har to'lovga shu ma'lumot bilan chek chiqaradi.</p>
+          <label class="field-label" for="pay-payme-mxik">MXIK (IKPU) kodi — 17 ta raqam</label>
+          <input class="input" id="pay-payme-mxik" inputmode="numeric" autocomplete="off" maxlength="17"
+                 value="${escapeHtml(pay.payme.mxik || "")}" />
+          <label class="field-label" for="pay-payme-package">O'lchov birligi (qadoq) kodi</label>
+          <input class="input" id="pay-payme-package" inputmode="numeric" autocomplete="off"
+                 value="${escapeHtml(pay.payme.package_code || "")}" />
+          <label class="field-label" for="pay-payme-vat">QQS, % (QQS to'lovchisi bo'lmasa — 0)</label>
+          <input class="input" id="pay-payme-vat" inputmode="numeric" autocomplete="off"
+                 value="${Number(pay.payme.vat_percent) || 0}" />
+
           <p class="section-label" style="margin-top:16px">CLICK ${paymentStateBadge(pay.click.enabled)}</p>
           <label class="field-label" for="pay-click-service">Service ID</label>
           <input class="input" id="pay-click-service" autocomplete="off" value="${escapeHtml(pay.click.service_id || "")}" />
@@ -10252,6 +10263,9 @@ async function adminSystemView() {
               payme_merchant_id: field("pay-payme-merchant"),
               payme_secret_key: field("pay-payme-secret"),
               payme_test_mode: document.getElementById("pay-payme-test").checked,
+              payme_mxik: field("pay-payme-mxik"),
+              payme_package_code: field("pay-payme-package"),
+              payme_vat_percent: Number(field("pay-payme-vat")) || 0,
               click_service_id: field("pay-click-service"),
               click_merchant_id: field("pay-click-merchant"),
               click_secret_key: field("pay-click-secret"),
