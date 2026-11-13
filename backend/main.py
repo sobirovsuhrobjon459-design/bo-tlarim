@@ -15124,8 +15124,30 @@ async def click_complete(request: Request, db: Session = Depends(get_db)):
 # Har bir metod alohida funksiyada — shunday o'qish osonroq.
 
 
+# Payme xato matnini uch tilda kutadi: {"ru": ..., "uz": ..., "en": ...}
+PAYME_ERROR_TEXTS = {
+    "Buyurtma topilmadi": ("Заказ не найден", "Order not found"),
+    "Buyurtma allaqachon ko'rib chiqilgan": ("Заказ уже обработан", "Order already processed"),
+    "Summa mos kelmadi": ("Неверная сумма", "Incorrect amount"),
+    "Boshqa tranzaksiya allaqachon mavjud": ("Для заказа уже есть другая транзакция", "Another transaction already exists"),
+    "Buyurtma allaqachon to'langan": ("Заказ уже оплачен", "Order already paid"),
+    "Buyurtma bekor qilingan": ("Заказ отменён", "Order cancelled"),
+    "Tranzaksiya topilmadi": ("Транзакция не найдена", "Transaction not found"),
+    "Tranzaksiya bekor qilingan": ("Транзакция отменена", "Transaction cancelled"),
+    "JSON o'qilmadi": ("Ошибка разбора JSON", "JSON parse error"),
+    "So'rov noto'g'ri": ("Неверный запрос", "Invalid request"),
+    "Ruxsat yo'q": ("Недостаточно привилегий", "Insufficient privileges"),
+    "Metod topilmadi": ("Метод не найден", "Method not found"),
+}
+
+
 def _payme_error(request_id, code: int, message: str) -> JSONResponse:
-    return JSONResponse({"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}})
+    ru, en = PAYME_ERROR_TEXTS.get(message, (message, message))
+    error = {"code": code, "message": {"ru": ru, "uz": message, "en": en}}
+    # -31050…-31099 — buyurtma (account) bilan bog'liq xatolar: qaysi maydon ekanini ham aytamiz
+    if -31099 <= code <= -31050:
+        error["data"] = "order_id"
+    return JSONResponse({"jsonrpc": "2.0", "id": request_id, "error": error})
 
 
 def _payme_result(request_id, result: dict) -> JSONResponse:

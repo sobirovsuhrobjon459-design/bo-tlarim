@@ -7675,3 +7675,14 @@ def test_payme_order_id_va_fiskal_chek():
     assert item["code"] == "10305008003000001" and item["package_code"] == "999" and item["vat_percent"] == 12, item
     client.post("/api/admin/payment-settings", headers=admin,
                 json={"clear": ["payme_mxik", "payme_package_code", "payme_vat_percent"]})
+
+
+def test_payme_xato_xabari_uch_tilda():
+    """Payme xato matnini ru/uz/en ko'rinishida kutadi; buyurtma xatosida — maydon nomi (data)."""
+    reset_database()
+    wrong = payme("CheckPerformTransaction", {"account": {"order_id": "c999"}, "amount": 100})
+    assert wrong["error"]["code"] == -31050
+    assert wrong["error"]["message"] == {"ru": "Заказ не найден", "uz": "Buyurtma topilmadi", "en": "Order not found"}
+    assert wrong["error"]["data"] == "order_id"
+    missing = payme("CheckTransaction", {"id": "yoq"})
+    assert missing["error"]["code"] == -31003 and "data" not in missing["error"], missing
