@@ -554,6 +554,10 @@ class Payment(Base):
     reminded_at: Mapped[datetime | None] = mapped_column(default=None)
     reminder_count: Mapped[int] = mapped_column(default=0)
     payme_transaction_id: Mapped[str | None] = mapped_column(String(50), default=None, unique=True, index=True)
+    # Payme tranzaksiyasi: bizda yaratilgan vaqt, Payme yuborgan "time" (ms) va bekor qilish sababi
+    payme_created_at: Mapped[datetime | None] = mapped_column(default=None)
+    payme_time: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    payme_cancel_reason: Mapped[int | None] = mapped_column(default=None)
     click_trans_id: Mapped[str | None] = mapped_column(String(50), default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     performed_at: Mapped[datetime | None] = mapped_column(default=None)
@@ -601,6 +605,10 @@ class CreditPurchase(Base):
     amount: Mapped[int]  # so'm
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | paid | cancelled
     payme_transaction_id: Mapped[str | None] = mapped_column(String(50), default=None, unique=True, index=True)
+    # Payme tranzaksiyasi: bizda yaratilgan vaqt, Payme yuborgan "time" (ms) va bekor qilish sababi
+    payme_created_at: Mapped[datetime | None] = mapped_column(default=None)
+    payme_time: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    payme_cancel_reason: Mapped[int | None] = mapped_column(default=None)
     click_trans_id: Mapped[str | None] = mapped_column(String(50), default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     performed_at: Mapped[datetime | None] = mapped_column(default=None)

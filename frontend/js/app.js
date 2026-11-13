@@ -9590,6 +9590,14 @@ function adminPurchaseRow(purchase) {
           ${formatDateTime(purchase.created_at)}
           <span class="badge ${status.badge}">${status.label}</span>
         </p>
+        ${
+          // To'lov tizimidagi buyurtma raqami (Payme'da order_id) — tekshiruv va murojaatlar uchun
+          purchase.method === "payme" || purchase.method === "click"
+            ? `<p class="subtitle" style="margin:4px 0 0;font-size:13px">Buyurtma: <b>c${purchase.id}</b>${
+                purchase.method === "payme" ? ` · Payme summasi: <b>${purchase.amount * 100}</b> tiyin` : ""
+              }</p>`
+            : ""
+        }
       </div>
     </div>`;
 }

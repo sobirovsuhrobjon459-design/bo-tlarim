@@ -283,6 +283,9 @@ def _add_missing_columns() -> None:
         "app_sessions": {"last_seen_at": "TIMESTAMP", "user_agent": "VARCHAR(300) DEFAULT ''"},
         "payments": {
             "payme_transaction_id": "VARCHAR(50)",
+            "payme_created_at": "TIMESTAMP",
+            "payme_time": "BIGINT",
+            "payme_cancel_reason": "INTEGER",
             "performed_at": "TIMESTAMP",
             "cancelled_at": "TIMESTAMP",
             "click_trans_id": "VARCHAR(50)",
@@ -297,6 +300,9 @@ def _add_missing_columns() -> None:
             "method": "VARCHAR(10) DEFAULT 'payme'",
             "receipt_file_id": "VARCHAR(200)",
             "click_trans_id": "VARCHAR(50)",
+            "payme_created_at": "TIMESTAMP",
+            "payme_time": "BIGINT",
+            "payme_cancel_reason": "INTEGER",
         },
         # Yozma javoblarni AI o'qishi (jadval oldingi yangilanishda AI ustunlarisiz yaratilgan)
         "written_answers": {
@@ -15138,6 +15144,9 @@ PAYME_ERROR_TEXTS = {
     "So'rov noto'g'ri": ("Неверный запрос", "Invalid request"),
     "Ruxsat yo'q": ("Недостаточно привилегий", "Insufficient privileges"),
     "Metod topilmadi": ("Метод не найден", "Method not found"),
+    "Buyurtma boshqa tranzaksiya bilan band": ("Заказ занят другой транзакцией", "Order is busy with another transaction"),
+    "Tranzaksiyani bajarib bo'lmaydi": ("Невозможно выполнить операцию", "Unable to perform operation"),
+    "Tranzaksiya muddati o'tgan": ("Время транзакции истекло", "Transaction timed out"),
 }
 
 
@@ -15175,8 +15184,39 @@ def _payme_check_auth(request: Request) -> bool:
         return False
 
 
-def _payme_state(status: str) -> int:
-    return {"pending": 1, "paid": 2, "cancelled": -1}.get(status, 1)
+# Payme tranzaksiyasi 12 soat ichida bajarilmasa — bekor qilinadi (sabab 4)
+PAYME_TRANSACTION_TIMEOUT = timedelta(hours=12)
+
+
+def _payme_state(order) -> int:
+    """1 — yaratilgan, 2 — bajarilgan, -1 — bajarilmasdan bekor, -2 — bajarilgandan keyin bekor."""
+    if order.status == "paid":
+        return 2
+    if order.status == "cancelled":
+        return -2 if order.performed_at else -1
+    return 1
+
+
+def _payme_ms(moment: datetime | None) -> int:
+    """Bazadagi UTC vaqt -> Payme kutadigan millisekund (0 — yo'q)."""
+    return int(moment.replace(tzinfo=timezone.utc).timestamp() * 1000) if moment else 0
+
+
+def _payme_created(order) -> datetime:
+    return order.payme_created_at or order.created_at
+
+
+def _payme_timed_out(order) -> bool:
+    return utcnow() - _payme_created(order) > PAYME_TRANSACTION_TIMEOUT
+
+
+def _payme_cancel(order, reason: int | None) -> None:
+    """Tranzaksiyani bekor qiladi (bajarilgan bo'lsa — berilgan token/balans qaytarib olinadi)."""
+    if order.status == "paid":
+        _payme_revert_paid(order)
+    order.status = "cancelled"
+    order.cancelled_at = utcnow()
+    order.payme_cancel_reason = reason
 
 
 # Payme ikki xil buyurtmani to'laydi va ikkalasi ham bir xil maydonlarga ega
@@ -15315,6 +15355,8 @@ def _payme_check_perform_transaction(request_id, params: dict, db: Session) -> J
         return _payme_error(request_id, -31050, "Buyurtma topilmadi")
     if order.status != "pending":
         return _payme_error(request_id, -31051, "Buyurtma allaqachon ko'rib chiqilgan")
+    if order.payme_transaction_id:
+        return _payme_error(request_id, -31099, "Buyurtma boshqa tranzaksiya bilan band")
     if params.get("amount") != order.amount * 100:
         return _payme_error(request_id, -31001, "Summa mos kelmadi")
 
@@ -15328,21 +15370,31 @@ def _payme_create_transaction(request_id, params: dict, db: Session) -> JSONResp
 
     if not order:
         return _payme_error(request_id, -31050, "Buyurtma topilmadi")
-    if order.payme_transaction_id and order.payme_transaction_id != payme_id:
-        return _payme_error(request_id, -31008, "Boshqa tranzaksiya allaqachon mavjud")
-    if order.status == "paid":
-        return _payme_error(request_id, -31008, "Buyurtma allaqachon to'langan")
-    if order.status == "cancelled":
-        return _payme_error(request_id, -31008, "Buyurtma bekor qilingan")
+
+    # Shu tranzaksiya qayta yuborildi — holatiga qarab javob
+    if payme_id and order.payme_transaction_id == payme_id:
+        if order.status != "pending":
+            return _payme_error(request_id, -31008, "Tranzaksiyani bajarib bo'lmaydi")
+        if _payme_timed_out(order):
+            _payme_cancel(order, 4)
+            db.commit()
+            return _payme_error(request_id, -31008, "Tranzaksiya muddati o'tgan")
+        return _payme_result(request_id, {"create_time": _payme_ms(_payme_created(order)),
+                                          "transaction": _click_order_ref(order), "state": 1})
+
+    if order.payme_transaction_id:
+        return _payme_error(request_id, -31099, "Buyurtma boshqa tranzaksiya bilan band")
+    if order.status != "pending":
+        return _payme_error(request_id, -31051, "Buyurtma allaqachon ko'rib chiqilgan")
     if params.get("amount") != order.amount * 100:
         return _payme_error(request_id, -31001, "Summa mos kelmadi")
 
-    if not order.payme_transaction_id:
-        order.payme_transaction_id = payme_id
-        db.commit()
-
-    create_time = int(order.created_at.timestamp() * 1000)
-    return _payme_result(request_id, {"create_time": create_time, "transaction": str(order.id), "state": 1})
+    order.payme_transaction_id = payme_id
+    order.payme_created_at = utcnow()
+    order.payme_time = params.get("time") if isinstance(params.get("time"), int) else None
+    db.commit()
+    return _payme_result(request_id, {"create_time": _payme_ms(order.payme_created_at),
+                                      "transaction": _click_order_ref(order), "state": 1})
 
 
 def _payme_perform_transaction(request_id, params: dict, db: Session) -> JSONResponse:
@@ -15353,13 +15405,17 @@ def _payme_perform_transaction(request_id, params: dict, db: Session) -> JSONRes
         return _payme_error(request_id, -31008, "Tranzaksiya bekor qilingan")
 
     if order.status != "paid":
+        if _payme_timed_out(order):
+            _payme_cancel(order, 4)
+            db.commit()
+            return _payme_error(request_id, -31008, "Tranzaksiya muddati o'tgan")
         order.status = "paid"
         order.performed_at = utcnow()
         _payme_apply_paid(order)
         db.commit()
 
-    perform_time = int(order.performed_at.timestamp() * 1000)
-    return _payme_result(request_id, {"transaction": str(order.id), "perform_time": perform_time, "state": 2})
+    return _payme_result(request_id, {"transaction": _click_order_ref(order),
+                                      "perform_time": _payme_ms(order.performed_at), "state": 2})
 
 
 def _payme_cancel_transaction(request_id, params: dict, db: Session) -> JSONResponse:
@@ -15367,30 +15423,25 @@ def _payme_cancel_transaction(request_id, params: dict, db: Session) -> JSONResp
     if not order:
         return _payme_error(request_id, -31003, "Tranzaksiya topilmadi")
 
-    was_paid = order.status == "paid"
-
     if order.status != "cancelled":
-        if was_paid:
-            _payme_revert_paid(order)
-        order.status = "cancelled"
-        order.cancelled_at = utcnow()
+        reason = params.get("reason")
+        _payme_cancel(order, reason if isinstance(reason, int) else None)
         db.commit()
 
-    cancel_time = int(order.cancelled_at.timestamp() * 1000)
-    state = -2 if was_paid else -1
-    return _payme_result(request_id, {"transaction": str(order.id), "cancel_time": cancel_time, "state": state})
+    return _payme_result(request_id, {"transaction": _click_order_ref(order),
+                                      "cancel_time": _payme_ms(order.cancelled_at), "state": _payme_state(order)})
 
 
 def _payme_transaction_info(order) -> dict:
     """Payme kutayotgan, tranzaksiya holatini tasvirlovchi javob."""
 
     return {
-        "create_time": int(order.created_at.timestamp() * 1000),
-        "perform_time": int(order.performed_at.timestamp() * 1000) if order.performed_at else 0,
-        "cancel_time": int(order.cancelled_at.timestamp() * 1000) if order.cancelled_at else 0,
-        "transaction": str(order.id),
-        "state": _payme_state(order.status),
-        "reason": None,
+        "create_time": _payme_ms(_payme_created(order)),
+        "perform_time": _payme_ms(order.performed_at),
+        "cancel_time": _payme_ms(order.cancelled_at),
+        "transaction": _click_order_ref(order),
+        "state": _payme_state(order),
+        "reason": order.payme_cancel_reason if order.status == "cancelled" else None,
     }
 
 
@@ -15408,20 +15459,15 @@ def _payme_get_statement(request_id, params: dict, db: Session) -> JSONResponse:
 
     orders = []
     for model in PAYME_ORDER_MODELS.values():
-        orders.extend(
-            db.scalars(
-                select(model)
-                .where(model.created_at >= from_dt, model.created_at <= to_dt)
-                .where(model.payme_transaction_id.is_not(None))
-            ).all()
-        )
+        candidates = db.scalars(select(model).where(model.payme_transaction_id.is_not(None))).all()
+        orders.extend(order for order in candidates if from_dt <= _payme_created(order) <= to_dt)
 
-    orders.sort(key=lambda order: order.created_at)
+    orders.sort(key=_payme_created)
 
     transactions = [
         {
             "id": order.payme_transaction_id,
-            "time": int(order.created_at.timestamp() * 1000),
+            "time": order.payme_time or _payme_ms(_payme_created(order)),
             "amount": order.amount * 100,
             "account": _payme_account_of(order),
             **_payme_transaction_info(order),

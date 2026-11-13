@@ -7686,3 +7686,65 @@ def test_payme_xato_xabari_uch_tilda():
     assert wrong["error"]["data"] == "order_id"
     missing = payme("CheckTransaction", {"id": "yoq"})
     assert missing["error"]["code"] == -31003 and "data" not in missing["error"], missing
+
+
+def test_payme_sandbox_holatlari():
+    """Payme sandbox: band buyurtma, qayta CreateTransaction, bekor qilish sababi, -2 holat, 12 soatlik muddat."""
+    from datetime import timedelta
+
+    from backend.database import CreditPurchase
+
+    reset_database()
+    register_teacher()
+
+    def new_order(credits=10):
+        purchase = client.post("/api/teacher/credit-purchases", json={"credits": credits, "provider": "payme"},
+                               headers=as_user(555)).json()
+        return {"order_id": f"c{purchase['id']}"}, purchase["amount"] * 100, purchase["id"]
+
+    account, amount, purchase_id = new_order()
+    created = payme("CreateTransaction", {"id": "tx-a", "time": 1700000000000, "account": account, "amount": amount})["result"]
+    assert created["state"] == 1 and created["transaction"] == f"c{purchase_id}", created
+
+    # Band buyurtma: tekshiruv ham, boshqa tranzaksiya ham — -31050…-31099
+    busy = payme("CheckPerformTransaction", {"account": account, "amount": amount})["error"]
+    assert -31099 <= busy["code"] <= -31050, busy
+    other = payme("CreateTransaction", {"id": "tx-b", "time": 1, "account": account, "amount": amount})["error"]
+    assert -31099 <= other["code"] <= -31050, other
+    # Shu tranzaksiya qayta kelsa — o'sha create_time
+    again = payme("CreateTransaction", {"id": "tx-a", "time": 1700000000000, "account": account, "amount": amount})["result"]
+    assert again["create_time"] == created["create_time"], (again, created)
+
+    # Bajarilgandan keyin bekor — holat -2, sabab saqlanadi
+    payme("PerformTransaction", {"id": "tx-a"})
+    cancelled = payme("CancelTransaction", {"id": "tx-a", "reason": 5})["result"]
+    assert cancelled["state"] == -2, cancelled
+    info = payme("CheckTransaction", {"id": "tx-a"})["result"]
+    assert info["state"] == -2 and info["reason"] == 5 and info["create_time"] == created["create_time"], info
+    # Bloklangan (bekor qilingan) buyurtmaga yangi tranzaksiya — -31050…-31099
+    blocked = payme("CreateTransaction", {"id": "tx-c", "time": 1, "account": account, "amount": amount})["error"]
+    assert -31099 <= blocked["code"] <= -31050, blocked
+    # Bekor qilingan tranzaksiyani qayta yaratib bo'lmaydi — -31008
+    assert payme("CreateTransaction", {"id": "tx-a", "time": 1, "account": account, "amount": amount})["error"]["code"] == -31008
+
+    # Bajarilmasdan bekor — -1
+    account2, amount2, _ = new_order(12)
+    payme("CreateTransaction", {"id": "tx-d", "time": 1, "account": account2, "amount": amount2})
+    assert payme("CancelTransaction", {"id": "tx-d", "reason": 3})["result"]["state"] == -1
+
+    # 12 soatdan eski tranzaksiya bajarilmaydi — sabab 4 bilan bekor bo'ladi
+    account3, amount3, purchase3 = new_order(14)
+    payme("CreateTransaction", {"id": "tx-e", "time": 1, "account": account3, "amount": amount3})
+    with SessionLocal() as session:
+        row = session.get(CreditPurchase, purchase3)
+        row.payme_created_at = main.utcnow() - timedelta(hours=13)
+        session.commit()
+    late = payme("PerformTransaction", {"id": "tx-e"})["error"]
+    assert late["code"] == -31008, late
+    late_info = payme("CheckTransaction", {"id": "tx-e"})["result"]
+    assert late_info["state"] == -1 and late_info["reason"] == 4, late_info
+
+    # GetStatement — tranzaksiyalar Payme yuborgan "time" bilan
+    statement = payme("GetStatement", {"from": 0, "to": 4102444800000})["result"]["transactions"]
+    first = next(item for item in statement if item["id"] == "tx-a")
+    assert first["time"] == 1700000000000 and first["account"] == account, first
