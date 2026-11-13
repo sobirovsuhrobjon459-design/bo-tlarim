@@ -7748,3 +7748,33 @@ def test_payme_sandbox_holatlari():
     statement = payme("GetStatement", {"from": 0, "to": 4102444800000})["result"]["transactions"]
     first = next(item for item in statement if item["id"] == "tx-a")
     assert first["time"] == 1700000000000 and first["account"] == account, first
+
+
+def test_payme_getstatement_katta_davr_va_changepassword():
+    """GetStatement juda katta "to" bilan yiqilmaydi; ChangePassword yangi kalitni darhol kuchga kiritadi."""
+    import base64 as _b64
+
+    reset_database()
+    register_teacher()
+    purchase = client.post("/api/teacher/credit-purchases", json={"credits": 10, "provider": "payme"},
+                           headers=as_user(555)).json()
+    payme("CreateTransaction", {"id": "tx-s", "time": 1, "account": {"order_id": f"c{purchase['id']}"},
+                                "amount": purchase["amount"] * 100})
+    statement = payme("GetStatement", {"from": 1, "to": 10000000000000000})
+    assert [item["id"] for item in statement["result"]["transactions"]] == ["tx-s"], statement
+    assert payme("GetStatement", {"from": "x", "to": 1})["error"]["code"] == -32600
+
+    original = main.PAYME_SECRET_KEY
+    try:
+        changed = payme("ChangePassword", {"password": "yangi-kalit"})
+        assert changed["result"] == {"success": True}, changed
+        assert main.PAYME_SECRET_KEY == "yangi-kalit"
+        # Eski kalit endi o'tmaydi, yangisi o'tadi
+        assert payme("CheckTransaction", {"id": "tx-s"})["error"]["code"] == -32504
+        token = _b64.b64encode(b"Paycom:yangi-kalit").decode()
+        response = client.post("/api/payme/webhook", headers={"Authorization": f"Basic {token}"},
+                               json={"jsonrpc": "2.0", "id": 1, "method": "CheckTransaction", "params": {"id": "tx-s"}})
+        assert response.json()["result"]["state"] == 1, response.json()
+    finally:
+        client.post("/api/admin/payment-settings", headers=as_user(4242), json={"clear": ["payme_secret_key"]})
+        main.PAYME_SECRET_KEY = original

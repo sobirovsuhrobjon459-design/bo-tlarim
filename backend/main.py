@@ -15147,6 +15147,7 @@ PAYME_ERROR_TEXTS = {
     "Buyurtma boshqa tranzaksiya bilan band": ("Заказ занят другой транзакцией", "Order is busy with another transaction"),
     "Tranzaksiyani bajarib bo'lmaydi": ("Невозможно выполнить операцию", "Unable to perform operation"),
     "Tranzaksiya muddati o'tgan": ("Время транзакции истекло", "Transaction timed out"),
+    "Tizim xatosi": ("Системная ошибка", "System error"),
 }
 
 
@@ -15454,13 +15455,16 @@ def _payme_check_transaction(request_id, params: dict, db: Session) -> JSONRespo
 
 
 def _payme_get_statement(request_id, params: dict, db: Session) -> JSONResponse:
-    from_dt = datetime.fromtimestamp(params.get("from", 0) / 1000, tz=timezone.utc).replace(tzinfo=None)
-    to_dt = datetime.fromtimestamp(params.get("to", 0) / 1000, tz=timezone.utc).replace(tzinfo=None)
+    # Davr millisekundda solishtiriladi: sanaga aylantirilmaydi — juda katta "to"
+    # (masalan 10^16) Python sanasi chegarasidan chiqib, server yiqilardi
+    from_ms, to_ms = params.get("from"), params.get("to")
+    if not isinstance(from_ms, int) or not isinstance(to_ms, int) or isinstance(from_ms, bool) or isinstance(to_ms, bool):
+        return _payme_error(request_id, -32600, "So'rov noto'g'ri")
 
     orders = []
     for model in PAYME_ORDER_MODELS.values():
         candidates = db.scalars(select(model).where(model.payme_transaction_id.is_not(None))).all()
-        orders.extend(order for order in candidates if from_dt <= _payme_created(order) <= to_dt)
+        orders.extend(order for order in candidates if from_ms <= _payme_ms(_payme_created(order)) <= to_ms)
 
     orders.sort(key=_payme_created)
 
@@ -15477,6 +15481,23 @@ def _payme_get_statement(request_id, params: dict, db: Session) -> JSONResponse:
     return _payme_result(request_id, {"transactions": transactions})
 
 
+def _payme_change_password(request_id, params: dict, db: Session) -> JSONResponse:
+    """Payme kassa kalitini almashtiradi: yangi kalit saqlanadi va darhol kuchga kiradi."""
+
+    password = params.get("password")
+    if not isinstance(password, str) or not password.strip() or len(password) > 200:
+        return _payme_error(request_id, -32600, "So'rov noto'g'ri")
+    row = db.get(AppSetting, "payme_secret_key")
+    if row:
+        row.value, row.updated_at = password.strip(), utcnow()
+    else:
+        db.add(AppSetting(key="payme_secret_key", value=password.strip()))
+    db.commit()
+    _apply_payment_settings(db)
+    logging.getLogger("backend").warning("Payme kaliti ChangePassword orqali almashtirildi")
+    return _payme_result(request_id, {"success": True})
+
+
 PAYME_METHOD_HANDLERS = {
     "CheckPerformTransaction": _payme_check_perform_transaction,
     "CreateTransaction": _payme_create_transaction,
@@ -15484,6 +15505,7 @@ PAYME_METHOD_HANDLERS = {
     "CancelTransaction": _payme_cancel_transaction,
     "CheckTransaction": _payme_check_transaction,
     "GetStatement": _payme_get_statement,
+    "ChangePassword": _payme_change_password,
 }
 
 
@@ -15508,8 +15530,16 @@ async def payme_webhook(request: Request, db: Session = Depends(get_db)):
     handler = PAYME_METHOD_HANDLERS.get(method)
     if not handler:
         return _payme_error(request_id, -32601, "Metod topilmadi")
+    if not isinstance(params, dict):
+        return _payme_error(request_id, -32600, "So'rov noto'g'ri")
 
-    return handler(request_id, params, db)
+    try:
+        return handler(request_id, params, db)
+    except Exception:
+        # Kutilmagan xato — Payme'ga 500 emas, spetsifikatsiyadagi "tizim xatosi" (-32400)
+        db.rollback()
+        logging.getLogger("backend").exception("Payme %s so'rovida xato", method)
+        return _payme_error(request_id, -32400, "Tizim xatosi")
 
 
 # ========== 8) Admin endpointlari ==========
