@@ -19,7 +19,7 @@ Bu bot ichida ilova (Mini App) bor — uni pastdagi <b>PLAY</b> tugmasi ochadi.
 
 _STUDENT = """👨‍🎓 <b>TEST TOPSHIRUVCHI UCHUN</b>
 
-1️⃣ PLAY → <b>Test markazi</b> → <b>O'quvchi</b>.
+1️⃣ PLAY → <b>O'quvchi</b>.
 2️⃣ <b>🔍 Yangi test qidirish</b> → o'qituvchi bergan <b>test kodini</b> kiriting.
 3️⃣ Test kartasida <b>📋 Shartlar</b> chiqadi:
    • kanalga obuna (✅ / ❌);
@@ -41,7 +41,7 @@ Test yakunlangach: <b>O'quvchi</b> → <b>Yakunlangan testlar</b> → <b>📊 Na
 
 _TEST_CREATE = """🧑‍🏫 <b>TEST YARATISH</b>
 
-1️⃣ PLAY → <b>Test markazi</b> → <b>O'qituvchi</b> → ism-familiyangizni kiriting.
+1️⃣ PLAY → <b>O'qituvchi</b> → ism-familiyangizni kiriting.
    🎁 Birinchi kirishda hisobingizga <b>8000 token</b> sovg'a qilinadi.
 2️⃣ <b>➕ Yangi test yaratish</b>:
    • test nomi, fan, davomiyligi;

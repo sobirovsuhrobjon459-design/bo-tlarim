@@ -3129,7 +3129,7 @@ async function renderStudentProfile(schoolClass, studentId) {
             <div class="att-row" style="cursor:default">
               <span class="att-name">${escapeHtml(item.title)}
                 <small class="subtitle" style="display:block;margin:0">${plainDate(item.date)}${item.subject ? ` · ${escapeHtml(item.subject)}` : ""}${
-                  item.source === "center" ? " · Test markazi" : ""
+                  item.source === "center" ? " · Imtihon" : ""
                 }</small>
               </span>
               ${
@@ -3377,7 +3377,7 @@ async function renderClassResultsTab(schoolClass) {
   showPage(`
     <div data-class-tab="results">
       ${classHeader(schoolClass)}
-      <p class="section-label">TEST MARKAZI</p>
+      <p class="section-label">IMTIHONLAR</p>
       <div class="row-between" style="gap:8px">
         <button class="btn" id="class-new-exam-button" style="margin:0">📝 Yangi imtihon</button>
         <button class="btn btn-ghost" id="class-attach-exam-button" style="margin:0">🔗 Testni biriktirish</button>
@@ -3444,7 +3444,7 @@ async function ensureTeacher() {
   const me = await api("/api/me");
   isTeacher = Boolean(me.is_teacher);
   if (!isTeacher) {
-    showToast("Avval Test markazida o'qituvchi sifatida ro'yxatdan o'ting");
+    showToast("Avval «O'qituvchi» bo'limida ro'yxatdan o'ting");
     renderTeacherRegister();
   }
   return isTeacher;
@@ -3536,7 +3536,7 @@ async function loadClassCenterTests(schoolClass) {
               </div>`
           )
           .join("")
-      : `<p class="subtitle" style="margin:0">Hali Test markazidan imtihon biriktirilmagan.</p>`;
+      : `<p class="subtitle" style="margin:0">Hali imtihon biriktirilmagan.</p>`;
     holder.querySelectorAll("[data-remove-center-test]").forEach((button) => {
       const test = tests.find((item) => item.id === Number(button.dataset.removeCenterTest));
       button.addEventListener(
@@ -3544,7 +3544,10 @@ async function loadClassCenterTests(schoolClass) {
         guarded(async () => {
           const scanned = test.done ? ` ${test.done} ta skanerlangan natija ham sinf natijalaridan o'chadi.` : "";
           const sure = await askConfirm(
-            `«${test.title}» imtihonini «${schoolClass.name}» sinfidan olib tashlaysizmi?${scanned} Imtihonning o'zi Test markazida qoladi.`
+            `«${test.title}» imtihonini «${schoolClass.name}» sinfidan olib tashlaysizmi?${scanned} ` +
+              (test.is_mine
+                ? "Imtihonning o'zi o'chmaydi — «O'qituvchi» bo'limidagi testlaringiz orasida qoladi."
+                : "Imtihonning o'zi o'chmaydi — uni yaratgan o'qituvchida qoladi.")
           );
           if (!sure) return;
           await api(`/api/classes/${schoolClass.id}/center-tests/${test.id}`, { method: "DELETE" });
