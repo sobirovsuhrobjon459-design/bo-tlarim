@@ -13110,8 +13110,8 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
     const saved = previous[number] || {};
     const options = Number(saved.options) || Number(optionOverrides[number]) || defaultOptions;
     // Variantlar kamaytirilsa (masalan, 4 dan 3 ga), endi yo'q harf ("D") qolmasin
-    // Rash testda kalit keyin kiritilishi mumkin — katak bo'sh ("—") boshlanadi
-    const blank = allowEmpty ? "" : "A";
+    // Har doim bir xil: katak bo'sh ("—") boshlanadi — o'qituvchi javobni o'zi belgilaydi
+    const blank = "";
     const savedAnswer = String(saved.answer ?? blank).toUpperCase() || blank;
     const fitsOptions = [...savedAnswer.replace(/,/g, "")].every((letter) => letter.charCodeAt(0) - 65 < options);
     const answer = fitsOptions ? savedAnswer : blank;
@@ -13131,7 +13131,7 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
          <p class="subtitle" style="margin:10px 0 0">${
            allowEmpty
              ? "Katakchani bosing: — → A → B … Javoblarni hozir kiritmasangiz ham bo'ladi — keyin «Kalit → Kalitni tuzatish» da kiritasiz."
-             : "Javobni almashtirish uchun katakchani bosing."
+             : "Katakchani bosing: — → A → B … Har bir savolning to'g'ri javobini belgilang."
          }</p>
        </div>`
     : "";
@@ -13219,15 +13219,13 @@ function handleAnswerCellTap(event) {
   const cell = event.target.closest(".answer-cell");
   if (!cell) return;
 
-  // Keyingi harfga o'tadi: A -> B -> C -> D -> A (variantlar soniga qarab).
-  // Rash testda bo'sh holat ham bor: — -> A -> B -> C -> D -> — (kalit keyin kiritilishi mumkin)
+  // Keyingi harfga o'tadi: — -> A -> B -> C -> D -> — (variantlar soniga qarab), hamma test turida bir xil
   const options = Number(cell.dataset.options) || 4;
-  const allowEmpty = document.getElementById("key-questions-container")?.dataset.allowEmpty === "1";
   let next;
   if (!cell.dataset.answer) next = "A";
   else {
     const current = cell.dataset.answer.charCodeAt(0) - 65;
-    next = current + 1 < options ? String.fromCharCode(65 + current + 1) : allowEmpty ? "" : "A";
+    next = current + 1 < options ? String.fromCharCode(65 + current + 1) : "";
   }
 
   cell.dataset.answer = next;
