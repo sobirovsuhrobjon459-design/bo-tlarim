@@ -18272,7 +18272,7 @@ async function renderAccount() {
          </div>
        </div>
        <div class="account-buy">
-         <button class="btn" type="button" data-buy="tokens" style="margin:0">🎫 Token sotib olish</button>
+         <button class="btn btn-ghost" type="button" data-buy="tokens" style="margin:0">🎫 Token sotib olish</button>
          <button class="btn btn-ghost" type="button" data-buy="subscription" style="margin:0">⭐ Obuna olish</button>
        </div>`
     : `<p class="section-label" style="margin-top:20px">BALANS</p>
