@@ -16402,8 +16402,8 @@ async function renderTestDetail(testId) {
     ${test.broadcast_at ? `<p class="subtitle" style="margin:4px 4px 10px">📢 E'lon qilingan: ${formatDateTime(test.broadcast_at)}</p>` : ""}
 
     ${test.missing > 0 && !isFinished
-      ? `<div class="notice">Yakunlash uchun barcha o'quvchilar uchun javoblarni kiriting.
-             ${test.missing} ta o'quvchi uchun javoblar kiritilmagan.</div>`
+      ? `<div class="notice">${test.missing} ta o'quvchi uchun javoblar kiritilmagan.
+             Baribir yakunlasangiz, ular natijalarga kirmaydi.</div>`
       : ""
     }
 
@@ -16535,8 +16535,13 @@ async function renderTestDetail(testId) {
   document.getElementById("finish-button")?.addEventListener(
     "click",
     guarded(async () => {
-      if (!(await askConfirm("Test yakunlansinmi? Natijalar shundan keyin qotadi."))) return;
-      await api(`/api/teacher/tests/${testId}/close`, { method: "POST" });
+      // Javoblari kiritilmagan o'quvchilar bo'lsa ham yakunlash mumkin — faqat ogohlantiriladi
+      const missing = Number(test.missing) || 0;
+      const question = missing
+        ? `${missing} ta o'quvchining javoblarini kiritmagansiz. Baribir yakunlaysizmi? Ular natijalarga kirmaydi.`
+        : "Test yakunlansinmi? Natijalar shundan keyin qotadi.";
+      if (!(await askConfirm(question, missing ? { yes: "Baribir yakunlash", no: "Bekor qilish" } : {}))) return;
+      await api(`/api/teacher/tests/${testId}/close${missing ? "?force=true" : ""}`, { method: "POST" });
       showToast("🏁 Test yakunlandi");
       await renderTestResults(testId);
     })

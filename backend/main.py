@@ -7474,15 +7474,24 @@ def set_written_verdict(
 
 
 @app.post("/api/teacher/tests/{test_id}/close")
-def close_test(test_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
-    """Testni yakunlaydi: natijalar qotadi va test "Yopilgan testlar" ro'yxatiga o'tadi."""
+def close_test(
+    test_id: int,
+    force: bool = False,
+    teacher: Teacher = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """
+    Testni yakunlaydi: natijalar qotadi va test "Yopilgan testlar" ro'yxatiga o'tadi.
+    Javoblari kiritilmagan o'quvchilar bo'lsa — o'qituvchi "Baribir yakunlash"ni
+    tasdiqlagandagina (force=true) yakunlanadi; ular natijalarga kirmaydi.
+    """
 
     test = _get_own_test(db, teacher, test_id)
 
     missing = db.scalar(
         select(func.count()).select_from(Attempt).where(Attempt.test_id == test.id, Attempt.status == "pending")
     )
-    if missing:
+    if missing and not force:
         raise HTTPException(
             status_code=400,
             detail=f"Yakunlash uchun barcha o'quvchilar javobini kiriting — {missing} ta o'quvchi qolgan",

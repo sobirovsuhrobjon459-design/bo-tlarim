@@ -3595,6 +3595,28 @@ def test_yopiq_test_oqimi_toliq():
     assert closed.status_code == 200, closed.text
 
 
+def test_javobi_kiritilmagan_oquvchi_bilan_baribir_yakunlash():
+    """O'qituvchi "Baribir yakunlaysizmi?"ni tasdiqlasa — kiritilmaganlar bo'lsa ham test yakunlanadi."""
+    reset_database()
+    register_teacher()
+    created = create_test(enrollment_type="closed")
+    client.post(f"/api/teacher/tests/{created['id']}/students", json={"names": ["Ali Valiyev", "Vali Aliyev"]},
+                headers=as_user(555))
+    students = client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()["students"]
+    client.post(f"/api/teacher/tests/{created['id']}/students/{students[0]['id']}/answers",
+                json={"answers": {"1": "B"}}, headers=as_user(555))
+
+    # Tasdiqsiz — avvalgidek to'xtatiladi
+    assert client.post(f"/api/teacher/tests/{created['id']}/close", headers=as_user(555)).status_code == 400
+    # "Baribir yakunlash" — yakunlanadi, kiritilmagan o'quvchi natijalarga kirmaydi
+    closed = client.post(f"/api/teacher/tests/{created['id']}/close?force=true", headers=as_user(555))
+    assert closed.status_code == 200, closed.text
+    detail = client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()
+    assert detail["status"] == "closed", detail["status"]
+    results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
+    assert len(results["rows"]) == 1, results["rows"]
+
+
 def test_oquvchini_royxatdan_ochirish():
     reset_database()
     register_teacher()
