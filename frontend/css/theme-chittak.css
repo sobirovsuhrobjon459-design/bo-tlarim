@@ -2246,7 +2246,8 @@ button.tt-cell {
   margin-bottom: 16px;
 }
 
-.home-brand img {
+/* Faqat logotip — o'ng yuqoridagi avatar rasmi bunga kirmaydi (aks holda u kichrayib, chetida joy qolardi) */
+.home-brand > img {
   width: 36px;
   height: 36px;
   border-radius: 12px;
