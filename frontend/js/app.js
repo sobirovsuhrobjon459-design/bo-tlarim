@@ -4949,6 +4949,12 @@ function renderMySchool(school, { refresh = true } = {}) {
         <div class="hero-stats" id="school-stats">${schoolStatsHtml(schoolOverviewCache)}</div>
       </section>
 
+      ${
+        school.delete_at
+          ? `<div class="notice" style="margin:12px 0 0">🗑 Maktab admini maktabni o'chirishga qo'ygan —
+               u <b>${formatDateTime(school.delete_at)}</b> da o'chiriladi.</div>`
+          : ""
+      }
       <div class="student-search">
         <input class="input is-search" id="student-search-input" type="search" autocomplete="off" enterkeyhint="search"
                placeholder="O'quvchini qidirish — ism yoki ID" />
@@ -9103,12 +9109,68 @@ function renderSchoolProfile(school) {
           ? `<button class="btn btn-ghost" id="leave-school-button" style="margin-top:10px">🚪 Maktabdan chiqish</button>`
           : `<p class="subtitle" style="margin:12px 4px 0">Maktabdan chiqish kerak bo'lsa — maktab adminiga murojaat qiling.</p>`
       }
+      ${
+        !isOwner(school)
+          ? ""
+          : school.delete_at
+            ? `<div class="notice" style="margin-top:18px">🗑 Maktab <b>${formatDateTime(school.delete_at)}</b> da o'chiriladi.
+                 Shu vaqtgacha fikringizni o'zgartirsangiz — bekor qiling.</div>
+               <button class="btn" id="cancel-school-delete" style="margin-top:10px">↩️ O'chirishni bekor qilish</button>`
+            : `<button class="btn btn-danger" id="delete-school-button" style="margin-top:18px">🗑 Maktabni o'chirish</button>`
+      }
     </div>
   `);
 
   wireSchoolTab("profile");
   document.getElementById("edit-school-profile").addEventListener("click", guarded(() => renderSchoolProfileEdit(school)));
   document.getElementById("leave-school-button")?.addEventListener("click", () => renderLeaveSchool(school));
+  document.getElementById("delete-school-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const sure = await askConfirm(
+        `«${school.name}» maktabini haqiqatan ham o'chirmoqchimisiz? Maktab 3 kundan keyin o'chadi: barcha xodimlar undan chiqariladi va unga kirib bo'lmaydi.`,
+        { yes: "Ha, davom etish" }
+      );
+      if (sure) renderDeleteSchool(school);
+    })
+  );
+  document.getElementById("cancel-school-delete")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const { school: updated } = await api("/api/schools/me/delete/cancel", { method: "POST", body: {} });
+      showToast("✅ O'chirish bekor qilindi");
+      renderSchoolProfile(updated);
+    })
+  );
+}
+
+// Maktabni o'chirish — 2-qadam: maktab kodi so'raladi. Maktab darhol emas, 3 kundan keyin o'chadi
+function renderDeleteSchool(school) {
+  showPage(`
+    ${schoolPageHeader("Maktabni o'chirish", "back-school")}
+    <div class="card" style="cursor:default">
+      <div class="card-body">
+        <p style="margin:0">«${escapeHtml(school.name)}» maktabini o'chirish uchun <b>maktab kodini</b> kiriting.</p>
+        <p class="subtitle" style="margin:8px 0 0">Maktab <b>3 kundan keyin</b> o'chadi. Shu 3 kun ichida «Profilim» bo'limida
+          o'chirishni bekor qilishingiz mumkin. Xodimlarga bot orqali xabar boradi.</p>
+      </div>
+    </div>
+    <input class="input" id="delete-code-input" placeholder="Maktab kodi" maxlength="12" autocomplete="off"
+           style="text-transform:uppercase;letter-spacing:3px;text-align:center;font-size:18px" />
+    <button class="btn btn-danger" id="confirm-delete-school" style="margin-top:12px">🗑 Maktabni o'chirish</button>
+  `);
+
+  document.querySelector('[data-action="back-school"]').addEventListener("click", () => renderSchoolProfile(school));
+  document.getElementById("confirm-delete-school").addEventListener(
+    "click",
+    guarded(async () => {
+      const code = document.getElementById("delete-code-input").value.trim().toUpperCase();
+      if (code.length < 4) throw new Error("Maktab kodini kiriting");
+      const { school: updated } = await api("/api/schools/me/delete", { method: "POST", body: { code } });
+      showToast(`🗑 Maktab ${formatDateTime(updated.delete_at)} da o'chiriladi`);
+      renderSchoolProfile(updated);
+    })
+  );
 }
 
 async function renderSchoolProfileEdit(school) {

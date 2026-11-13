@@ -7484,3 +7484,58 @@ def test_oflayn_testda_kanalga_majburiy_obuna_yoq():
     online = create_test()
     online_detail = client.get(f"/api/teacher/tests/{online['id']}", headers=as_user(555)).json()
     assert online_detail["required_channels"] == list(main.DEFAULT_REQUIRED_CHANNELS)
+
+
+def test_maktab_admini_maktabni_3_kundan_keyin_ochiradi():
+    """Admin: tasdiq → maktab kodi → 3 kundan keyin o'chadi; shu orada bekor qila oladi."""
+    from datetime import timedelta
+
+    from backend.database import PrivateSchool
+
+    reset_database()
+    _set_name(701, "Aziza", "Karimova")
+    _set_name(702, "Bobur", "Aliyev")
+    place = {"region": "Samarqand viloyati", "district": "Urgut tumani"}
+    school = client.post("/api/schools", json={"subjects": ["Matematika"], **place, "name": "Ilm maktabi"},
+                         headers=as_user(701)).json()["school"]
+    joined = client.post("/api/schools/join", json={"phone": "901234567", "subjects": ["Matematika"],
+                                                    "code": current_code(school), "school_id": school["id"]},
+                         headers=as_user(702))
+    assert joined.status_code == 200, joined.text
+
+    sent: list[tuple[int, str]] = []
+    original = main._send_bot_text
+    main._send_bot_text = lambda chat_id, text: sent.append((chat_id, text)) or True
+    try:
+        # O'qituvchi o'chira olmaydi, noto'g'ri kod bilan ham bo'lmaydi
+        assert client.post("/api/schools/me/delete", json={"code": current_code(school)}, headers=as_user(702)).status_code == 403
+        assert client.post("/api/schools/me/delete", json={"code": "XXXXXXXX"}, headers=as_user(701)).status_code == 403
+
+        scheduled = client.post("/api/schools/me/delete", json={"code": current_code(school).lower()}, headers=as_user(701))
+        assert scheduled.status_code == 200, scheduled.text
+        assert scheduled.json()["school"]["delete_at"], scheduled.json()
+        # O'qituvchi ham ogohlantirishni ko'radi; maktab hali ishlaydi
+        teacher_view = client.get("/api/schools/me", headers=as_user(702)).json()["school"]
+        assert teacher_view["delete_at"] == scheduled.json()["school"]["delete_at"]
+
+        # Bekor qilish
+        cancelled = client.post("/api/schools/me/delete/cancel", headers=as_user(701)).json()
+        assert cancelled["school"]["delete_at"] is None
+        assert main._delete_scheduled_schools_once() == 0
+
+        # Qayta qo'yiladi; 3 kun o'tmaguncha o'chmaydi
+        client.post("/api/schools/me/delete", json={"code": current_code(school)}, headers=as_user(701))
+        assert main._delete_scheduled_schools_once() == 0
+        with SessionLocal() as session:
+            row = session.get(PrivateSchool, school["id"])
+            row.delete_requested_at = main.utcnow() - main.SCHOOL_DELETE_DELAY - timedelta(minutes=1)
+            session.commit()
+        assert main._delete_scheduled_schools_once() == 1
+
+        with SessionLocal() as session:
+            assert session.get(PrivateSchool, school["id"]).deleted_at is not None
+        assert client.get("/api/schools/me", headers=as_user(701)).json()["school"] is None
+        assert client.get("/api/schools/me", headers=as_user(702)).json()["school"] is None
+        assert any("o'chirildi" in text for _, text in sent), sent
+    finally:
+        main._send_bot_text = original

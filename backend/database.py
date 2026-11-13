@@ -643,6 +643,8 @@ class PrivateSchool(Base):
     # Platforma admini o'chirgan: ro'yxatlarda ko'rinmaydi, kod/havola bilan qo'shilib bo'lmaydi.
     # Ma'lumotlar (sinflar, o'quvchilar, to'lovlar, davomat) bazada qoladi — tiklash mumkin
     deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+    # Maktab admini o'chirishni so'radi (kod bilan tasdiqlab): 3 kundan keyin o'chadi, shu orada bekor qilsa bo'ladi
+    delete_requested_at: Mapped[datetime | None] = mapped_column(default=None)
 
     members: Mapped[list["SchoolMember"]] = relationship(back_populates="school", order_by="SchoolMember.id")
 

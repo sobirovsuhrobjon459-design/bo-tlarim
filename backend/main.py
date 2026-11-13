@@ -257,7 +257,7 @@ def _add_missing_columns() -> None:
             "monthly_fee": "INTEGER", "subject": "VARCHAR(100)", "assistant_user_id": "INTEGER",
         },
         "private_schools": {"monthly_fee": "INTEGER DEFAULT 0", "kind": "VARCHAR(10) DEFAULT 'school'",
-                            "deleted_at": "TIMESTAMP"},
+                            "deleted_at": "TIMESTAMP", "delete_requested_at": "TIMESTAMP"},
         "class_students": {"discount_percent": "INTEGER DEFAULT 0", "student_code": "INTEGER", "added_by_user_id": "INTEGER",
                            "source_student_id": "INTEGER", "removed_reason": "TEXT", "removed_by_user_id": "INTEGER",
                            "basket_closed_at": "TIMESTAMP", "reassigned_to_id": "INTEGER"},
@@ -834,6 +834,10 @@ async def _finish_expired_tests_loop() -> None:
             await asyncio.to_thread(_finish_expired_tests_once)
         except Exception:
             logging.getLogger("backend").warning("Vaqti tugagan testlarni tekshirib bo'lmadi", exc_info=True)
+        try:
+            await asyncio.to_thread(_delete_scheduled_schools_once)
+        except Exception:
+            logging.getLogger("backend").warning("O'chirishga qo'yilgan maktablarni tekshirib bo'lmadi", exc_info=True)
 
 
 def _finish_expired_tests_once() -> None:
@@ -9174,6 +9178,8 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         # Kod faqat adminda: o'qituvchilarni maktabga faqat admin qo'shadi
         "code": school.code if member.role == "owner" else None,
         "created_at": school.created_at,
+        # Admin o'chirishga qo'ygan bo'lsa — qachon o'chishi (hamma xodimga ogohlantirish ko'rinadi)
+        "delete_at": _school_delete_at(school),
         "my_role": member.role,
         "my_position": member.position,
         "my_phone": member.phone,
@@ -9749,6 +9755,120 @@ def update_school_profile(body: SchoolProfileIn, user: User = Depends(get_curren
     member.subjects = json.dumps(body.subjects, ensure_ascii=False)
     db.commit()
     return {"school": _school_view(db, member, user)}
+
+
+# ---------- Maktab admini o'z maktabini o'chiradi ----------
+# Admin "Maktabni o'chirish" → tasdiq → maktab kodi. Maktab darhol emas, 3 kundan keyin o'chadi:
+# shu orada admin bekor qila oladi, xodimlar esa bot orqali ogohlantiriladi. O'chirish platforma
+# adminidagi kabi "yumshoq": ro'yxatlardan yo'qoladi, xodimlar chiqariladi, ma'lumotlar bazada qoladi.
+SCHOOL_DELETE_DELAY = timedelta(days=3)
+
+
+def _soft_delete_school(school: PrivateSchool) -> int:
+    """Muassasani o'chirilgan deb belgilaydi va barcha xodimlarni chiqaradi. Chiqarilganlar sonini qaytaradi."""
+
+    now = utcnow()
+    school.deleted_at = now
+    school.delete_requested_at = None
+    removed = 0
+    for member in school.members:
+        if member.left_at is None:
+            member.left_at = now
+            member.position = None
+            removed += 1
+    return removed
+
+
+def _school_delete_at(school: PrivateSchool) -> datetime | None:
+    return school.delete_requested_at + SCHOOL_DELETE_DELAY if school.delete_requested_at else None
+
+
+def _notify_school_staff(school: PrivateSchool, text: str, skip_user_id: int | None = None) -> None:
+    """Muassasaning barcha faol xodimlariga bot xabari (fonda — so'rov kutib qolmasin)."""
+
+    chats = [member.user.tg_id for member in school.members
+             if member.left_at is None and member.user_id != skip_user_id and member.user and member.user.tg_id > 0]
+
+    def send() -> None:
+        for chat_id in chats:
+            _send_bot_text(chat_id, text)
+
+    if chats:
+        threading.Thread(target=send, name="school-delete-notice", daemon=True).start()
+
+
+def _owner_membership(db: Session, user: User) -> SchoolMember:
+    member = _active_membership(db, user)
+    if not member:
+        raise HTTPException(status_code=404, detail="Siz hech qaysi maktabga a'zo emassiz")
+    if member.role != "owner":
+        raise HTTPException(status_code=403, detail="Maktabni faqat uning admini o'chira oladi")
+    return member
+
+
+@app.post("/api/schools/me/delete")
+def request_school_delete(body: SchoolCodeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Admin maktabni o'chirishga qo'yadi (maktab kodi bilan) — 3 kundan keyin o'chadi."""
+
+    member = _owner_membership(db, user)
+    school = member.school
+    _check_code_attempts(user)
+    if not hmac.compare_digest(body.code.strip().upper(), school.code.upper()):
+        _record_code_failure(user)
+        raise HTTPException(status_code=403, detail="Maktab kodi noto'g'ri")
+    _school_code_failures.pop(user.id, None)
+
+    if not school.delete_requested_at:
+        school.delete_requested_at = utcnow()
+        db.commit()
+        words = _kind_words(school.kind)
+        _notify_school_staff(
+            school,
+            f"⚠️ «{school.name}» {words['noun']}i admin tomonidan o'chirishga qo'yildi. "
+            f"U {_local_time(_school_delete_at(school))} da o'chiriladi — shundan keyin unga kirib bo'lmaydi.",
+            skip_user_id=user.id,
+        )
+    return {"ok": True, "delete_at": _school_delete_at(school), "school": _school_view(db, member, user)}
+
+
+@app.post("/api/schools/me/delete/cancel")
+def cancel_school_delete(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Admin 3 kun ichida o'chirishni bekor qiladi."""
+
+    member = _owner_membership(db, user)
+    school = member.school
+    if school.delete_requested_at:
+        school.delete_requested_at = None
+        db.commit()
+        words = _kind_words(school.kind)
+        _notify_school_staff(school, f"✅ «{school.name}» {words['noun']}ini o'chirish bekor qilindi — hammasi avvalgidek.",
+                             skip_user_id=user.id)
+    return {"ok": True, "school": _school_view(db, member, user)}
+
+
+def _delete_scheduled_schools_once() -> int:
+    """Fon tsikli: o'chirishga qo'yilganiga 3 kun bo'lgan muassasalarni o'chiradi."""
+
+    with SessionLocal() as db:
+        due = db.scalars(
+            select(PrivateSchool).where(
+                PrivateSchool.deleted_at.is_(None),
+                PrivateSchool.delete_requested_at.is_not(None),
+                PrivateSchool.delete_requested_at <= utcnow() - SCHOOL_DELETE_DELAY,
+            )
+        ).all()
+        for school in due:
+            words = _kind_words(school.kind)
+            text = f"🗑 «{school.name}» {words['noun']}i o'chirildi."
+            chats = [member.user.tg_id for member in school.members
+                     if member.left_at is None and member.user and member.user.tg_id > 0]
+            removed = _soft_delete_school(school)
+            db.commit()
+            logging.getLogger("backend").warning("Muassasa admin so'rovi bilan o'chirildi: id=%s nomi=%s (%s ta xodim)",
+                                                 school.id, school.name, removed)
+            for chat_id in chats:
+                _send_bot_text(chat_id, text)
+        return len(due)
 
 
 @app.post("/api/schools/leave")
@@ -15903,14 +16023,7 @@ def admin_delete_school(school_id: int, body: AdminSchoolDeleteIn, admin: User =
         raise HTTPException(status_code=404, detail="Muassasa topilmadi")
     if " ".join(body.confirm.split()).lower() != " ".join(school.name.split()).lower():
         raise HTTPException(status_code=422, detail="Tasdiqlash uchun muassasa nomini aynan yozing")
-    now = utcnow()
-    school.deleted_at = now
-    members = 0
-    for member in school.members:
-        if member.left_at is None:
-            member.left_at = now
-            member.position = None
-            members += 1
+    members = _soft_delete_school(school)
     db.commit()
     logging.getLogger("backend").warning("Muassasa o'chirildi: id=%s nomi=%s admin=%s (%s ta xodim chiqarildi)",
                                          school.id, school.name, admin.id, members)
