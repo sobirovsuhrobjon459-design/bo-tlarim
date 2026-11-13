@@ -571,6 +571,9 @@ function showPage(html, { exitRoot = false } = {}) {
   // Ochiq matematik klaviatura yangi sahifa ustida qolib ketmasin
   if (activeMathField || window.mathVirtualKeyboard?.visible) closeMathKeyboard();
   appElement.innerHTML = `<div class="page">${html}</div>`;
+  // Suzuvchi "+" tugmasi (.fab) animatsiyali sahifa blokidan tashqariga chiqariladi: kirish
+  // animatsiyasi (transform) paytida u blokka nisbatan joylashib, chapda chiqib keyin sakrardi
+  appElement.firstElementChild.querySelectorAll(".fab").forEach((fab) => appElement.appendChild(fab));
   addPageBrand(appElement.firstElementChild);
   animatePageEntrance(appElement.firstElementChild);
   window.scrollTo(0, scrollTarget);
