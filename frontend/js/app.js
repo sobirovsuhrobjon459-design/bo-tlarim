@@ -13368,9 +13368,19 @@ async function saveNewTest() {
   boshlagan bo'lsa, davomiylikni faqat uzaytirish mumkin (server ham tekshiradi).
 */
 function openTestEditSheet(test, reopenHint = false) {
+  // Oflayn test sinfda, titul bilan o'tadi — davomiylik va boshlanish/tugash vaqti kerak emas
+  const offline = test.enrollment_type === "closed";
   const { sheet, close } = openSheet(`
     <h3 style="margin:0 0 10px">${reopenHint ? "🔓 Testni qayta ochish" : "✏️ Testni tahrirlash"}</h3>
-    ${reopenHint ? `<div class="notice" style="margin:0 0 10px">Test vaqti tugagan — qayta ochish uchun yangi tugash vaqtini tanlang (masalan «+1 soat» yoki «Cheklovsiz»).</div>` : ""}
+    ${
+      reopenHint
+        ? `<div class="notice" style="margin:0 0 10px">${
+            offline
+              ? "Saqlash bosilsa, test vaqt cheklovisiz qayta ochiladi."
+              : "Test vaqti tugagan — qayta ochish uchun yangi tugash vaqtini tanlang (masalan «+1 soat» yoki «Cheklovsiz»)."
+          }</div>`
+        : ""
+    }
     <label class="field-label" style="margin:0">Test nomi
       <input class="input" id="edit-test-title" maxlength="200" value="${escapeHtml(test.title)}" style="margin:4px 0 0" /></label>
     ${
@@ -13382,7 +13392,10 @@ function openTestEditSheet(test, reopenHint = false) {
         <option value="boshlangich" ${test.test_type === "boshlangich" ? "selected" : ""}>Oddiy test — to'g'ri javoblar soni va foiz</option>
       </select></label>`
     }
-    <label class="field-label">Davomiyligi (daqiqa)
+    ${
+      offline
+        ? ""
+        : `<label class="field-label">Davomiyligi (daqiqa)
       <input class="input" id="edit-test-duration" type="number" min="${test.has_attempts ? test.duration : 1}" max="300"
              value="${test.duration}" style="margin:4px 0 0" /></label>
     ${test.has_attempts ? `<p class="subtitle" style="margin:-4px 0 6px;font-size:12px">O'quvchilar ishlay boshlagan — faqat uzaytirish mumkin</p>` : ""}
@@ -13396,7 +13409,8 @@ function openTestEditSheet(test, reopenHint = false) {
       <button type="button" class="share-pill" data-extend="30">+30 daq</button>
       <button type="button" class="share-pill" data-extend="60">+1 soat</button>
       <button type="button" class="share-pill" id="edit-test-no-end">Cheklovsiz</button>
-    </div>
+    </div>`
+    }
     <button class="btn" id="edit-test-save" style="margin-top:12px">💾 Saqlash</button>
     <button class="btn btn-ghost" data-sheet-close>Bekor qilish</button>
   `);
@@ -13412,7 +13426,7 @@ function openTestEditSheet(test, reopenHint = false) {
       telegram?.HapticFeedback?.selectionChanged?.();
     });
   });
-  sheet.querySelector("#edit-test-no-end").addEventListener("click", () => {
+  sheet.querySelector("#edit-test-no-end")?.addEventListener("click", () => {
     endInput.value = "";
   });
 
@@ -13421,11 +13435,15 @@ function openTestEditSheet(test, reopenHint = false) {
     guarded(async () => {
       const body = {
         title: sheet.querySelector("#edit-test-title").value.trim(),
-        duration: Number(sheet.querySelector("#edit-test-duration").value) || test.duration,
-        end_time: localTimeToUtcIso(endInput.value),
         ...(sheet.querySelector("#edit-test-type") ? { test_type: sheet.querySelector("#edit-test-type").value } : {}),
       };
-      if (!test.has_attempts) body.start_time = localTimeToUtcIso(sheet.querySelector("#edit-test-start").value);
+      if (!offline) {
+        body.duration = Number(sheet.querySelector("#edit-test-duration").value) || test.duration;
+        body.end_time = localTimeToUtcIso(endInput.value);
+        if (!test.has_attempts) body.start_time = localTimeToUtcIso(sheet.querySelector("#edit-test-start").value);
+      } else if (reopenHint) {
+        body.end_time = null; // eskirgan tugash vaqti olib tashlanadi — test qayta ochiladi
+      }
       const saved = await api(`/api/teacher/tests/${test.id}`, { method: "PATCH", body });
       close();
       showToast(saved.reopened ? `✅ Saqlandi — test qayta ochildi, yangi kod: ${saved.code}` : "✅ Saqlandi");
@@ -16332,7 +16350,9 @@ async function renderTestDetail(testId) {
     <section class="hero-card">
       <div class="hero-who">
         <div class="hero-hello">${escapeHtml(test.title)}</div>
-        <div class="hero-chips">${testBadges(test)}<span class="hero-chip">⏱ ${test.duration} daqiqa</span></div>
+        <div class="hero-chips">${testBadges(test)}${
+          test.enrollment_type === "closed" ? "" : `<span class="hero-chip">⏱ ${test.duration} daqiqa</span>`
+        }</div>
       </div>
       <div class="hero-code-row">
         <span>Test kodi</span>
