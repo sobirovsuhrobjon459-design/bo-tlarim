@@ -8978,6 +8978,13 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
 
     _check_channel_subscription(test, user)
 
+    # Kalitsiz saqlangan onlayn test: o'quvchi boshlasa, natijasi noto'g'ri (0) chiqardi — kalit to'liq kiritilguncha kutadi
+    if not (attempt and attempt.status == "in_progress") and _key_missing(test):
+        raise HTTPException(
+            status_code=409,
+            detail="Test hali tayyor emas — o'qituvchi javoblar kalitini to'liq kiritmagan. Birozdan keyin urinib ko'ring.",
+        )
+
     # Vaqti tugab qolgan urinish: o'quvchi belgilab qo'ygan javoblar bo'yicha
     # darhol tekshirib, natijasini qotiramiz — mehnati yo'qolmasligi uchun.
     if attempt and attempt.status == "in_progress":

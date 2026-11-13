@@ -12781,7 +12781,6 @@ function renderNewTestForm(testType, draft = {}) {
       </div>
     </div>
     <div id="key-questions-container" data-default-parts="${structure.textParts}"
-         data-allow-empty="${type === "rash" ? "1" : ""}"
          data-part-overrides='${JSON.stringify(structure.partOverrides || {})}'
          data-fixed-parts='${JSON.stringify(structure.fixedParts || {})}'
          data-option-overrides='${JSON.stringify(structure.options)}'></div>
@@ -13120,7 +13119,6 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
   const defaultOptions = Math.min(8, Math.max(2, Number(document.getElementById("field-option-count").value) || 4));
   const textCount = Math.max(0, Number(document.getElementById("field-text-count").value) || 0);
   const parts = Number(container.dataset.defaultParts) || 1;
-  const allowEmpty = container.dataset.allowEmpty === "1"; // Rash test: kalitsiz ham saqlanadi
   // Yozma ish (Kimyo/Biologiya 41–43): savolga qarab bandlar soni — o'qituvchi [−]/[+] bilan o'zgartiradi
   let partOverrides = {};
   try {
@@ -13193,11 +13191,8 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
     ? `<p class="section-label">1–${testCount}: TO'G'RI JAVOBLAR</p>
        <div class="panel">
          <div class="answer-grid">${cells.join("")}</div>
-         <p class="subtitle" style="margin:10px 0 0">${
-           allowEmpty
-             ? "Katakchani bosing: — → A → B … Javoblarni hozir kiritmasangiz ham bo'ladi — keyin «Kalit → Kalitni tuzatish» da kiritasiz."
-             : "Katakchani bosing: — → A → B … Har bir savolning to'g'ri javobini belgilang."
-         }</p>
+         <p class="subtitle" style="margin:10px 0 0">Katakchani bosing: — → A → B … Javoblarni hozir kiritmasangiz ham bo'ladi —
+           keyin «Kalit → Kalitni tuzatish» da kiritasiz.</p>
        </div>`
     : "";
 
@@ -13364,12 +13359,7 @@ async function saveNewTest() {
     throw new Error(`Offline testda variantlar ko'pi bilan ${OFFLINE_MAX_OPTIONS} ta bo'ladi (A–F) — titulga sig'ishi uchun`);
   }
 
-  // Rash testni kalitsiz ham saqlash mumkin (kalit keyin kiritiladi, test sahifasida eslatma turadi)
-  const allowEmptyKey = document.getElementById("key-questions-container").dataset.allowEmpty === "1";
-  const emptyRow = keyRows.find((row) => !row.dataset.answer);
-  if (emptyRow && !allowEmptyKey) {
-    throw new Error(`${emptyRow.dataset.label}-savolning to'g'ri javobi belgilanmagan`);
-  }
+  // Har qanday testni kalitsiz ham saqlash mumkin (kalit keyin kiritiladi, test sahifasida eslatma turadi)
   const missingKeys = keyRows.filter((row) => !row.dataset.answer).length;
 
   body.key_questions = keyRows.map((row, index) => {
@@ -16441,7 +16431,11 @@ async function renderTestDetail(testId) {
       test.key_missing
         ? `<div class="notice key-missing-notice">
              🔑 <b>Javoblarni kiriting:</b> ${test.key_missing} ta savolning to'g'ri javobi hali kiritilmagan —
-             kiritilmaguncha natijalar to'g'ri hisoblanmaydi va testni yakunlab bo'lmaydi.
+             ${
+               isClosedTest
+                 ? "kiritilmaguncha varaqlarni skanerlab va testni yakunlab bo'lmaydi."
+                 : "kiritilmaguncha o'quvchilar testni boshlay olmaydi va testni yakunlab bo'lmaydi."
+             }
              ${test.mode === "key" ? `<button type="button" class="btn" id="key-missing-button" style="margin:10px 0 0">🔑 Javoblar kalitini kiritish</button>` : ""}
            </div>`
         : ""

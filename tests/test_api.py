@@ -7603,3 +7603,30 @@ def test_akkaunt_faol_qurilmalar_va_90_kunlik_muddat():
     # Telegram ichidan (seanssiz) — "Telegram" qatori, ilova seanslari ro'yxati bo'sh
     via_telegram = client.get("/api/me/account", headers=as_user(4242)).json()
     assert via_telegram["via_telegram"] is True and via_telegram["sessions"] == [], via_telegram
+
+
+def test_har_qanday_test_kalitsiz_saqlanadi_onlayn_kalitsiz_boshlanmaydi():
+    """Kalitni keyin kiritish mumkin (hamma turda); onlayn testni o'quvchi kalit to'liq bo'lgachgina boshlaydi."""
+    reset_database()
+    register_teacher()
+    empty_key = [
+        {"number": 1, "question_type": "single", "option_count": 4, "correct": ""},
+        {"number": 2, "question_type": "single", "option_count": 4, "correct": "B"},
+        {"number": 3, "question_type": "text", "correct": ""},
+    ]
+
+    # Oddiy (boshlang'ich) oflayn test — kalitsiz saqlanadi, eslatma chiqadi
+    offline = create_test(enrollment_type="closed", test_type="boshlangich", key_questions=empty_key)
+    detail = client.get(f"/api/teacher/tests/{offline['id']}", headers=as_user(555)).json()
+    assert detail["key_missing"] == 2, detail["key_missing"]
+
+    # Onlayn oddiy test — kalitsiz saqlanadi, lekin o'quvchi boshlay olmaydi
+    online = create_test(test_type="boshlangich", key_questions=empty_key)
+    blocked = client.post(f"/api/tests/{online['code']}/start", headers=as_user(900))
+    assert blocked.status_code == 409 and "kalit" in blocked.json()["detail"], blocked.text
+
+    # Kalit to'liq kiritilgach — boshlanadi
+    saved = client.put(f"/api/teacher/tests/{online['id']}/key", json={"answers": {"1": "A", "3": "5"}}, headers=as_user(555))
+    assert saved.status_code == 200, saved.text
+    started = client.post(f"/api/tests/{online['code']}/start", headers=as_user(900))
+    assert started.status_code == 200, started.text
