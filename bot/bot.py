@@ -15,6 +15,7 @@ bo'lsa ham ".config" nisbiy import orqali, paket sifatida ishga tushiriladi:
 import asyncio
 import html
 import logging
+import re
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramUnauthorizedError
@@ -22,6 +23,7 @@ from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     BotCommand,
     CallbackQuery,
+    CopyTextButton,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
@@ -471,10 +473,19 @@ async def handle_app_login(callback: CallbackQuery) -> None:
             return confirm_app_login(session, token, user.id, user.full_name, user.username)
 
     ok, text = await asyncio.to_thread(confirm)
+    # Kod ostida "📋 Kodni nusxalash" — bir bosishda nusxalanadi, ilovada esa "Qo'yish" bilan qo'yiladi
+    code = re.search(r"<code>(\d{6})</code>", text) if ok else None
+    keyboard = (
+        InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="📋 Kodni nusxalash", copy_text=CopyTextButton(text=code.group(1)))]]
+        )
+        if code
+        else None
+    )
     try:
-        await callback.message.edit_text(text, parse_mode="HTML")
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
     except Exception:
-        await callback.message.answer(text, parse_mode="HTML")
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=keyboard)
     await callback.answer("✅ Tasdiqlandi" if ok else "Eskirgan", show_alert=not ok)
 
 

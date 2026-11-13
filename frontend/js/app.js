@@ -18028,20 +18028,29 @@ function renderAppLogin(errorText = "") {
   }
   showPage(`
     <div style="text-align:center;padding-top:40px">
-      <img src="/img/chittak-icon.png" alt="" style="width:88px;height:88px;border-radius:24px;display:block;margin:0 auto">
+      <img src="/img/chittak-icon.png" alt="" id="app-login-logo" style="width:88px;height:88px;border-radius:24px;display:block;margin:0 auto">
       <h1 style="margin:12px 0 8px">Chittak</h1>
       <p class="subtitle">Telegram akkauntingiz bilan kiring — testlar, natijalar va tokenlar Telegram'dagi bilan bir xil bo'ladi.</p>
     </div>
     <button class="btn" id="app-login-button" style="margin-top:24px">✈️ Telegram orqali kirish</button>
     <button class="btn btn-ghost" id="pupil-entry-button" style="margin-top:10px">🎒 Maktab o'quvchisi sifatida kirish</button>
     <p class="subtitle" id="app-login-status" style="text-align:center;margin-top:14px">${escapeHtml(errorText)}</p>
-    <p style="text-align:center;margin-top:36px">
+    <p style="text-align:center;margin-top:36px" id="review-login-holder" hidden>
       <button class="link-button" id="review-login-link" type="button" style="border:0;background:none;color:var(--color-text-muted);font:inherit;font-size:13px;text-decoration:underline;cursor:pointer">Sinov akkaunti bilan kirish</button>
     </p>
   `);
   document.getElementById("app-login-button").addEventListener("click", guarded(startAppLogin));
   document.getElementById("pupil-entry-button").addEventListener("click", guarded(renderPupilEntry));
   document.getElementById("review-login-link").addEventListener("click", renderReviewLogin);
+
+  // "Sinov akkaunti" (Google Play tekshiruvchisi uchun) oddiy foydalanuvchiga ko'rinmaydi —
+  // logotip 3 soniya ichida 5 marta bosilganda chiqadi
+  let logoTaps = [];
+  document.getElementById("app-login-logo").addEventListener("click", () => {
+    const now = Date.now();
+    logoTaps = [...logoTaps.filter((moment) => now - moment < 3000), now];
+    if (logoTaps.length >= 5) document.getElementById("review-login-holder").hidden = false;
+  });
 }
 
 // Google Play tekshiruvchisi uchun: Telegram'siz, login va parol bilan demo akkauntga kirish
@@ -18093,9 +18102,12 @@ function appLoginCodeFormHtml(idPrefix) {
   return `
     <form id="${idPrefix}-form" style="margin-top:14px">
       <label class="field-label" for="${idPrefix}-input">Botdan kelgan 6 xonali kod</label>
-      <input class="input" id="${idPrefix}-input" inputmode="numeric" pattern="[0-9]*" maxlength="6"
-             autocomplete="one-time-code" placeholder="000000"
-             style="text-align:center;letter-spacing:8px;font-size:22px;font-weight:800" />
+      <div style="display:flex;gap:8px;align-items:stretch">
+        <input class="input" id="${idPrefix}-input" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+               autocomplete="one-time-code" placeholder="000000"
+               style="flex:1;min-width:0;margin:0;text-align:center;letter-spacing:8px;font-size:22px;font-weight:800" />
+        <button class="btn btn-ghost" type="button" id="${idPrefix}-paste" style="width:auto;margin:0;padding:0 16px;white-space:nowrap">📋 Qo'yish</button>
+      </div>
       <button class="btn" type="submit" style="margin-top:10px">Kirish</button>
     </form>`;
 }
@@ -18103,6 +18115,38 @@ function appLoginCodeFormHtml(idPrefix) {
 function wireAppLoginCodeForm(idPrefix, token, expiresIn, onExpired) {
   const deadline = Date.now() + expiresIn * 1000;
   const form = document.getElementById(`${idPrefix}-form`);
+  const input = document.getElementById(`${idPrefix}-input`);
+
+  // Nusxalangan matndan 6 xonali kod olinadi va kirish o'zi boshlanadi
+  const fillAndSubmit = (text) => {
+    const code = String(text || "").match(/\d{6}/)?.[0] || String(text || "").replace(/\D/g, "");
+    if (code.length !== 6) return false;
+    input.value = code;
+    if (form.requestSubmit) form.requestSubmit();
+    else form.dispatchEvent(new Event("submit", { cancelable: true }));
+    return true;
+  };
+
+  // Qo'lda (bosib turib) qo'yilganda ham — bo'shliq yoki matn aralashgan bo'lsa ham kod ajratib olinadi
+  input.addEventListener("paste", (event) => {
+    const text = event.clipboardData?.getData("text") || "";
+    if (/\d{6}/.test(text.replace(/\s/g, ""))) {
+      event.preventDefault();
+      fillAndSubmit(text.replace(/\s/g, ""));
+    }
+  });
+
+  document.getElementById(`${idPrefix}-paste`).addEventListener("click", async () => {
+    let text = "";
+    try {
+      text = await navigator.clipboard.readText();
+    } catch (_) {
+      /* Ba'zi ilova/brauzerlarda nusxa xotirasini o'qishga ruxsat yo'q — quyida qo'lda qo'yish yo'li */
+    }
+    if (fillAndSubmit(text.replace(/\s/g, ""))) return;
+    input.focus();
+    showToast(text ? "Nusxada 6 xonali kod topilmadi — botda «📋 Kodni nusxalash»ni bosing" : "Kod maydonini bosib turing va «Qo'yish»ni tanlang");
+  });
   form.addEventListener(
     "submit",
     guarded(async (event) => {

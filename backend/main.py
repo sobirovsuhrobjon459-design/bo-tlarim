@@ -5252,7 +5252,7 @@ def confirm_app_login(db: Session, token: str, tg_id: int, full_name: str, usern
     return True, (
         "✅ <b>Tasdiqlandi!</b>\n\n"
         f"Tasdiqlash kodingiz: <code>{code}</code>\n\n"
-        "Shu kodni saytda yoki ilovada kiriting — kirish shu bilan yakunlanadi."
+        "«📋 Kodni nusxalash»ni bosing, so'ng ilovada «Qo'yish»ni bosing — kirish shu bilan yakunlanadi."
     )
 
 
