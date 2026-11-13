@@ -10144,7 +10144,7 @@ async function adminSystemView() {
               <span>
                 <b>Sinov rejimi</b>
                 <small style="display:block;color:var(--color-text-muted)">
-                  Haqiqiy pulsiz tekshirish (test.paycom.uz). Sinovdan keyin o'chiring.
+                  Haqiqiy pulsiz tekshirish (checkout.test.paycom.uz). Sinovdan keyin o'chiring.
                 </small>
               </span>
             </label>

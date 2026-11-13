@@ -3940,7 +3940,8 @@ def _build_payme_checkout_url(account_field: str, order_id: int | str, amount: i
     # Payme summani tiyinda kutadi
     params = f"m={PAYME_MERCHANT_ID};ac.{account_field}={order_id};a={amount * 100}"
     encoded = base64.b64encode(params.encode()).decode()
-    base = "https://test.paycom.uz" if PAYME_TEST_MODE else "https://checkout.paycom.uz"
+    # Sinov rejimida — Payme'ning test to'lov sahifasi (test.paycom.uz — bu sandbox, to'lov sahifasi emas)
+    base = "https://checkout.test.paycom.uz" if PAYME_TEST_MODE else "https://checkout.paycom.uz"
     return f"{base}/{encoded}"
 
 

@@ -1605,11 +1605,11 @@ def test_click_orqali_kredit_avtomatik_tushadi():
 
 
 def test_payme_sinov_rejimi_havolasi():
-    """PAYME_TEST_MODE yoqilsa — to'lov sahifasi test.paycom.uz, aks holda checkout.paycom.uz."""
+    """PAYME_TEST_MODE yoqilsa — to'lov sahifasi checkout.test.paycom.uz, aks holda checkout.paycom.uz."""
     original = main.PAYME_TEST_MODE
     try:
         main.PAYME_TEST_MODE = True
-        assert main._build_payme_checkout_url("purchase_id", 1, 1000).startswith("https://test.paycom.uz/")
+        assert main._build_payme_checkout_url("purchase_id", 1, 1000).startswith("https://checkout.test.paycom.uz/")
         main.PAYME_TEST_MODE = False
         assert main._build_payme_checkout_url("purchase_id", 1, 1000).startswith("https://checkout.paycom.uz/")
     finally:
@@ -7248,7 +7248,7 @@ def test_tolov_kalitlari_admin_panelidan_kiritiladi():
     assert "SIR-KALIT" not in _json.dumps(state)
     assert main.PAYME_MERCHANT_ID == "65abc123" and main.PAYME_SECRET_KEY == "SIR-KALIT"
     # To'lov havolasi yangi kalit bilan, sinov rejimida yasaladi
-    assert main._build_payme_checkout_url("payment_id", 7, 5000).startswith("https://test.paycom.uz/")
+    assert main._build_payme_checkout_url("payment_id", 7, 5000).startswith("https://checkout.test.paycom.uz/")
 
     # Bo'sh yuborilgan maxfiy kalit — "o'zgarishsiz qoldir" degani
     again = client.post("/api/admin/payment-settings", headers=admin, json={"payme_merchant_id": "65abc123"}).json()
