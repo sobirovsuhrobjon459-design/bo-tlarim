@@ -1142,6 +1142,47 @@ def test_zaxira_nusxadan_toliq_tiklanadi():
     assert create_test()["id"] != created["id"]
 
 
+def test_zaxira_nusxa_telegramga_toliq_va_kalitsiz_boradi():
+    """Nusxa diskka bo'lib-bo'lib yoziladi: fayl to'g'ri JSON, yozuvlar soni to'g'ri, to'lov kalitlari yo'q."""
+    from backend.memory import release_memory, rss_mb
+
+    reset_database()
+    register_teacher()
+    create_test()
+    session = SessionLocal()
+    try:
+        session.add(main.AppSetting(key="payme_secret_key", value="maxfiy-kalit-123"))
+        session.add(main.AppSetting(key="boshqa_sozlama", value="qoladi"))
+        session.commit()
+    finally:
+        session.close()
+
+    sent = []
+    original_send, original_admin = main._send_pdf_to_telegram, main.ADMIN_ID
+    main._send_pdf_to_telegram = lambda chat_id, name, data, caption="", mime="": sent.append((name, data, caption))
+    main.ADMIN_ID = main.ADMIN_IDS[0] if main.ADMIN_IDS else 1
+    try:
+        session = SessionLocal()
+        try:
+            assert main.send_backup_to_admin(session)
+        finally:
+            session.close()
+    finally:
+        main._send_pdf_to_telegram, main.ADMIN_ID = original_send, original_admin
+
+    name, data, caption = sent[0]
+    backup = json.loads(data)
+    total = sum(len(rows) for rows in backup["tables"].values())
+    assert f"Jami yozuvlar: {total} ta" in caption, caption
+    assert backup["tables"]["tests"] and backup["exported_at"]
+    keys = {row["key"] for row in backup["tables"]["app_settings"]}
+    assert "boshqa_sozlama" in keys and "payme_secret_key" not in keys
+    assert b"maxfiy-kalit-123" not in data
+    # Xotira yordamchilari Linux bo'lmagan joyda ham yiqilmaydi
+    release_memory()
+    assert rss_mb() is None or rss_mb() > 0
+
+
 def test_oquvchini_ochirish_javoblarni_yoqotmaydi():
     reset_database()
     register_teacher()

@@ -29,6 +29,7 @@ import math
 import os
 import re
 import secrets
+import tempfile
 import threading
 import time
 from types import SimpleNamespace
@@ -57,10 +58,14 @@ from reportlab.platypus import CondPageBreak, HRFlowable, PageBreak, Paragraph, 
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import String, case, cast, delete, distinct, func, inspect, or_, select, text, update
-from sqlalchemy.orm import Session, object_session, selectinload
+from sqlalchemy.orm import Session, defer, object_session, selectinload
 
+from .memory import MEMORY_WARN_MB, limit_malloc_arenas, release_memory
 from .rasch import grade_for, rasch_scores
 from .timetable import ClassInput, Period, TeacherInput, build_timetable
+
+# Ko'p oqimda xotira bo'laklanib, 512 MB'dan oshib ketmasin (qarang: backend/memory.py)
+limit_malloc_arenas()
 from .subjects import default_sections, essay_max, frontend_config, score_weights, subject_keyboard
 from .regions import REGIONS, is_valid_location
 from .student_import import names_from_rows, parse_student_file, rows_from_text
@@ -704,27 +709,48 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 # paytda admin panelidagi tugma orqali.
 
 
+def write_database_export(db: Session, out) -> int:
+    """
+    Butun bazani JSON qilib `out` (ikkilik fayl) ga yozadi va yozuvlar sonini qaytaradi.
+
+    Fayl tuzilishi: {"exported_at": ..., "tables": {jadval: [qator, ...]}} — restore_backup shuni o'qiydi.
+    Qatorlar bazadan bo'lib-bo'lib o'qiladi va darhol faylga yoziladi: bazada skaner rasmlari
+    (base64) bor, butun bazani xotirada yig'ish server xotirasini (512 MB) bir necha barobar
+    to'ldirib, uni o'ldirishi mumkin edi.
+    """
+
+    def write(chunk: str) -> None:
+        out.write(chunk.encode("utf-8"))
+
+    row_count = 0
+    write('{"exported_at": ' + json.dumps(utcnow().isoformat()) + ', "tables": {')
+    for table_index, table in enumerate(Base.metadata.sorted_tables):
+        write(("," if table_index else "") + "\n" + json.dumps(table.name) + ": [")
+        rows = db.execute(select(table).execution_options(yield_per=200)).mappings()
+        first = True
+        for row in rows:
+            # To'lov kalitlari nusxaga tushmaydi: bu fayl Telegram chatiga yuboriladi,
+            # maxfiy kalit esa u yerda yotmasligi kerak. Ular HAMMASI chiqariladi (faqat
+            # maxfiylari emas): tiklangan bazada Merchant ID bo'lib, kalit bo'lmasa, Payme
+            # yoqilgandek ko'rinardi, lekin to'lov tasdig'i qabul qilinmay pul osilib qolardi.
+            # Baza tiklanganda kalitlar admin panelidan qaytadan kiritiladi.
+            if table.name == AppSetting.__tablename__ and row["key"] in PAYMENT_SETTING_KEYS:
+                continue
+            # default=str — sana/vaqt qiymatlarini matnga aylantiradi
+            write(("" if first else ",") + "\n " + json.dumps(dict(row), ensure_ascii=False, default=str))
+            first = False
+            row_count += 1
+        write("]")
+    write("\n}}\n")
+    return row_count
+
+
 def export_database(db: Session) -> bytes:
     """Butun bazani bitta JSON faylga aylantiradi."""
 
-    export: dict[str, list[dict]] = {
-        "exported_at": utcnow().isoformat(),
-        "tables": {},
-    }
-
-    for table in Base.metadata.sorted_tables:
-        rows = db.execute(select(table)).mappings().all()
-        # To'lov kalitlari nusxaga tushmaydi: bu fayl Telegram chatiga yuboriladi,
-        # maxfiy kalit esa u yerda yotmasligi kerak. Ular HAMMASI chiqariladi (faqat
-        # maxfiylari emas): tiklangan bazada Merchant ID bo'lib, kalit bo'lmasa, Payme
-        # yoqilgandek ko'rinardi, lekin to'lov tasdig'i qabul qilinmay pul osilib qolardi.
-        # Baza tiklanganda kalitlar admin panelidan qaytadan kiritiladi.
-        if table.name == AppSetting.__tablename__:
-            rows = [row for row in rows if row["key"] not in PAYMENT_SETTING_KEYS]
-        export["tables"][table.name] = [dict(row) for row in rows]
-
-    # default=str — sana/vaqt qiymatlarini matnga aylantiradi
-    return json.dumps(export, ensure_ascii=False, indent=1, default=str).encode("utf-8")
+    buffer = io.BytesIO()
+    write_database_export(db, buffer)
+    return buffer.getvalue()
 
 
 def send_backup_to_admin(db: Session) -> bool:
@@ -734,8 +760,11 @@ def send_backup_to_admin(db: Session) -> bool:
         return False
 
     try:
-        backup_bytes = export_database(db)
-        row_count = sum(len(rows) for rows in json.loads(backup_bytes)["tables"].values())
+        # Nusxa avval diskdagi vaqtinchalik faylga yoziladi (xotirada butun baza yig'ilmaydi)
+        with tempfile.TemporaryFile() as handle:
+            row_count = write_database_export(db, handle)
+            handle.seek(0)
+            backup_bytes = handle.read()
 
         sent = False
         for admin_id in ADMIN_IDS:  # har bir admin'ga; biriga yetmasa ham qolganlariga boradi
@@ -862,6 +891,24 @@ async def _finish_expired_tests_loop() -> None:
             await asyncio.to_thread(_delete_scheduled_schools_once)
         except Exception:
             logging.getLogger("backend").warning("O'chirishga qo'yilgan maktablarni tekshirib bo'lmadi", exc_info=True)
+        await asyncio.to_thread(_release_memory_and_log)
+
+
+def _release_memory_and_log() -> None:
+    """Bo'shagan xotirani tizimga qaytaradi va qancha egallanganini logga yozadi (Render'da 512 MB chegara)."""
+
+    try:
+        used = release_memory()
+    except Exception:
+        logging.getLogger("backend").warning("Xotirani bo'shatib bo'lmadi", exc_info=True)
+        return
+    if used is None:
+        return
+    logger = logging.getLogger("backend")
+    if used >= MEMORY_WARN_MB:
+        logger.warning("Xotira: %.0f MB — 512 MB chegarasiga yaqin", used)
+    else:
+        logger.info("Xotira: %.0f MB", used)
 
 
 def _finish_expired_tests_once() -> None:
@@ -951,6 +998,7 @@ def _send_backup_once() -> None:
         send_backup_to_admin(session)
     finally:
         session.close()
+        _release_memory_and_log()  # nusxa katta bo'lishi mumkin — bo'shagan xotira darhol qaytsin
 
 
 # ========== 2) Statistika va PDF yordamchilari ==========
@@ -7311,7 +7359,7 @@ def _apply_saved_ai_verdicts(db: Session, attempt_ids: list[int]) -> int:
         select(WrittenAnswer).where(
             WrittenAnswer.attempt_id.in_(attempt_ids), WrittenAnswer.verdict.is_(None),
             WrittenAnswer.ai_status == "done", WrittenAnswer.ai_sure.is_(True),
-        )
+        ).options(defer(WrittenAnswer.image))  # rasm kerak emas — xotiraga yuklanmaydi
     ).all()
     touched: set[int] = set()
     for row in rows:
@@ -7341,7 +7389,7 @@ def _queue_ai_reading(db: Session, attempt_ids: list[int]) -> int:
             WrittenAnswer.attempt_id.in_(attempt_ids), WrittenAnswer.blank.is_(False),
             WrittenAnswer.verdict.is_(None),
             or_(WrittenAnswer.ai_status.is_(None), WrittenAnswer.ai_status.in_(("queued", "error"))),
-        )
+        ).options(defer(WrittenAnswer.image))  # rasm kerak emas — xotiraga yuklanmaydi
     ).all()
     for row in rows:
         row.ai_status = "queued"
@@ -7439,14 +7487,23 @@ def _store_written_images(db: Session, test: Test, attempt: Attempt, images: dic
     db.flush()
 
 
-def _written_rows(db: Session, test: Test):
-    """Testdagi (natijasi bor o'quvchilarning) yozma katak yozuvlari: (WrittenAnswer, Attempt)."""
+def _written_rows(db: Session, test: Test, ref: int | None = None, with_images: bool = False):
+    """
+    Testdagi (natijasi bor o'quvchilarning) yozma katak yozuvlari: (WrittenAnswer, Attempt).
+    ref — faqat shu savol. Katak rasmlari (base64) faqat with_images=True bo'lsa o'qiladi:
+    butun test bo'yicha yuzlab rasmni sanash uchun xotiraga yuklash server xotirasini to'ldirardi.
+    """
 
-    return db.execute(
+    query = (
         select(WrittenAnswer, Attempt)
         .join(Attempt, Attempt.id == WrittenAnswer.attempt_id)
         .where(Attempt.test_id == test.id, Attempt.status == "done")
-    ).all()
+    )
+    if ref is not None:
+        query = query.where(WrittenAnswer.question_ref == ref)
+    if not with_images:
+        query = query.options(defer(WrittenAnswer.image))
+    return db.execute(query).all()
 
 
 def _written_stats(db: Session, test: Test) -> dict | None:
@@ -7531,7 +7588,7 @@ def written_question(
         raise HTTPException(status_code=404, detail="Yozma savol topilmadi")
     question = questions[index]
     variants = _test_variants(db, test)
-    rows = [(row, attempt) for row, attempt in _written_rows(db, test) if row.question_ref == ref]
+    rows = list(_written_rows(db, test, ref=ref, with_images=True))
     rows.sort(key=lambda pair: _uz_sort_key(pair[1].offline_name or ""))
     return {
         "ref": ref,
@@ -7588,8 +7645,7 @@ def set_written_rest(
     """Shu savolda hali baholanmagan kataklarning hammasiga bir xil baho (odatda: qolganlari ✗)."""
 
     test = _get_own_test(db, teacher, test_id)
-    pending = [(row, attempt) for row, attempt in _written_rows(db, test)
-               if row.question_ref == ref and row.verdict is None]
+    pending = [(row, attempt) for row, attempt in _written_rows(db, test, ref=ref) if row.verdict is None]
     for row, _ in pending:
         row.verdict = body.verdict
         row.auto_verdict = False
