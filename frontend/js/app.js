@@ -15611,22 +15611,13 @@ async function renderVariantEditor(testId, test, name, saved) {
   const row = (question) => {
     if (question.question_type === "text") {
       return `
-        <div class="scan-row variant-text-row">
-          <span class="scan-label">${escapeHtml(question.label)}</span>
+        <div class="sheet-row">
+          <span class="sheet-number">${escapeHtml(question.label.replace(/-savol$/, ""))}</span>
           <input class="input" data-variant-text="${question.ref}" value="${escapeHtml(answers[question.ref] || "")}"
-            placeholder="To'g'ri javob" style="margin:0" />
+            placeholder="To'g'ri javob" style="margin:0;flex:1;min-width:0" />
         </div>`;
     }
-    const chosen = new Set((answers[question.ref] || "").split(",").filter(Boolean));
-    return `
-      <div class="scan-row" data-variant-ref="${question.ref}">
-        <span class="scan-label">${escapeHtml(question.label.replace(/-savol$/, ""))}.</span>
-        <div class="scan-options">
-          ${Array.from({ length: question.option_count }, (_, index) => String.fromCharCode(65 + index))
-            .map((letter) => `<button type="button" class="scan-option${chosen.has(letter) ? " selected" : ""}" data-letter="${letter}">${letter}</button>`)
-            .join("")}
-        </div>
-      </div>`;
+    return keyLetterRowHtml(question, answers[question.ref], `data-variant-ref="${question.ref}"`);
   };
 
   showPage(`
@@ -15635,7 +15626,7 @@ async function renderVariantEditor(testId, test, name, saved) {
       <h2 style="margin:0;flex:1">${name} variant kaliti</h2>
     </div>
     <p class="subtitle">Har savolning to'g'ri javobini belgilang (savollar tartibi ${name} variantdagi kabi).</p>
-    <div class="panel scan-grid">${structure.questions.map(row).join("")}</div>
+    <div class="panel answer-sheet">${structure.questions.map(row).join("")}</div>
     <button class="btn" id="save-variant-button" style="margin-top:14px">💾 Saqlash</button>
   `);
   markUnsaved();
@@ -15643,7 +15634,7 @@ async function renderVariantEditor(testId, test, name, saved) {
   document.querySelectorAll("[data-variant-ref]").forEach((rowElement) => {
     const question = structure.questions.find((item) => item.ref === rowElement.dataset.variantRef);
     rowElement.addEventListener("click", (event) => {
-      const button = event.target.closest(".scan-option");
+      const button = event.target.closest(".sheet-option");
       if (!button) return;
       const chosen = new Set((answers[question.ref] || "").split(",").filter(Boolean));
       const letter = button.dataset.letter;
@@ -15655,7 +15646,7 @@ async function renderVariantEditor(testId, test, name, saved) {
         chosen.add(letter);
       }
       answers[question.ref] = [...chosen].sort().join(",");
-      rowElement.querySelectorAll(".scan-option").forEach((item) => item.classList.toggle("selected", chosen.has(item.dataset.letter)));
+      rowElement.querySelectorAll(".sheet-option").forEach((item) => item.classList.toggle("selected", chosen.has(item.dataset.letter)));
     });
   });
   document.querySelectorAll("[data-variant-text]").forEach((input) => {
@@ -15687,23 +15678,26 @@ async function renderVariantEditor(testId, test, name, saved) {
   Asosiy kalitni (A) tahrirlash — test yaratilgandan keyin ham to'g'ri javoblarni tuzatish mumkin.
   Savollar soni va turi o'zgarmaydi. Saqlanganda tayyor natijalar yangi kalit bilan qayta hisoblanadi.
 */
+// Kalit qatori — test yaratishdagi kalit kiritish bilan bir xil: bitta ustun, ketma-ket, katta doirachalar
+function keyLetterRowHtml(question, value, dataAttribute) {
+  const chosen = new Set(String(value || "").split(",").filter(Boolean));
+  return `
+      <div class="sheet-row" ${dataAttribute}>
+        <span class="sheet-number">${escapeHtml(question.label.replace(/-savol$/, ""))}</span>
+        <div class="sheet-options">
+          ${Array.from({ length: question.option_count }, (_, index) => String.fromCharCode(65 + index))
+            .map((letter) => `<button type="button" class="sheet-option${chosen.has(letter) ? " selected" : ""}" data-letter="${letter}">${letter}</button>`)
+            .join("")}
+        </div>
+      </div>`;
+}
+
 async function renderMainKeyEditor(testId, test, back) {
   const structure = await api(`/api/teacher/tests/${testId}/questions`);
   answerKeyboard = structure.keyboard || "math";
   const answers = Object.fromEntries(structure.questions.map((question) => [question.ref, question.correct || ""]));
 
-  const letterRow = (question) => {
-    const chosen = new Set(answers[question.ref].split(",").filter(Boolean));
-    return `
-      <div class="scan-row" data-key-ref="${question.ref}">
-        <span class="scan-label">${escapeHtml(question.label.replace(/-savol$/, ""))}.</span>
-        <div class="scan-options">
-          ${Array.from({ length: question.option_count }, (_, index) => String.fromCharCode(65 + index))
-            .map((letter) => `<button type="button" class="scan-option${chosen.has(letter) ? " selected" : ""}" data-letter="${letter}">${letter}</button>`)
-            .join("")}
-        </div>
-      </div>`;
-  };
+  const letterRow = (question) => keyLetterRowHtml(question, answers[question.ref], `data-key-ref="${question.ref}"`);
   const textRow = (question) => `
       <div class="written-row">
         <span class="written-number">${escapeHtml(question.label.replace(/-savol$/, ""))}</span>
@@ -15723,7 +15717,7 @@ async function renderMainKeyEditor(testId, test, back) {
     <p class="subtitle">To'g'ri javobni o'zgartirish uchun kerakli harfni bosing.${
       test.variants?.length ? " Bu — asosiy (A) variant kaliti." : ""
     }</p>
-    ${letterQuestions.length ? `<div class="panel scan-grid">${letterQuestions.map(letterRow).join("")}</div>` : ""}
+    ${letterQuestions.length ? `<div class="panel answer-sheet">${letterQuestions.map(letterRow).join("")}</div>` : ""}
     ${
       textQuestions.length
         ? `<p class="section-label">YOZMA JAVOBLAR</p>
@@ -15741,7 +15735,7 @@ async function renderMainKeyEditor(testId, test, back) {
   document.querySelectorAll("[data-key-ref]").forEach((rowElement) => {
     const question = structure.questions.find((item) => item.ref === rowElement.dataset.keyRef);
     rowElement.addEventListener("click", (event) => {
-      const button = event.target.closest(".scan-option");
+      const button = event.target.closest(".sheet-option");
       if (!button) return;
       const chosen = new Set(answers[question.ref].split(",").filter(Boolean));
       const letter = button.dataset.letter;
@@ -15753,7 +15747,7 @@ async function renderMainKeyEditor(testId, test, back) {
         chosen.add(letter);
       }
       answers[question.ref] = [...chosen].sort().join(",");
-      rowElement.querySelectorAll(".scan-option").forEach((item) => item.classList.toggle("selected", chosen.has(item.dataset.letter)));
+      rowElement.querySelectorAll(".sheet-option").forEach((item) => item.classList.toggle("selected", chosen.has(item.dataset.letter)));
       markUnsaved();
       telegram?.HapticFeedback?.selectionChanged?.();
     });
