@@ -2694,3 +2694,22 @@ button.tt-cell {
   font-weight: 800;
   white-space: nowrap;
 }
+
+/* Skaner tekshiruvi — bitta ustunli ro'yxat (kalit kiritishdagi kabi). Shubhali qator — sariq */
+.answer-sheet .sheet-row.scan-check-row {
+  flex-wrap: wrap;
+}
+
+.answer-sheet .sheet-row.scan-check-row.is-flagged {
+  padding: 8px;
+  margin: 4px 0;
+  border-bottom-color: transparent;
+  border-radius: 14px;
+  background: #fff4cc;
+  box-shadow: inset 0 0 0 2px #f2c94c;
+}
+
+.sheet-row.scan-check-row .scan-note {
+  flex-basis: 100%;
+  margin-left: 44px;
+}

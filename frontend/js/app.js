@@ -15212,14 +15212,15 @@ function renderScanReview(testId, test, scan) {
   const questionRow = (question) => {
     const chosen = new Set((question.chosen || "").split(",").filter(Boolean));
     const flagged = question.status === "multiple" || question.status === "unsure";
+    // Kalit kiritishdagi bilan bir xil: bitta ustun, katta doirachalar
     return `
-      <div class="scan-row${flagged ? " is-flagged" : ""}" data-scan-ref="${question.ref}">
-        <span class="scan-label">${escapeHtml(question.label)}.</span>
-        <div class="scan-options">
+      <div class="sheet-row scan-check-row${flagged ? " is-flagged" : ""}" data-scan-ref="${question.ref}">
+        <span class="sheet-number">${escapeHtml(question.label)}</span>
+        <div class="sheet-options">
           ${question.options
             .map(
               (letter) =>
-                `<button type="button" class="scan-option${chosen.has(letter) ? " selected" : ""}" data-letter="${letter}">${letter}</button>`
+                `<button type="button" class="sheet-option${chosen.has(letter) ? " selected" : ""}" data-letter="${letter}">${letter}</button>`
             )
             .join("")}
         </div>
@@ -15279,12 +15280,12 @@ function renderScanReview(testId, test, scan) {
       ${scan.pageCount > 1 ? ` · 📄 ${scan.page}/${scan.pageCount}-sahifa` : ""}
     </p>
     ${needsCheck.length ? `<div class="notice">Sariq qatorlarni varaqqa qarab tuzating: harfni bosing (qayta bosilsa — bekor).</div>` : ""}
-    ${needsCheck.length ? `<div class="panel scan-grid">${needsCheck.map(questionRow).join("")}</div>` : ""}
+    ${needsCheck.length ? `<div class="panel answer-sheet">${needsCheck.map(questionRow).join("")}</div>` : ""}
     <!-- Hamma javoblar yopiq turadi — bosilganda ochiladi (85 ta savol bir ekranda turmasin) -->
     <button type="button" class="btn btn-ghost" id="scan-toggle-all" style="margin-top:10px">
       📋 Barcha javoblar (${scan.questions.length}) — ko'rish
     </button>
-    <div class="panel scan-grid" id="scan-all" hidden>
+    <div class="panel answer-sheet" id="scan-all" hidden>
       ${scan.questions.filter((question) => !needsCheck.includes(question)).map(questionRow).join("")}
     </div>
     ${
@@ -15342,10 +15343,10 @@ function renderScanReview(testId, test, scan) {
     document.getElementById("scan-student-pick").hidden = false;
   });
 
-  document.querySelectorAll(".scan-row").forEach((row) => {
+  document.querySelectorAll("[data-scan-ref]").forEach((row) => {
     const question = scan.questions.find((item) => String(item.ref) === row.dataset.scanRef);
     row.addEventListener("click", (event) => {
-      const button = event.target.closest(".scan-option");
+      const button = event.target.closest(".sheet-option");
       if (!button) return;
       const letter = button.dataset.letter;
       const chosen = new Set((question.chosen || "").split(",").filter(Boolean));
@@ -15361,7 +15362,7 @@ function renderScanReview(testId, test, scan) {
       question.status = question.chosen ? "ok" : "empty";
       row.classList.remove("is-flagged");
       row.querySelector(".scan-note")?.remove();
-      row.querySelectorAll(".scan-option").forEach((item) => item.classList.toggle("selected", chosen.has(item.dataset.letter)));
+      row.querySelectorAll(".sheet-option").forEach((item) => item.classList.toggle("selected", chosen.has(item.dataset.letter)));
       paintViews();
     });
   });
