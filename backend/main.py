@@ -32,6 +32,7 @@ import secrets
 import tempfile
 import threading
 import time
+import zipfile
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -60,7 +61,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import String, case, cast, delete, distinct, func, inspect, or_, select, text, update
 from sqlalchemy.orm import Session, defer, object_session, selectinload
 
-from .memory import MEMORY_WARN_MB, limit_malloc_arenas, release_memory
+from .memory import MEMORY_WARN_MB, limit_malloc_arenas, release_memory, rss_mb, storage_report
 from .rasch import grade_for, rasch_scores
 from .timetable import ClassInput, Period, TeacherInput, build_timetable
 
@@ -250,6 +251,11 @@ def _add_missing_columns() -> None:
             "sheet_version": "INTEGER DEFAULT 1",
             "essay_max": "INTEGER",
             "test_type": "VARCHAR(15) DEFAULT 'rash'",
+            "closed_at": "TIMESTAMP",
+            "reopened_at": "TIMESTAMP",
+            "delete_warned_at": "TIMESTAMP",
+            "archive_tried_at": "TIMESTAMP",
+            "auto_deleted_at": "TIMESTAMP",
         },
         "test_attempts": {
             "offline_name": "VARCHAR(200)", "saved_answers": "TEXT", "sheet_number": "INTEGER", "variant": "VARCHAR(2)",
@@ -534,6 +540,10 @@ except Exception:  # jadval hali yo'q bo'lsa — .env'dagi kalitlar bilan ishlay
 async def lifespan(app: FastAPI):
     """Server ishga tushganda botni va kunlik zaxira nusxa vazifasini ishga tushiradi."""
     _warn_if_storage_is_temporary()
+    try:
+        logging.getLogger("backend").info("Server: %s", storage_report(_temp_dir()))
+    except Exception:
+        logging.getLogger("backend").warning("Disk hajmini o'lchab bo'lmadi", exc_info=True)
     bot_task = asyncio.create_task(run_bot())
     backup_task = asyncio.create_task(_daily_backup_loop())
     finish_task = asyncio.create_task(_finish_expired_tests_loop())
@@ -672,10 +682,23 @@ class StaticCacheHeaders:
 app.add_middleware(StaticCacheHeaders)
 
 
+_STARTED_AT = time.monotonic()
+
+
 @app.get("/api/health")
 def health():
-    """Server tirikligini tekshirish (uyg'oq tutish uchun ham)."""
-    return {"ok": True}
+    """
+    Server tirikligini tekshirish (uyg'oq tutish uchun ham). Nosozlikni tashqaridan kuzatish uchun:
+    qaysi versiya ishlayapti (Render beradigan commit), necha daqiqadan beri (qayta ishga tushganmi)
+    va qancha xotira egallagan (Render bepul tarifi 512 MB'dan oshsa serverni o'ldiradi).
+    """
+    used = rss_mb()
+    return {
+        "ok": True,
+        "commit": os.getenv("RENDER_GIT_COMMIT", "")[:7] or None,
+        "uptime_min": round((time.monotonic() - _STARTED_AT) / 60),
+        "memory_mb": round(used) if used is not None else None,
+    }
 
 
 # Render'ning bepul tarifi 15 daqiqa so'rov kelmasa serverni uxlatib qo'yadi:
@@ -698,6 +721,16 @@ async def _keep_awake_loop() -> None:
                 logging.getLogger("backend").warning("Uyg'oq tutish so'rovi o'tmadi", exc_info=True)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+
+# Vaqtinchalik fayllar (zaxira nusxa, test arxivi ZIP) — loyiha papkasi ichida, ya'ni aniq diskda.
+# Ba'zi serverlarda /tmp operativ xotirada turadi va u yerga yozilgan fayl 512 MB hisobiga kirardi.
+# Render'da bu disk vaqtinchalik (qayta ishga tushganda tozalanadi) — fayllar bir necha daqiqa yashaydi.
+TEMP_DIR = Path(__file__).resolve().parent.parent / ".tmp"
+
+
+def _temp_dir() -> Path:
+    TEMP_DIR.mkdir(exist_ok=True)
+    return TEMP_DIR
 
 
 # ========== 1.1) Zaxira nusxa (backup) ==========
@@ -761,7 +794,7 @@ def send_backup_to_admin(db: Session) -> bool:
 
     try:
         # Nusxa avval diskdagi vaqtinchalik faylga yoziladi (xotirada butun baza yig'ilmaydi)
-        with tempfile.TemporaryFile() as handle:
+        with tempfile.TemporaryFile(dir=_temp_dir()) as handle:
             row_count = write_database_export(db, handle)
             handle.seek(0)
             backup_bytes = handle.read()
@@ -891,6 +924,10 @@ async def _finish_expired_tests_loop() -> None:
             await asyncio.to_thread(_delete_scheduled_schools_once)
         except Exception:
             logging.getLogger("backend").warning("O'chirishga qo'yilgan maktablarni tekshirib bo'lmadi", exc_info=True)
+        try:
+            await asyncio.to_thread(_auto_cleanup_tests_once)
+        except Exception:
+            logging.getLogger("backend").warning("Testlarni avtomatik yopish/o'chirish bajarilmadi", exc_info=True)
         await asyncio.to_thread(_release_memory_and_log)
 
 
@@ -932,7 +969,8 @@ def _finish_expired_tests_once() -> None:
         ).all()
 
         for test in expired:
-            test.status = "closed"
+            if test.status != "closed":
+                _mark_test_closed(test)
             send_results_to_teacher(session, test)
         session.commit()
 
@@ -940,6 +978,251 @@ def _finish_expired_tests_once() -> None:
             _remind_pending_payments(session)
     finally:
         session.close()
+
+
+# ========== 1.2) Testlarni avtomatik yopish va o'chirish ==========
+#
+# Baza (bepul tarifda 1 GB) skanerlangan titul rasmlari bilan to'lib qolmasligi uchun:
+# - yopilmagan test yaratilganidan (qayta ochilganidan) 20 kun o'tib o'zi yopiladi;
+# - yopilgan test 20 kundan keyin o'chiriladi: avval barcha ma'lumotlari — natijalar (Excel),
+#   hisobot (PDF) va titul rasmlari — bitta ZIP bo'lib o'qituvchining Telegram'iga yuboriladi;
+#   3 kun oldin ogohlantiriladi. ZIP yetib bormasa (bot bloklangan, Telegram xatosi) — hech
+#   narsa o'chirilmaydi, ertasi kuni qayta uriniladi.
+# Bazadan faqat og'ir qism — titul va yozma javob rasmlari — butunlay o'chadi. Test yozuvi,
+# ballar va to'lovlar qoladi (sinf jurnali, o'quvchi profili, to'lov hisobi buzilmasin):
+# test xuddi o'qituvchi o'zi o'chirgandek ro'yxatdan yashiriladi.
+
+TEST_AUTO_CLOSE_AFTER = timedelta(days=20)
+TEST_AUTO_DELETE_AFTER = timedelta(days=20)
+TEST_DELETE_WARNING = timedelta(days=3)
+TEST_ARCHIVE_RETRY = timedelta(days=1)
+# Qoida shu kuni ishga tushdi: oldingi testlar uchun 20 kun shu kundan sanaladi —
+# eski testlar yangilanish chiqqan kuni birdaniga yopilib, o'chib ketmasin
+TEST_CLEANUP_SINCE = datetime(2026, 11, 15)
+# Telegram bot 50 MB'dan katta fayl yubora olmaydi — ZIP shundan oshsa, qismlarga bo'linadi
+TEST_ARCHIVE_PART_LIMIT = 45 * 1024 * 1024
+TEST_ARCHIVES_PER_RUN = 3  # bir tekshiruvda ko'pi bilan nechta test arxivlanadi (server band bo'lib qolmasin)
+
+
+def _mark_test_closed(test: Test) -> None:
+    test.status = "closed"
+    test.closed_at = utcnow()
+    test.delete_warned_at = test.archive_tried_at = None
+
+
+def _mark_test_reopened(test: Test) -> None:
+    test.status = "active"
+    test.reopened_at = utcnow()
+    test.closed_at = test.delete_warned_at = test.archive_tried_at = None
+
+
+def _test_auto_close_at(test: Test) -> datetime | None:
+    """Ochiq test qachon o'zi yopiladi (tugash vaqti keyinroq qo'yilgan bo'lsa — o'sha vaqtda)."""
+
+    if test.status == "closed" or test.deleted_at:
+        return None
+    due = max(test.created_at, test.reopened_at or test.created_at, TEST_CLEANUP_SINCE) + TEST_AUTO_CLOSE_AFTER
+    return max(due, test.end_time) if test.end_time else due
+
+
+def _test_auto_delete_at(test: Test) -> datetime | None:
+    """Yopilgan test qachon o'chiriladi (ogohlantirishdan keyin kamida 3 kun o'tadi)."""
+
+    if test.status != "closed" or test.deleted_at:
+        return None
+    due = max(test.closed_at or TEST_CLEANUP_SINCE, TEST_CLEANUP_SINCE) + TEST_AUTO_DELETE_AFTER
+    if test.delete_warned_at:
+        due = max(due, test.delete_warned_at + TEST_DELETE_WARNING)
+    return due
+
+
+def _local_date(moment: datetime) -> str:
+    return (moment + TASHKENT_OFFSET).strftime("%d.%m.%Y")
+
+
+def _safe_file_name(name: str, limit: int = 80) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', " ", name or "")
+    return " ".join(cleaned.split())[:limit].strip() or "fayl"
+
+
+def _build_test_archive(db: Session, test: Test, folder: Path) -> tuple[list[Path], int]:
+    """
+    Test arxivi: natijalar (Excel), hisobot (PDF) va Titullar/ papkasida har o'quvchining titul rasmi.
+    Diskka yoziladi va 45 MB'dan oshsa, qismlarga bo'linadi. (qismlar, titul rasmlari soni)
+    """
+
+    has_results = bool(db.scalar(select(Attempt.id).where(Attempt.test_id == test.id, Attempt.status == "done").limit(1)))
+    reports = []
+    for file_name, build in (
+        (f"{test.code}_natijalar.xlsx", lambda: generate_test_report_xlsx(db, test)),
+        (f"{test.code}_hisobot.pdf", lambda: generate_test_report_pdf(db, test, test.teacher)),
+    ):
+        try:
+            reports.append((file_name, build()))
+        except Exception:
+            # Natijasi bor testning hisobotini yasab bo'lmasa — arxivlanmaydi (hech narsa o'chmaydi)
+            if has_results:
+                raise
+            logging.getLogger("backend").warning("Arxiv: %s yasalmadi (test %s)", file_name, test.id, exc_info=True)
+
+    parts: list[Path] = []
+    archive = None
+    size = 0
+
+    def next_part():
+        nonlocal archive, size
+        if archive:
+            archive.close()
+        parts.append(folder / f"part{len(parts) + 1}.zip")
+        archive = zipfile.ZipFile(parts[-1], "w", zipfile.ZIP_DEFLATED)
+        size = 0
+
+    next_part()
+    try:
+        for file_name, data in reports:
+            archive.writestr(file_name, data)
+            size += len(data)
+
+        # Titullar — bittadan o'qiladi (hammasi birdaniga xotiraga yuklanmaydi)
+        sheets = db.execute(
+            select(SheetImage.id, SheetImage.page, Attempt.id, Attempt.offline_name, User.full_name)
+            .join(Attempt, Attempt.id == SheetImage.attempt_id)
+            .outerjoin(User, User.id == Attempt.user_id)
+            .where(Attempt.test_id == test.id)
+            .order_by(Attempt.offline_name, Attempt.id, SheetImage.page)
+        ).all()
+        used: set[str] = set()
+        count = 0
+        for sheet_id, page, attempt_id, offline_name, full_name in sheets:
+            image = db.scalar(select(SheetImage.image).where(SheetImage.id == sheet_id)) or ""
+            header, _, encoded = image.partition(",")
+            try:
+                data = base64.b64decode(encoded)
+            except (binascii.Error, ValueError):
+                continue
+            if not data:
+                continue
+            extension = "png" if "image/png" in header else "jpg"
+            stem = _safe_file_name(offline_name or full_name or f"O'quvchi {attempt_id}") + (f"_{page}" if page > 1 else "")
+            name, copy = stem, 2
+            while name.lower() in used:
+                name, copy = f"{stem} ({copy})", copy + 1
+            used.add(name.lower())
+            if size and size + len(data) > TEST_ARCHIVE_PART_LIMIT:
+                next_part()
+            archive.writestr(f"Titullar/{name}.{extension}", data, compress_type=zipfile.ZIP_STORED)
+            size += len(data)
+            count += 1
+    finally:
+        archive.close()
+    return parts, count
+
+
+def _archive_and_delete_test(db: Session, test: Test) -> None:
+    """ZIP'ni o'qituvchiga yuboradi; yetkazilgandagina rasmlar o'chiriladi va test ro'yxatdan yashiriladi."""
+
+    chat_id = test.teacher.user.tg_id
+    with tempfile.TemporaryDirectory(dir=_temp_dir()) as folder:
+        parts, sheet_count = _build_test_archive(db, test, Path(folder))
+        base_name = f"{_safe_file_name(test.title, 40)}_{test.code}"
+        for index, path in enumerate(parts, start=1):
+            if index == 1:
+                caption = NEWLINE.join([
+                    f"🗂 «{test.title}» ({test.code}) testi yopilganiga 20 kun bo'lgani uchun avtomatik o'chirildi.",
+                    "",
+                    "Barcha ma'lumotlari shu faylda:",
+                    "• natijalar — Excel",
+                    "• hisobot — PDF",
+                    *([f"• titullar — {sheet_count} ta rasm"] if sheet_count else []),
+                    "",
+                    "Faylni saqlab qo'ying — test endi ro'yxatingizda ko'rinmaydi."
+                    + (f" Fayl {len(parts)} qismga bo'lingan, hammasini saqlang." if len(parts) > 1 else ""),
+                ])
+            else:
+                caption = f"🗂 «{test.title}» ({test.code}) — {index}/{len(parts)}-qism"
+            file_name = f"{base_name}_{index}-qism.zip" if len(parts) > 1 else f"{base_name}.zip"
+            _send_pdf_to_telegram(chat_id, file_name, path, caption=caption, mime="application/zip")
+
+    # Yetkazildi — og'ir qism (rasmlar) bazadan o'chadi, ballar va to'lovlar qoladi
+    attempt_ids = select(Attempt.id).where(Attempt.test_id == test.id)
+    db.execute(delete(SheetImage).where(SheetImage.attempt_id.in_(attempt_ids)))
+    db.execute(update(WrittenAnswer).where(WrittenAnswer.attempt_id.in_(attempt_ids)).values(image=""))
+    test.deleted_at = test.auto_deleted_at = utcnow()
+    db.commit()
+    logging.getLogger("backend").info("Test avtomatik o'chirildi: id=%s kod=%s, %s qism", test.id, test.code, len(parts))
+
+
+def _auto_cleanup_tests_once() -> None:
+    """Har 5 daqiqada (alohida ipda): muddati kelgan testlarni yopadi, ogohlantiradi, arxivlab o'chiradi."""
+
+    now = utcnow()
+    logger = logging.getLogger("backend")
+    with SessionLocal() as db:
+        # 1) Yaratilganiga 20 kun bo'lgan ochiq testlar yopiladi
+        for test in db.scalars(
+            select(Test).where(Test.status != "closed", Test.deleted_at.is_(None),
+                               Test.created_at <= now - TEST_AUTO_CLOSE_AFTER)
+        ).all():
+            due = _test_auto_close_at(test)
+            if not due or due > now:
+                continue
+            _mark_test_closed(test)
+            db.commit()
+            if BOT_TOKEN:
+                _notify_teacher(test.teacher, NEWLINE.join([
+                    f"🔒 «{test.title}» ({test.code}) testi yaratilganiga 20 kun bo'lgani uchun avtomatik yopildi.",
+                    "",
+                    f"{_local_date(_test_auto_delete_at(test))} kuni test o'chiriladi — natijalar (Excel, PDF) va "
+                    "titullar Telegram'ingizga ZIP fayl bo'lib keladi.",
+                    "Test hali kerak bo'lsa — uni ochib «Qayta ochish»ni bosing.",
+                ]))
+
+        # 2) O'chirilishiga 3 kun qolgan testlar — o'qituvchiga bitta xabar (har bir test uchun alohida emas)
+        warn_by_teacher: dict[int, list[Test]] = {}
+        for test in db.scalars(
+            select(Test).where(Test.status == "closed", Test.deleted_at.is_(None), Test.delete_warned_at.is_(None))
+        ).all():
+            due = _test_auto_delete_at(test)
+            if due and due - TEST_DELETE_WARNING <= now:
+                warn_by_teacher.setdefault(test.teacher_id, []).append(test)
+        for tests in warn_by_teacher.values():
+            for test in tests:
+                test.delete_warned_at = now
+            db.commit()
+            if not BOT_TOKEN:
+                continue
+            lines = [f"• «{test.title}» ({test.code}) — {_local_date(_test_auto_delete_at(test))}" for test in tests[:30]]
+            if len(tests) > 30:
+                lines.append(f"…va yana {len(tests) - 30} ta")
+            _notify_teacher(tests[0].teacher, NEWLINE.join([
+                "⏳ Quyidagi yopilgan testlar 3 kundan keyin avtomatik o'chiriladi:",
+                *lines,
+                "",
+                "O'sha kuni har birining natijalari (Excel, PDF) va titullari Telegram'ingizga ZIP fayl bo'lib keladi.",
+                "Biror test hali kerak bo'lsa — uni ochib «Qayta ochish»ni bosing.",
+            ]))
+
+        # 3) Muddati kelganlari — ZIP yuboriladi va o'chiriladi (yetkazib bo'lmasa — ertaga qayta)
+        if not BOT_TOKEN:
+            return
+        archived = 0
+        for test in db.scalars(
+            select(Test).where(Test.status == "closed", Test.deleted_at.is_(None), Test.delete_warned_at.is_not(None))
+            .order_by(Test.closed_at)
+        ).all():
+            if archived >= TEST_ARCHIVES_PER_RUN:
+                break
+            due = _test_auto_delete_at(test)
+            if not due or due > now or (test.archive_tried_at and now - test.archive_tried_at < TEST_ARCHIVE_RETRY):
+                continue
+            test.archive_tried_at = now
+            db.commit()
+            archived += 1
+            try:
+                _archive_and_delete_test(db, test)
+            except Exception:
+                db.rollback()
+                logger.warning("Test arxivi yuborilmadi — ertaga qayta uriniladi (test %s)", test.id, exc_info=True)
 
 
 BACKUP_INTERVAL_SECONDS = 6 * 60 * 60  # kuniga 4 marta
@@ -4029,17 +4312,26 @@ def _send_withdrawal_notice(admin_id: int, request: WithdrawalRequest, teacher: 
         logging.getLogger("backend").warning("Admin'ga pul yechish bildirishnomasi yuborilmadi", exc_info=True)
 
 
-def _send_pdf_to_telegram(chat_id: int, file_name: str, pdf_bytes: bytes, caption: str = "",
+def _send_pdf_to_telegram(chat_id: int, file_name: str, pdf_bytes: "bytes | Path", caption: str = "",
                           mime: str = "application/pdf") -> None:
-    """Tayyor faylni (PDF yoki Excel) bot orqali foydalanuvchining shaxsiy chatiga yuboradi."""
+    """
+    Tayyor faylni (PDF, Excel, ZIP) bot orqali foydalanuvchining shaxsiy chatiga yuboradi.
+    Katta fayl (masalan test arxivi) diskdagi yo'li (Path) bilan beriladi — xotiraga to'liq yuklanmaydi.
+    """
 
     for _ in range(3):
-        response = httpx.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
-            data={"chat_id": chat_id, "caption": caption} if caption else {"chat_id": chat_id},
-            files={"document": (file_name, pdf_bytes, mime)},
-            timeout=30,
-        )
+        on_disk = isinstance(pdf_bytes, Path)
+        payload = pdf_bytes.open("rb") if on_disk else pdf_bytes
+        try:
+            response = httpx.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
+                data={"chat_id": chat_id, "caption": caption} if caption else {"chat_id": chat_id},
+                files={"document": (file_name, payload, mime)},
+                timeout=300 if on_disk else 30,
+            )
+        finally:
+            if on_disk:
+                payload.close()
         if response.status_code != 429:  # 429 — juda tez: Telegram aytgancha kutib qayta urinamiz
             break
         try:
@@ -6164,6 +6456,9 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
         "written": _written_stats(db, test),
         # Javoblar kaliti kiritilmagan savollar soni — test sahifasida eslatma ("Javoblarni kiriting")
         "key_missing": _key_missing(test),
+        # Avtomatik tozalash: ochiq test qachon o'zi yopiladi, yopilgani qachon o'chiriladi
+        "auto_close_at": _test_auto_close_at(test),
+        "auto_delete_at": _test_auto_delete_at(test),
     }
 
 
@@ -6235,7 +6530,7 @@ def edit_test(test_id: int, body: TestEditIn, teacher: Teacher = Depends(get_cur
     # Vaqti tugab o'zi yopilgan test cho'zilsa — qayta ochiladi (o'qituvchi aynan shuni xohlaydi)
     reopened = False
     if "end_time" in fields and test.status == "closed" and (end_time is None or end_time > now):
-        test.status = "active"
+        _mark_test_reopened(test)
         test.results_sent_at = None
         test.code = _new_test_code(db)  # qayta ochilgan test — yangi kod bilan
         reopened = True
@@ -6268,7 +6563,8 @@ def delete_test(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
 
     test = _get_own_test(db, teacher, test_id)
     test.deleted_at = utcnow()
-    test.status = "closed"
+    if test.status != "closed":
+        _mark_test_closed(test)
     db.commit()
 
     logging.getLogger("backend").info("Test arxivga o'tkazildi: id=%s kod=%s o'qituvchi=%s", test.id, test.code, teacher.id)
@@ -7717,7 +8013,7 @@ def close_test(
                    "Avval «Yozma javoblar» bo'limida ✓ yoki ✗ qo'ying",
         )
 
-    test.status = "closed"
+    _mark_test_closed(test)
     db.commit()
 
     # Natijalar hisoboti o'qituvchining Telegram chatiga ham yuboriladi
@@ -7731,7 +8027,7 @@ def reopen_test(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
     """Yakunlangan testni qayta ochadi (masalan, yana o'quvchi qo'shish kerak bo'lsa)."""
 
     test = _get_own_test(db, teacher, test_id)
-    test.status = "active"
+    _mark_test_reopened(test)  # avtomatik yopish/o'chirish muddati ham shu kundan qayta sanaladi
     test.code = _new_test_code(db)  # qayta ochilgan test — yangi kod bilan
     # Tugash vaqti o'tib ketgan bo'lsa — test baribir "vaqti tugagan" bo'lib qolmasin
     if test.end_time and test.end_time <= utcnow():

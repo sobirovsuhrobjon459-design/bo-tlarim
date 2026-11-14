@@ -5,3 +5,4 @@ __pycache__/
 backend/app.db
 reports/*.pdf
 .claude/
+.tmp/

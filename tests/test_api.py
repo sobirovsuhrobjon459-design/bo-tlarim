@@ -3658,6 +3658,152 @@ def test_javobi_kiritilmagan_oquvchi_bilan_baribir_yakunlash():
     assert len(results["rows"]) == 1, results["rows"]
 
 
+def _set_test_fields(test_id: int, **fields) -> None:
+    session = SessionLocal()
+    try:
+        test = session.get(main.Test, test_id)
+        for name, value in fields.items():
+            setattr(test, name, value)
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_test_20_kunda_yopiladi_ogohlantiriladi_va_zip_bilan_ochiriladi():
+    """B variant: 20 kunda o'zi yopiladi, yana 20 kunda ZIP (Excel, PDF, titullar) yuborilib o'chiriladi."""
+    import zipfile
+
+    reset_database()
+    register_teacher()
+    created = create_test(enrollment_type="closed")
+    test_id = created["id"]
+    client.post(f"/api/teacher/tests/{test_id}/students", json={"names": ["Ali Valiyev", "Vali Aliyev"]},
+                headers=as_user(555))
+    student = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()["students"][0]
+    client.post(f"/api/teacher/tests/{test_id}/students/{student['id']}/answers",
+                json={"answers": {"1": "B"}}, headers=as_user(555))
+    page1, page2 = b"\xff\xd8\xff\xe0 birinchi sahifa", b"\xff\xd8\xff\xe0 ikkinchi sahifa"
+    session = SessionLocal()
+    try:
+        for page, data in ((1, page1), (2, page2)):
+            session.add(main.SheetImage(attempt_id=student["id"], page=page,
+                                        image="data:image/jpeg;base64," + base64.b64encode(data).decode()))
+        session.add(main.WrittenAnswer(attempt_id=student["id"], question_ref=4, verdict=False,
+                                       image="data:image/jpeg;base64,AAAA"))
+        session.commit()
+    finally:
+        session.close()
+
+    notes, files = [], []
+
+    def capture(chat_id, name, data, caption="", mime=""):
+        files.append((name, data.read_bytes() if isinstance(data, Path) else data, caption))
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("Telegram javob bermadi")
+
+    saved = (main.TEST_CLEANUP_SINCE, main._notify_teacher, main._send_pdf_to_telegram, main.TEST_ARCHIVE_PART_LIMIT)
+    main.TEST_CLEANUP_SINCE = datetime(2020, 1, 1)
+    main._notify_teacher = lambda teacher, text: notes.append(text)
+    main._send_pdf_to_telegram = capture
+    try:
+        now = main.utcnow()
+        detail = lambda: client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
+
+        # 19 kun — hali ochiq, sahifada yopilish sanasi ko'rinadi
+        _set_test_fields(test_id, created_at=now - timedelta(days=19))
+        main._auto_cleanup_tests_once()
+        assert detail()["status"] == "active" and detail()["auto_close_at"]
+
+        # 21 kun — o'zi yopiladi va o'qituvchiga aytiladi
+        _set_test_fields(test_id, created_at=now - timedelta(days=21))
+        main._auto_cleanup_tests_once()
+        assert detail()["status"] == "closed" and detail()["auto_delete_at"]
+        assert "avtomatik yopildi" in notes[-1], notes
+
+        # Qayta ochilsa — 20 kun shu kundan qayta sanaladi
+        assert client.post(f"/api/teacher/tests/{test_id}/reopen", headers=as_user(555)).status_code == 200
+        reopened = detail()
+        assert reopened["status"] == "active"
+        assert main.datetime.fromisoformat(str(reopened["auto_close_at"])) > now + timedelta(days=19)
+        closed = client.post(f"/api/teacher/tests/{test_id}/close?force=true", headers=as_user(555))
+        assert closed.status_code == 200, closed.text
+        code = detail()["code"]
+        files.clear()  # yakunlanganda natijalar PDF'i darhol keladi — bu arxiv emas
+
+        # O'chirilishiga 3 kun qolganda — ogohlantirish (fayl hali yo'q)
+        _set_test_fields(test_id, closed_at=now - timedelta(days=18))
+        notes.clear()
+        main._auto_cleanup_tests_once()
+        assert len(notes) == 1 and "3 kundan keyin" in notes[0] and code in notes[0], notes
+        assert not files
+
+        # 20 kun o'tgan, lekin ogohlantirishdan 3 kun o'tmagan — o'chmaydi
+        _set_test_fields(test_id, closed_at=now - timedelta(days=25))
+        main._auto_cleanup_tests_once()
+        assert not files and detail()["status"] == "closed"
+
+        # Telegram xato bersa — hech narsa o'chmaydi, ertaga qayta uriniladi
+        _set_test_fields(test_id, delete_warned_at=now - timedelta(days=4))
+        main._send_pdf_to_telegram = broken
+        main._auto_cleanup_tests_once()
+        assert any(item["id"] == test_id for item in client.get("/api/teacher/tests", headers=as_user(555)).json())
+        main._send_pdf_to_telegram = capture
+        main._auto_cleanup_tests_once()  # bir kun o'tmaguncha qayta urinilmaydi
+        assert not files
+
+        # Yetkazildi: ZIP 45 MB'dan oshsa — qismlarga bo'linadi (bu yerda chegara ataylab 1 bayt)
+        main.TEST_ARCHIVE_PART_LIMIT = 1
+        _set_test_fields(test_id, archive_tried_at=now - timedelta(days=2))
+        main._auto_cleanup_tests_once()
+        assert len(files) == 3, [name for name, _, _ in files]
+        first = zipfile.ZipFile(io.BytesIO(files[0][1]))
+        assert sorted(first.namelist()) == [f"{code}_hisobot.pdf", f"{code}_natijalar.xlsx"], first.namelist()
+        titles = {}
+        for _, data, _ in files[1:]:
+            archive = zipfile.ZipFile(io.BytesIO(data))
+            titles.update({name: archive.read(name) for name in archive.namelist()})
+        assert titles == {"Titullar/Ali Valiyev.jpg": page1, "Titullar/Ali Valiyev_2.jpg": page2}, titles
+        assert "avtomatik o'chirildi" in files[0][2] and "titullar — 2 ta rasm" in files[0][2], files[0][2]
+        assert "3 qismga" in files[0][2] and "2/3-qism" in files[1][2]
+
+        # Test ro'yxatda yo'q, rasmlar bazadan o'chgan, natija (ball) qolgan
+        assert not any(item["id"] == test_id for item in client.get("/api/teacher/tests", headers=as_user(555)).json())
+        session = SessionLocal()
+        try:
+            assert not session.scalars(main.select(main.SheetImage).where(main.SheetImage.attempt_id == student["id"])).all()
+            assert session.scalar(main.select(main.WrittenAnswer.image).where(main.WrittenAnswer.attempt_id == student["id"])) == ""
+            attempt = session.get(Attempt, student["id"])
+            assert attempt.status == "done" and attempt.correct == 1
+            assert session.get(main.Test, test_id).auto_deleted_at is not None
+        finally:
+            session.close()
+
+        # Bir marta yuboriladi
+        files.clear()
+        main._auto_cleanup_tests_once()
+        assert not files
+    finally:
+        (main.TEST_CLEANUP_SINCE, main._notify_teacher, main._send_pdf_to_telegram,
+         main.TEST_ARCHIVE_PART_LIMIT) = saved
+
+
+def test_eski_testlar_yangilanish_kunidan_20_kun_kutadi():
+    """Qoida chiqqan kuni eski testlar birdaniga yopilib/o'chib ketmaydi."""
+    reset_database()
+    register_teacher()
+    created = create_test()
+    _set_test_fields(created["id"], created_at=datetime(2025, 1, 1))
+    since = main.TEST_CLEANUP_SINCE
+    detail = client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()
+    assert main.datetime.fromisoformat(str(detail["auto_close_at"])) == since + timedelta(days=20)
+    closed = client.post(f"/api/teacher/tests/{created['id']}/close", headers=as_user(555))
+    assert closed.status_code == 200, closed.text
+    _set_test_fields(created["id"], closed_at=None)  # qoida chiqishidan oldin yopilgan test
+    detail = client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()
+    assert main.datetime.fromisoformat(str(detail["auto_delete_at"])) == since + timedelta(days=20)
+
+
 def test_oquvchini_royxatdan_ochirish():
     reset_database()
     register_teacher()

@@ -66,6 +66,29 @@ def rss_mb() -> float | None:
         return None
 
 
+def storage_report(path) -> str:
+    """Server ishga tushganda logga: vaqtinchalik fayllar diskidagi joy va /tmp xotirada (tmpfs) emasmi."""
+
+    import shutil
+
+    parts = []
+    try:
+        usage = shutil.disk_usage(path)
+        parts.append(f"disk {path}: bo'sh {usage.free / 1024 ** 3:.1f} GB / jami {usage.total / 1024 ** 3:.1f} GB")
+    except OSError:
+        parts.append(f"disk {path}: o'lchab bo'lmadi")
+    try:
+        with open("/proc/mounts", encoding="utf-8") as handle:
+            mounts = {fields[1]: fields[2] for fields in (line.split() for line in handle) if len(fields) > 2}
+        parts.append(f"/tmp turi: {mounts.get('/tmp', 'alohida emas (asosiy disk)')}")
+    except OSError:
+        pass
+    used = rss_mb()
+    if used is not None:
+        parts.append(f"xotira: {used:.0f} MB")
+    return "; ".join(parts)
+
+
 def release_memory() -> float | None:
     """Keraksiz obyektlarni tozalab, bo'shagan xotirani operatsion tizimga qaytaradi. Keyingi RSS (MB)."""
 
