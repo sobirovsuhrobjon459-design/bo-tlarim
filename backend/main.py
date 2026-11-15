@@ -735,7 +735,8 @@ app.add_middleware(StaticCacheHeaders)
 _STARTED_AT = time.monotonic()
 
 
-@app.get("/api/health")
+# HEAD ham: tashqi kuzatuv xizmatlari (UptimeRobot) saytni HEAD so'rovi bilan tekshiradi
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 def health():
     """
     Server tirikligini tekshirish (uyg'oq tutish uchun ham). Nosozlikni tashqaridan kuzatish uchun:
