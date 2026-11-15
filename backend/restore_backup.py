@@ -1,5 +1,5 @@
 """
-Zaxira nusxadan (admin'ga Telegram orqali keladigan backup_*.json) bazani tiklash.
+Zaxira nusxadan (admin'ga Telegram orqali keladigan backup_*.json.gz yoki eski backup_*.json) bazani tiklash.
 
 Ishlatish (loyihaning bosh papkasidan):
 
@@ -15,6 +15,7 @@ ustiga yozish kerak bo'lsa: --force (avval eski bazaning nusxasini oling!).
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import sys
 from datetime import date, datetime
@@ -96,7 +97,9 @@ def main() -> int:
     parser.add_argument("--force", action="store_true", help="bo'sh bo'lmagan bazani tozalab, ustiga yozish")
     args = parser.parse_args()
 
-    with open(args.file, encoding="utf-8") as handle:
+    # Yangi nusxalar siqilgan (backup_*.json.gz), eskilari — oddiy .json; ikkalasi ham o'qiladi
+    opener = gzip.open if args.file.endswith(".gz") else open
+    with opener(args.file, "rt", encoding="utf-8") as handle:
         backup = json.load(handle)
 
     print(f"Zaxira sanasi: {backup.get('exported_at', '?')}")

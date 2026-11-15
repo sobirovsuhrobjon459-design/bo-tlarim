@@ -1171,7 +1171,9 @@ def test_zaxira_nusxa_telegramga_toliq_va_kalitsiz_boradi():
         main._send_pdf_to_telegram, main.ADMIN_ID = original_send, original_admin
 
     name, data, caption = sent[0]
-    backup = json.loads(data)
+    assert name.endswith(".json.gz"), name  # siqilgan — Telegram'ning 50 MB chegarasiga kech yetadi
+    import gzip
+    backup = json.loads(gzip.decompress(data))
     total = sum(len(rows) for rows in backup["tables"].values())
     assert f"Jami yozuvlar: {total} ta" in caption, caption
     assert backup["tables"]["tests"] and backup["exported_at"]

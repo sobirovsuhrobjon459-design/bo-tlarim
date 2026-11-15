@@ -19,6 +19,7 @@ import asyncio
 import base64
 import binascii
 import contextvars
+import gzip
 import hashlib
 import hmac
 import io
@@ -560,7 +561,12 @@ async def lifespan(app: FastAPI):
     awake_task.cancel()
 
 
-app = FastAPI(title="Chittak API", lifespan=lifespan)
+# API xaritasi (/docs, /redoc, /openapi.json) faqat lokal sinovda ochiq — productionda
+# begona odam barcha yo'llarni parametrlari bilan ko'rib chiqmasin
+from .database import DEV_MODE  # noqa: E402
+
+_API_DOCS = {} if DEV_MODE else {"docs_url": None, "redoc_url": None, "openapi_url": None}
+app = FastAPI(title="Chittak API", lifespan=lifespan, **_API_DOCS)
 # JS/CSS fayllar siqilib yuboriladi (~320 KB → ~70 KB) — ilova tezroq ochiladi
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -599,6 +605,45 @@ class AutosaveLoadShedding:
         finally:
             self.in_flight -= 1
 
+
+class BodySizeLimit:
+    """
+    Juda katta so'rovni o'qimasdan rad etadi. Usiz istalgan (kirmagan ham) odam yuzlab MB'lik
+    so'rov yuborib, 512 MB xotirali serverni yiqita olardi — hajm tekshiruvi (pydantic
+    max_length) so'rov to'liq o'qilgandan KEYIN ishlaydi. Eng katta qonuniy so'rov —
+    titul surati (12 MB base64).
+    """
+
+    def __init__(self, asgi_app, limit: int):
+        self.app = asgi_app
+        self.limit = limit
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        declared = dict(scope.get("headers") or []).get(b"content-length", b"")
+        if declared.isdigit() and int(declared) > self.limit:
+            await JSONResponse({"detail": "So'rov juda katta"}, status_code=413)(scope, receive, send)
+            return
+
+        received = 0
+
+        async def limited_receive():
+            # Content-Length'siz (bo'lak-bo'lak) kelgan so'rov ham chegaradan oshsa — uziladi
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.limit:
+                    return {"type": "http.disconnect"}
+            return message
+
+        await self.app(scope, limited_receive, send)
+
+
+MAX_REQUEST_BYTES = 16 * 1024 * 1024
+app.add_middleware(BodySizeLimit, limit=MAX_REQUEST_BYTES)
 
 AUTOSAVE_SHED_AT = 40  # anyio ip havzasi (40) to'lganda — avtosaqlashlar kutmaydi
 app.add_middleware(AutosaveLoadShedding, shed_at=AUTOSAVE_SHED_AT)
@@ -798,18 +843,24 @@ def send_backup_to_admin(db: Session) -> bool:
         return False
 
     try:
-        # Nusxa avval diskdagi vaqtinchalik faylga yoziladi (xotirada butun baza yig'ilmaydi)
+        # Nusxa diskdagi vaqtinchalik faylga, siqilgan holda yoziladi (xotirada butun baza yig'ilmaydi).
+        # JSON ~10 barobar siqiladi — Telegram'ning 50 MB chegarasiga ancha kech yetadi.
         with tempfile.TemporaryFile(dir=_temp_dir()) as handle:
-            row_count = write_database_export(db, handle)
+            with gzip.GzipFile(fileobj=handle, mode="wb") as packed:
+                row_count = write_database_export(db, packed)
             handle.seek(0)
             backup_bytes = handle.read()
+
+        if len(backup_bytes) > BACKUP_MAX_BYTES:
+            _warn_admins_backup_failed(f"fayl juda katta ({len(backup_bytes) // (1024 * 1024)} MB) — Telegram qabul qilmaydi")
+            return False
 
         sent = False
         for admin_id in ADMIN_IDS:  # har bir admin'ga; biriga yetmasa ham qolganlariga boradi
             try:
                 _send_pdf_to_telegram(
                     admin_id,
-                    f"backup_{datetime.now():%Y-%m-%d_%H-%M}.json",
+                    f"backup_{datetime.now():%Y-%m-%d_%H-%M}.json.gz",
                     backup_bytes,
                     caption=(
                         "💾 Zaxira nusxa\n\n"
@@ -817,14 +868,39 @@ def send_backup_to_admin(db: Session) -> bool:
                         f"Jami yozuvlar: {row_count} ta\n\n"
                         "Bu faylni saqlab qo'ying — baza bilan nimadir bo'lsa, hammasi shundan tiklanadi."
                     ),
+                    mime="application/gzip",
                 )
                 sent = True
             except Exception:
                 logging.getLogger("backend").warning("Zaxira nusxa %s ga yuborilmadi", admin_id, exc_info=True)
+        if not sent:
+            _warn_admins_backup_failed("fayl hech bir adminga yetib bormadi")
         return sent
     except Exception:
         logging.getLogger("backend").warning("Zaxira nusxa yuborilmadi", exc_info=True)
+        _warn_admins_backup_failed("nusxani tayyorlashda xato (batafsil — server logida)")
         return False
+
+
+# Telegram bot 50 MB'dan katta fayl yubora olmaydi
+BACKUP_MAX_BYTES = 49 * 1024 * 1024
+
+
+def _warn_admins_backup_failed(reason: str) -> None:
+    """Zaxira nusxa olinmasa — jim qolmaydi: adminlarga oddiy xabar boradi (fayl emas, shuning uchun yetadi)."""
+
+    if not BOT_TOKEN:
+        return
+    for admin_id in ADMIN_IDS:
+        try:
+            httpx.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json={"chat_id": admin_id, "text": f"⚠️ Zaxira nusxa OLINMADI: {reason}.\n\n"
+                                                   "Baza hozir zaxirasiz qolmoqda — tekshiring."},
+                timeout=10,
+            )
+        except Exception:
+            logging.getLogger("backend").warning("Zaxira xatosi haqida adminga xabar yuborilmadi", exc_info=True)
 
 
 NEWLINE = chr(10)
@@ -5866,7 +5942,9 @@ def confirm_app_login(db: Session, token: str, tg_id: int, full_name: str, usern
     return True, (
         "✅ <b>Tasdiqlandi!</b>\n\n"
         f"Tasdiqlash kodingiz: <code>{code}</code>\n\n"
-        "«📋 Kodni nusxalash»ni bosing, so'ng ilovada «Qo'yish»ni bosing — kirish shu bilan yakunlanadi."
+        "«📋 Kodni nusxalash»ni bosing, so'ng ilovada «Qo'yish»ni bosing — kirish shu bilan yakunlanadi.\n\n"
+        "⚠️ Bu kodni hech kimga bermang. Chittak xodimlari kodni hech qachon so'ramaydi — "
+        "kodni bilgan odam hisobingizga kiradi."
     )
 
 
@@ -16982,7 +17060,7 @@ LEGAL_INN = os.getenv("LEGAL_INN", "").strip()  # bo'sh bo'lsa sahifada ko'rsati
 LEGAL_PHONE = os.getenv("LEGAL_PHONE", "+998 90 537 07 38").strip()
 LEGAL_EMAIL = os.getenv("LEGAL_EMAIL", "").strip()
 LEGAL_ADDRESS = os.getenv("LEGAL_ADDRESS", "").strip()
-LEGAL_BOT = os.getenv("LEGAL_BOT", "@Sukhrobjonmath_bot").strip()
+LEGAL_BOT = os.getenv("LEGAL_BOT", "@chittakapp").strip()
 
 
 def _oferta_html() -> str:
@@ -17118,16 +17196,31 @@ def _privacy_html() -> str:
 <h2>3. Ma'lumotlar kimga beriladi</h2>
 <p>Ma'lumotlar sotilmaydi va reklama uchun ishlatilmaydi. Ular faqat xizmatni ko'rsatish uchun zarur hollarda beriladi:
 to'lov tizimlari (Payme, Click) to'lovni amalga oshirish uchun, hamda qonunchilikda nazarda tutilgan hollarda.</p>
+<p>Xizmat ishlashi uchun quyidagi texnik xizmatlardan foydalaniladi:</p>
+<ul>
+  <li>Server va ma'lumotlar bazasi — Render (Yevropa Ittifoqi, Germaniya); sayt trafigi Cloudflare orqali o'tadi.</li>
+  <li>Xabar va fayllar (natija, hisobot, chek) Telegram orqali yetkaziladi.</li>
+  <li>O'qituvchi tituldagi qo'lda yozilgan javoblarni avtomatik o'qishni yoqsa, faqat javob kataklarining rasmlari
+    sun'iy intellekt xizmatiga (Google Gemini yoki Anthropic Claude) yuboriladi. O'quvchining ismi, sinfi va ID raqami yuborilmaydi.</li>
+</ul>
 
 <h2>4. Saqlash va himoya</h2>
 <p>Ma'lumotlar himoyalangan serverda saqlanadi. Kirish seanslarining o'zi emas, faqat ularning shifrlangan izi saqlanadi.
 Brauzerda faqat kirish seansi tokeni saqlanadi; reklama yoki kuzatuv cookie'lari ishlatilmaydi.</p>
+<p>Testlar 20 kundan keyin avtomatik yopiladi, yana 20 kundan keyin esa o'chiriladi — undan oldin
+natijalar arxivi o'qituvchiga Telegram orqali yuboriladi.</p>
 
-<h2>5. Ma'lumotlarni o'chirish</h2>
-<p>Akkauntingiz va unga tegishli ma'lumotlarni o'chirishni so'rash mumkin — quyidagi aloqa orqali murojaat qiling.
+<h2>5. O'quvchilar va voyaga yetmaganlar</h2>
+<p>O'quvchilar ma'lumotlarini (ism, sinf, natijalar, davomat) ta'lim muassasasi yoki o'qituvchi kiritadi va ular faqat
+o'quv jarayoni uchun ishlatiladi. Voyaga yetmagan o'quvchining ma'lumotlarini ko'rish, tuzatish yoki o'chirish uchun
+ota-onasi (qonuniy vakili) o'quvchining muassasasiga yoki quyidagi aloqa orqali bizga murojaat qilishi mumkin.</p>
+
+<h2>6. Ma'lumotlarni o'chirish</h2>
+<p>Hisobingizni istalgan payt o'zingiz o'chirishingiz mumkin: ilovada «Akkaunt» → «Hisobni o'chirish».
+Batafsil: <a href="/delete-account">akkauntni o'chirish tartibi</a>. Ilovaga kira olmasangiz — quyidagi aloqa orqali murojaat qiling.
 To'lovlar bo'yicha yozuvlar qonunchilik talab qilgan muddat davomida saqlanishi mumkin.</p>
 
-<h2>6. Aloqa</h2>
+<h2>7. Aloqa</h2>
 <ul>{contacts}</ul>
 </main></body></html>"""
 
@@ -17163,7 +17256,14 @@ def _account_deletion_html() -> str:
 <p class="muted">Chittak ilovasi (Android, Telegram Mini App va chittak.uz sayti) foydalanuvchilari uchun.
 Ishlab chiquvchi: {html_escape(LEGAL_NAME)}.</p>
 
-<h2>Akkauntni o'chirishni qanday so'rash mumkin</h2>
+<h2>Akkauntni o'zingiz o'chirishingiz mumkin</h2>
+<ol class="steps">
+  <li>Chittak'ni oching (ilova, Telegram Mini App yoki chittak.uz) va hisobingizga kiring.</li>
+  <li>«Akkaunt» bo'limini oching va pastdagi <b>«Hisobni o'chirish»</b> tugmasini bosing.</li>
+  <li>Tasdiqlash so'zini yozing — hisob shu zahoti o'chiriladi.</li>
+</ol>
+
+<h2>Ilovaga kira olmasangiz — so'rov yuboring</h2>
 <ol class="steps">
   <li>Quyidagi aloqa usullaridan biri orqali bizga yozing:
     <ul>{contacts}</ul>
@@ -17176,8 +17276,8 @@ Ishlab chiquvchi: {html_escape(LEGAL_NAME)}.</p>
 <h2>Qaysi ma'lumotlar o'chiriladi</h2>
 <ul>
   <li>Profil: ism, Telegram username, profil rasmi havolasi, telefon raqami.</li>
-  <li>Yaratgan testlaringiz, test javoblaringiz va natijalaringiz.</li>
-  <li>Siz kiritgan o'quvchilar ro'yxatlari, sinflar, davomat va boshqa ma'lumotlar.</li>
+  <li>Yaratgan testlaringiz, tokenlaringiz va obunangiz.</li>
+  <li>Topshirgan testlaringiz natijalari ismingizdan ajratiladi (ism o'chgach, ular kimniki ekanini bilib bo'lmaydi).</li>
   <li>Kirish seanslari (ilova va saytdan avtomatik chiqasiz).</li>
 </ul>
 
@@ -17195,21 +17295,15 @@ o'chirishni ham xuddi shu aloqa orqali so'rashingiz mumkin.</p>
 
 
 def _founder_html() -> str:
-    # Google odam haqidagi ma'lumotni shu sahifadan va undagi Person tuzilgan ma'lumotidan oladi
+    # Google odam haqidagi ma'lumotni shu sahifadan va undagi Person tuzilgan ma'lumotidan oladi.
+    # Tug'ilgan sana va yashash joyi ataylab yozilmaydi — ommaviy sahifada shaxsiy ma'lumot bo'lmasin.
     person = {
         "@context": "https://schema.org",
         "@type": "Person",
-        "name": "Sultonmurodov Ulug'bek Sherzod o'g'li",
-        "givenName": "Ulug'bek",
-        "familyName": "Sultonmurodov",
-        "alternateName": ["Ulug'bek Sultonmurodov", "Ulugbek Sultonmurodov", "Sultonmurodov Ulugbek", "Улуғбек Султонмуродов", "Султонмуродов Улугбек"],
-        "birthDate": "2010-02-15",
-        "birthPlace": {
-            "@type": "Place",
-            "name": "Qudash qishlog'i, O'zbekiston tumani, Farg'ona viloyati, O'zbekiston",
-            "address": {"@type": "PostalAddress", "addressLocality": "Qudash", "addressRegion": "Farg'ona viloyati",
-                        "addressCountry": "UZ"},
-        },
+        "name": "Sobirov Suxrobjon Saidjon o'g'li",
+        "givenName": "Suxrobjon",
+        "familyName": "Sobirov",
+        "alternateName": ["Suxrobjon Sobirov", "Sobirov Suxrobjon", "Sukhrobjon Sobirov", "Сухробжон Собиров", "Собиров Сухробжон"],
         "nationality": {"@type": "Country", "name": "O'zbekiston"},
         "jobTitle": "Chittak.uz platformasi asoschisi",
         "url": "https://www.chittak.uz/asoschi",
@@ -17217,11 +17311,11 @@ def _founder_html() -> str:
     }
     return f"""<!doctype html>
 <html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sultonmurodov Ulug'bek (Ulugbek) Sherzod o'g'li — Chittak.uz asoschisi</title>
-<meta name="description" content="Sultonmurodov Ulug'bek (Sultonmurodov Ulugbek, Султонмуродов Улуғбек) Sherzod o'g'li — Chittak.uz ta'lim platformasi asoschisi. 2010-yil 15-fevralda Farg'ona viloyati O'zbekiston tumani Qudash qishlog'ida tug'ilgan.">
+<title>Sobirov Suxrobjon Saidjon o'g'li — Chittak.uz asoschisi</title>
+<meta name="description" content="Sobirov Suxrobjon (Suxrobjon Sobirov, Собиров Сухробжон) Saidjon o'g'li — Chittak.uz ta'lim platformasi asoschisi.">
 <link rel="canonical" href="https://www.chittak.uz/asoschi">
 <meta property="og:type" content="profile">
-<meta property="og:title" content="Sultonmurodov Ulug'bek — Chittak.uz asoschisi">
+<meta property="og:title" content="Sobirov Suxrobjon — Chittak.uz asoschisi">
 <meta property="og:url" content="https://www.chittak.uz/asoschi">
 <script type="application/ld+json">{json.dumps(person, ensure_ascii=False)}</script>
 <style>
@@ -17236,20 +17330,18 @@ def _founder_html() -> str:
   dt {{ color: var(--muted) }}
   dd {{ margin: 0; font-weight: 600 }}
 </style></head><body><main>
-<h1>Sultonmurodov Ulug'bek Sherzod o'g'li</h1>
+<h1>Sobirov Suxrobjon Saidjon o'g'li</h1>
 <p class="muted"><a href="/">Chittak.uz</a> platformasi asoschisi</p>
-<p class="muted">Boshqa yozilishlari: Sultonmurodov Ulugbek, Ulugbek Sultonmurodov, Султонмуродов Улуғбек, Султонмуродов Улугбек</p>
+<p class="muted">Boshqa yozilishlari: Suxrobjon Sobirov, Sukhrobjon Sobirov, Собиров Сухробжон, Сухробжон Собиров</p>
 
-<p>Sultonmurodov Ulug'bek Sherzod o'g'li — maktablar, o'quv markazlari va repetitorlar uchun yaratilgan
+<p>Sobirov Suxrobjon Saidjon o'g'li — maktablar, o'quv markazlari va repetitorlar uchun yaratilgan
 Chittak.uz ta'lim platformasining asoschisi. Platformada onlayn testlar, titul (javob varaqasi) skaneri,
 Rasch modeli bo'yicha natijalar tahlili va maktab CRM bitta joyda jamlangan.</p>
 
 <h2>Ma'lumot</h2>
 <dl>
-  <dt>Ism-familiyasi</dt><dd>Sultonmurodov Ulug'bek Sherzod o'g'li</dd>
+  <dt>Ism-familiyasi</dt><dd>Sobirov Suxrobjon Saidjon o'g'li</dd>
   <dt>Faoliyati</dt><dd>Chittak.uz platformasi asoschisi</dd>
-  <dt>Tug'ilgan sana</dt><dd>2010-yil 15-fevral</dd>
-  <dt>Tug'ilgan joyi</dt><dd>Farg'ona viloyati, O'zbekiston tumani, Qudash qishlog'i</dd>
 </dl>
 
 <h2>Chittak.uz haqida</h2>

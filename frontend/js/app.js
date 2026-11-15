@@ -18679,9 +18679,9 @@ function renderWebLogin(errorText = "") {
           </div>
           <div class="lp-footer-col lp-footer-contact">
             <h4>Aloqa</h4>
-            <a href="https://t.me/Sukhrobjonmath_bot" target="_blank" rel="noopener">
+            <a href="https://t.me/chittakapp" target="_blank" rel="noopener">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m21 4-18 7 6 2 2 6 3-4 5 4 2-15Z"/><path d="m9 13 8-6"/></svg>
-              @Sukhrobjonmath_bot
+              @chittakapp
             </a>
             <a href="tel:+998905370738">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2Z"/></svg>
