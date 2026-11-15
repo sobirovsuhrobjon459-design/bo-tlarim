@@ -62,7 +62,8 @@ SUBJECTS: dict[str, dict] = {
             ("Aralash", "33-35"),
         ],
         "note": "Kimyo: 35 ta test (33–35 — moslashtirish), 36–40 qisqa javob, 41–43 yozma ish "
-                "(har bandning yakuniy javobi), 180 daqiqa",
+                "(har bandning yakuniy javobi), 180 daqiqa. Yozma ishda faqat yakuniy javob tekshiriladi — "
+                "imtihonda esa yechim bosqichlari ham baholanadi",
     },
     "Biologiya": {
         "tests": 35, "options": MATCHING, "written": 8, "parts": 1, "duration": 180, "keyboard": "text",
@@ -76,7 +77,8 @@ SUBJECTS: dict[str, dict] = {
             ("Umumbiologik qonuniyatlar", "33-43"),
         ],
         "note": "Biologiya: 35 ta test (33–35 — moslashtirish), 36–40 qisqa javob, 41–43 yozma ish "
-                "(har bandning yakuniy javobi), 180 daqiqa",
+                "(har bandning yakuniy javobi), 180 daqiqa. Yozma ishda faqat yakuniy javob tekshiriladi — "
+                "imtihonda esa yechim bosqichlari ham baholanadi",
     },
     "Tarix": {
         "tests": 35, "options": MATCHING, "written": 10, "parts": 2, "duration": 90, "keyboard": "text",
@@ -101,7 +103,8 @@ SUBJECTS: dict[str, dict] = {
     },
     "Ona tili va adabiyot": {
         "tests": 35, "options": MATCHING, "written": 9, "parts": 2, "duration": 180, "keyboard": "text",
-        # 36–39 — bitta javob, 40–44 — ikki qismli (a, b)
+        # 36–39 — bitta javob, 40–44 — ikki qismli (a, b). ATAYLAB shunday: haqiqiy imtihon varag'i shunday
+        # (spetsifikatsiyadagi O-1 ta'rifi "a va b bandli" deydi, lekin amalda 36–39 bitta javobli) — tuzatmang.
         "fixed_parts": {36: 1, 37: 1, 38: 1, 39: 1},
         "essay": 24,
         "sections": [

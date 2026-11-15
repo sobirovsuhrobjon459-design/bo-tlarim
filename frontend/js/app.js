@@ -10621,6 +10621,7 @@ async function renderMyAttemptReview(attemptId) {
       <div class="stat-tile"><span class="stat-value">${review.correct}/${review.total}</span>To'g'ri (${review.percent}%)</div>
       ${review.rank ? `<div class="stat-tile"><span class="stat-value">${review.rank}</span>O'rin (${review.participants} tadan)</div>` : ""}
     </div>
+    ${review.ball != null && review.dtm_ball == null ? `<p class="subtitle" style="margin:8px 0 0;font-size:13px">${RASCH_SCORE_NOTE}</p>` : ""}
     ${
       sections.length
         ? `<div class="panel section-bars">
@@ -17221,6 +17222,11 @@ async function renderStudentAnswersForm(testId, attemptId) {
   );
 }
 
+// Rasch balli haqiqiy imtihondagidan farq qilishi mumkin — natija ko'rinadigan joyda shu izoh turadi
+// (aks holda "Chittak A+ berdi, imtihonda C oldim" degan kutilmagan holat bo'ladi)
+const RASCH_SCORE_NOTE =
+  "ℹ️ Ball shu testni ishlaganlar natijalariga nisbatan Rasch modeli bo'yicha hisoblangan. Haqiqiy Milliy sertifikat imtihonida natija respublika bo'yicha barcha qatnashchilarga nisbatan chiqadi — shuning uchun ball va daraja undan farq qilishi mumkin.";
+
 // Rasch balli; natija hali yo'q bo'lsa (o'rtacha / eng yuqori — null) — chiziqcha
 const ballText = (value) => (value == null ? "—" : Number(value).toFixed(2));
 
@@ -17330,6 +17336,7 @@ async function renderResultsTab(selectedId) {
       </div>
       <p class="section-label" style="margin:0 0 10px">${usesRasch ? "DARAJALAR (RASCH BALLI)" : "TO'G'RI JAVOBLAR FOIZI"}</p>
       <div class="chart">${chart}</div>
+      ${usesRasch ? `<p class="subtitle" style="margin:10px 0 0;font-size:13px">${RASCH_SCORE_NOTE}</p>` : ""}
     </div>
     ${
       results.essay_pending
