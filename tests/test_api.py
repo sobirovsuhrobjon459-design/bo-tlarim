@@ -8113,6 +8113,7 @@ def test_oferta_saytdagi_sozlamalarga_mos():
     try:
         text = client.get("/oferta").text
         assert "Oylik obuna" in text and "99 000 so'm" in text
+        assert "Oylik obuna uchun to'langan pul qaytarilmaydi" in text and "hisob o'chirilganda ham" in text
         assert "o'qituvchi ko'rsatgan kartaga o'tkazadi" in text and "xizmat haqi olmaydi" in text
         assert "3 ish kuni ichida" not in text  # pul platformadan o'tmaydi — yechib olish ham yo'q
     finally:

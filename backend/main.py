@@ -17323,8 +17323,10 @@ bo'yicha tomon emas va javobgar emas.</p>"""))
         " qism uchun pul qaytariladi.</li>",
     ]
     if plans:
-        refund_items.append("<li>Obuna uchun to'lovdan keyin 14 kun ichida murojaat qilinsa va obuna davrida birorta ham"
-                            " natija tekshirilmagan bo'lsa, pul to'liq qaytariladi; aks holda obuna puli qaytarilmaydi.</li>")
+        refund_items.append("<li>Oylik obuna uchun to'langan pul qaytarilmaydi — shu jumladan hisob o'chirilganda ham"
+                            " (obunaning qolgan kunlari bekor bo'ladi).</li>")
+    refund_items.append("<li>Hisob o'chirilsa, undagi tokenlar va obuna bekor bo'ladi va ular uchun pul qaytarilmaydi"
+                        " (o'chirishdan oldin ilova buni alohida ogohlantiradi).</li>")
     refund_items += [
         "<li>Texnik nosozlik sababli xizmat ko'rsatilmagan bo'lsa (masalan, to'lov o'tdi, lekin token yozilmadi yoki test"
         " ochilmadi), pul to'liq qaytariladi.</li>",
