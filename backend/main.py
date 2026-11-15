@@ -17056,7 +17056,6 @@ def _asset_version() -> str:
 
 # Ijrochi (YaTT) rekvizitlari — Render → Environment'da beriladi, kodda saqlanmaydi
 LEGAL_NAME = os.getenv("LEGAL_NAME", "Sobirov Suxrobjon Saidjon o'g'li").strip()
-LEGAL_INN = os.getenv("LEGAL_INN", "").strip()  # bo'sh bo'lsa sahifada ko'rsatilmaydi
 LEGAL_PHONE = os.getenv("LEGAL_PHONE", "+998 90 537 07 38").strip()
 LEGAL_EMAIL = os.getenv("LEGAL_EMAIL", "").strip()
 LEGAL_ADDRESS = os.getenv("LEGAL_ADDRESS", "").strip()
@@ -17096,7 +17095,7 @@ def _oferta_html() -> str:
 Xizmatdan foydalanish yoki to'lov qilish — oferta shartlarini to'liq qabul qilish (aksept) demakdir.</p>
 
 <h2>1. Taraflar</h2>
-<p><b>Ijrochi:</b> yakka tartibdagi tadbirkor {value(LEGAL_NAME)}{f", STIR {html_escape(LEGAL_INN)}" if LEGAL_INN else ""}.</p>
+<p><b>Ijrochi:</b> yakka tartibdagi tadbirkor {value(LEGAL_NAME)}.</p>
 <p><b>Foydalanuvchi:</b> xizmatdan {service} orqali foydalanayotgan har qanday shaxs — o'qituvchi yoki o'quvchi.</p>
 
 <h2>2. Xizmatlar</h2>
@@ -17141,7 +17140,6 @@ to'g'ri javoblar mazmuni uchun testni yaratgan o'qituvchi javobgar.</p>
 <h2>9. Ijrochi rekvizitlari va aloqa</h2>
 <table class="req">
   <tr><td>YaTT</td><td>{value(LEGAL_NAME)}</td></tr>
-  {f"<tr><td>STIR</td><td>{html_escape(LEGAL_INN)}</td></tr>" if LEGAL_INN else ""}
   {f"<tr><td>Manzil</td><td>{html_escape(LEGAL_ADDRESS)}</td></tr>" if LEGAL_ADDRESS else ""}
   <tr><td>Telefon</td><td>{value(LEGAL_PHONE)}</td></tr>
   {f"<tr><td>E-mail</td><td>{html_escape(LEGAL_EMAIL)}</td></tr>" if LEGAL_EMAIL else ""}
