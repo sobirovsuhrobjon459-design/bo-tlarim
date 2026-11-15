@@ -219,7 +219,7 @@ from .database import (
     withdraw_balance,
     youtube_video_id,
 )
-from bot.bot import run_bot
+from bot.bot import SUPPORT_CONTACTS, run_bot
 from bot.config import WEBAPP_URL
 
 # ========== 1) Ilova sozlash ==========
@@ -17061,6 +17061,8 @@ LEGAL_PHONE = os.getenv("LEGAL_PHONE", "+998 90 537 07 38").strip()
 LEGAL_EMAIL = os.getenv("LEGAL_EMAIL", "").strip()
 LEGAL_ADDRESS = os.getenv("LEGAL_ADDRESS", "").strip()
 LEGAL_BOT = os.getenv("LEGAL_BOT", "@chittakapp").strip()
+# Murojaat uchun — tirik odamlar (bot yozilgan xabarni hech kimga yetkazmaydi, faqat avtomatik javob beradi)
+LEGAL_SUPPORT = ", ".join(f"@{name}" for name in SUPPORT_CONTACTS)
 
 
 def _oferta_html() -> str:
@@ -17158,7 +17160,7 @@ def oferta_page():
 def _privacy_html() -> str:
     contacts = "".join(
         f"<li>{label}: {html_escape(text)}</li>"
-        for label, text in (("E-mail", LEGAL_EMAIL), ("Telefon", LEGAL_PHONE), ("Telegram", LEGAL_BOT))
+        for label, text in (("Telegram", LEGAL_SUPPORT), ("Telefon", LEGAL_PHONE), ("E-mail", LEGAL_EMAIL))
         if text
     ) or "<li>Telegram bot ichidagi «Murojaat uchun» bo'limi orqali</li>"
     owner = f"<p>Xizmat egasi: {html_escape(LEGAL_NAME)}.</p>" if LEGAL_NAME else ""
@@ -17234,7 +17236,7 @@ def privacy_page():
 def _account_deletion_html() -> str:
     contacts = "".join(
         f"<li>{label}: <b>{html_escape(text)}</b></li>"
-        for label, text in (("Telegram", LEGAL_BOT), ("Telefon", LEGAL_PHONE), ("E-mail", LEGAL_EMAIL))
+        for label, text in (("Telegram", LEGAL_SUPPORT), ("Telefon", LEGAL_PHONE), ("E-mail", LEGAL_EMAIL))
         if text
     )
     return f"""<!doctype html>
