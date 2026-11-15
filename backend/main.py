@@ -47,6 +47,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import MutableHeaders
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.graphics.shapes import Drawing, Line, Rect
@@ -72,7 +73,9 @@ from .subjects import default_sections, essay_max, frontend_config, score_weight
 from .regions import REGIONS, is_valid_location
 from .student_import import names_from_rows, parse_student_file, rows_from_text
 from .auth import (
+    InitDataError,
     app_session_hash,
+    validate_init_data,
     ensure_school_teacher,
     get_current_admin,
     get_current_teacher,
@@ -730,6 +733,47 @@ class StaticCacheHeaders:
 
 
 app.add_middleware(StaticCacheHeaders)
+
+
+# Har javobga qo'shiladigan xavfsizlik sarlavhalari:
+#   nosniff         — brauzer fayl turini o'zi "taxmin qilib", matnni skript sifatida ishga tushirmasin;
+#   referrer-policy — boshqa saytga o'tilganda to'liq manzil (kodlar, ID'lar) emas, faqat domen ketsin;
+#   frame-ancestors — saytni faqat o'zi va Telegram (web.telegram.org — Mini App shu yerda iframe'da
+#                     ochiladi) o'z sahifasiga joylay oladi: begona sayt Chittak'ni yashirin oynaga
+#                     qo'yib, foydalanuvchini aldab tugma bostira olmaydi (clickjacking).
+#   HSTS            — faqat HTTPS orqali kelgan so'rovga: brauzer keyingi safar ham faqat HTTPS bilan ochadi.
+SECURITY_HEADERS = (
+    ("x-content-type-options", "nosniff"),
+    ("referrer-policy", "strict-origin-when-cross-origin"),
+    ("content-security-policy", "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"),
+)
+HSTS_HEADER = "max-age=31536000"
+
+
+class SecurityHeaders:
+    def __init__(self, asgi_app):
+        self.app = asgi_app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        forwarded = dict(scope.get("headers") or []).get(b"x-forwarded-proto", b"").decode("latin-1")
+        https = (forwarded.split(",")[0].strip() or scope.get("scheme", "")) == "https"
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for name, value in SECURITY_HEADERS:
+                    headers.setdefault(name, value)
+                if https:
+                    headers.setdefault("strict-transport-security", HSTS_HEADER)
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+app.add_middleware(SecurityHeaders)
 
 
 _STARTED_AT = time.monotonic()
@@ -9125,7 +9169,11 @@ def pay_for_test(code: str, provider: str = "payme", user: User = Depends(get_cu
         .order_by(Payment.id.desc())
     )
 
-    if not payment or payment.amount != test.price:
+    # To'lov tizimi almashtirildi, lekin eskisida tranzaksiya allaqachon boshlangan — o'sha buyurtma
+    # o'z tizimida qoladi, yangi tizimga alohida buyurtma ochiladi (bitta buyurtmani ikki tizim to'lamasin)
+    started_elsewhere = payment is not None and payment.provider != provider and bool(
+        payment.payme_transaction_id or payment.click_trans_id)
+    if not payment or payment.amount != test.price or started_elsewhere:
         payment = Payment(user_id=user.id, test_id=test.id, amount=test.price, status="pending", provider=provider)
         db.add(payment)
         db.commit()
@@ -14510,10 +14558,71 @@ def set_video_duration(video_id: int, seconds: int, db: Session = Depends(get_db
     return {"ok": True}
 
 
+class VideoViewIn(BaseModel):
+    pupil_session: str = Field(default="", max_length=200)  # Telegram'siz kirgan maktab o'quvchisi
+
+
+VIDEO_VIEW_REPEAT_SECONDS = 6 * 60 * 60  # bitta odam bitta videoni shuncha vaqtda bir marta sanaladi
+_video_views_seen: dict[tuple[str, int], float] = {}
+_video_views_lock = threading.Lock()
+
+
+def _video_viewer(db: Session, init_data: str, app_session: str, dev_user: str, pupil_session: str) -> str | None:
+    """Videoni kim ko'ryapti (faqat sanash uchun): Telegram, ilova/sayt seansi yoki maktab o'quvchisi seansi."""
+
+    if init_data:
+        try:
+            return f"tg:{validate_init_data(init_data)['id']}"
+        except InitDataError:
+            return None
+    if app_session:
+        user_id = db.scalar(select(AppSession.user_id).where(
+            AppSession.token_hash == app_session_hash(app_session), AppSession.revoked_at.is_(None)))
+        if user_id:
+            return f"user:{user_id}"
+    if pupil_session:
+        account_id = db.scalar(select(PupilSession.account_id).where(
+            PupilSession.token_hash == _pupil_token_hash(pupil_session), PupilSession.revoked_at.is_(None)))
+        if account_id:
+            return f"pupil:{account_id}"
+    if DEV_MODE and dev_user.isdigit():
+        return f"tg:{dev_user}"
+    return None
+
+
+def _count_this_view(viewer: str, video_id: int) -> bool:
+    """Shu odam bu videoni yaqinda (VIDEO_VIEW_REPEAT_SECONDS ichida) ko'rmagan bo'lsa — True."""
+
+    now = time.monotonic()
+    key = (viewer, video_id)
+    with _video_views_lock:
+        last = _video_views_seen.get(key)
+        if last is not None and now - last < VIDEO_VIEW_REPEAT_SECONDS:
+            return False
+        if len(_video_views_seen) > 50_000:  # xotira cheksiz o'smasin — eskilari tozalanadi
+            cutoff = now - VIDEO_VIEW_REPEAT_SECONDS
+            for old_key in [item for item, seen_at in _video_views_seen.items() if seen_at < cutoff]:
+                del _video_views_seen[old_key]
+        _video_views_seen[key] = now
+    return True
+
+
 @app.post("/api/videos/{video_id}/view")
-def count_video_view(video_id: int, db: Session = Depends(get_db)):
+def count_video_view(
+    video_id: int,
+    body: VideoViewIn | None = None,
+    x_init_data: str = Header(default=""),
+    x_app_session: str = Header(default=""),
+    x_dev_user: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
     """Ko'rishlar soni — video ochilganda (bir martalik so'rov, javobni kutish shart emas).
-    Telegram'siz kirgan maktab o'quvchisi ham sanaladi — shuning uchun foydalanuvchi so'ralmaydi."""
+    Telegram'siz kirgan maktab o'quvchisi ham sanaladi (seansi so'rov tanasida keladi). Kimligi
+    aniqlanmagan so'rov sanalmaydi, bitta odam esa bir videoni 6 soatda bir marta sanaladi —
+    aks holda istalgan odam ko'rishlar sonini sun'iy oshira olardi."""
+    viewer = _video_viewer(db, x_init_data, x_app_session, x_dev_user, body.pupil_session if body else "")
+    if not viewer or not _count_this_view(viewer, video_id):
+        return {"ok": True}
     db.execute(update(VideoLesson).where(VideoLesson.id == video_id, VideoLesson.deleted_at.is_(None))
                .values(views=VideoLesson.views + 1))
     db.commit()
@@ -15530,6 +15639,27 @@ def _require_provider(provider: str) -> None:
         raise HTTPException(status_code=503, detail="Bu to'lov usuli hali sozlanmagan, admin bilan bog'laning")
 
 
+def _order_provider(order) -> str:
+    """Buyurtma qaysi to'lov yo'li uchun yaratilgan: "payme", "click" yoki "card" (chek bilan)."""
+    return order.method if isinstance(order, CreditPurchase) else order.provider
+
+
+def _test_already_paid(db: Session, order) -> bool:
+    """
+    Shu o'quvchi shu testga BOSHQA buyurtma bilan allaqachon to'laganmi.
+
+    O'quvchi Payme sahifasini ochib, keyin Click'ni tanlashi (yoki aksincha) mumkin — har biri
+    o'z buyurtmasi bilan. Ikkinchisi ham oxirigacha bosilsa, pul ikki marta yechilardi;
+    shuning uchun to'lov yakunlanishidan oldin shu tekshiriladi va ikkinchisi rad etiladi.
+    """
+    if not isinstance(order, Payment):
+        return False  # token/obunani ikki marta sotib olish — ikki alohida xarid, bu normal
+    return db.scalar(
+        select(Payment.id).where(Payment.user_id == order.user_id, Payment.test_id == order.test_id,
+                                 Payment.status == "paid", Payment.id != order.id).limit(1)
+    ) is not None
+
+
 def _click_order_ref(order) -> str:
     """Click'ga yuboriladigan buyurtma raqami: c12 — token xaridi, t34 — test to'lovi."""
     return f"{'c' if isinstance(order, CreditPurchase) else 't'}{order.id}"
@@ -15600,10 +15730,9 @@ def _click_find_order(db: Session, ref: str):
         return None
     model = CreditPurchase if ref[0] == "c" else Payment
     order = db.get(model, int(ref[1:]), with_for_update=True)  # takroriy so'rov ikki marta yozmasin
-    # Chek bilan tasdiqlanadigan (karta) buyurtmalarni Click to'lay olmaydi — ikki marta to'lanmasin
-    if isinstance(order, CreditPurchase) and order.method == "card":
-        return None
-    if isinstance(order, Payment) and order.provider == "card":
+    # Click faqat Click uchun yaratilgan buyurtmani to'laydi: Payme yoki karta (chek) buyurtmasini
+    # ham to'lay olsa, bitta buyurtma ikki yo'l bilan ikki marta to'lanishi mumkin edi
+    if order is not None and _order_provider(order) != "click":
         return None
     return order
 
@@ -15633,6 +15762,8 @@ async def click_prepare(request: Request, db: Session = Depends(get_db)):
         return _click_response(form, -9)
     if not _click_amount_ok(form, order):
         return _click_response(form, -2)
+    if _test_already_paid(db, order):
+        return _click_response(form, -4)
     order.click_trans_id = str(form.get("click_trans_id"))
     db.commit()
     return _click_response(form, 0, merchant_prepare_id=order.id)
@@ -15670,6 +15801,9 @@ async def click_complete(request: Request, db: Session = Depends(get_db)):
         return _click_response(form, -9)
     if order.status == "cancelled":
         return _click_response(form, -9)
+
+    if _test_already_paid(db, order):
+        return _click_response(form, -4)  # boshqa yo'l bilan to'lab bo'lingan — Click pulni qaytaradi
 
     order.status = "paid"
     order.performed_at = utcnow()
@@ -15815,8 +15949,9 @@ def _payme_find_order_by_account(params: dict, db: Session):
         # Payme) ikki marta token olishi mumkin edi.
         if isinstance(order, CreditPurchase) and order.method != "payme":
             return None
-        # O'qituvchi kartasiga chek bilan qilingan to'lovni ham Payme to'lay olmaydi
-        if isinstance(order, Payment) and order.provider == "card":
+        # Testga to'lovda ham — faqat Payme uchun yaratilgan buyurtma (Click yoki chek bilan
+        # to'lanadigan buyurtmani Payme to'lasa, pul ikki marta yechilishi mumkin edi)
+        if isinstance(order, Payment) and order.provider != "payme":
             return None
         # O'chirilgan (arxivlangan) testga yangi to'lov qabul qilinmaydi
         if isinstance(order, Payment):
@@ -15917,6 +16052,8 @@ def _payme_check_perform_transaction(request_id, params: dict, db: Session) -> J
         return _payme_error(request_id, -31099, "Buyurtma boshqa tranzaksiya bilan band")
     if params.get("amount") != order.amount * 100:
         return _payme_error(request_id, -31001, "Summa mos kelmadi")
+    if _test_already_paid(db, order):
+        return _payme_error(request_id, -31051, "Buyurtma allaqachon to'langan")
 
     # Fiskal chek ma'lumoti (MXIK, o'lchov birligi, QQS) — Payme chekni shundan chiqaradi
     return _payme_result(request_id, {"allow": True, "detail": _payme_receipt_detail(order)})
@@ -15946,6 +16083,8 @@ def _payme_create_transaction(request_id, params: dict, db: Session) -> JSONResp
         return _payme_error(request_id, -31051, "Buyurtma allaqachon ko'rib chiqilgan")
     if params.get("amount") != order.amount * 100:
         return _payme_error(request_id, -31001, "Summa mos kelmadi")
+    if _test_already_paid(db, order):
+        return _payme_error(request_id, -31051, "Buyurtma allaqachon to'langan")
 
     order.payme_transaction_id = payme_id
     order.payme_created_at = utcnow()
@@ -15967,6 +16106,9 @@ def _payme_perform_transaction(request_id, params: dict, db: Session) -> JSONRes
             _payme_cancel(order, 4)
             db.commit()
             return _payme_error(request_id, -31008, "Tranzaksiya muddati o'tgan")
+        if _test_already_paid(db, order):
+            # Shu orada boshqa yo'l (Click) bilan to'lab bo'lindi — Payme pulni yechmaydi
+            return _payme_error(request_id, -31008, "Buyurtma allaqachon to'langan")
         order.status = "paid"
         order.performed_at = utcnow()
         _payme_apply_paid(order)

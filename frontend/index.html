@@ -61,9 +61,18 @@
     telegram.org sekin yoki to'silgan tarmoqda sahifa yuklanishi tugamay, tepadagi chiziq qolib ketardi.
   -->
   <script>
-    if (!/TestWayApp/i.test(navigator.userAgent)) {
-      document.write('<script src="https://telegram.org/js/telegram-web-app.js"><\/script>');
-    }
+    // Oddiy brauzerda (saytga reklamadan kelgan odam) bu skript kerak emas — u sahifani
+    // telegram.org javob berguncha to'xtatib turardi. Telegram ichida ekanimiz uning o'z
+    // belgilaridan bilinadi: manzil oxiridagi #tgWebApp... parametrlari, telefondagi
+    // TelegramWebviewProxy, web.telegram.org'dagi iframe, yoki sahifa yangilanganda skript
+    // sessionStorage'ga saqlab qo'ygan parametrlar.
+    (function () {
+      if (/TestWayApp/i.test(navigator.userAgent)) return;
+      var inTelegram = /tgWebApp/.test(location.hash) || window.TelegramWebviewProxy !== undefined ||
+        !!(window.external && "notify" in window.external) || window.parent !== window;
+      try { inTelegram = inTelegram || !!sessionStorage.getItem("__telegram__initParams"); } catch (error) {}
+      if (inTelegram) document.write('<script src="https://telegram.org/js/telegram-web-app.js"><\/script>');
+    })();
   </script>
 
   <!--

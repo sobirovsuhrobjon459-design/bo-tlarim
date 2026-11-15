@@ -5856,7 +5856,8 @@ function renderVideoPlayer(video, back) {
   `);
 
   // Ko'rishlar soni — javobini kutish shart emas
-  api(`/api/videos/${video.id}/view`, { method: "POST", body: {} }).catch(() => {});
+  // Maktab o'quvchisi (Telegram'siz) — seansi bilan, aks holda server ko'rishni sanamaydi
+  api(`/api/videos/${video.id}/view`, { method: "POST", body: { pupil_session: pupilSession || "" } }).catch(() => {});
   trackVideoPlayback(video, document.getElementById("video-player"));
   document.querySelector('[data-action="back-video"]').addEventListener("click", guarded(back));
   document

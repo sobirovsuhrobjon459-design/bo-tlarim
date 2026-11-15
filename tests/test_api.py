@@ -7329,7 +7329,12 @@ def test_video_darslar_rahbariyat_qoshadi_hamma_korad():
     assert [item["title"] for item in client.get("/api/pupil/videos?subject=Matematika", headers=pupil).json()["videos"]] == ["Kasrlar"]
     assert len(client.get("/api/pupil/videos?grade=7", headers=pupil).json()["videos"]) == 1  # faqat sinfsiz "Tarix 1"
     assert [item["title"] for item in client.get("/api/pupil/videos?q=qo'shish", headers=pupil).json()["videos"]] == ["Kasrlar"]
-    assert client.post(f"/api/videos/{video['id']}/view").status_code == 200
+    assert client.post(f"/api/videos/{video['id']}/view").status_code == 200  # kimligi noma'lum — sanalmaydi
+    assert client.post(f"/api/videos/{video['id']}/view", json={"pupil_session": token}).status_code == 200
+    assert client.post(f"/api/videos/{video['id']}/view", json={"pupil_session": token}).status_code == 200  # takror
+    assert client.post(f"/api/videos/{video['id']}/view", headers=as_user(801)).status_code == 200
+    viewed = {item["title"]: item["views"] for item in client.get("/api/videos", headers=as_user(701)).json()["videos"]}
+    assert viewed["Kasrlar"] == 2, viewed  # o'quvchi bir marta + o'qituvchi bir marta; noma'lum va takror sanalmadi
 
     # Boshqa odam o'zgartira olmaydi; rahbariyat tahrirlaydi; platforma admini o'chira oladi
     assert client.delete(f"/api/videos/{video['id']}", headers=as_user(801)).status_code == 403
@@ -8044,3 +8049,46 @@ def test_maktab_egasi_hisobini_ochira_olmaydi():
     info = client.get("/api/me/delete-info", headers=as_user(701)).json()
     assert info["blockers"] and "Ilm maktabi" in info["blockers"][0], info
     assert client.post("/api/me/delete", json={"confirm": "O'CHIRISH"}, headers=as_user(701)).status_code == 409
+
+
+def test_bitta_testga_payme_va_click_bilan_ikki_marta_pul_yechilmaydi():
+    """O'quvchi Payme'ni boshlab, keyin Click bilan to'ladi — Payme'dagi tranzaksiya endi pul yecha olmaydi."""
+    reset_database()
+    register_teacher()
+    created = create_test(price=10_000)
+
+    first = client.post(f"/api/tests/{created['code']}/pay?provider=payme", json={}, headers=as_user(901)).json()
+    account = {"order_id": f"t{first['payment_id']}"}
+    assert "result" in payme("CheckPerformTransaction", {"amount": 1_000_000, "account": account})
+    assert "result" in payme("CreateTransaction", {"id": "tx-dbl", "time": 1, "amount": 1_000_000, "account": account})
+
+    # Click tanlandi — Payme tranzaksiyasi boshlangan buyurtma o'z tizimida qoladi, yangisi ochiladi
+    second = client.post(f"/api/tests/{created['code']}/pay?provider=click", json={}, headers=as_user(901)).json()
+    assert second["payment_id"] != first["payment_id"], (first, second)
+    ref = f"t{second['payment_id']}"
+    assert client.post("/api/click/prepare", data=_click_form(0, ref, 10000)).json()["error"] == 0
+    done = client.post("/api/click/complete", data=_click_form(1, ref, 10000, prepare_id=second["payment_id"])).json()
+    assert done["error"] == 0, done
+    assert balance_of() == main._teacher_share(10_000)
+
+    # Payme tomonda o'quvchi endi tasdiqlasa ham — pul yechilmaydi, balans ikki marta oshmaydi
+    late = payme("PerformTransaction", {"id": "tx-dbl"})
+    assert late.get("error", {}).get("code") == -31008, late
+    assert balance_of() == main._teacher_share(10_000)
+
+    # Payme uchun yaratilgan buyurtmani Click to'lay olmaydi (va aksincha)
+    assert client.post("/api/click/prepare", data=_click_form(0, f"t{first['payment_id']}", 10000)).json()["error"] == -5
+    check = payme("CheckPerformTransaction", {"amount": 1_000_000, "account": {"order_id": ref}})
+    assert check.get("error", {}).get("code") == -31050, check
+
+
+def test_xavfsizlik_sarlavhalari():
+    """Har javobda: nosniff, referrer-policy, faqat Telegram ichiga joylash; HTTPS'da HSTS; /docs yopiq emas faqat DEV'da."""
+    page = client.get("/")
+    assert page.headers["x-content-type-options"] == "nosniff"
+    assert page.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert "frame-ancestors 'self' https://web.telegram.org" in page.headers["content-security-policy"]
+    assert "strict-transport-security" not in page.headers  # oddiy HTTP (lokal) — HSTS yo'q
+    secure = client.get("/api/health", headers={"X-Forwarded-Proto": "https"})
+    assert secure.headers["strict-transport-security"].startswith("max-age=")
+    assert client.get("/js/app.js").headers["x-content-type-options"] == "nosniff"
