@@ -17207,7 +17207,17 @@ LEGAL_BOT = os.getenv("LEGAL_BOT", "@chittakapp").strip()
 LEGAL_SUPPORT = ", ".join(f"@{name}" for name in SUPPORT_CONTACTS)
 
 
-def _oferta_html() -> str:
+WITHDRAWAL_DAYS = 3  # o'qituvchi /pul bilan so'rov yuborgach, pul shuncha ish kunida kartasiga o'tkaziladi
+OFERTA_EDITED = "15.11.2026"
+
+
+def _oferta_html(db: Session) -> str:
+    """
+    Ommaviy oferta. Bo'limlar saytning HAQIQIY sozlamalariga qarab chiqadi: obuna — admin panelda
+    narxi belgilangan bo'lsa, Click — ulangan bo'lsa, karta orqali xarid — karta kiritilgan bo'lsa,
+    pullik testda esa ulangan to'lov tizimiga qarab ikki tartibdan biri. Shunda oferta sotilayotgan
+    narsadan hech qachon farq qilmaydi.
+    """
     from .database import TEST_PRICE_MAX, TEST_PRICE_MIN
 
     def value(text: str) -> str:
@@ -17218,10 +17228,139 @@ def _oferta_html() -> str:
         for low, high, price in CREDIT_PRICE_TIERS
     )
     share = 100 - PLATFORM_COMMISSION_PERCENT
-    service = html_escape(LEGAL_BOT) if LEGAL_BOT else "Telegram bot va Mini App"
+    service = html_escape(LEGAL_BOT) if LEGAL_BOT else "Telegram bot"
+    providers = [{"payme": "Payme", "click": "Click"}[name] for name in _enabled_providers()]
+    providers_text = " yoki ".join(providers)
+    plans = _subscription_plans(db)
+    card_topup = _card_topup_enabled()
+
+    sections: list[tuple[str, str]] = []
+
+    sections.append(("Taraflar", f"""
+<p><b>Ijrochi:</b> yakka tartibdagi tadbirkor {value(LEGAL_NAME)}.</p>
+<p><b>Foydalanuvchi:</b> Chittak xizmatidan ({service} Telegram boti va Mini App, Android ilova yoki chittak.uz sayti
+orqali) foydalanayotgan har qanday shaxs — o'qituvchi, ta'lim muassasasi (xususiy maktab, o'quv markazi, to'garak) va uning
+xodimlari, o'quvchi yoki uning ota-onasi.</p>"""))
+
+    sections.append(("Xizmatlar", """
+<ul>
+  <li><b>O'qituvchi uchun:</b> onlayn va titul (javob varaqasi) testlarini yaratish, o'quvchilarga tarqatish, natijalarni
+    avtomatik tekshirish (shu jumladan titulni telefon kamerasi bilan skanerlash), Rasch modeli bo'yicha ball, hisobot (PDF)
+    va sertifikatlar.</li>
+  <li><b>Ta'lim muassasasi uchun (maktab CRM):</b> sinf va guruhlar, o'quvchilar ro'yxati, davomat, dars jadvali, o'qish
+    to'lovlari hisobi, e'lonlar, yotoqxona va video darslar. Bu bo'lim hozirda bepul; pullik bo'lsa, narxi ushbu ofertaga
+    oldindan kiritiladi.</li>
+  <li><b>O'quvchi uchun:</b> test ishlash, natija va savollar tahlilini ko'rish, maktab o'quvchisi kabineti.</li>
+  <li>Xizmat internet mavjud bo'lganda Telegram Mini App, Android ilova va chittak.uz sayti orqali ko'rsatiladi.</li>
+</ul>"""))
+
+    sections.append(("Tokenlar va narxlar", f"""
+<p>Bepul testda har bir o'quvchi natijasi uchun o'qituvchi hisobidan 1 token yechiladi (oylik obunasi faol bo'lsa —
+yechilmaydi). Token narxi (1 dona uchun):</p>
+<table>{tiers}</table>
+<p>Narx sotib olinadigan tokenlar soniga qarab yuqoridagi jadval bo'yicha hisoblanadi va to'lovdan oldin ko'rsatiladi.
+Ro'yxatdan o'tganda yoki do'stni taklif qilganda beriladigan sovg'a tokenlar pulga almashtirilmaydi va ular uchun pul
+qaytarilmaydi.</p>"""))
+
+    if plans:
+        rows = "".join(
+            f"<tr><td>{plan['months']} oy ({plan['days']} kun)</td><td>{_format_sum(plan['price'])} so'm</td></tr>"
+            for plan in plans
+        )
+        sections.append(("Oylik obuna", f"""
+<table>{rows}</table>
+<ul>
+  <li>Obuna davrida bepul testlar natijalari uchun token yechilmaydi — tekshiruvlar soni cheklanmaydi.</li>
+  <li>Obuna to'lov tasdiqlangan paytdan boshlanadi. Faol obuna ustiga yana obuna olinsa, yangi muddat qolgan kunlarga qo'shiladi.</li>
+  <li>Obuna avtomatik uzaytirilmaydi va kartadan o'z-o'zidan pul yechilmaydi.</li>
+</ul>"""))
+
+    if providers:
+        paid_tests = f"""
+<p>O'qituvchi o'z testiga {_format_sum(TEST_PRICE_MIN)} — {_format_sum(TEST_PRICE_MAX)} so'm oralig'ida narx belgilashi mumkin.
+O'quvchi testga {providers_text} orqali to'laydi; to'lov tasdiqlangach test unga avtomatik ochiladi.</p>
+<ul>
+  <li>To'lov summasining {share}% o'qituvchi balansiga yoziladi, {PLATFORM_COMMISSION_PERCENT}% — platforma xizmat haqi.</li>
+  <li>O'qituvchi balansdagi mablag'ni yechib olish uchun botda /pul buyrug'i orqali so'rov yuboradi. Ijrochi so'rovni
+    {WITHDRAWAL_DAYS} ish kuni ichida bajarib, pulni o'qituvchi ko'rsatgan kartaga o'tkazadi.</li>
+  <li>O'quvchiga pul qaytarilsa (masalan, to'lov tizimi orqali bekor qilinsa), o'qituvchiga yozilgan ulush balansdan qaytarib olinadi.</li>
+</ul>"""
+    else:
+        paid_tests = f"""
+<p>O'qituvchi o'z testiga {_format_sum(TEST_PRICE_MIN)} — {_format_sum(TEST_PRICE_MAX)} so'm oralig'ida narx belgilashi mumkin.</p>
+<ul>
+  <li>O'quvchi pulni to'g'ridan-to'g'ri o'qituvchi ko'rsatgan kartaga o'tkazadi va chek rasmini ilovada yuboradi.
+    O'qituvchi pul tushganini tekshirib tasdiqlagach, test o'quvchiga ochiladi.</li>
+  <li>Bu to'lov o'quvchi va o'qituvchi o'rtasida amalga oshiriladi: Ijrochi pulni qabul qilmaydi, ushlab turmaydi va
+    undan xizmat haqi olmaydi. To'lov, testni ochish va pulni qaytarish bo'yicha nizolar o'quvchi va o'qituvchi
+    o'rtasida hal qilinadi.</li>
+</ul>"""
+    sections.append(("Pullik testlar", paid_tests))
+
+    payment_items = []
+    if providers:
+        payment_items.append(f"<li>Token, obuna va pullik testlar uchun to'lovlar {providers_text} to'lov tizimi orqali,"
+                             " O'zbekiston so'mida qabul qilinadi. Karta ma'lumotlari faqat to'lov tizimi sahifasida"
+                             " kiritiladi; Ijrochi ularni ko'rmaydi va saqlamaydi.</li>")
+        payment_items.append("<li>To'lov tasdiqlangach, token, obuna yoki testga ruxsat avtomatik beriladi.</li>")
+    if card_topup:
+        also = " ham" if providers else ""
+        payment_items.append(f"<li>Token va obunani Ijrochi kartasiga pul o'tkazib, chek rasmini ilovada yuborish orqali{also}"
+                             " sotib olish mumkin. Ijrochi pul tushganini tekshirib tasdiqlagach, token yoki obuna beriladi;"
+                             " chek tasdiqlanmasa, pul to'lovchiga qaytariladi.</li>")
+    if not payment_items:
+        payment_items.append("<li>Mavjud to'lov usullari ilovada, to'lovdan oldin ko'rsatiladi.</li>")
+    sections.append(("To'lov tartibi", f"<ul>{''.join(payment_items)}</ul>"))
+
+    sections.append(("Ta'lim muassasalaridagi o'qish to'lovlari", """
+<p>Ta'lim muassasasi o'quvchilardan (ota-onalardan) oladigan o'qish to'lovlari Chittak orqali o'tmaydi. Chittak ularni
+faqat hisobga yozish, chek va qarzdorlik ro'yxatini chiqarish vositasi hisoblanadi. To'lov summasi, chegirmalar, qarzdorlik
+va pulni qaytarish masalalari ta'lim muassasasi bilan o'quvchi (ota-ona) o'rtasida hal qilinadi; Ijrochi bu to'lovlar
+bo'yicha tomon emas va javobgar emas.</p>"""))
+
+    refund_items = [
+        "<li>Sotib olingan, lekin ishlatilmagan tokenlar uchun to'lovdan keyin 14 kun ichida murojaat qilinsa, ishlatilmagan"
+        " qism uchun pul qaytariladi.</li>",
+    ]
+    if plans:
+        refund_items.append("<li>Obuna uchun to'lovdan keyin 14 kun ichida murojaat qilinsa va obuna davrida birorta ham"
+                            " natija tekshirilmagan bo'lsa, pul to'liq qaytariladi; aks holda obuna puli qaytarilmaydi.</li>")
+    refund_items += [
+        "<li>Texnik nosozlik sababli xizmat ko'rsatilmagan bo'lsa (masalan, to'lov o'tdi, lekin token yozilmadi yoki test"
+        " ochilmadi), pul to'liq qaytariladi.</li>",
+        "<li>Pul to'lov qilingan kartaga, to'lov tizimi qoidalariga ko'ra 3–10 ish kuni ichida qaytariladi.</li>",
+    ]
+    sections.append(("Pulni qaytarish", f"<ul>{''.join(refund_items)}</ul>"))
+
+    sections.append(("Shaxsiy ma'lumotlar", """
+<p>Ijrochi faqat xizmat uchun zarur ma'lumotlarni saqlaydi va ularni sotmaydi. Qaysi ma'lumotlar saqlanishi, kimga
+berilishi va qanday o'chirilishi <a href="/maxfiylik">Maxfiylik siyosati</a>da yozilgan. Hisobni ilovaning o'zida
+o'chirish mumkin: <a href="/delete-account">batafsil</a>.</p>"""))
+
+    sections.append(("Javobgarlik", """
+<p>Ijrochi Telegram, internet provayderi, xosting yoki to'lov tizimlari ishidagi uzilishlar uchun javobgar emas. Test
+savollari va to'g'ri javoblar mazmuni uchun testni yaratgan o'qituvchi, ta'lim muassasasi kiritgan ma'lumotlar (o'quvchilar,
+baholar, davomat, to'lovlar) uchun esa o'sha muassasa javobgar.</p>"""))
+
+    sections.append(("Ofertaning o'zgarishi va nizolar", """
+<p>Ijrochi ushbu ofertani o'zgartirishi mumkin; yangi tahrir shu sahifada e'lon qilingan paytdan kuchga kiradi. Oldin
+to'langan xizmatlar to'lov paytidagi shartlar asosida ko'rsatiladi. Nizolar muzokara yo'li bilan, kelishuvga erishilmasa —
+O'zbekiston Respublikasi qonunchiligiga muvofiq hal qilinadi.</p>"""))
+
+    sections.append(("Ijrochi rekvizitlari va aloqa", f"""
+<table class="req">
+  <tr><td>YaTT</td><td>{value(LEGAL_NAME)}</td></tr>
+  {f"<tr><td>Manzil</td><td>{html_escape(LEGAL_ADDRESS)}</td></tr>" if LEGAL_ADDRESS else ""}
+  <tr><td>Telefon</td><td>{value(LEGAL_PHONE)}</td></tr>
+  {f"<tr><td>E-mail</td><td>{html_escape(LEGAL_EMAIL)}</td></tr>" if LEGAL_EMAIL else ""}
+  <tr><td>Murojaat</td><td>{html_escape(LEGAL_SUPPORT)}</td></tr>
+  <tr><td>Xizmat</td><td>{service}, chittak.uz</td></tr>
+</table>"""))
+
+    body = "\n".join(f"<h2>{number}. {title}</h2>{content}" for number, (title, content) in enumerate(sections, 1))
     return f"""<!doctype html>
 <html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ommaviy oferta</title>
+<title>Ommaviy oferta — Chittak</title>
 <style>
   :root {{ color-scheme: light; --ink: #151b3d; --muted: #5d6385; --line: #e3e5f0; --bg: #f6f6fb }}
   body {{ margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif }}
@@ -17235,68 +17374,18 @@ def _oferta_html() -> str:
   .req td:first-child {{ color: var(--muted); width: 40% }}
   .blank {{ color: #c0392b }}
 </style></head><body><main>
-<h1>Ommaviy oferta — onlayn test platformasi xizmatlari</h1>
+<h1>Ommaviy oferta — Chittak ta'lim platformasi xizmatlari</h1>
 <p class="muted">Ushbu hujjat O'zbekiston Respublikasi Fuqarolik kodeksining 367–370-moddalariga muvofiq ommaviy oferta hisoblanadi.
-Xizmatdan foydalanish yoki to'lov qilish — oferta shartlarini to'liq qabul qilish (aksept) demakdir.</p>
-
-<h2>1. Taraflar</h2>
-<p><b>Ijrochi:</b> yakka tartibdagi tadbirkor {value(LEGAL_NAME)}.</p>
-<p><b>Foydalanuvchi:</b> xizmatdan {service} orqali foydalanayotgan har qanday shaxs — o'qituvchi yoki o'quvchi.</p>
-
-<h2>2. Xizmatlar</h2>
-<ul>
-  <li>O'qituvchi uchun: onlayn test yaratish, o'quvchilarga tarqatish, natijalarni avtomatik tekshirish, Rasch modeli bo'yicha ball, hisobot (PDF) va sertifikatlar.</li>
-  <li>O'quvchi uchun: test ishlash, natija va savollar tahlilini ko'rish.</li>
-  <li>Xizmat Telegram Mini App orqali, internet mavjud bo'lganda ko'rsatiladi.</li>
-</ul>
-
-<h2>3. Tokenlar va narxlar</h2>
-<p>Bepul testda har bir o'quvchi natijasi uchun o'qituvchi hisobidan 1 token yechiladi. Token narxi (1 dona uchun):</p>
-<table>{tiers}</table>
-<p>Narx sotib olinadigan tokenlar soniga qarab yuqoridagi jadval bo'yicha hisoblanadi va to'lovdan oldin ko'rsatiladi.</p>
-
-<h2>4. Pullik testlar</h2>
-<p>O'qituvchi o'z testiga {_format_sum(TEST_PRICE_MIN)} — {_format_sum(TEST_PRICE_MAX)} so'm oralig'ida narx belgilashi mumkin.
-To'lov Payme yoki Click orqali amalga oshirilganda, to'lov summasining {share}% o'qituvchi balansiga yoziladi,
-{PLATFORM_COMMISSION_PERCENT}% — platforma xizmat haqi. O'qituvchi balansdagi mablag'ni o'z kartasiga yechib olish uchun so'rov yuboradi.</p>
-
-<h2>5. To'lov tartibi</h2>
-<ul>
-  <li>To'lovlar Payme yoki Click to'lov tizimlari orqali, O'zbekiston so'mida qabul qilinadi.</li>
-  <li>Karta ma'lumotlari faqat to'lov tizimi sahifasida kiritiladi; Ijrochi ularni ko'rmaydi va saqlamaydi.</li>
-  <li>To'lov tasdiqlangach, token yoki testga ruxsat avtomatik beriladi.</li>
-</ul>
-
-<h2>6. Pulni qaytarish</h2>
-<ul>
-  <li>Sotib olingan, lekin ishlatilmagan tokenlar uchun to'lovdan keyin 14 kun ichida murojaat qilinsa, ishlatilmagan qism uchun pul qaytariladi.</li>
-  <li>Texnik nosozlik sababli xizmat ko'rsatilmagan bo'lsa (masalan, to'lov o'tdi, lekin test ochilmadi), pul to'liq qaytariladi.</li>
-  <li>Pul to'lov qilingan kartaga, to'lov tizimi qoidalariga ko'ra 3–10 ish kuni ichida qaytariladi.</li>
-</ul>
-
-<h2>7. Shaxsiy ma'lumotlar</h2>
-<p>Ijrochi faqat xizmat uchun zarur ma'lumotlarni (Telegram ID, ism, test natijalari) saqlaydi va ularni uchinchi shaxslarga bermaydi,
-qonunchilikda nazarda tutilgan hollar bundan mustasno.</p>
-
-<h2>8. Javobgarlik</h2>
-<p>Ijrochi Telegram, internet provayderi yoki to'lov tizimlari ishidagi uzilishlar uchun javobgar emas. Test savollari va
-to'g'ri javoblar mazmuni uchun testni yaratgan o'qituvchi javobgar.</p>
-
-<h2>9. Ijrochi rekvizitlari va aloqa</h2>
-<table class="req">
-  <tr><td>YaTT</td><td>{value(LEGAL_NAME)}</td></tr>
-  {f"<tr><td>Manzil</td><td>{html_escape(LEGAL_ADDRESS)}</td></tr>" if LEGAL_ADDRESS else ""}
-  <tr><td>Telefon</td><td>{value(LEGAL_PHONE)}</td></tr>
-  {f"<tr><td>E-mail</td><td>{html_escape(LEGAL_EMAIL)}</td></tr>" if LEGAL_EMAIL else ""}
-  <tr><td>Xizmat</td><td>{service}</td></tr>
-</table>
+Xizmatdan foydalanish yoki to'lov qilish — oferta shartlarini to'liq qabul qilish (aksept) demakdir.
+Oxirgi tahrir: {OFERTA_EDITED}.</p>
+{body}
 </main></body></html>"""
 
 
 @app.get("/oferta", include_in_schema=False)
-def oferta_page():
+def oferta_page(db: Session = Depends(get_db)):
     """Ommaviy oferta — Telegram'siz ochiladi (Payme/Click arizasiga havola)."""
-    return HTMLResponse(_oferta_html())
+    return HTMLResponse(_oferta_html(db))
 
 
 def _privacy_html() -> str:

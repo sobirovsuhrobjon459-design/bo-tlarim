@@ -8092,3 +8092,28 @@ def test_xavfsizlik_sarlavhalari():
     secure = client.get("/api/health", headers={"X-Forwarded-Proto": "https"})
     assert secure.headers["strict-transport-security"].startswith("max-age=")
     assert client.get("/js/app.js").headers["x-content-type-options"] == "nosniff"
+
+
+def test_oferta_saytdagi_sozlamalarga_mos():
+    """Oferta sotilayotgan narsadan farq qilmaydi: obuna — narxi bo'lsa, pullik test — ulangan to'lov tizimiga qarab."""
+    reset_database()
+    text = client.get("/oferta").text
+    assert "Oylik obuna" not in text  # narx belgilanmagan — obuna sotilmaydi
+    assert "3 ish kuni ichida" in text and "Payme yoki Click" in text
+    assert "o'qish to'lovlari Chittak orqali o'tmaydi" in text
+
+    session = SessionLocal()
+    try:
+        session.add(main.AppSetting(key="sub_price_1", value="99000"))
+        session.commit()
+    finally:
+        session.close()
+    original = main.PAYME_MERCHANT_ID, main.CLICK_SERVICE_ID
+    main.PAYME_MERCHANT_ID, main.CLICK_SERVICE_ID = "", ""
+    try:
+        text = client.get("/oferta").text
+        assert "Oylik obuna" in text and "99 000 so'm" in text
+        assert "o'qituvchi ko'rsatgan kartaga o'tkazadi" in text and "xizmat haqi olmaydi" in text
+        assert "3 ish kuni ichida" not in text  # pul platformadan o'tmaydi — yechib olish ham yo'q
+    finally:
+        main.PAYME_MERCHANT_ID, main.CLICK_SERVICE_ID = original
