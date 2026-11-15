@@ -3,6 +3,7 @@ Ma'lumotlar bazasi fayli: .env sozlamalari, bazaga ulanish, barcha jadvallar
 (modellar) va API so'rov sxemalari (Pydantic) shu bitta faylda.
 """
 
+import hashlib
 import os
 import re
 from typing import Literal
@@ -11,7 +12,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import BigInteger, ForeignKey, String, Text, UniqueConstraint, case, create_engine, update
+from sqlalchemy import BigInteger, ForeignKey, String, Text, UniqueConstraint, case, create_engine, select, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, object_session, relationship, sessionmaker
 
 # ========== 1) Sozlamalar (.env) ==========
@@ -134,6 +135,26 @@ class User(Base):
     # Telegram profil rasmi (Mini App ochilganda avtomatik olinadi)
     photo_url: Mapped[str | None] = mapped_column(String(500), default=None)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    # Hisobni o'chirish (Akkaunt → Hisobni o'chirish): yozuv qoladi (to'lovlar, natijalar unga bog'langan),
+    # lekin shaxsiy ma'lumot o'chadi va tg_id bo'shatiladi (-id) — odam qaytsa, yangi hisob ochiladi.
+    # deleted_tg_hash — eski tg_id'ning izi: qayta ro'yxatdan o'tganda sovg'a token va referal qayta berilmasin.
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+    deleted_tg_hash: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
+
+
+def tg_fingerprint(tg_id: int) -> str:
+    """O'chirilgan hisobning Telegram ID izi — ID'ning o'zi saqlanmaydi, faqat solishtirish uchun."""
+    return hashlib.sha256(f"chittak-deleted-account:{tg_id}".encode()).hexdigest()
+
+
+def had_deleted_account(session, tg_id: int) -> bool:
+    """Shu Telegram akkaunt ilgari Chittak hisobini o'chirganmi."""
+    return session.scalar(select(User.id).where(User.deleted_tg_hash == tg_fingerprint(tg_id)).limit(1)) is not None
+
+
+def welcome_credits_for(session, tg_id: int) -> int:
+    """Yangi o'qituvchiga sovg'a token — hisobini o'chirib, qayta ochgan odamga qayta berilmaydi."""
+    return 0 if had_deleted_account(session, tg_id) else WELCOME_CREDITS
 
 
 class Teacher(Base):
@@ -1826,6 +1847,12 @@ class SchoolCreateIn(BaseModel):
         if self.birth_date is not None:
             self.birth_date = _check_birth_date(self.birth_date)
         return self
+
+
+class AccountDeleteIn(BaseModel):
+    """Hisobni o'chirish: foydalanuvchi tasdiq so'zini o'zi yozadi (adashib bosilmasin)."""
+
+    confirm: str = Field(default="", max_length=30)
 
 
 class SchoolCodeIn(BaseModel):

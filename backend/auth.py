@@ -25,7 +25,6 @@ from .database import (
     is_admin_tg,
     BOT_TOKEN,
     DEV_MODE,
-    WELCOME_CREDITS,
     APP_SESSION_IDLE_LIMIT,
     AppSession,
     SchoolMember,
@@ -33,6 +32,7 @@ from .database import (
     Teacher,
     User,
     utcnow,
+    welcome_credits_for,
 )
 
 # Seansning oxirgi faolligi har so'rovda emas, shuncha vaqtda bir marta yoziladi (bazaga ortiqcha yuk bo'lmasin)
@@ -207,7 +207,7 @@ def ensure_school_teacher(db: Session, user: User) -> Teacher | None:
     member = db.scalar(select(SchoolMember.id).where(SchoolMember.user_id == user.id, SchoolMember.left_at.is_(None)))
     if not member:
         return None
-    teacher = Teacher(user_id=user.id, credits=WELCOME_CREDITS)
+    teacher = Teacher(user_id=user.id, credits=welcome_credits_for(db, user.tg_id))
     db.add(teacher)
     try:
         db.commit()

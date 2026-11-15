@@ -7965,3 +7965,80 @@ def test_payme_getstatement_katta_davr_va_changepassword():
     finally:
         client.post("/api/admin/payment-settings", headers=as_user(4242), json={"clear": ["payme_secret_key"]})
         main.PAYME_SECRET_KEY = original
+
+
+def test_hisobni_ochirish_anonimlashtiradi_va_qayta_ochsa_yangi_hisob():
+    """Akkaunt → Hisobni o'chirish: shaxsiy ma'lumot o'chadi, to'lov/natija yozuvi ismsiz qoladi."""
+    reset_database()
+    register_teacher(5150, "Alisher", "Karimov")
+    created = create_test(tg_id=5150)
+    session_token = _app_session_for(5150, "Mozilla/5.0 (Linux; Android 14) TestWayApp/1.0")
+    # Boshqa o'qituvchining testini ishlagan — natijasi o'sha o'qituvchida qoladi
+    register_teacher(555)
+    other = create_test()
+    sent, restore_notices = _capture_result_notices()
+    try:
+        started = client.post(f"/api/tests/{other['code']}/start", json={}, headers=as_user(5150)).json()
+        client.post(f"/api/attempts/{started['attempt_id']}/finish", json={"answers": {"1": "B"}}, headers=as_user(5150))
+    finally:
+        restore_notices()
+
+    # Pul balansi bor — o'chirib bo'lmaydi
+    session = SessionLocal()
+    try:
+        teacher = session.scalar(main.select(Teacher).join(main.User).where(main.User.tg_id == 5150))
+        teacher.balance, teacher.card_number = 20000, "8600123412341234"
+        session.commit()
+    finally:
+        session.close()
+    info = client.get("/api/me/delete-info", headers=as_user(5150)).json()
+    assert info["blockers"] and "20 000 so'm" in info["blockers"][0], info
+    assert client.post("/api/me/delete", json={"confirm": "O'CHIRISH"}, headers=as_user(5150)).status_code == 409
+    session = SessionLocal()
+    try:
+        session.scalar(main.select(Teacher).join(main.User).where(main.User.tg_id == 5150)).balance = 0
+        session.commit()
+    finally:
+        session.close()
+
+    info = client.get("/api/me/delete-info", headers=as_user(5150)).json()
+    assert info["blockers"] == [] and info["tests"] == 1 and info["is_teacher"], info
+    # Tasdiq so'zisiz — o'chmaydi; har xil apostrof bilan yozilsa ham qabul qilinadi
+    assert client.post("/api/me/delete", json={"confirm": "ha"}, headers=as_user(5150)).status_code == 422
+    deleted = client.post("/api/me/delete", json={"confirm": " oʻchirish "}, headers=as_user(5150))
+    assert deleted.status_code == 200, deleted.text
+
+    session = SessionLocal()
+    try:
+        old = session.scalar(main.select(main.User).where(main.User.deleted_at.is_not(None)))
+        assert old.full_name == "O'chirilgan foydalanuvchi" and old.username is None and old.tg_id < 0
+        assert old.deleted_tg_hash == main.tg_fingerprint(5150)
+        old_teacher = session.scalar(main.select(Teacher).where(Teacher.user_id == old.id))
+        assert old_teacher.credits == 0 and old_teacher.card_number is None
+        assert session.get(main.Test, created["id"]).deleted_at is not None
+        # Boshqa o'qituvchidagi natija qoladi — ismsiz
+        assert session.get(Attempt, started["attempt_id"]).user_id == old.id
+    finally:
+        session.close()
+    results = client.get(f"/api/teacher/tests/{other['id']}/results", headers=as_user(555)).json()
+    assert [row["name"] for row in results["rows"]] == ["O'chirilgan foydalanuvchi"], results["rows"]
+
+    # Ilovadagi seans bekor bo'lgan
+    assert client.get("/api/me/account", headers={"X-App-Session": session_token}).status_code == 401
+    # Qaytib kirsa — yangi, bo'sh hisob; o'qituvchi bo'lsa sovg'a token qayta berilmaydi
+    fresh = client.get("/api/me/account", headers=as_user(5150)).json()
+    assert fresh["is_teacher"] is False
+    again = client.post("/api/teacher/register", json={"first_name": "Alisher", "last_name": "Karimov"},
+                        headers=as_user(5150))
+    assert again.status_code == 200 and again.json()["credits"] == 0, again.text
+    assert client.get("/api/teacher/tests", headers=as_user(5150)).json() == []
+
+
+def test_maktab_egasi_hisobini_ochira_olmaydi():
+    reset_database()
+    _set_name(701, "Aziza", "Karimova")
+    client.post("/api/schools", json={"subjects": ["Matematika"], "region": "Samarqand viloyati", "district": "Urgut tumani",
+                                      "name": "Ilm maktabi"}, headers=as_user(701))
+    info = client.get("/api/me/delete-info", headers=as_user(701)).json()
+    assert info["blockers"] and "Ilm maktabi" in info["blockers"][0], info
+    assert client.post("/api/me/delete", json={"confirm": "O'CHIRISH"}, headers=as_user(701)).status_code == 409

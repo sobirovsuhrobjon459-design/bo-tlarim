@@ -93,9 +93,13 @@ from .database import (
     PLATFORM_COMMISSION_PERCENT,
     REFERRAL_CREDITS,
     WELCOME_CREDITS,
+    had_deleted_account,
+    tg_fingerprint,
+    welcome_credits_for,
     APP_SESSION_IDLE_LIMIT,
     AppLogin,
     AppLoginVerifyIn,
+    AccountDeleteIn,
     AppSession,
     AppSetting,
     Referral,
@@ -261,7 +265,8 @@ def _add_missing_columns() -> None:
             "offline_name": "VARCHAR(200)", "saved_answers": "TEXT", "sheet_number": "INTEGER", "variant": "VARCHAR(2)",
             "class_student_id": "INTEGER", "essay_text": "TEXT", "essay_score": "INTEGER",
         },
-        "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)"},
+        "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)", "deleted_at": "TIMESTAMP",
+                  "deleted_tg_hash": "VARCHAR(64)"},
         "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)",
                      "subscription_until": "TIMESTAMP"},
         "school_classes": {
@@ -5423,11 +5428,13 @@ def register_teacher(
     user.full_name = f"{body.first_name.strip()} {body.last_name.strip()}".strip()
 
     # Yangi o'qituvchi darhol ishlay boshlashi uchun sovg'a tokenlar beriladi
-    db.add(Teacher(user_id=user.id, credits=WELCOME_CREDITS))
+    # (hisobini o'chirib, qayta ochgan odamga — yo'q)
+    credits = welcome_credits_for(db, user.tg_id)
+    db.add(Teacher(user_id=user.id, credits=credits))
     db.commit()
     reward_referral(db, user)
 
-    return {"ok": True, "full_name": user.full_name, "credits": WELCOME_CREDITS}
+    return {"ok": True, "full_name": user.full_name, "credits": credits}
 
 
 # ---------- Referal ----------
@@ -5456,7 +5463,8 @@ def remember_bot_user(db: Session, tg_id: int, full_name: str, username: str | N
         db.flush()
         code = payload[len("ref_"):] if payload.startswith("ref_") else ""
         referrer = db.get(Teacher, int(code)) if code.isdigit() and len(code) <= 9 else None
-        if referrer and referrer.user_id != user.id:
+        # Hisobini o'chirib, qayta kelgan odam — yangi odam emas (taklif qilganga token qayta berilmasin)
+        if referrer and referrer.user_id != user.id and not had_deleted_account(db, tg_id):
             db.add(Referral(referrer_teacher_id=referrer.id, referred_user_id=user.id))
         db.commit()
     except IntegrityError:
@@ -5724,6 +5732,121 @@ def revoke_other_sessions(
             revoked += 1
     db.commit()
     return {"ok": True, "revoked": revoked}
+
+
+# ---------- Hisobni o'chirish ----------
+# Google Play talabi ham: hisob ochiladigan ilovada uni o'chirish imkoni bo'lishi shart.
+# Foydalanuvchi yozuvini bazadan butunlay o'chirib bo'lmaydi — unga to'lovlar (pul hisobi,
+# fiskal chek, Payme solishtiruvi), boshqa o'qituvchilar testlaridagi natijalar, sinf va
+# maktab yozuvlari bog'langan. Shuning uchun hisob ANONIMLASHTIRILADI: ism, username, rasm,
+# karta, telefon/pasport, kirish seanslari o'chadi, testlar ro'yxatdan olinadi, tokenlar va
+# obuna bekor bo'ladi, Telegram ID bo'shatiladi — odam qaytib kirsa, unga yangi bo'sh hisob ochiladi.
+
+ACCOUNT_DELETE_WORD = "O'CHIRISH"
+DELETED_USER_NAME = "O'chirilgan foydalanuvchi"
+
+
+def _all_memberships(db: Session, user: User) -> list[SchoolMember]:
+    """Foydalanuvchining barcha turdagi muassasalardagi amaldagi a'zoliklari."""
+
+    return db.scalars(
+        select(SchoolMember)
+        .join(PrivateSchool, PrivateSchool.id == SchoolMember.school_id)
+        .where(SchoolMember.user_id == user.id, SchoolMember.left_at.is_(None), PrivateSchool.deleted_at.is_(None))
+    ).all()
+
+
+def _account_delete_blockers(db: Session, user: User, teacher: Teacher | None) -> list[str]:
+    """Hisobni hozir o'chirib bo'lmaydigan sabablar (pul yoki boshqalar ishi bog'liq bo'lsa)."""
+
+    blockers = []
+    for member in _all_memberships(db, user):
+        if member.role == "owner":
+            school = member.school
+            blockers.append(
+                f"Siz «{school.name}» egasisiz — o'chirilishi kutilmoqda, u o'chgach hisobni o'chira olasiz."
+                if school.delete_requested_at else
+                f"Siz «{school.name}» egasisiz. Avval uni o'chiring yoki egalikni boshqa xodimga topshirib, chiqing."
+            )
+    if teacher and teacher.balance > 0:
+        blockers.append(f"Balansingizda {teacher.balance:,} so'm bor — avval uni yechib oling.".replace(",", " "))
+    if teacher and db.scalar(
+        select(WithdrawalRequest.id).where(WithdrawalRequest.teacher_id == teacher.id, WithdrawalRequest.status == "pending")
+    ):
+        blockers.append("Pul yechish so'rovingiz ko'rib chiqilmoqda — u yakunlangach hisobni o'chira olasiz.")
+    return blockers
+
+
+@app.get("/api/me/delete-info")
+def account_delete_info(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Hisobni o'chirish oynasi: nima yo'qoladi va o'chirishga nima xalaqit beradi."""
+
+    teacher = db.scalar(select(Teacher).where(Teacher.user_id == user.id))
+    tests = db.scalar(
+        select(func.count()).select_from(Test).where(Test.teacher_id == teacher.id, Test.deleted_at.is_(None))
+    ) if teacher else 0
+    return {
+        "word": ACCOUNT_DELETE_WORD,
+        "blockers": _account_delete_blockers(db, user, teacher),
+        "is_teacher": teacher is not None,
+        "tests": tests,
+        "credits": teacher.credits if teacher else 0,
+        "subscription_active": _subscription_active(teacher) if teacher else False,
+        "schools": [member.school.name for member in _all_memberships(db, user)],
+    }
+
+
+@app.post("/api/me/delete")
+def delete_my_account(body: AccountDeleteIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Hisobni o'chirish (qaytarib bo'lmaydi) — foydalanuvchi tasdiq so'zini yozgandan keyin."""
+
+    typed = body.confirm.strip().upper()
+    for apostrophe in ("ʻ", "ʼ", "’", "‘", "`"):
+        typed = typed.replace(apostrophe, "'")
+    if typed != ACCOUNT_DELETE_WORD:
+        raise HTTPException(status_code=422, detail=f"Tasdiqlash uchun «{ACCOUNT_DELETE_WORD}» so'zini yozing")
+
+    teacher = db.scalar(select(Teacher).where(Teacher.user_id == user.id))
+    blockers = _account_delete_blockers(db, user, teacher)
+    if blockers:
+        raise HTTPException(status_code=409, detail=blockers[0])
+
+    now = utcnow()
+    old_tg_id = user.tg_id
+    if teacher:
+        for test in db.scalars(select(Test).where(Test.teacher_id == teacher.id, Test.deleted_at.is_(None))).all():
+            test.deleted_at = now
+            if test.status != "closed":
+                _mark_test_closed(test)
+        teacher.credits = 0
+        teacher.subscription_until = None
+        teacher.card_number = teacher.card_holder = teacher.card_expiry = None
+    for member in db.scalars(select(SchoolMember).where(SchoolMember.user_id == user.id)).all():
+        if member.left_at is None:
+            member.left_at = now
+        member.phone = member.passport = None
+        member.birth_date = None
+    db.execute(
+        update(AppSession).where(AppSession.user_id == user.id, AppSession.revoked_at.is_(None)).values(revoked_at=now),
+        execution_options={"synchronize_session": False},
+    )
+    user.deleted_tg_hash = tg_fingerprint(old_tg_id)
+    user.tg_id = -user.id  # Telegram ID bo'shaydi: qaytib kirsa — yangi hisob
+    user.full_name = DELETED_USER_NAME
+    user.username = user.photo_url = None
+    user.deleted_at = now
+    db.commit()
+
+    _subscription_confirmed.pop(old_tg_id, None)
+    logging.getLogger("backend").info("Hisob o'chirildi: user=%s", user.id)
+    if BOT_TOKEN:
+        threading.Thread(
+            target=_send_bot_text,
+            args=(old_tg_id, "🗑 Chittak hisobingiz o'chirildi.\n\nIsmingiz, testlaringiz, tokenlaringiz va kirish "
+                             "seanslaringiz o'chirildi. Xohlasangiz, istalgan payt qaytadan ro'yxatdan o'tishingiz mumkin."),
+            daemon=True,
+        ).start()
+    return {"ok": True}
 
 
 def confirm_app_login(db: Session, token: str, tg_id: int, full_name: str, username: str | None) -> tuple[bool, str]:
@@ -6347,7 +6470,9 @@ def _run_broadcast(test_id: int) -> None:
             (_broadcast_text(test, teacher_user, profile_link=False), None),
         ]
         teacher_tg_id = teacher_user.tg_id
-        chat_ids = session.scalars(select(User.tg_id).where(User.tg_id != teacher_tg_id).order_by(User.id)).all()
+        chat_ids = session.scalars(
+            select(User.tg_id).where(User.tg_id != teacher_tg_id, User.tg_id > 0).order_by(User.id)  # o'chirilganlarsiz
+        ).all()
 
     delivered, variant = 0, 0
     for chat_id in chat_ids:
@@ -16742,7 +16867,8 @@ def _admin_audience_chat_ids(db: Session, audience: str) -> list[int]:
             query = query.where(or_(SchoolMember.role == "owner", SchoolMember.position.in_(("director", "deputy"))))
     else:
         raise HTTPException(status_code=422, detail="Bunday guruh yo'q")
-    return list(dict.fromkeys(db.scalars(query.order_by(User.id)).all()))
+    # O'chirilgan hisoblar (tg_id manfiy) — xabar yuborilmaydi
+    return list(dict.fromkeys(db.scalars(query.where(User.tg_id > 0).order_by(User.id)).all()))
 
 
 def _run_admin_broadcast(admin_tg_id: int, chat_ids: list[int], text: str, title: str) -> None:

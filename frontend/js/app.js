@@ -18360,6 +18360,7 @@ async function renderAccount() {
         ? `<button class="btn btn-danger" type="button" id="account-logout" style="margin-top:22px">🚪 Akkauntdan chiqish</button>`
         : ""
     }
+    <button class="btn btn-ghost" type="button" id="account-delete" style="margin-top:12px;color:#c0392b">🗑 Hisobni o'chirish</button>
   `);
 
   document.querySelector('[data-action="home"]').addEventListener("click", guarded(loadHome));
@@ -18388,6 +18389,85 @@ async function renderAccount() {
     })
   );
   document.getElementById("account-logout")?.addEventListener("click", guarded(appLogout));
+  document.getElementById("account-delete").addEventListener("click", guarded(renderDeleteAccount));
+}
+
+/*
+  Hisobni o'chirish (Google Play talabi ham). Ikki bosqich: nima yo'qolishini ko'rsatib so'raladi,
+  keyin "O'CHIRISH" so'zi yoziladi. Hisob qaytarilmaydi: ism, testlar, tokenlar, seanslar o'chadi.
+  O'chgandan keyin hech qanday so'rov yuborilmaydi — Telegram ichida har so'rov yangi hisob ochib qo'yardi.
+*/
+async function renderDeleteAccount() {
+  const info = await api("/api/me/delete-info");
+  const lost = [
+    "ismingiz, Telegram username va rasmingiz",
+    ...(info.is_teacher
+      ? [
+          `barcha testlaringiz (${info.tests} ta) — natijalari bilan ro'yxatingizdan`,
+          `tokenlar (${formatNumber(info.credits)} ta)${info.subscription_active ? " va oylik obuna" : ""} — pul qaytarilmaydi`,
+          "karta ma'lumotlaringiz",
+        ]
+      : []),
+    ...(info.schools.length ? [`${info.schools.map(escapeHtml).join(", ")} dagi a'zoligingiz`] : []),
+    "barcha qurilmalardagi kirishlar",
+  ];
+
+  showPage(`
+    <div class="page-header">
+      <button class="back-button" type="button" data-action="back-account" style="margin:0">←</button>
+      <h2 style="margin:0;flex:1">Hisobni o'chirish</h2>
+    </div>
+    ${
+      info.blockers.length
+        ? `<div class="notice">⚠️ Hisobni hozir o'chirib bo'lmaydi:
+             <ul style="margin:8px 0 0;padding-left:18px">${info.blockers.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+           </div>`
+        : `<div class="panel">
+             <p style="margin:0 0 8px"><b>Butunlay o'chiriladi — qaytarib bo'lmaydi:</b></p>
+             <ul style="margin:0;padding-left:18px">${lost.map((item) => `<li>${item}</li>`).join("")}</ul>
+             <p class="subtitle" style="margin:12px 0 0">To'lovlar tarixi (qonun bo'yicha) va boshqa o'qituvchilar
+               hisobotidagi natijalaringiz ismsiz — «O'chirilgan foydalanuvchi» bo'lib qoladi.</p>
+           </div>
+           <label class="field-label" for="delete-account-word" style="margin-top:16px">Tasdiqlash uchun <b>${escapeHtml(info.word)}</b> deb yozing</label>
+           <input class="input" id="delete-account-word" autocomplete="off" placeholder="${escapeHtml(info.word)}" />
+           <button class="btn btn-danger" type="button" id="delete-account-confirm" style="margin-top:12px" disabled>🗑 Hisobni butunlay o'chirish</button>`
+    }
+  `);
+
+  document.querySelector('[data-action="back-account"]').addEventListener("click", guarded(renderAccount));
+  const input = document.getElementById("delete-account-word");
+  const button = document.getElementById("delete-account-confirm");
+  if (!input) return;
+  const normalize = (value) => value.trim().toUpperCase().replace(/[ʻʼ’‘`]/g, "'");
+  input.addEventListener("input", () => {
+    button.disabled = normalize(input.value) !== info.word;
+  });
+  button.addEventListener(
+    "click",
+    guarded(async () => {
+      if (!(await askConfirm("Hisobingiz butunlay o'chiriladi. Haqiqatan ham davom etasizmi?", { yes: "Ha, o'chirish", no: "Bekor qilish" }))) return;
+      await api("/api/me/delete", { method: "POST", body: { confirm: input.value } });
+      setAppSession("");
+      homeSnapshot = null;
+      homeData = null;
+      pageDataCache.clear();
+      renderAccountDeleted();
+    })
+  );
+}
+
+function renderAccountDeleted() {
+  showPage(`
+    <div class="result-number">👋</div>
+    <h2 style="text-align:center">Hisobingiz o'chirildi</h2>
+    <p class="subtitle" style="text-align:center">Ma'lumotlaringiz o'chirildi. Xohlasangiz, istalgan payt qaytadan ro'yxatdan o'tishingiz mumkin.</p>
+    <button class="btn" type="button" id="account-deleted-close" style="margin-top:16px">${telegram?.close && !NEEDS_LOGIN ? "Yopish" : "Bosh sahifa"}</button>
+  `);
+  document.getElementById("account-deleted-close").addEventListener("click", () => {
+    if (telegram?.close && !NEEDS_LOGIN) telegram.close();
+    else if (NEEDS_LOGIN) renderAppLogin();
+    else window.location.reload();
+  });
 }
 
 async function appLogout() {
