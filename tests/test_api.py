@@ -4329,6 +4329,106 @@ def test_ona_tili_essesi_oqituvchi_baholaydi_va_ballga_qoshiladi():
         pdf = client.get(url, headers=teacher)
         assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF"), url
 
+    _check_essay_ai(created, attempts, teacher)
+
+
+def test_esse_ai_orqali_avtomatik_baholanadi():
+    """Testda "AI orqali tekshirish" yoqilgan bo'lsa — topshirilgach AI o'zi taklif beradi, ball qo'yilmaydi."""
+    import time
+    from backend import ai_reader
+
+    reset_database()
+    register_teacher()
+    key = _subject_key("Ona tili va adabiyot")
+    with_ai = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay=True, essay_ai=True)
+    without_ai = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay=True)
+    # Esse yo'q testda AI belgisi saqlanmaydi
+    no_essay = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay_ai=True)
+    with SessionLocal() as session:
+        assert session.get(main.Test, no_essay["id"]).essay_ai is False
+
+    original = ai_reader.grade_essay, os.environ.get("GEMINI_API_KEY")
+    calls = []
+    os.environ["GEMINI_API_KEY"] = "test"
+    ai_reader.grade_essay = lambda subject, text, max_score: calls.append(text) or (19, "Puxta yozilgan")
+    sent, restore = _capture_result_notices()
+    try:
+        attempt_ids = {}
+        for created, user in ((with_ai, 7500), (without_ai, 7501)):
+            started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(user)).json()
+            attempt_ids[created["id"]] = started["attempt_id"]
+            finished = client.post(f"/api/attempts/{started['attempt_id']}/finish", headers=as_user(user),
+                                   json={"answers": {"essay": "Ilm " * 150}})
+            assert finished.status_code == 200, finished.text
+
+        url = f"/api/teacher/tests/{with_ai['id']}/students/{attempt_ids[with_ai['id']]}/detail"
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            essay = client.get(url, headers=as_user(555)).json()["essay"]
+            if essay["ai_score"] is not None:
+                break
+            time.sleep(0.1)
+        assert essay["ai_score"] == 19 and essay["ai_comment"] == "Puxta yozilgan" and essay["ai_auto"] is True, essay
+        assert essay["score"] is None  # ballni o'qituvchi tasdiqlaydi
+        other = client.get(f"/api/teacher/tests/{without_ai['id']}/students/{attempt_ids[without_ai['id']]}/detail",
+                           headers=as_user(555)).json()["essay"]
+        assert other["ai_score"] is None and other["ai_auto"] is False
+        assert len(calls) == 1  # faqat AI yoqilgan testdagi esse yuborildi
+    finally:
+        restore()
+        ai_reader.grade_essay = original[0]
+        if original[1] is None:
+            os.environ.pop("GEMINI_API_KEY", None)
+        else:
+            os.environ["GEMINI_API_KEY"] = original[1]
+
+
+def _check_essay_ai(created: dict, attempts: dict, teacher: dict):
+    """AI esseni baholaydi: faqat TAKLIF saqlanadi, ballni o'qituvchi qo'yadi."""
+    from backend import ai_reader
+
+    base = f"/api/teacher/tests/{created['id']}/students"
+    long_url, short_url = f"{base}/{attempts[7400]}/essay/ai", f"{base}/{attempts[7401]}/essay/ai"
+    empty_url = f"{base}/{attempts[7402]}/essay/ai"
+
+    original = ai_reader.grade_essay, os.environ.pop("GEMINI_API_KEY", None), os.environ.pop("ANTHROPIC_API_KEY", None)
+    calls = []
+    try:
+        # AI ulanmagan — aniq xabar
+        assert client.post(long_url, headers=teacher).status_code == 400
+        assert client.get(f"{base}/{attempts[7400]}/detail", headers=teacher).json()["essay"]["ai_enabled"] is False
+
+        os.environ["GEMINI_API_KEY"] = "test"
+        ai_reader.grade_essay = lambda subject, text, max_score: calls.append((subject, text, max_score)) or (17, "Yaxshi")
+        before = client.get(f"{base}/{attempts[7400]}/detail", headers=teacher).json()["essay"]["score"]
+        graded = client.post(long_url, headers=teacher)
+        assert graded.status_code == 200 and graded.json()["score"] == 17, graded.text
+        assert calls == [("Ona tili va adabiyot", ("Vatan " * 120).strip(), 24)]  # faqat fan va matn ketadi
+        essay = client.get(f"{base}/{attempts[7400]}/detail", headers=teacher).json()["essay"]
+        assert essay["ai_score"] == 17 and essay["ai_comment"] == "Yaxshi" and essay["ai_enabled"] is True
+        assert essay["score"] == before  # o'qituvchi bahosi o'zgarmaydi
+
+        # 100 so'zdan kam — AI'siz 2 ball; yozilmagan esse — baholanmaydi
+        short = client.post(short_url, headers=teacher).json()
+        assert short["score"] == 2 and len(calls) == 1, short
+        assert client.post(empty_url, headers=teacher).status_code == 400
+
+        # AI xatosi — 502, taklif o'zgarmaydi
+        def fail(*_):
+            raise ai_reader.AIReadError("cheklov")
+        ai_reader.grade_essay = fail
+        assert client.post(long_url, headers=teacher).status_code == 502
+        assert client.get(f"{base}/{attempts[7400]}/detail", headers=teacher).json()["essay"]["ai_score"] == 17
+
+        # Boshqa o'qituvchi so'ray olmaydi
+        assert client.post(long_url, headers=as_user(556)).status_code in (403, 404)
+    finally:
+        ai_reader.grade_essay = original[0]
+        os.environ.pop("GEMINI_API_KEY", None)
+        for name, value in (("GEMINI_API_KEY", original[1]), ("ANTHROPIC_API_KEY", original[2])):
+            if value is not None:
+                os.environ[name] = value
+
 
 def test_yozma_ish_har_bandi_kalitga_solishtiriladi():
     """Kimyo 41–43: har bandning yakuniy javobi kalit bilan; ko'proq to'g'ri band — ko'proq ball."""
@@ -4338,6 +4438,13 @@ def test_yozma_ish_har_bandi_kalitga_solishtiriladi():
     created = create_test(subject="Kimyo", key_questions=key)
     refs = {item["label"]: str(item["number"]) for item in key if item.get("label")}
     assert {"41a", "41b", "41c", "43c"} <= set(refs), sorted(refs)[-6:]
+
+    # Ko'rinishda — imtihondagidek raqam bilan (41.1, 41.2 …); ichki nom (41a) bazada qoladi
+    shown = {item["label"] for item in client.get(f"/api/teacher/tests/{created['id']}/questions",
+                                                  headers=as_user(555)).json()["questions"]}
+    assert {"41.1", "41.2", "43.3"} <= shown and "41a" not in shown, sorted(shown)
+    assert main.band_label("Kimyo", "41c") == "41.3" and main.band_label("Matematika", "41a") == "41a"
+    assert main.band_label("Biologiya", "42e") == "42.5" and main.band_label("Kimyo", "36") == "36"
 
     sent, restore = _capture_result_notices()
     try:
@@ -4439,13 +4546,6 @@ def test_natija_xabarlari_navbat_bilan_yetkaziladi():
     assert sorted(delivered) == sorted(f"Natija #{index:03d} " + "x" * 40 for index in range(300)), len(delivered)
     assert len(to_teacher) < 30, f"birlashtirilmadi: {len(to_teacher)} ta xabar"
     assert all(len(text) <= 4096 for _, text, _ in to_teacher)
-    # Ko'rinishda — imtihondagidek raqam bilan (41.1, 41.2 …); ichki nom (41a) bazada qoladi
-    shown = {item["label"] for item in client.get(f"/api/teacher/tests/{created['id']}/questions",
-                                                  headers=as_user(555)).json()["questions"]}
-    assert {"41.1", "41.2", "43.3"} <= shown and "41a" not in shown, sorted(shown)
-    assert main.band_label("Kimyo", "41c") == "41.3" and main.band_label("Matematika", "41a") == "41a"
-    assert main.band_label("Biologiya", "42e") == "42.5" and main.band_label("Kimyo", "36") == "36"
-
     gaps = [b[2] - a[2] for a, b in zip(to_teacher, to_teacher[1:])]
     assert all(gap >= 0.29 for gap in gaps), gaps
     assert any(chat == 777 for chat, _, _ in sent)

@@ -325,3 +325,143 @@ def _read_with_claude(subject: str, boxes: list[tuple[str, str]]) -> list:
     log.info("Claude o'qidi: %d katak, model %s, tokenlar %s/%s", len(boxes), response.model,
              usage.input_tokens, usage.output_tokens)
     return _parse_answers(next((block.text for block in response.content if block.type == "text"), ""))
+
+
+# ---------- Esseni baholash (Ona tili 45) ----------
+#
+# AI faqat TAKLIF beradi: ball va izoh o'qituvchiga ko'rinadi, ballni o'qituvchi o'zi qo'yadi
+# (bitta tugma bilan taklifni qabul qilishi yoki o'zgartirishi mumkin). Yuboriladigan narsa —
+# faqat fan nomi va esse matni (o'quvchi ismi, sinfi, ID'si ketmaydi).
+
+ESSAY_PROMPT = """You are an experienced examiner of the Uzbek national certificate exam (Milliy sertifikat), \
+subject "Ona tili va adabiyot". You grade the essay task (esse) written in Uzbek (Latin script) by a student.
+
+Scoring follows the official scheme: 12 criteria, each scored 0, 1 or 2 points, total 0–{max_score}. \
+Judge the essay as a whole on: a clear position on the topic, an introduction, a developed main part and a \
+conclusion; argumentation with relevant examples (from literature, history or life); logical coherence and \
+paragraphing; richness and accuracy of vocabulary and style; grammar; spelling (imlo); punctuation.
+Special rules:
+- An essay that is off-topic, copied, or shorter than 100 words gets 2 points in total.
+- An empty essay, only an introduction, or an essay written in Cyrillic script gets 0 points.
+The exam topic is NOT given to you. Do not penalise for topic relevance unless the text plainly has no topic; \
+the teacher checks the topic.
+
+Return JSON: {{"score": <integer 0–{max_score}>, "comment": "<3–6 short sentences in Uzbek (Latin): \
+main strengths, the most important mistakes with 1–2 concrete examples quoted from the essay, and why this score>"}}."""
+
+ESSAY_SCHEMA = {
+    "type": "object",
+    "properties": {"score": {"type": "integer"}, "comment": {"type": "string"}},
+    "required": ["score", "comment"],
+    "additionalProperties": False,
+}
+
+
+def grade_essay(subject: str, text: str, max_score: int) -> tuple[int, str]:
+    """
+    Esseni AI baholaydi: (taklif qilingan ball 0..max_score, izoh o'zbekcha).
+    Xato bo'lsa — AIReadError (o'qituvchi esseni o'zi baholaydi).
+    """
+
+    global last_error
+    system = ESSAY_PROMPT.format(max_score=max_score)
+    user_text = f"Subject: {subject}. Maximum score: {max_score}.\n\nStudent's essay:\n<essay>\n{text}\n</essay>"
+    provider = ai_provider()
+    try:
+        if provider == "gemini":
+            raw = _essay_with_gemini(system, user_text)
+        elif provider == "anthropic":
+            raw = _essay_with_claude(system, user_text)
+        else:
+            raise AIReadError("AI kaliti sozlanmagan")
+        result = _parse_essay(raw, max_score)
+    except AIReadError as error:
+        last_error = {"message": str(error), "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        raise
+    last_error = None
+    return result
+
+
+def _parse_essay(text: str, max_score: int) -> tuple[int, str]:
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.strip("`").removeprefix("json").strip()
+    try:
+        data = json.loads(text)
+        score = int(data["score"])
+        comment = str(data.get("comment", "")).strip()
+    except (ValueError, KeyError, TypeError) as error:
+        raise AIReadError("AI javobi tushunarsiz") from error
+    return max(0, min(max_score, score)), comment[:2000]
+
+
+def _essay_with_gemini(system: str, user_text: str) -> str:
+    body = {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseJsonSchema": _gemini_schema(ESSAY_SCHEMA),
+            "maxOutputTokens": 8192,
+        },
+    }
+    headers = {"x-goog-api-key": os.getenv("GEMINI_API_KEY", ""), "Content-Type": "application/json"}
+    models = [GEMINI_MODEL] + ([GEMINI_FALLBACK_MODEL] if GEMINI_FALLBACK_MODEL not in ("", GEMINI_MODEL) else [])
+    quota_over = False
+    for model in models:
+        response, quota_over = _gemini_call(GEMINI_URL.format(model=model), body, headers)
+        if response.status_code in (404, 429, 500, 502, 503, 504) and model != models[-1]:
+            log.warning("Gemini %s ishlamadi (%s) — zaxira model %s", model, response.status_code, models[-1])
+            continue
+        break
+    if response.status_code != 200:
+        if quota_over:
+            raise AIReadError("Gemini bepul cheklovi tugadi — keyinroq qayta urinib ko'ring")
+        message = _gemini_error(response)
+        log.warning("Gemini xatosi %s: %s", response.status_code, message)
+        raise AIReadError(f"Gemini xatosi ({response.status_code}): {message}")
+
+    data = response.json()
+    if data.get("promptFeedback", {}).get("blockReason"):
+        raise AIReadError(f"Gemini so'rovni rad etdi ({data['promptFeedback']['blockReason']})")
+    candidates = data.get("candidates") or []
+    if not candidates:
+        raise AIReadError("Gemini javob bermadi")
+    finish = candidates[0].get("finishReason", "STOP")
+    if finish not in ("STOP", "FINISH_REASON_UNSPECIFIED"):
+        raise AIReadError(f"Gemini javobi to'liq emas ({finish})")
+    usage = data.get("usageMetadata", {})
+    log.info("Gemini esseni baholadi: tokenlar %s/%s", usage.get("promptTokenCount"), usage.get("candidatesTokenCount"))
+    return "".join(part.get("text", "") for part in candidates[0].get("content", {}).get("parts", [])
+                   if not part.get("thought"))
+
+
+def _essay_with_claude(system: str, user_text: str) -> str:
+    import anthropic
+
+    try:
+        response = _get_client().beta.messages.create(
+            model=AI_MODEL,
+            max_tokens=16000,
+            system=system,
+            messages=[{"role": "user", "content": user_text}],
+            # Baholash — mulohaza talab qiladi, lekin bitta esse: o'rtacha chuqurlik yetarli
+            output_config={"effort": "medium", "format": {"type": "json_schema", "schema": ESSAY_SCHEMA}},
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+        )
+    except anthropic.APIConnectionError as error:
+        raise AIReadError("AI bilan aloqa yo'q") from error
+    except anthropic.RateLimitError as error:
+        raise AIReadError("AI band (so'rovlar chegarasi)") from error
+    except anthropic.APIStatusError as error:
+        log.warning("AI xatosi %s: %s", error.status_code, error.message)
+        raise AIReadError(f"AI xatosi ({error.status_code})") from error
+
+    if response.stop_reason == "refusal":
+        raise AIReadError("AI so'rovni rad etdi")
+    if response.stop_reason == "max_tokens":
+        raise AIReadError("AI javobi chala qoldi")
+    log.info("Claude esseni baholadi: model %s, tokenlar %s/%s", response.model,
+             response.usage.input_tokens, response.usage.output_tokens)
+    return next((block.text for block in response.content if block.type == "text"), "")

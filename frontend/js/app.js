@@ -12724,6 +12724,18 @@ function renderNewTestForm(testType, draft = {}) {
           } 0–${SUBJECT_PRESETS[subject]?.essay || 24} ball qo'yasiz — ball umumiy natijaga qo'shiladi.</p>
         </span>
       </label>
+      <label class="setting-row" style="margin-top:10px">
+        <input type="checkbox" id="field-essay-ai" ${draft.essay_ai ? "checked" : ""} />
+        <span>
+          <b>🤖 AI orqali tekshirish</b>
+          <p class="subtitle" style="margin:4px 0 0">O'quvchi testni topshirishi bilan AI esseni o'qib, ball va izoh
+            taklif qiladi. Siz natijalarda taklifni ko'rib, bitta tugma bilan qo'yasiz yoki ballni o'zgartirasiz —
+            yakuniy ballni baribir siz tasdiqlaysiz. Faqat ilovada yozilgan esse tekshiriladi (qog'ozdagisi — yo'q).</p>
+          <p class="subtitle" style="margin:6px 0 0;color:#d97706">⚠️ <b>Pullik xizmat.</b>
+            AI orqali tekshirish pullik xizmat hisoblanadi. Narxi va to'lov tartibi alohida e'lon qilinadi.
+            AI xato qilishi mumkin va esse mavzusini bilmaydi — mavzuga mosligini o'zingiz tekshiring.</p>
+        </span>
+      </label>
     </div>
 
     <p class="field-label" style="margin-top:14px">Testga qo'shilish turi</p>
@@ -13367,6 +13379,9 @@ async function saveNewTest() {
     test_type: { boshlangich: "boshlangich", dtm: "dtm" }[document.getElementById("field-type").value] || "rash",
     essay: Boolean(SUBJECT_PRESETS[document.getElementById("field-subject").value]?.essay) &&
       document.getElementById("field-essay").checked,
+    essay_ai: Boolean(SUBJECT_PRESETS[document.getElementById("field-subject").value]?.essay) &&
+      document.getElementById("field-essay").checked &&
+      Boolean(document.getElementById("field-essay-ai")?.checked),
   };
 
   const keyRows = [...document.querySelectorAll("#key-questions-container .key-row")];
@@ -17005,6 +17020,7 @@ function essayGradingHtml(essay) {
              <div style="white-space:pre-wrap;line-height:1.55;max-height:50vh;overflow:auto;padding:10px 12px;border-radius:12px;background:var(--color-bg)">${escapeHtml(essay.text)}</div>`
           : `<p class="subtitle" style="margin:0">Esse ilovada yozilmagan — qog'ozdagi esseni o'qib baholang.</p>`
       }
+      ${essay.text && essay.ai_enabled ? essayAiHtml(essay) : ""}
       <p class="field-label" style="margin-top:12px">Ball (0–${essay.max})</p>
       <div class="row-between" style="gap:8px">
         <button type="button" class="btn btn-ghost" data-essay-step="-1" style="width:56px;margin:0" aria-label="Kamaytirish">−</button>
@@ -17024,9 +17040,49 @@ function essayGradingHtml(essay) {
     </div>`;
 }
 
+// AI taklifi: ball + izoh. Ballni o'qituvchi o'zi qo'yadi ("Taklifni qo'yish" — faqat maydonni to'ldiradi)
+function essayAiHtml(essay) {
+  const hasSuggestion = essay.ai_score !== null && essay.ai_score !== undefined;
+  return `
+    <div style="margin-top:12px;padding:10px 12px;border-radius:12px;background:var(--color-bg)">
+      ${
+        hasSuggestion
+          ? `<p style="margin:0 0 4px"><b>🤖 AI taklifi: ${essay.ai_score}/${essay.max}</b></p>
+             <p class="subtitle" style="margin:0 0 8px;white-space:pre-wrap;line-height:1.45">${escapeHtml(essay.ai_comment || "")}</p>
+             <div class="row-between" style="gap:8px">
+               <button type="button" class="btn btn-ghost" id="essay-ai-apply" style="margin:0">Taklifni qo'yish</button>
+               <button type="button" class="btn btn-ghost" id="essay-ai-button" style="margin:0">🔄 Qayta baholash</button>
+             </div>`
+          : `${essay.ai_auto ? `<p class="subtitle" style="margin:0 0 8px">⏳ AI esseni baholamoqda — birozdan keyin sahifani yangilang.</p>` : ""}
+             <button type="button" class="btn btn-ghost" id="essay-ai-button" style="margin:0">🤖 AI bilan baholash</button>`
+      }
+      <p class="subtitle" style="margin:6px 0 0;font-size:12px">AI faqat taklif beradi — yakuniy ballni siz qo'yasiz.
+        Mavzuga mosligini AI bilmaydi, uni o'zingiz tekshiring.
+        <span style="color:#d97706">⚠️ AI orqali tekshirish — pullik xizmat.</span></p>
+    </div>`;
+}
+
 function bindEssayGrading(testId, attemptId, essay) {
   const input = document.getElementById("essay-score");
   const clamp = (value) => Math.min(essay.max, Math.max(0, Math.round(value)));
+  document.getElementById("essay-ai-apply")?.addEventListener("click", () => {
+    input.value = essay.ai_score;
+    telegram?.HapticFeedback?.selectionChanged?.();
+  });
+  const aiButton = document.getElementById("essay-ai-button");
+  aiButton?.addEventListener(
+    "click",
+    guarded(async () => {
+      const label = aiButton.textContent;
+      aiButton.textContent = "⏳ AI o'qiyapti...";
+      try {
+        await api(`/api/teacher/tests/${testId}/students/${attemptId}/essay/ai`, { method: "POST" });
+      } finally {
+        aiButton.textContent = label;
+      }
+      await renderStudentDetail(testId, attemptId);
+    })
+  );
   document.querySelectorAll("[data-essay-step]").forEach((button) =>
     button.addEventListener("click", () => {
       const current = input.value === "" ? 0 : Number(input.value) || 0;

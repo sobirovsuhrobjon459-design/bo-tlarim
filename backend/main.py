@@ -60,7 +60,7 @@ from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import CondPageBreak, HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import String, case, cast, delete, distinct, func, inspect, or_, select, text, update
+from sqlalchemy import String, case, cast, delete, distinct, event, func, inspect, or_, select, text, update
 from sqlalchemy.orm import Session, defer, object_session, selectinload
 
 from .memory import MEMORY_WARN_MB, limit_malloc_arenas, release_memory, rss_mb, storage_report
@@ -258,6 +258,7 @@ def _add_missing_columns() -> None:
             # Eski testlar — eski varaq ko'rinishi (raqamsiz), chop etilganlari to'g'ri skanerlansin
             "sheet_version": "INTEGER DEFAULT 1",
             "essay_max": "INTEGER",
+            "essay_ai": "BOOLEAN DEFAULT FALSE",
             "test_type": "VARCHAR(15) DEFAULT 'rash'",
             "closed_at": "TIMESTAMP",
             "reopened_at": "TIMESTAMP",
@@ -268,6 +269,7 @@ def _add_missing_columns() -> None:
         "test_attempts": {
             "offline_name": "VARCHAR(200)", "saved_answers": "TEXT", "sheet_number": "INTEGER", "variant": "VARCHAR(2)",
             "class_student_id": "INTEGER", "essay_text": "TEXT", "essay_score": "INTEGER",
+            "essay_ai_score": "INTEGER", "essay_ai_comment": "TEXT",
         },
         "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)", "deleted_at": "TIMESTAMP",
                   "deleted_tg_hash": "VARCHAR(64)"},
@@ -1660,12 +1662,12 @@ def _rasch_items(test: Test) -> list[tuple[int, str]]:
     items = []
     for key_question in test.key_questions:
         label = key_question.label or str(key_question.number)
-        match = re.fullmatch(r"(\d+)([a-z]+)", label)
-        items.append((key_question.number, f"{match.group(1)}({match.group(2)})" if match else label))
         shown = band_label(test.subject, label)
         if shown != label:  # yozma ish bandi — imtihondagidek "43.1"
             items.append((key_question.number, shown))
             continue
+        match = re.fullmatch(r"(\d+)([a-z]+)", label)
+        items.append((key_question.number, f"{match.group(1)}({match.group(2)})" if match else label))
     return items
 
 
@@ -5147,6 +5149,9 @@ def _finalize_attempt(db: Session, attempt: Attempt, test: Test, answers: dict[s
     _calculate_attempt_score(db, attempt, test)
     if test.essay_max:
         attempt.essay_text = (answers.get(ESSAY_KEY) or "").strip()[:ESSAY_MAX_CHARS] or None
+        if test.essay_ai and attempt.essay_text:
+            # Bazaga yozilgach (commit) fonda AI baholaydi — qarang: _submit_essay_ai
+            db.info.setdefault("essay_ai", set()).add(attempt.id)
 
     attempt.finished_at = utcnow()
     attempt.status = "done"
@@ -6533,6 +6538,7 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         start_time=start_time,
         end_time=end_time,
         essay_max=essay_max(body.subject) if body.essay else None,
+        essay_ai=bool(body.essay and body.essay_ai and essay_max(body.subject)),
         test_type=body.test_type,
         questions=[Question(**question.model_dump()) for question in body.questions] if body.mode == "full" else [],
         key_questions=(
@@ -7058,6 +7064,8 @@ def _essay_review(test: Test, attempt: Attempt) -> dict | None:
     """Esse: raqami, maksimal bali, qo'yilgan ball (None — baholanmagan) va o'quvchi yozgan matn."""
     if not test.essay_max:
         return None
+    from .ai_reader import ai_enabled
+
     text_value = attempt.essay_text or ""
     return {
         "number": _essay_number(test),
@@ -7065,7 +7073,101 @@ def _essay_review(test: Test, attempt: Attempt) -> dict | None:
         "score": attempt.essay_score,
         "text": text_value,
         "words": len(text_value.split()),
+        # AI taklifi: o'qituvchi "AI bilan baholash" ni bosganda to'ladi
+        "ai_enabled": ai_enabled(),
+        "ai_auto": bool(test.essay_ai),  # topshirilgach AI o'zi baholaydi
+        "ai_score": attempt.essay_ai_score,
+        "ai_comment": attempt.essay_ai_comment,
     }
+
+
+def _suggest_essay_score(db: Session, test: Test, attempt: Attempt) -> tuple[int, str]:
+    """
+    Esse uchun AI taklifi (ball, izoh) — saqlanadi, lekin essay_score'ga yozilmaydi.
+    100 so'zdan kam esse — mezon bo'yicha 2 ball, AI'ga so'rovsiz. AI xatosi — AIReadError.
+    """
+
+    from .ai_reader import grade_essay
+
+    text_value = (attempt.essay_text or "").strip()
+    words = len(text_value.split())
+    if words < ESSAY_MIN_WORDS:
+        score = min(2, test.essay_max)
+        comment = f"Esse {words} so'zdan iborat — {ESSAY_MIN_WORDS} so'zdan kam, mezon bo'yicha {score} ball."
+    else:
+        score, comment = grade_essay(test.subject, text_value, test.essay_max)
+    attempt.essay_ai_score, attempt.essay_ai_comment = score, comment
+    db.commit()
+    return score, comment
+
+
+@event.listens_for(Session, "after_commit")
+def _submit_essay_ai(session: Session) -> None:
+    """Topshirilgan esselar bazaga yozilgach — fonda AI navbatiga (testda "AI orqali tekshirish" yoqilgan bo'lsa)."""
+
+    from .ai_reader import ai_enabled
+
+    attempt_ids = session.info.pop("essay_ai", None)
+    if attempt_ids and ai_enabled():
+        for attempt_id in sorted(attempt_ids):
+            _ai_pool.submit(_ai_grade_essay, attempt_id)
+
+
+@event.listens_for(Session, "after_rollback")
+def _forget_essay_ai(session: Session) -> None:
+    session.info.pop("essay_ai", None)
+
+
+def _ai_grade_essay(attempt_id: int) -> None:
+    """Fonda: bitta o'quvchining essesini AI baholaydi (xato bo'lsa — o'qituvchi tugma bilan qayta so'raydi)."""
+
+    from .ai_reader import AIReadError
+
+    logger = logging.getLogger("backend.ai")
+    try:
+        with SessionLocal() as db:
+            attempt = db.get(Attempt, attempt_id)
+            if not attempt or attempt.status != "done" or attempt.essay_ai_score is not None:
+                return
+            test = db.get(Test, attempt.test_id)
+            if not test or not test.essay_max or not test.essay_ai or not (attempt.essay_text or "").strip():
+                return
+            try:
+                _suggest_essay_score(db, test, attempt)
+            except AIReadError as error:
+                logger.warning("AI esseni baholay olmadi (o'quvchi %s): %s", attempt_id, error)
+    except Exception:  # noqa: BLE001 — fondagi ish: xato bo'lsa esseni o'qituvchi baholaydi
+        logger.exception("AI esse baholashda kutilmagan xato (o'quvchi %s)", attempt_id)
+
+
+@app.post("/api/teacher/tests/{test_id}/students/{attempt_id}/essay/ai")
+def essay_ai_grade(
+    test_id: int, attempt_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db),
+):
+    """
+    Esseni AI baholaydi va TAKLIF qiladi (ball + izoh). Ball o'quvchiga qo'yilmaydi —
+    o'qituvchi taklifni ko'rib, o'zi saqlaydi (PUT .../essay).
+    """
+
+    from .ai_reader import AIReadError, ai_enabled
+
+    test = _get_own_test(db, teacher, test_id)
+    if not test.essay_max:
+        raise HTTPException(status_code=400, detail="Bu testda esse yo'q")
+    attempt = db.get(Attempt, attempt_id)
+    if not attempt or attempt.test_id != test.id:
+        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    text_value = (attempt.essay_text or "").strip()
+    if not text_value:
+        raise HTTPException(status_code=400, detail="Esse ilovada yozilmagan — AI faqat ilovada yozilgan esseni baholaydi")
+    if not ai_enabled():
+        raise HTTPException(status_code=400, detail="AI ulanmagan — administrator API kalitini sozlashi kerak")
+
+    try:
+        score, comment = _suggest_essay_score(db, test, attempt)
+    except AIReadError as error:
+        raise HTTPException(status_code=502, detail=f"AI baholay olmadi: {error}") from error
+    return {"ok": True, "score": score, "comment": comment}
 
 
 @app.put("/api/teacher/tests/{test_id}/students/{attempt_id}/essay")
