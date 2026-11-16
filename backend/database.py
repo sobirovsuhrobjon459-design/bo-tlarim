@@ -287,8 +287,11 @@ class Test(Base):
     sheet_version: Mapped[int] = mapped_column(default=12)
     # Esse (Ona tili 45): maksimal bali (24). Bo'sh — testda esse yo'q
     essay_max: Mapped[int | None] = mapped_column(default=None)
-    # Esseni AI avtomatik baholasinmi (o'quvchi topshirgach — taklif; ballni o'qituvchi tasdiqlaydi)
+    # Esseni kim baholaydi: False — o'qituvchi, True — AI (o'quvchi topshirgach ballni o'zi qo'yadi,
+    # o'qituvchi istalgan vaqtda o'zgartira oladi)
     essay_ai: Mapped[bool] = mapped_column(default=False)
+    # Esse mavzusi: AI baholasa — majburiy (AI mavzuga moslikni tekshiradi), o'quvchiga test ichida ko'rinadi
+    essay_topic: Mapped[str | None] = mapped_column(Text, default=None)
 
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     # O'qituvchi "o'chirgan" test. Bazadan butunlay o'chirilmaydi: unga bog'liq
@@ -1552,8 +1555,9 @@ class TestIn(BaseModel):
     key_questions: list[KeyQuestionIn] = Field(default_factory=list, max_length=300)
     # Esse qo'shilsinmi (faqat esseli fanda — Ona tili)
     essay: bool = False
-    # Esseni AI avtomatik baholasinmi (faqat essay=True bo'lsa)
+    # Esseni AI baholasinmi (faqat essay=True bo'lsa); AI uchun esse mavzusi majburiy
     essay_ai: bool = False
+    essay_topic: str | None = Field(None, max_length=300)
     # dtm — Oliygohga kirish (DTM) testi: 90 savol, natija DTM bali bilan (fan — "DTM testi")
     test_type: Literal["rash", "boshlangich", "dtm"] = "rash"
 

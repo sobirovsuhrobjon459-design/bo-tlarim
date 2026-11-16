@@ -4251,8 +4251,8 @@ def test_ona_tili_milliy_sertifikat_tuzilishi():
 
 def test_ona_tili_essesi_oqituvchi_baholaydi_va_ballga_qoshiladi():
     """
-    Esse (45): o'quvchi ilovada yozadi, o'qituvchi 0–24 ball qo'yadi (UZBMB: 12 mezon × 0–2).
-    Bir xil javobli ikki o'quvchidan essesi yaxshirog'i ko'proq Rasch balli oladi.
+    Esse (45): o'quvchi ilovada yozadi, o'qituvchi 0–75 ball qo'yadi.
+    Umumiy ball = (1–44 savollar bo'yicha Rasch balli + esse bali) / 2; esse baholanguncha — faqat test qismi.
     """
     reset_database()
     register_teacher()
@@ -4267,7 +4267,7 @@ def test_ona_tili_essesi_oqituvchi_baholaydi_va_ballga_qoshiladi():
         for index in range(6):
             user = 7400 + index
             started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(user)).json()
-            assert started["essay"] == {"number": 45, "min_words": 100}
+            assert started["essay"] == {"number": 45, "topic": None}  # so'zlar soniga chegara yo'q
             attempt_id = started["attempt_id"]
             attempts[user] = attempt_id
             # 7400 va 7401 — javoblari bir xil (yarmi to'g'ri); qolganlari har xil
@@ -4294,32 +4294,63 @@ def test_ona_tili_essesi_oqituvchi_baholaydi_va_ballga_qoshiladi():
     detail_url = f"/api/teacher/tests/{created['id']}/students/{attempts[7400]}"
     detail = client.get(f"{detail_url}/detail", headers=teacher).json()
     assert detail["essay"]["text"] == essay_text.strip() and detail["essay"]["words"] == 120
-    assert detail["essay"]["score"] is None and detail["essay"]["max"] == 24 and detail["essay"]["number"] == 45
+    assert detail["essay"]["score"] is None and detail["essay"]["max"] == 75 and detail["essay"]["number"] == 45
+    assert detail["edit"]["essay_pending"] is True and detail["edit"]["ball"] == detail["edit"]["test_ball"]
 
     results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=teacher).json()
-    assert results["essay_max"] == 24 and results["essay_pending"] == 6
+    assert results["essay_max"] == 75 and results["essay_pending"] == 6
     assert results["section_names"][-1] == "Esse"
-    same = {row["attempt_id"]: row["ball"] for row in results["rows"]}
-    assert same[attempts[7400]] == same[attempts[7401]]  # esse baholanmaguncha — teng
+    rows = {row["attempt_id"]: row for row in results["rows"]}
+    # Esse baholanguncha — umumiy ball = test qismi (Rasch, 1–44)
+    assert all(row["essay_pending"] and row["ball"] == row["test_ball"] for row in rows.values()), rows
+    assert rows[attempts[7400]]["ball"] == rows[attempts[7401]]["ball"]
+    test_part = rows[attempts[7400]]["test_ball"]
 
-    # Baholash: 0–24 oralig'ida; 7400 — 20 ball, 7401 — 2 ball (100 so'zdan kam)
-    assert client.put(f"{detail_url}/essay", json={"score": 25}, headers=teacher).status_code == 422
-    assert client.put(f"{detail_url}/essay", json={"score": 20}, headers=teacher).json()["score"] == 20
+    # Essesiz test bilan bir xil savollar — Rasch faqat savollar bo'yicha (esse unga kirmaydi)
+    plain_rows = client.get(f"/api/teacher/tests/{plain['id']}/results", headers=teacher).json()["rows"]
+    assert plain_rows[0]["test_ball"] is None and plain_rows[0]["essay_pending"] is False
+
+    # Baholash: 0–75 oralig'ida; 7400 — 60 ball, 7401 — 5 ball
+    assert client.put(f"{detail_url}/essay", json={"score": 76}, headers=teacher).status_code == 422
+    assert client.put(f"{detail_url}/essay", json={"score": 60}, headers=teacher).json()["score"] == 60
     other_url = f"/api/teacher/tests/{created['id']}/students/{attempts[7401]}/essay"
-    assert client.put(other_url, json={"score": 2}, headers=teacher).status_code == 200
+    assert client.put(other_url, json={"score": 5}, headers=teacher).status_code == 200
 
     results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=teacher).json()
     rows = {row["attempt_id"]: row for row in results["rows"]}
     assert results["essay_pending"] == 4
-    assert rows[attempts[7400]]["essay"] == 20 and rows[attempts[7400]]["sections"]["Esse"] == 83.3
-    assert rows[attempts[7400]]["ball"] > rows[attempts[7401]]["ball"], (rows[attempts[7400]], rows[attempts[7401]])
-    assert rows[attempts[7400]]["percent"] == rows[attempts[7401]]["percent"]  # foiz — faqat savollar
+    graded = rows[attempts[7400]]
+    assert graded["essay"] == 60 and graded["essay_ball"] == 60 and graded["sections"]["Esse"] == 80.0
+    assert graded["test_ball"] == test_part  # esse Rasch'ni o'zgartirmaydi
+    assert graded["ball"] == round((test_part + 60) / 2, 2), graded  # (Rasch + esse) / 2
+    assert rows[attempts[7401]]["ball"] == round((test_part + 5) / 2, 2)
+    assert graded["grade"] == main.grade_for(graded["ball"])
+    assert graded["ball"] > rows[attempts[7401]]["ball"]
+    assert graded["percent"] == rows[attempts[7401]]["percent"]  # foiz — faqat savollar
+    assert results["rows"][0]["attempt_id"] == attempts[7400] or results["rows"][0]["ball"] >= graded["ball"]
 
-    # Bahoni olib tashlash mumkin
+    # Bahoni olib tashlash mumkin — yana faqat test qismi
     assert client.put(other_url, json={"score": None}, headers=teacher).json()["score"] is None
+    rows = {row["attempt_id"]: row for row in client.get(f"/api/teacher/tests/{created['id']}/results",
+                                                           headers=teacher).json()["rows"]}
+    assert rows[attempts[7401]]["ball"] == rows[attempts[7401]]["test_ball"] and rows[attempts[7401]]["essay_pending"]
+
+    # Eski (24 ballik) testlar ham 75 ballik shkalaga keltiriladi: 12/24 -> 37.5
+    with SessionLocal() as session:
+        session.get(main.Test, created["id"]).essay_max = 24
+        attempt = session.get(main.Attempt, attempts[7400])
+        attempt.essay_score = 12
+        session.commit()
+    old = {row["attempt_id"]: row for row in client.get(f"/api/teacher/tests/{created['id']}/results",
+                                                          headers=teacher).json()["rows"]}[attempts[7400]]
+    assert old["essay_ball"] == 37.5 and old["ball"] == round((old["test_ball"] + 37.5) / 2, 2), old
+    with SessionLocal() as session:
+        session.get(main.Test, created["id"]).essay_max = 75
+        session.get(main.Attempt, attempts[7400]).essay_score = 60
+        session.commit()
 
     # Essesiz testda baholab bo'lmaydi; boshqa o'qituvchi baholay olmaydi
-    plain_attempt = client.get(f"/api/teacher/tests/{plain['id']}/results", headers=teacher).json()["rows"][0]["attempt_id"]
+    plain_attempt = plain_rows[0]["attempt_id"]
     assert client.put(f"/api/teacher/tests/{plain['id']}/students/{plain_attempt}/essay",
                       json={"score": 3}, headers=teacher).status_code == 400
     register_teacher(556)
@@ -4329,100 +4360,120 @@ def test_ona_tili_essesi_oqituvchi_baholaydi_va_ballga_qoshiladi():
         pdf = client.get(url, headers=teacher)
         assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF"), url
 
-    _check_essay_ai(created, attempts, teacher)
 
-
-def test_esse_ai_orqali_avtomatik_baholanadi():
-    """Testda "AI orqali tekshirish" yoqilgan bo'lsa — topshirilgach AI o'zi taklif beradi, ball qo'yilmaydi."""
+def _wait_essay(url: str, teacher: dict) -> dict:
+    """Fondagi AI baholashini kutish (ko'pi bilan 10 s)."""
     import time
+
+    deadline = time.time() + 10
+    while True:
+        essay = client.get(url, headers=teacher).json()["essay"]
+        if essay["ai_score"] is not None or time.time() > deadline:
+            return essay
+        time.sleep(0.1)
+
+
+def test_esse_ai_orqali_tekshirilsa_ballni_ozi_qoyadi():
+    """
+    Esseni YO o'qituvchi, YO AI tekshiradi. AI tanlansa — mavzu majburiy, o'quvchiga ko'rinadi va AI'ga ketadi;
+    topshirilgach AI ballni o'zi qo'yadi, o'qituvchi uni o'zgartira oladi.
+    """
     from backend import ai_reader
 
     reset_database()
     register_teacher()
+    teacher = as_user(555)
     key = _subject_key("Ona tili va adabiyot")
-    with_ai = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay=True, essay_ai=True)
-    without_ai = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay=True)
-    # Esse yo'q testda AI belgisi saqlanmaydi
-    no_essay = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay_ai=True)
+    common = dict(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay=True)
+
+    # AI uchun mavzu majburiy
+    for empty_topic in (None, "   "):
+        no_topic = client.post("/api/teacher/tests", headers=teacher, json={
+            "title": "Mavzusiz", "mode": "key", "enrollment_type": "open", "price": 0,
+            **common, "essay_ai": True, "essay_topic": empty_topic,
+        })
+        assert no_topic.status_code == 422 and "mavzu" in no_topic.text, no_topic.text
+
+    topic = "Kitob — bilim bulog'i"
+    with_ai = create_test(**common, essay_ai=True, essay_topic=topic)
+    by_teacher = create_test(**common, essay_topic="e'tiborsiz")  # o'qituvchi baholasa — mavzu saqlanmaydi
+    no_essay = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay_ai=True,
+                           essay_topic=topic)
     with SessionLocal() as session:
         assert session.get(main.Test, no_essay["id"]).essay_ai is False
-
-    original = ai_reader.grade_essay, os.environ.get("GEMINI_API_KEY")
-    calls = []
-    os.environ["GEMINI_API_KEY"] = "test"
-    ai_reader.grade_essay = lambda subject, text, max_score: calls.append(text) or (19, "Puxta yozilgan")
-    sent, restore = _capture_result_notices()
-    try:
-        attempt_ids = {}
-        for created, user in ((with_ai, 7500), (without_ai, 7501)):
-            started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(user)).json()
-            attempt_ids[created["id"]] = started["attempt_id"]
-            finished = client.post(f"/api/attempts/{started['attempt_id']}/finish", headers=as_user(user),
-                                   json={"answers": {"essay": "Ilm " * 150}})
-            assert finished.status_code == 200, finished.text
-
-        url = f"/api/teacher/tests/{with_ai['id']}/students/{attempt_ids[with_ai['id']]}/detail"
-        deadline = time.time() + 10
-        while time.time() < deadline:
-            essay = client.get(url, headers=as_user(555)).json()["essay"]
-            if essay["ai_score"] is not None:
-                break
-            time.sleep(0.1)
-        assert essay["ai_score"] == 19 and essay["ai_comment"] == "Puxta yozilgan" and essay["ai_auto"] is True, essay
-        assert essay["score"] is None  # ballni o'qituvchi tasdiqlaydi
-        other = client.get(f"/api/teacher/tests/{without_ai['id']}/students/{attempt_ids[without_ai['id']]}/detail",
-                           headers=as_user(555)).json()["essay"]
-        assert other["ai_score"] is None and other["ai_auto"] is False
-        assert len(calls) == 1  # faqat AI yoqilgan testdagi esse yuborildi
-    finally:
-        restore()
-        ai_reader.grade_essay = original[0]
-        if original[1] is None:
-            os.environ.pop("GEMINI_API_KEY", None)
-        else:
-            os.environ["GEMINI_API_KEY"] = original[1]
-
-
-def _check_essay_ai(created: dict, attempts: dict, teacher: dict):
-    """AI esseni baholaydi: faqat TAKLIF saqlanadi, ballni o'qituvchi qo'yadi."""
-    from backend import ai_reader
-
-    base = f"/api/teacher/tests/{created['id']}/students"
-    long_url, short_url = f"{base}/{attempts[7400]}/essay/ai", f"{base}/{attempts[7401]}/essay/ai"
-    empty_url = f"{base}/{attempts[7402]}/essay/ai"
+        assert session.get(main.Test, by_teacher["id"]).essay_topic is None
 
     original = ai_reader.grade_essay, os.environ.pop("GEMINI_API_KEY", None), os.environ.pop("ANTHROPIC_API_KEY", None)
     calls = []
+    os.environ["GEMINI_API_KEY"] = "test"
+    def fake_grade(subject, text, max_score, topic):
+        calls.append((subject, text, max_score, topic))
+        return (60, "Puxta") if len(text.split()) > 100 else (8, "Mavzu ochilmagan")
+    ai_reader.grade_essay = fake_grade
+    sent, restore = _capture_result_notices()
+    attempts = {}
+    long_essay = ("Ilm " * 150).strip()
     try:
-        # AI ulanmagan — aniq xabar
-        assert client.post(long_url, headers=teacher).status_code == 400
-        assert client.get(f"{base}/{attempts[7400]}/detail", headers=teacher).json()["essay"]["ai_enabled"] is False
+        for name, created, user, text_value in (("ai", with_ai, 7500, long_essay), ("teacher", by_teacher, 7501, long_essay),
+                                                ("short", with_ai, 7502, "Qisqa esse"), ("empty", with_ai, 7503, "")):
+            started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(user)).json()
+            if name == "ai":
+                assert started["essay"]["topic"] == topic  # o'quvchi mavzuni ko'radi
+            attempts[name] = (created["id"], started["attempt_id"])
+            finished = client.post(f"/api/attempts/{started['attempt_id']}/finish", headers=as_user(user),
+                                   json={"answers": {"essay": text_value}})
+            assert finished.status_code == 200, finished.text
 
-        os.environ["GEMINI_API_KEY"] = "test"
-        ai_reader.grade_essay = lambda subject, text, max_score: calls.append((subject, text, max_score)) or (17, "Yaxshi")
-        before = client.get(f"{base}/{attempts[7400]}/detail", headers=teacher).json()["essay"]["score"]
-        graded = client.post(long_url, headers=teacher)
-        assert graded.status_code == 200 and graded.json()["score"] == 17, graded.text
-        assert calls == [("Ona tili va adabiyot", ("Vatan " * 120).strip(), 24)]  # faqat fan va matn ketadi
-        essay = client.get(f"{base}/{attempts[7400]}/detail", headers=teacher).json()["essay"]
-        assert essay["ai_score"] == 17 and essay["ai_comment"] == "Yaxshi" and essay["ai_enabled"] is True
-        assert essay["score"] == before  # o'qituvchi bahosi o'zgarmaydi
+        def url(name, tail="detail"):
+            test_id, attempt_id = attempts[name]
+            return f"/api/teacher/tests/{test_id}/students/{attempt_id}/{tail}"
 
-        # 100 so'zdan kam — AI'siz 2 ball; yozilmagan esse — baholanmaydi
-        short = client.post(short_url, headers=teacher).json()
-        assert short["score"] == 2 and len(calls) == 1, short
-        assert client.post(empty_url, headers=teacher).status_code == 400
+        # AI ballni o'zi qo'ydi; mavzu, fan va matn AI'ga ketdi (ism/ID emas)
+        essay = _wait_essay(url("ai"), teacher)
+        assert essay["score"] == 60 and essay["ai_score"] == 60 and essay["ai_comment"] == "Puxta", essay
+        assert essay["ai_auto"] is True and essay["topic"] == topic
+        short = _wait_essay(url("short"), teacher)
+        assert short["score"] == 8 and short["ai_score"] == 8  # so'zlar soniga chegara yo'q — qisqasini ham AI baholaydi
+        assert sorted(calls) == sorted([("Ona tili va adabiyot", long_essay, 75, topic),
+                                        ("Ona tili va adabiyot", "Qisqa esse", 75, topic)]), calls
+        assert client.get(url("empty"), headers=teacher).json()["essay"]["score"] is None
 
-        # AI xatosi — 502, taklif o'zgarmaydi
+        # O'qituvchi baholaydigan testda AI ishlamaydi
+        teacher_essay = client.get(url("teacher"), headers=teacher).json()["essay"]
+        assert teacher_essay["ai_auto"] is False and teacher_essay["score"] is None and teacher_essay["ai_score"] is None
+        assert client.post(url("teacher", "essay/ai"), headers=teacher).status_code == 400
+
+        # O'qituvchi AI qo'ygan ballni o'zgartira oladi; AI bahosi tarix sifatida qoladi
+        assert client.put(url("ai", "essay"), json={"score": 50}, headers=teacher).json()["score"] == 50
+        essay = client.get(url("ai"), headers=teacher).json()["essay"]
+        assert essay["score"] == 50 and essay["ai_score"] == 60
+        results = client.get(f"/api/teacher/tests/{with_ai['id']}/results", headers=teacher).json()
+        row = {row["attempt_id"]: row for row in results["rows"]}[attempts["ai"][1]]
+        assert row["essay"] == 50 and row["ball"] == round((row["test_ball"] + 50) / 2, 2), row
+
+        # Qayta baholash (tugma) — yangi AI bahosi ball o'rniga yoziladi
+        ai_reader.grade_essay = lambda subject, text, max_score, topic: (66, "Yangi")
+        regraded = client.post(url("ai", "essay/ai"), headers=teacher)
+        assert regraded.status_code == 200 and regraded.json()["score"] == 66, regraded.text
+        assert client.get(url("ai"), headers=teacher).json()["essay"]["score"] == 66
+
+        # Yozilmagan esse — AI'ga yuborilmaydi; AI xatosi — 502, ball o'zgarmaydi
+        assert client.post(url("empty", "essay/ai"), headers=teacher).status_code == 400
+
         def fail(*_):
             raise ai_reader.AIReadError("cheklov")
         ai_reader.grade_essay = fail
-        assert client.post(long_url, headers=teacher).status_code == 502
-        assert client.get(f"{base}/{attempts[7400]}/detail", headers=teacher).json()["essay"]["ai_score"] == 17
+        assert client.post(url("ai", "essay/ai"), headers=teacher).status_code == 502
+        assert client.get(url("ai"), headers=teacher).json()["essay"]["score"] == 66
 
-        # Boshqa o'qituvchi so'ray olmaydi
-        assert client.post(long_url, headers=as_user(556)).status_code in (403, 404)
+        # Boshqa o'qituvchi so'ray olmaydi; AI ulanmagan bo'lsa — aniq xabar
+        register_teacher(556)
+        assert client.post(url("ai", "essay/ai"), headers=as_user(556)).status_code in (403, 404)
+        os.environ.pop("GEMINI_API_KEY", None)
+        assert client.post(url("ai", "essay/ai"), headers=teacher).status_code == 400
+        assert client.get(url("ai"), headers=teacher).json()["essay"]["ai_enabled"] is False
     finally:
+        restore()
         ai_reader.grade_essay = original[0]
         os.environ.pop("GEMINI_API_KEY", None)
         for name, value in (("GEMINI_API_KEY", original[1]), ("ANTHROPIC_API_KEY", original[2])):

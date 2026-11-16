@@ -259,6 +259,7 @@ def _add_missing_columns() -> None:
             "sheet_version": "INTEGER DEFAULT 1",
             "essay_max": "INTEGER",
             "essay_ai": "BOOLEAN DEFAULT FALSE",
+            "essay_topic": "TEXT",
             "test_type": "VARCHAR(15) DEFAULT 'rash'",
             "closed_at": "TIMESTAMP",
             "reopened_at": "TIMESTAMP",
@@ -1632,13 +1633,20 @@ def build_test_stats(db: Session, test: Test) -> dict:
     }
 
 
-# Esse (Ona tili 45). UZBMB mezoni: 12 ta holat × 0–2 ball = 24 ball; mavzuga mos bo'lmasa,
-# 100 so'zdan kam yoki ko'chirilgan bo'lsa — 2 ball; yozilmagan bo'lsa — 0 ball.
-ESSAY_ITEMS = 12
+# Esse (Ona tili 45): 0–75 ball. Umumiy natija = (1–44 savollar bo'yicha Rasch balli + esse bali) / 2.
+# Esse hali baholanmagan bo'lsa — umumiy ball o'rnida faqat test qismi (Rasch) turadi.
+# So'zlar soniga qat'iy talab yo'q (2024-yildan) — qisqa esseni baholovchi o'zi past baholaydi.
+ESSAY_SCALE = 75  # esse balining shkalasi; eski testlar (essay_max=24) shu shkalaga keltiriladi
 ESSAY_SECTION = "Esse"
 ESSAY_KEY = "essay"  # o'quvchi javoblaridagi kalit
-ESSAY_MIN_WORDS = 100
 ESSAY_MAX_CHARS = 10000
+
+
+def _essay_ball(test: Test, attempt: Attempt) -> float | None:
+    """Esse bali 0–75 shkalada (eski 24 ballik testlarda ham); baholanmagan — None."""
+    if not test.essay_max or attempt.essay_score is None:
+        return None
+    return round(min(attempt.essay_score, test.essay_max) / test.essay_max * ESSAY_SCALE, 2)
 
 
 def _essay_number(test: Test) -> int:
@@ -1776,14 +1784,14 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             correct_refs[attempt_id].add(question_ref)
 
     matrix = [[1 if ref in correct_refs[attempt.id] else 0 for ref, _ in items] for attempt, _ in results]
-    # Esse — ESSAY_ITEMS ta mezon (UZBMB: 12 × 0–2 ball). Rasch'ga har mezon alohida savol bo'lib
-    # qo'shiladi (qiymati 0..1 — qisman ball): 24 dan 18 olgan o'quvchi 12 dan 9 "savol"ni yechgan bo'ladi.
-    # Matritsada savollardan keyin turadi — bo'limlar va savol statistikasi ularni ko'rmaydi.
-    if test.essay_max:
-        for row, (attempt, _) in zip(matrix, results):
-            row += [min(attempt.essay_score or 0, test.essay_max) / test.essay_max] * ESSAY_ITEMS
+    # Rasch — faqat savollar (1–44) bo'yicha. Esse Rasch'ga kirmaydi: umumiy ball = (Rasch + esse) / 2
     rasch = rasch_scores(matrix) if uses_rasch else None
-    scores = rasch["scores"] if uses_rasch else [None] * len(results)
+    test_scores = rasch["scores"] if uses_rasch else [None] * len(results)
+    essay_balls = [_essay_ball(test, attempt) for attempt, _ in results]
+    scores = [
+        round((test_score + essay) / 2, 2) if test_score is not None and essay is not None else test_score
+        for test_score, essay in zip(test_scores, essay_balls)
+    ]
 
     # Bo'limlar (Algebra / Geometriya ...): har savol qaysi bo'limda
     sections = _test_sections(test)
@@ -1840,11 +1848,16 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             "grade": grade_for(score) if uses_rasch else None,
             "sections": split_sections(row_matrix, attempt),
             "essay": attempt.essay_score,
+            # Esseli testda: test qismi (Rasch, 1–44) va esse bali (0–75) alohida; "ball" — ularning o'rtachasi
+            "test_ball": test_score if test.essay_max else None,
+            "essay_ball": essay_ball,
+            "essay_pending": bool(test.essay_max) and attempt.essay_score is None,
             "dtm_ball": round(sum(w for solved, w in zip(row_matrix, item_weights) if solved), 1) if item_weights else None,
             "section_scores": section_scores(row_matrix) if item_weights else {},
             "variant": attempt.variant,
         }
-        for (attempt, name), score, row_matrix in zip(results, scores, matrix)
+        for (attempt, name), score, test_score, essay_ball, row_matrix
+        in zip(results, scores, test_scores, essay_balls, matrix)
     ]
 
     # O'rin: DTM testida — DTM bali, aks holda Rasch balli; teng natija — teng o'rin (1, 1, 3 ...)
@@ -1879,7 +1892,7 @@ def build_rasch_report(db: Session, test: Test) -> dict:
         "uses_rasch": uses_rasch,
         "section_names": section_names,
         "essay_max": test.essay_max,
-        "essay_pending": sum(1 for row in rows if test.essay_max and row["essay"] is None),
+        "essay_pending": sum(1 for row in rows if row["essay_pending"]),
         "dtm_max": dtm_max,
         "summary": {
             "dtm_max": dtm_max,
@@ -6521,6 +6534,12 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
     if required_channel:
         _ensure_bot_can_check_channel(required_channel)
 
+    # Esseni AI baholasa — mavzu majburiy (AI mavzuga moslikni tekshiradi). Oflayn esse qog'ozda — AI o'qiy olmaydi
+    essay_by_ai = bool(body.essay and body.essay_ai and essay_max(body.subject) and body.enrollment_type != "closed")
+    essay_topic = (body.essay_topic or "").strip()
+    if essay_by_ai and not essay_topic:
+        raise HTTPException(status_code=422, detail="Esse mavzusini kiriting — AI esseni shu mavzu bo'yicha tekshiradi")
+
     code = _new_test_code(db)
 
     test = Test(
@@ -6538,7 +6557,8 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         start_time=start_time,
         end_time=end_time,
         essay_max=essay_max(body.subject) if body.essay else None,
-        essay_ai=bool(body.essay and body.essay_ai and essay_max(body.subject)),
+        essay_ai=essay_by_ai,
+        essay_topic=essay_topic if essay_by_ai else None,
         test_type=body.test_type,
         questions=[Question(**question.model_dump()) for question in body.questions] if body.mode == "full" else [],
         key_questions=(
@@ -6996,6 +7016,9 @@ def _teacher_answer_sheet(db: Session, test: Test, attempt: Attempt) -> dict:
         "uses_rasch": uses_rasch,
         "ball": row["ball"] if row else None,
         "grade": row["grade"] if row else None,
+        # Esseli testda: test qismi (Rasch) va esse kutilyaptimi — umumiy ball shunga qarab tushuniladi
+        "test_ball": row["test_ball"] if row else None,
+        "essay_pending": bool(row and row["essay_pending"]),
     }
 
 
@@ -7074,29 +7097,29 @@ def _essay_review(test: Test, attempt: Attempt) -> dict | None:
         "text": text_value,
         "words": len(text_value.split()),
         # AI taklifi: o'qituvchi "AI bilan baholash" ni bosganda to'ladi
+        "topic": test.essay_topic,
         "ai_enabled": ai_enabled(),
-        "ai_auto": bool(test.essay_ai),  # topshirilgach AI o'zi baholaydi
+        "ai_auto": bool(test.essay_ai),  # AI baholaydigan test: topshirilgach ballni AI o'zi qo'yadi
         "ai_score": attempt.essay_ai_score,
         "ai_comment": attempt.essay_ai_comment,
     }
 
 
-def _suggest_essay_score(db: Session, test: Test, attempt: Attempt) -> tuple[int, str]:
+def _ai_grade_essay_now(db: Session, test: Test, attempt: Attempt, *, overwrite: bool) -> tuple[int, str]:
     """
-    Esse uchun AI taklifi (ball, izoh) — saqlanadi, lekin essay_score'ga yozilmaydi.
-    100 so'zdan kam esse — mezon bo'yicha 2 ball, AI'ga so'rovsiz. AI xatosi — AIReadError.
+    Esseni AI baholaydi: AI bahosi va izohi saqlanadi va ball (essay_score) qo'yiladi.
+    overwrite=False (fonda) — o'qituvchi shu orada ball qo'ygan bo'lsa, unga tegilmaydi.
+    So'zlar soniga qat'iy chegara yo'q — qisqa esseni AI o'zi past baholaydi. AI xatosi — AIReadError.
     """
 
     from .ai_reader import grade_essay
 
     text_value = (attempt.essay_text or "").strip()
-    words = len(text_value.split())
-    if words < ESSAY_MIN_WORDS:
-        score = min(2, test.essay_max)
-        comment = f"Esse {words} so'zdan iborat — {ESSAY_MIN_WORDS} so'zdan kam, mezon bo'yicha {score} ball."
-    else:
-        score, comment = grade_essay(test.subject, text_value, test.essay_max)
+    score, comment = grade_essay(test.subject, text_value, test.essay_max, test.essay_topic or "")
+    db.refresh(attempt)  # AI o'qiyotganda o'qituvchi ball qo'ygan bo'lishi mumkin — bazadagisi olinadi
     attempt.essay_ai_score, attempt.essay_ai_comment = score, comment
+    if overwrite or attempt.essay_score is None:
+        attempt.essay_score = score
     db.commit()
     return score, comment
 
@@ -7133,7 +7156,7 @@ def _ai_grade_essay(attempt_id: int) -> None:
             if not test or not test.essay_max or not test.essay_ai or not (attempt.essay_text or "").strip():
                 return
             try:
-                _suggest_essay_score(db, test, attempt)
+                _ai_grade_essay_now(db, test, attempt, overwrite=False)
             except AIReadError as error:
                 logger.warning("AI esseni baholay olmadi (o'quvchi %s): %s", attempt_id, error)
     except Exception:  # noqa: BLE001 — fondagi ish: xato bo'lsa esseni o'qituvchi baholaydi
@@ -7145,8 +7168,8 @@ def essay_ai_grade(
     test_id: int, attempt_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db),
 ):
     """
-    Esseni AI baholaydi va TAKLIF qiladi (ball + izoh). Ball o'quvchiga qo'yilmaydi —
-    o'qituvchi taklifni ko'rib, o'zi saqlaydi (PUT .../essay).
+    Esseni AI bilan qayta baholash (AI baholaydigan testda): masalan fondagi baholash xato bergan bo'lsa.
+    AI bahosi ballga yoziladi — o'qituvchi uni keyin o'zgartira oladi (PUT .../essay).
     """
 
     from .ai_reader import AIReadError, ai_enabled
@@ -7154,6 +7177,8 @@ def essay_ai_grade(
     test = _get_own_test(db, teacher, test_id)
     if not test.essay_max:
         raise HTTPException(status_code=400, detail="Bu testda esse yo'q")
+    if not test.essay_ai:
+        raise HTTPException(status_code=400, detail="Bu testda esseni o'qituvchi baholaydi")
     attempt = db.get(Attempt, attempt_id)
     if not attempt or attempt.test_id != test.id:
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
@@ -7164,7 +7189,7 @@ def essay_ai_grade(
         raise HTTPException(status_code=400, detail="AI ulanmagan — administrator API kalitini sozlashi kerak")
 
     try:
-        score, comment = _suggest_essay_score(db, test, attempt)
+        score, comment = _ai_grade_essay_now(db, test, attempt, overwrite=True)
     except AIReadError as error:
         raise HTTPException(status_code=502, detail=f"AI baholay olmadi: {error}") from error
     return {"ok": True, "score": score, "comment": comment}
@@ -9786,8 +9811,8 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
         # Ilgari belgilangan javoblar — Mini App yopilib qayta ochilsa,
         # o'quvchi to'xtagan joyidan davom etadi.
         "answers": _read_saved_answers(attempt),
-        # Esse: o'quvchi ilovada yozadi (javoblarda "essay" kaliti), o'qituvchi baholaydi
-        "essay": {"number": _essay_number(test), "min_words": ESSAY_MIN_WORDS} if test.essay_max else None,
+        # Esse: o'quvchi ilovada yozadi (javoblarda "essay" kaliti), o'qituvchi yoki AI baholaydi
+        "essay": {"number": _essay_number(test), "topic": test.essay_topic} if test.essay_max else None,
     }
 
 

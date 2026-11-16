@@ -11016,7 +11016,7 @@ async function startTest(code) {
     attemptId: data.attempt_id,
     mode: data.mode,
     questions: data.questions,
-    essay: data.essay || null, // {number, min_words} — esse bor testda
+    essay: data.essay || null, // {number, topic} — esse bor testda
     index: 0,
     answers: { ...serverAnswers, ...localAnswers },
     endsAt: Date.now() + data.remaining * 1000,
@@ -11381,8 +11381,9 @@ function quizEssayHtml() {
   return `
     <p class="section-label" style="margin-top:16px">${essay.number}. ESSE</p>
     <div class="panel">
-      <p class="subtitle" style="margin:0 0 8px">Berilgan mavzuda esse yozing: kirish, asosiy qism (kamida 3 xatboshi)
-        va xulosa. Kamida ${essay.min_words} so'z, lotin yozuvida. Esseni o'qituvchingiz baholaydi.</p>
+      ${essay.topic ? `<p style="margin:0 0 8px"><b>Mavzu:</b> ${escapeHtml(essay.topic)}</p>` : ""}
+      <p class="subtitle" style="margin:0 0 8px">Berilgan mavzuda esse yozing: kirish, asosiy qism (fikr va dalillar)
+        va xulosa. Lotin yozuvida. So'zlar soniga qat'iy chegara yo'q — mavzuni to'liq ochib bering.</p>
       <textarea class="input" id="quiz-essay" rows="12" maxlength="10000" placeholder="Esse matni..."
                 style="min-height:240px;line-height:1.5;resize:vertical">${escapeHtml(quizState.answers[ESSAY_KEY] || "")}</textarea>
       <p class="subtitle" id="essay-word-count" style="margin:6px 0 0"></p>
@@ -11392,9 +11393,7 @@ function quizEssayHtml() {
 function updateEssayWordCount() {
   const label = document.getElementById("essay-word-count");
   if (!label || !quizState?.essay) return;
-  const words = countWords(quizState.answers[ESSAY_KEY]);
-  const minimum = quizState.essay.min_words;
-  label.textContent = words >= minimum ? `✅ ${words} so'z` : `${words} so'z — kamida ${minimum} ta bo'lsin`;
+  label.textContent = `${countWords(quizState.answers[ESSAY_KEY])} so'z`;
 }
 
 async function updateQuizTimer() {
@@ -12609,6 +12608,9 @@ function renderNewTestForm(testType, draft = {}) {
   */
   const msAvailable = type === "rash" && (!offline || (SUBJECT_PRESETS[subject]?.textCount || 0) > 0);
   const msFormat = msAvailable && Boolean(draft.msFormat);
+  // 45. Esse: "none" (essesiz mock), "teacher" yoki "ai"; "" — hali tanlanmagan (saqlashda so'raladi).
+  // AI — faqat onlayn (oflaynda esse qog'ozda yoziladi)
+  const essayMode = offline && draft.essayMode === "ai" ? "" : draft.essayMode || "";
   const ownRashFormat = type === "rash" && !msFormat;
   const structure = msFormat
     ? subjectStructure(subject, preset)
@@ -12712,30 +12714,51 @@ function renderNewTestForm(testType, draft = {}) {
         </span>
       </label>
     </div>
-    <div class="setting-card" id="essay-card" style="margin-top:10px;${SUBJECT_PRESETS[subject]?.essay ? "" : "display:none"}">
+    <div class="setting-card" id="essay-card" style="margin-top:10px;${SUBJECT_PRESETS[subject]?.essay && msFormat ? "" : "display:none"}">
+      <p class="field-label" style="margin:0 0 6px">45. Esse — bittasini tanlang</p>
       <label class="setting-row">
-        <input type="checkbox" id="field-essay" ${offline ? "" : "checked"} />
+        <input type="radio" name="essay-mode" value="none" ${essayMode === "none" ? "checked" : ""} />
+        <span>
+          <b>🚫 Essesiz (mock test)</b>
+          <p class="subtitle" style="margin:4px 0 0">Faqat 1–44 savollar. Natija — Rasch balli.</p>
+        </span>
+      </label>
+      <label class="setting-row" style="margin-top:10px">
+        <input type="radio" name="essay-mode" value="teacher" ${essayMode === "teacher" ? "checked" : ""} />
         <span>
           <b>📝 Esse (o'qituvchi baholaydi)</b>
           <p class="subtitle" style="margin:4px 0 0">${
             offline
               ? "O'quvchilar esseni qog'ozda yozadi. Siz har biriga"
-              : "O'quvchi esseni ilovada yozadi (kamida 100 so'z). Siz natijalarda o'qib,"
-          } 0–${SUBJECT_PRESETS[subject]?.essay || 24} ball qo'yasiz — ball umumiy natijaga qo'shiladi.</p>
+              : "O'quvchi esseni ilovada yozadi. Siz natijalarda o'qib,"
+          } 0–${SUBJECT_PRESETS[subject]?.essay || 75} ball qo'yasiz.</p>
         </span>
       </label>
-      <label class="setting-row" style="margin-top:10px">
-        <input type="checkbox" id="field-essay-ai" ${draft.essay_ai ? "checked" : ""} />
+      ${
+        offline
+          ? ""
+          : `<label class="setting-row" style="margin-top:10px">
+        <input type="radio" name="essay-mode" value="ai" ${essayMode === "ai" ? "checked" : ""} />
         <span>
           <b>🤖 AI orqali tekshirish</b>
-          <p class="subtitle" style="margin:4px 0 0">O'quvchi testni topshirishi bilan AI esseni o'qib, ball va izoh
-            taklif qiladi. Siz natijalarda taklifni ko'rib, bitta tugma bilan qo'yasiz yoki ballni o'zgartirasiz —
-            yakuniy ballni baribir siz tasdiqlaysiz. Faqat ilovada yozilgan esse tekshiriladi (qog'ozdagisi — yo'q).</p>
-          <p class="subtitle" style="margin:6px 0 0;color:#d97706">⚠️ <b>Pullik xizmat.</b>
-            AI orqali tekshirish pullik xizmat hisoblanadi. Narxi va to'lov tartibi alohida e'lon qilinadi.
-            AI xato qilishi mumkin va esse mavzusini bilmaydi — mavzuga mosligini o'zingiz tekshiring.</p>
+          <p class="subtitle" style="margin:4px 0 0">O'quvchi testni topshirishi bilan AI esseni o'qib, ballni
+            o'zi qo'yadi va qisqa izoh yozadi — har birini tasdiqlab chiqish shart emas. Istalgan o'quvchining
+            esse balini natijalarda o'zgartirishingiz mumkin.</p>
         </span>
       </label>
+      <div id="essay-topic-block" style="margin-top:10px;${essayMode === "ai" ? "" : "display:none"}">
+        <p class="field-label" style="margin:0 0 4px">Esse mavzusi <span style="color:#dc2626">*</span></p>
+        <input class="input" id="field-essay-topic" maxlength="300" style="margin:0"
+               placeholder="Masalan: Kitob — bilim bulog'i" value="${escapeHtml(draft.essayTopic || "")}" />
+        <p class="subtitle" style="margin:4px 0 0;font-size:12px">Majburiy: AI esseni shu mavzuga mosligi bo'yicha ham
+          baholaydi. Mavzu o'quvchiga test ichida, esse maydoni ustida ko'rinadi.</p>
+        <p class="subtitle" style="margin:8px 0 0;color:#d97706">⚠️ <b>Pullik xizmat.</b>
+          AI orqali tekshirish pullik xizmat hisoblanadi. Narxi va to'lov tartibi alohida e'lon qilinadi.
+          AI ham xato qilishi mumkin — shubhali ballarni ko'rib chiqing.</p>
+      </div>`
+      }
+      <p class="subtitle" style="margin:10px 0 0;font-size:12px">Esseli testda umumiy ball =
+        (1–44 savollar bo'yicha Rasch balli + esse bali) ÷ 2. Esse baholanguncha natijada faqat test qismi turadi.</p>
     </div>
 
     <p class="field-label" style="margin-top:14px">Testga qo'shilish turi</p>
@@ -12859,8 +12882,19 @@ function renderNewTestForm(testType, draft = {}) {
   document.getElementById("field-ms-format").addEventListener("change", (event) => rerenderWithFormat(event.target.checked));
 
   // Fan almashtirilganda, o'sha fandagi Milliy sertifikat tuzilishi qo'llanadi
+  // Esse: bitta tanlov (radio); AI tanlansa mavzu maydoni chiqadi
+  document.querySelectorAll('input[name="essay-mode"]').forEach((radio) =>
+    radio.addEventListener("change", () => {
+      const block = document.getElementById("essay-topic-block");
+      if (!block) return;
+      block.style.display = radio.value === "ai" && radio.checked ? "" : "none";
+      if (radio.value === "ai" && radio.checked) document.getElementById("field-essay-topic").focus();
+    })
+  );
+
   subjectSelect.addEventListener("change", () => {
-    document.getElementById("essay-card").style.display = SUBJECT_PRESETS[subjectSelect.value]?.essay ? "" : "none";
+    document.getElementById("essay-card").style.display =
+      SUBJECT_PRESETS[subjectSelect.value]?.essay && msFormat ? "" : "none";
     // DTM testi — oflayn (titulli) testda ham savollar soni darhol 90 ta (titul shunga moslashadi)
     if (offline && subjectSelect.value === DTM_SUBJECT) {
       document.getElementById("field-test-count").value = 90;
@@ -13145,6 +13179,8 @@ function collectTestFormDraft() {
     optionCount: document.getElementById("field-option-count").value,
     textCount: document.getElementById("field-text-count").value,
     msFormat: Boolean(document.getElementById("field-ms-format")?.checked),
+    essayMode: document.querySelector('input[name="essay-mode"]:checked')?.value || "",
+    essayTopic: document.getElementById("field-essay-topic")?.value || "",
     answers,
   };
 }
@@ -13359,6 +13395,23 @@ async function saveNewTest() {
     throw new Error("Pullik test uchun avval karta raqamingizni kiriting (narx ostidagi «+ Karta kiritish»)");
   }
 
+  // Esse — faqat esseli fanda va Milliy sertifikat formatida; o'qituvchi YOKI AI tekshiradi
+  const essayShown =
+    Boolean(SUBJECT_PRESETS[document.getElementById("field-subject").value]?.essay) &&
+    Boolean(document.getElementById("field-ms-format")?.checked);
+  const essayMode = document.querySelector('input[name="essay-mode"]:checked')?.value || "";
+  const essayByTeacher = essayMode === "teacher";
+  const essayByAi = essayMode === "ai";
+  const essayTopic = (document.getElementById("field-essay-topic")?.value || "").trim();
+  if (essayShown && !essayMode) {
+    document.getElementById("essay-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    throw new Error("45. Esse bo'yicha tanlang: essesiz, o'qituvchi baholaydi yoki AI orqali tekshirish");
+  }
+  if (essayShown && essayByAi && !essayTopic) {
+    document.getElementById("field-essay-topic")?.focus();
+    throw new Error("Esse mavzusini kiriting — AI esseni shu mavzu bo'yicha tekshiradi");
+  }
+
   const body = {
     title: titleValue,
     subject: document.getElementById("field-subject").value,
@@ -13377,11 +13430,9 @@ async function saveNewTest() {
     key_questions: [],
     // Hisoblash usuli: Rash test — Rasch modeli, Oddiy test — to'g'ri javoblar soni va foiz
     test_type: { boshlangich: "boshlangich", dtm: "dtm" }[document.getElementById("field-type").value] || "rash",
-    essay: Boolean(SUBJECT_PRESETS[document.getElementById("field-subject").value]?.essay) &&
-      document.getElementById("field-essay").checked,
-    essay_ai: Boolean(SUBJECT_PRESETS[document.getElementById("field-subject").value]?.essay) &&
-      document.getElementById("field-essay").checked &&
-      Boolean(document.getElementById("field-essay-ai")?.checked),
+    essay: essayShown && (essayByTeacher || essayByAi),
+    essay_ai: essayShown && essayByAi,
+    essay_topic: essayShown && essayByAi ? essayTopic : null,
   };
 
   const keyRows = [...document.querySelectorAll("#key-questions-container .key-row")];
@@ -16718,7 +16769,16 @@ async function renderStudentDetail(testId, attemptId) {
     <div class="stat-tile"><span class="stat-value">${detail.percent}%</span>Foiz</div>
     ${
       detail.edit.uses_rasch && detail.edit.ball !== null && detail.edit.ball !== undefined
-        ? `<div class="stat-tile"><span class="stat-value">${formatNumber(detail.edit.ball)}</span>Rasch ball${detail.edit.grade ? ` · ${escapeHtml(detail.edit.grade)}` : ""}</div>`
+        ? detail.essay
+          ? `<div class="stat-tile"><span class="stat-value">${formatNumber(detail.edit.ball)}</span>${
+              detail.edit.essay_pending ? "Test qismi · esse kutilmoqda" : "Umumiy ball"
+            }${detail.edit.grade ? ` · ${escapeHtml(detail.edit.grade)}` : ""}</div>
+             ${
+               detail.edit.essay_pending
+                 ? ""
+                 : `<div class="stat-tile"><span class="stat-value">${formatNumber(detail.edit.test_ball)}</span>Test qismi (Rasch)</div>`
+             }`
+          : `<div class="stat-tile"><span class="stat-value">${formatNumber(detail.edit.ball)}</span>Rasch ball${detail.edit.grade ? ` · ${escapeHtml(detail.edit.grade)}` : ""}</div>`
         : ""
     }
     ${detail.essay ? `<div class="stat-tile"><span class="stat-value">${detail.essay.score ?? "—"}/${detail.essay.max}</span>Esse</div>` : ""}`;
@@ -17014,13 +17074,14 @@ function essayGradingHtml(essay) {
   return `
     <h3>${essay.number}. Esse</h3>
     <div class="panel">
+      ${essay.topic ? `<p style="margin:0 0 8px"><b>Mavzu:</b> ${escapeHtml(essay.topic)}</p>` : ""}
       ${
         essay.text
-          ? `<p class="subtitle" style="margin:0 0 6px">${essay.words} so'z${essay.words < 100 ? " — 100 dan kam" : ""}</p>
+          ? `<p class="subtitle" style="margin:0 0 6px">${essay.words} so'z</p>
              <div style="white-space:pre-wrap;line-height:1.55;max-height:50vh;overflow:auto;padding:10px 12px;border-radius:12px;background:var(--color-bg)">${escapeHtml(essay.text)}</div>`
           : `<p class="subtitle" style="margin:0">Esse ilovada yozilmagan — qog'ozdagi esseni o'qib baholang.</p>`
       }
-      ${essay.text && essay.ai_enabled ? essayAiHtml(essay) : ""}
+      ${essay.ai_auto && essay.text ? essayAiHtml(essay) : ""}
       <p class="field-label" style="margin-top:12px">Ball (0–${essay.max})</p>
       <div class="row-between" style="gap:8px">
         <button type="button" class="btn btn-ghost" data-essay-step="-1" style="width:56px;margin:0" aria-label="Kamaytirish">−</button>
@@ -17029,35 +17090,36 @@ function essayGradingHtml(essay) {
         <button type="button" class="btn btn-ghost" data-essay-step="1" style="width:56px;margin:0" aria-label="Oshirish">+</button>
       </div>
       <div style="display:grid;gap:8px;margin-top:10px">
-        <button type="button" class="btn btn-ghost" data-essay-set="2" style="${ESSAY_PICK_STYLE}">
-          <b>2 ball</b> — mavzuga mos emas, 100 so'zdan kam yoki ko'chirilgan</button>
         <button type="button" class="btn btn-ghost" data-essay-set="0" style="${ESSAY_PICK_STYLE}">
           <b>0 ball</b> — yozilmagan, faqat kirish qismi yoki kirillda</button>
       </div>
-      <p class="subtitle" style="margin:8px 0 0;font-size:12px">Milliy sertifikat mezoni: 12 ta mezon, har biri 0–2 ball (jami ${essay.max}).
-        Ball umumiy Rasch balliga qo'shiladi.</p>
+      <p class="subtitle" style="margin:8px 0 0;font-size:12px">Esse 0–${essay.max} ball${
+        essay.max !== 75 ? " (umumiy natijada 75 ballik shkalaga keltiriladi)" : ""
+      }. Umumiy ball = (1–44 savollar bo'yicha Rasch balli + esse bali) ÷ 2.</p>
       <button class="btn" id="essay-save-button" style="margin-top:10px">💾 Ballni saqlash</button>
     </div>`;
 }
 
-// AI taklifi: ball + izoh. Ballni o'qituvchi o'zi qo'yadi ("Taklifni qo'yish" — faqat maydonni to'ldiradi)
+// AI baholaydigan test: ballni AI o'zi qo'ygan — bu yerda bahosi va izohi; o'qituvchi pastda ballni o'zgartira oladi
 function essayAiHtml(essay) {
-  const hasSuggestion = essay.ai_score !== null && essay.ai_score !== undefined;
+  const graded = essay.ai_score !== null && essay.ai_score !== undefined;
+  const changed = graded && essay.score !== null && essay.score !== essay.ai_score;
   return `
     <div style="margin-top:12px;padding:10px 12px;border-radius:12px;background:var(--color-bg)">
       ${
-        hasSuggestion
-          ? `<p style="margin:0 0 4px"><b>🤖 AI taklifi: ${essay.ai_score}/${essay.max}</b></p>
+        graded
+          ? `<p style="margin:0 0 4px"><b>🤖 AI bahosi: ${essay.ai_score}/${essay.max}</b>${
+              changed ? ` <span class="subtitle">— siz ${essay.score} ga o'zgartirgansiz</span>` : ""
+            }</p>
              <p class="subtitle" style="margin:0 0 8px;white-space:pre-wrap;line-height:1.45">${escapeHtml(essay.ai_comment || "")}</p>
-             <div class="row-between" style="gap:8px">
-               <button type="button" class="btn btn-ghost" id="essay-ai-apply" style="margin:0">Taklifni qo'yish</button>
-               <button type="button" class="btn btn-ghost" id="essay-ai-button" style="margin:0">🔄 Qayta baholash</button>
-             </div>`
-          : `${essay.ai_auto ? `<p class="subtitle" style="margin:0 0 8px">⏳ AI esseni baholamoqda — birozdan keyin sahifani yangilang.</p>` : ""}
-             <button type="button" class="btn btn-ghost" id="essay-ai-button" style="margin:0">🤖 AI bilan baholash</button>`
+             <button type="button" class="btn btn-ghost" id="essay-ai-button" style="margin:0">🔄 AI bilan qayta baholash</button>`
+          : essay.ai_enabled
+            ? `<p class="subtitle" style="margin:0 0 8px">⏳ AI esseni baholamoqda — birozdan keyin sahifani yangilang.
+                 Uzoq kutilsa, quyidagi tugmani bosing.</p>
+               <button type="button" class="btn btn-ghost" id="essay-ai-button" style="margin:0">🤖 AI bilan baholash</button>`
+            : `<p class="subtitle" style="margin:0">AI ulanmagan — bu esseni o'zingiz baholang.</p>`
       }
-      <p class="subtitle" style="margin:6px 0 0;font-size:12px">AI faqat taklif beradi — yakuniy ballni siz qo'yasiz.
-        Mavzuga mosligini AI bilmaydi, uni o'zingiz tekshiring.
+      <p class="subtitle" style="margin:6px 0 0;font-size:12px">Ballni AI o'zi qo'yadi — kerak bo'lsa pastda o'zgartiring.
         <span style="color:#d97706">⚠️ AI orqali tekshirish — pullik xizmat.</span></p>
     </div>`;
 }
@@ -17065,14 +17127,14 @@ function essayAiHtml(essay) {
 function bindEssayGrading(testId, attemptId, essay) {
   const input = document.getElementById("essay-score");
   const clamp = (value) => Math.min(essay.max, Math.max(0, Math.round(value)));
-  document.getElementById("essay-ai-apply")?.addEventListener("click", () => {
-    input.value = essay.ai_score;
-    telegram?.HapticFeedback?.selectionChanged?.();
-  });
   const aiButton = document.getElementById("essay-ai-button");
   aiButton?.addEventListener(
     "click",
     guarded(async () => {
+      const graded = essay.ai_score !== null && essay.ai_score !== undefined;
+      if (graded && !(await askConfirm("Esseni AI bilan qayta baholaysizmi?\nYangi AI bahosi hozirgi ball o'rniga yoziladi.", { yes: "Qayta baholash" }))) {
+        return;
+      }
       const label = aiButton.textContent;
       aiButton.textContent = "⏳ AI o'qiyapti...";
       try {
@@ -17397,7 +17459,8 @@ async function renderResultsTab(selectedId) {
     ${
       results.essay_pending
         ? `<div class="notice is-info" style="margin:12px 0 0">📝 ${results.essay_pending} ta o'quvchining essesi baholanmagan.
-             O'quvchini bosib, esse balini qo'ying — ball umumiy natijaga qo'shiladi.</div>`
+             Ularning umumiy bali hozircha faqat test qismi bo'yicha. O'quvchini bosib, esse balini qo'ying —
+             umumiy ball (test + esse) ÷ 2 bo'lib qayta hisoblanadi.</div>`
         : ""
     }
 
@@ -17496,7 +17559,13 @@ function resultLineHtml(row, results) {
             testSectionNames(results).length
               ? testSectionNames(results).map((name) => `${escapeHtml(name)}: ${row.sections[name]}%`).join(" • ")
               : `✅ ${row.correct} • ❌ ${row.wrong} • ${row.percent}%`
-          }${results.essay_max ? ` • 📝 Esse: ${row.essay ?? "—"}/${results.essay_max}` : ""}</small>
+          }${
+            results.essay_max
+              ? row.essay_pending
+                ? " • 📝 Esse: ⏳ kutilmoqda (ball — faqat test qismi)"
+                : ` • 📝 Esse: ${row.essay}/${results.essay_max} • Test: ${formatNumber(row.test_ball)}`
+              : ""
+          }</small>
         </span>
         ${
           row.dtm_ball != null

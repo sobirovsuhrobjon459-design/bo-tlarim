@@ -565,7 +565,8 @@ select:focus {
   cursor: pointer;
 }
 
-.setting-row input[type="checkbox"] {
+.setting-row input[type="checkbox"],
+.setting-row input[type="radio"] {
   width: 20px;
   height: 20px;
   margin-top: 2px;
