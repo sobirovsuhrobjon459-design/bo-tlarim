@@ -469,6 +469,21 @@ class SheetImage(Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
+class EssayImage(Base):
+    """
+    Qog'ozga qo'lda yozilgan esse rasmi (o'quvchi test ichida yuklaydi): har sahifa alohida yozuv.
+    AI matnga aylantiradi, o'quvchi uni tekshirib tuzatadi; o'qituvchi asl rasmni matn bilan solishtira oladi.
+    """
+
+    __tablename__ = "essay_images"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    attempt_id: Mapped[int] = mapped_column(ForeignKey("test_attempts.id"), index=True)
+    page: Mapped[int] = mapped_column(default=1)
+    image: Mapped[str] = mapped_column(Text)  # data:image/jpeg;base64,…
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
 class PupilAccount(Base):
     """
     Maktab o'quvchisining ilovaga kirishi: o'quvchi maktabini topadi, login va parol bilan kiradi.
@@ -1557,7 +1572,8 @@ class TestIn(BaseModel):
     essay: bool = False
     # Esseni AI baholasinmi (faqat essay=True bo'lsa); AI uchun esse mavzusi majburiy
     essay_ai: bool = False
-    essay_topic: str | None = Field(None, max_length=300)
+    # Mavzu — vaziyat matni bilan birga (Milliy sertifikatda bir necha jumla): 300 belgi kamlik qilardi
+    essay_topic: str | None = Field(None, max_length=2000)
     # dtm — Oliygohga kirish (DTM) testi: 90 savol, natija DTM bali bilan (fan — "DTM testi")
     test_type: Literal["rash", "boshlangich", "dtm"] = "rash"
 

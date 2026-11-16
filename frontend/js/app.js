@@ -10617,8 +10617,14 @@ async function renderMyAttemptReview(attemptId) {
           ? `<div class="stat-tile"><span class="stat-value">${review.dtm_ball}</span>DTM bali (${review.dtm_max} dan)</div>`
           : ""
       }
-      ${review.ball != null ? `<div class="stat-tile"><span class="stat-value" id="review-ball">0.0</span>Ball</div>` : ""}
-      <div class="stat-tile"><span class="stat-value">${review.correct}/${review.total}</span>To'g'ri (${review.percent}%)</div>
+      ${review.ball != null ? `<div class="stat-tile"><span class="stat-value" id="review-ball">0.0</span>${review.test_ball != null ? "Umumiy ball" : "Ball"}</div>` : ""}
+      ${
+        review.test_ball != null
+          ? `<div class="stat-tile"><span class="stat-value">${Number(review.test_ball).toFixed(2)}</span>Test bali</div>
+             <div class="stat-tile"><span class="stat-value">${review.essay_pending ? "⏳" : formatNumber(review.essay_ball)}</span>Yozma ish (esse)</div>
+             <div class="stat-tile"><span class="stat-value">${certPercentText(review.cert_percent)}</span>Foiz ko'rsatkichi</div>`
+          : `<div class="stat-tile"><span class="stat-value">${review.correct}/${review.total}</span>To'g'ri (${review.percent}%)</div>`
+      }
       ${review.rank ? `<div class="stat-tile"><span class="stat-value">${review.rank}</span>O'rin (${review.participants} tadan)</div>` : ""}
     </div>
     ${review.ball != null && review.dtm_ball == null ? `<p class="subtitle" style="margin:8px 0 0;font-size:13px">${RASCH_SCORE_NOTE}</p>` : ""}
@@ -10646,7 +10652,7 @@ async function renderMyAttemptReview(attemptId) {
   `);
 
   document.querySelector('[data-action="back"]').addEventListener("click", guarded(renderStudentHome));
-  if (review.ball != null) countUp(document.getElementById("review-ball"), review.ball, 1);
+  if (review.ball != null) countUp(document.getElementById("review-ball"), review.ball, review.test_ball != null ? 2 : 1);
   // Bo'lim chiziqlari 0 dan o'sib chiqadi
   requestAnimationFrame(() =>
     document.querySelectorAll(".section-bars .progress-fill").forEach((bar) => {
@@ -11306,6 +11312,7 @@ function renderKeyQuizQuestion() {
       updateEssayWordCount();
       scheduleAnswerSave();
     });
+    wireEssayPhotos(essayInput);
   }
 
   // Bitta tinglovchi butun varaq uchun — 45 ta savolda ham tez ishlaydi
@@ -11352,7 +11359,9 @@ function renderKeyQuizQuestion() {
     guarded(async () => {
       // Har doim so'raladi — tasodifan bosib yuborilsa test yopilib qolmasin
       const { answered, total } = updateAnsweredCounter();
-      const essayMissing = quizState.essay && !String(quizState.answers[ESSAY_KEY] || "").trim();
+      // Qog'ozdagi esse rasmi yuklangan bo'lsa — esse bor (matni bo'sh bo'lsa ham o'qituvchi rasmdan baholaydi)
+      const essayMissing =
+        quizState.essay && !String(quizState.answers[ESSAY_KEY] || "").trim() && !quizState.essay.photos?.length;
       const question =
         answered < total
           ? `${total - answered} ta savolga javob belgilanmagan${essayMissing ? ", esse yozilmagan" : ""}. Baribir testni yakunlaysizmi?`
@@ -11381,13 +11390,96 @@ function quizEssayHtml() {
   return `
     <p class="section-label" style="margin-top:16px">${essay.number}. ESSE</p>
     <div class="panel">
-      ${essay.topic ? `<p style="margin:0 0 8px"><b>Mavzu:</b> ${escapeHtml(essay.topic)}</p>` : ""}
+      ${essay.topic ? `<p style="margin:0 0 8px;white-space:pre-line;overflow-wrap:anywhere"><b>Mavzu:</b> ${escapeHtml(essay.topic)}</p>` : ""}
       <p class="subtitle" style="margin:0 0 8px">Berilgan mavzuda esse yozing: kirish, asosiy qism (fikr va dalillar)
         va xulosa. Lotin yozuvida. So'zlar soniga qat'iy chegara yo'q — mavzuni to'liq ochib bering.</p>
       <textarea class="input" id="quiz-essay" rows="12" maxlength="10000" placeholder="Esse matni..."
                 style="min-height:240px;line-height:1.5;resize:vertical">${escapeHtml(quizState.answers[ESSAY_KEY] || "")}</textarea>
       <p class="subtitle" id="essay-word-count" style="margin:6px 0 0"></p>
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--color-border, #e5e7eb)">
+        <p class="subtitle" style="margin:0 0 8px">📄 Esseni qog'ozga qo'lda yozdingizmi? Har sahifani aniq, yorug' joyda,
+          tekis suratga oling (ko'pi bilan ${ESSAY_PHOTO_PAGES} sahifa).${
+            essay.ai ? " Matn avtomatik o'qilib, yuqoridagi maydonga qo'shiladi — rasm bilan solishtirib, xatosini tuzating." : " Rasmni o'qituvchi ko'rib baholaydi."
+          }</p>
+        <div id="essay-photo-list" class="row-between" style="flex-wrap:wrap;gap:6px;justify-content:flex-start"></div>
+        <input type="file" id="essay-photo-input" accept="image/*" hidden />
+        <button type="button" class="btn btn-ghost" id="essay-photo-button" style="margin-top:8px">📷 Esse rasmini yuklash</button>
+      </div>
     </div>`;
+}
+
+const ESSAY_PHOTO_PAGES = 4;
+
+// Qog'ozdagi esse rasmlari: har sahifa alohida yuklanadi; AI o'qigan matn esse maydoniga qo'shiladi
+function wireEssayPhotos(essayInput) {
+  const list = document.getElementById("essay-photo-list");
+  const button = document.getElementById("essay-photo-button");
+  const fileInput = document.getElementById("essay-photo-input");
+  if (!list || !button || !fileInput) return;
+  quizState.essay.photos = quizState.essay.photos || [];
+
+  const draw = () => {
+    const pages = quizState.essay.photos;
+    list.innerHTML = pages
+      .map(
+        (page) => `<span class="share-pill" style="display:inline-flex;gap:6px;align-items:center">📄 ${page}-sahifa
+          <button type="button" data-remove-page="${page}" aria-label="${page}-sahifani o'chirish"
+                  style="border:0;background:none;color:#dc2626;font-weight:700;cursor:pointer;padding:0 2px">✕</button></span>`
+      )
+      .join("");
+    button.disabled = pages.length >= ESSAY_PHOTO_PAGES;
+    button.textContent = pages.length ? `📷 Yana sahifa qo'shish (${pages.length}/${ESSAY_PHOTO_PAGES})` : "📷 Esse rasmini yuklash";
+  };
+  draw();
+
+  button.addEventListener("click", () => fileInput.click());
+  list.addEventListener(
+    "click",
+    guarded(async (event) => {
+      const remove = event.target.closest("[data-remove-page]");
+      if (!remove) return;
+      if (!(await askConfirm(`${remove.dataset.removePage}-sahifa rasmi o'chirilsinmi? (Maydondagi matn o'zgarmaydi)`))) return;
+      const result = await api(`/api/attempts/${quizState.attemptId}/essay/photo/${remove.dataset.removePage}`, { method: "DELETE" });
+      quizState.essay.photos = result.pages;
+      draw();
+    })
+  );
+
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = "";
+    if (!file) return;
+    const used = new Set(quizState.essay.photos);
+    const page = Array.from({ length: ESSAY_PHOTO_PAGES }, (_, index) => index + 1).find((number) => !used.has(number));
+    if (!page) return;
+    button.disabled = true;
+    button.textContent = quizState.essay.ai ? "⏳ Rasm yuklanmoqda va o'qilmoqda..." : "⏳ Rasm yuklanmoqda...";
+    try {
+      // Qo'lyozma o'qilishi uchun kattaroq o'lcham (2000 px) — JPEG odatda 300–700 KB
+      const image = await compressImage(file, 2000, 0.85);
+      const result = await api(`/api/attempts/${quizState.attemptId}/essay/photo`, {
+        method: "POST",
+        body: { image, page },
+      });
+      quizState.essay.photos = result.pages;
+      if (result.text) {
+        const current = essayInput.value.trim();
+        essayInput.value = current ? `${current}\n\n${result.text}` : result.text;
+        quizState.answers[ESSAY_KEY] = essayInput.value;
+        updateEssayWordCount();
+        scheduleAnswerSave();
+        showToast(`✅ ${page}-sahifa o'qildi — matnni rasm bilan solishtirib tekshiring`);
+      } else if (result.ai) {
+        showToast(result.error ? `⚠️ Rasm saqlandi, lekin matn o'qilmadi: ${result.error}` : "⚠️ Rasm saqlandi, lekin unda matn topilmadi");
+      } else {
+        showToast(`✅ ${page}-sahifa saqlandi — o'qituvchi rasmdan baholaydi`);
+      }
+    } catch (error) {
+      showToast(`❌ ${error.message || "Rasm yuklanmadi"}`);
+    } finally {
+      draw();
+    }
+  });
 }
 
 function updateEssayWordCount() {
@@ -12748,8 +12840,8 @@ function renderNewTestForm(testType, draft = {}) {
       </label>
       <div id="essay-topic-block" style="margin-top:10px;${essayMode === "ai" ? "" : "display:none"}">
         <p class="field-label" style="margin:0 0 4px">Esse mavzusi <span style="color:#dc2626">*</span></p>
-        <input class="input" id="field-essay-topic" maxlength="300" style="margin:0"
-               placeholder="Masalan: Kitob — bilim bulog'i" value="${escapeHtml(draft.essayTopic || "")}" />
+        <textarea class="input" id="field-essay-topic" maxlength="2000" rows="4" style="margin:0;resize:vertical;line-height:1.45"
+               placeholder="Masalan: Kitob — bilim bulog'i (vaziyat matni va topshiriq shartlari bilan birga yozish mumkin)">${escapeHtml(draft.essayTopic || "")}</textarea>
         <p class="subtitle" style="margin:4px 0 0;font-size:12px">Majburiy: AI esseni shu mavzuga mosligi bo'yicha ham
           baholaydi. Mavzu o'quvchiga test ichida, esse maydoni ustida ko'rinadi.</p>
         <p class="subtitle" style="margin:8px 0 0;color:#d97706">⚠️ <b>Pullik xizmat.</b>
@@ -16776,8 +16868,9 @@ async function renderStudentDetail(testId, attemptId) {
              ${
                detail.edit.essay_pending
                  ? ""
-                 : `<div class="stat-tile"><span class="stat-value">${formatNumber(detail.edit.test_ball)}</span>Test qismi (Rasch)</div>`
-             }`
+                 : `<div class="stat-tile"><span class="stat-value">${formatNumber(detail.edit.test_ball)}</span>Test bali</div>`
+             }
+             ${detail.edit.cert_percent != null ? `<div class="stat-tile"><span class="stat-value">${certPercentText(detail.edit.cert_percent)}</span>Foiz ko'rsatkichi</div>` : ""}`
           : `<div class="stat-tile"><span class="stat-value">${formatNumber(detail.edit.ball)}</span>Rasch ball${detail.edit.grade ? ` · ${escapeHtml(detail.edit.grade)}` : ""}</div>`
         : ""
     }
@@ -17046,13 +17139,19 @@ async function renderStudentDetail(testId, attemptId) {
     .getElementById("student-sheet-button")
     ?.addEventListener("click", guarded(() => openSheetImages(`/api/teacher/tests/${testId}/students/${attemptId}/sheet`)));
   if (detail.essay) bindEssayGrading(testId, attemptId, detail.essay);
+  document
+    .getElementById("essay-photos-button")
+    ?.addEventListener(
+      "click",
+      guarded(() => openSheetImages(`/api/teacher/tests/${testId}/students/${attemptId}/essay/photos`, "📄 Qo'lda yozilgan esse"))
+    );
 }
 
 // Skanerlangan titul rasmi: oynada to'liq; rasm bosilsa — kattalashadi (kichik yozuvni o'qish uchun)
-async function openSheetImages(url) {
+async function openSheetImages(url, title = "🧾 Titul rasmi") {
   const data = await api(url);
   const { sheet } = openSheet(`
-    <h3 style="margin:0 0 4px">🧾 Titul rasmi</h3>
+    <h3 style="margin:0 0 4px">${title}</h3>
     <p class="subtitle" style="margin:0 0 10px">${data.name ? `${escapeHtml(data.name)} · ` : ""}rasmni bosing — kattalashadi</p>
     <div class="sheet-photo-scroll">
       ${data.pages
@@ -17074,7 +17173,15 @@ function essayGradingHtml(essay) {
   return `
     <h3>${essay.number}. Esse</h3>
     <div class="panel">
-      ${essay.topic ? `<p style="margin:0 0 8px"><b>Mavzu:</b> ${escapeHtml(essay.topic)}</p>` : ""}
+      ${essay.topic ? `<p style="margin:0 0 8px;white-space:pre-line;overflow-wrap:anywhere"><b>Mavzu:</b> ${escapeHtml(essay.topic)}</p>` : ""}
+      ${
+        essay.photos
+          ? `<button type="button" class="btn btn-ghost" id="essay-photos-button" style="margin:0 0 8px">📄 Qo'lda yozilgan esse rasmi (${essay.photos} sahifa)</button>
+             <p class="subtitle" style="margin:0 0 8px;font-size:12px">O'quvchi esseni qog'ozga yozib yuklagan${
+               essay.text ? " — quyidagi matn rasmdan o'qilgan va o'quvchi tuzatgan bo'lishi mumkin. Rasm bilan solishtiring" : ""
+             }.</p>`
+          : ""
+      }
       ${
         essay.text
           ? `<p class="subtitle" style="margin:0 0 6px">${essay.words} so'z</p>
@@ -17542,9 +17649,20 @@ async function renderResultsTab(selectedId) {
   );
 }
 
-// Savollar bo'limlari (esse — alohida ko'rsatiladi)
+// Savollar bo'limlari (esseli testda bo'limlar yo'q — Milliy sertifikatdagidek test va yozma ish bali)
 function testSectionNames(results) {
   return (results.section_names || []).filter((name) => name !== ESSAY_SECTION);
+}
+
+// Milliy sertifikatdagi "umumiy ballga nisbatan foiz ko'rsatkichi" (ball / 65 × 100)
+function certPercentText(value) {
+  return value == null ? "—" : `${Number(value).toFixed(2)}%`;
+}
+
+// Esseli test qatori: "Test: 66.72 • Esse: 55.5 • 94.02%"
+function essayResultMeta(row) {
+  const essay = row.essay_pending ? "⏳ kutilmoqda (ball — faqat test qismi)" : formatNumber(row.essay_ball);
+  return `Test: ${formatNumber(row.test_ball)} • 📝 Esse: ${essay} • ${certPercentText(row.cert_percent)}`;
 }
 
 // Natijalar ro'yxatidagi bitta qator (o'rin, ism, bo'limlar/foiz, ball va daraja)
@@ -17556,15 +17674,11 @@ function resultLineHtml(row, results) {
         <span class="result-name">
           ${escapeHtml(row.name)}
           <small class="result-meta">${
-            testSectionNames(results).length
-              ? testSectionNames(results).map((name) => `${escapeHtml(name)}: ${row.sections[name]}%`).join(" • ")
-              : `✅ ${row.correct} • ❌ ${row.wrong} • ${row.percent}%`
-          }${
-            results.essay_max
-              ? row.essay_pending
-                ? " • 📝 Esse: ⏳ kutilmoqda (ball — faqat test qismi)"
-                : ` • 📝 Esse: ${row.essay}/${results.essay_max} • Test: ${formatNumber(row.test_ball)}`
-              : ""
+            results.essay_max && row.test_ball != null
+              ? essayResultMeta(row)
+              : testSectionNames(results).length
+                ? testSectionNames(results).map((name) => `${escapeHtml(name)}: ${row.sections[name]}%`).join(" • ")
+                : `✅ ${row.correct} • ❌ ${row.wrong} • ${row.percent}%`
           }</small>
         </span>
         ${
@@ -17865,7 +17979,17 @@ async function renderTestResults(testId) {
           })
           .join("")}<td style="text-align:center"><b>${dtmNumber(row.dtm_ball)}</b></td></tr>`;
 
-  const tableRow = (row) => isDtm ? dtmRow(row) : `
+  // Esseli test: Milliy sertifikatdagidek — test bali, esse bali, umumiy ball, foiz ko'rsatkichi, daraja
+  const isEssay = Boolean(results.essay_max) && results.uses_rasch;
+  const essayRow = (row) => `
+        <tr class="result-row">
+          <td>${row.rank}</td><td>${escapeHtml(row.name)}</td>
+          <td>${formatNumber(row.test_ball)}</td>
+          <td>${row.essay_pending ? "<small>⏳</small>" : formatNumber(row.essay_ball)}</td>
+          <td><b>${ballText(row.ball)}</b></td><td>${certPercentText(row.cert_percent)}</td><td><b>${escapeHtml(row.grade)}</b></td>
+        </tr>`;
+
+  const tableRow = (row) => isDtm ? dtmRow(row) : isEssay ? essayRow(row) : `
         <tr class="result-row">
           <td>${row.rank}</td><td>${escapeHtml(row.name)}</td>
           <td>${row.correct}</td><td>${row.wrong}</td><td>${row.percent}%</td>
@@ -17907,6 +18031,8 @@ async function renderTestResults(testId) {
             ? `<tr><th>№</th><th>O'quvchi ism-familiyasi</th>${hasVariants ? "<th>Var.</th>" : ""}${results.section_names
                 .map((name, index) => `<th style="text-align:center">${dtmSectionTitle(name, index)}</th>`)
                 .join("")}<th style="text-align:center">Jami ball</th></tr>`
+            : isEssay
+            ? `<tr><th>O'rin</th><th>O'quvchi</th><th>Test</th><th>Esse</th><th>Ball</th><th>%</th><th>Daraja</th></tr>`
             : `<tr><th>O'rin</th><th>O'quvchi</th><th>✅</th><th>❌</th><th>%</th>${results.uses_rasch ? "<th>Ball</th><th>Daraja</th>" : ""}</tr>`
         }</thead>
         <tbody id="results-table-body"></tbody>

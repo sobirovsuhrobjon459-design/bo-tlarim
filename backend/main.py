@@ -206,6 +206,7 @@ from .database import (
     WithdrawalRequest,
     WithdrawalRequestIn,
     SheetImage,
+    EssayImage,
     PupilAccount,
     PupilLoginIn,
     PupilPasswordIn,
@@ -1275,6 +1276,7 @@ def _archive_and_delete_test(db: Session, test: Test) -> None:
     # Yetkazildi — og'ir qism (rasmlar) bazadan o'chadi, ballar va to'lovlar qoladi
     attempt_ids = select(Attempt.id).where(Attempt.test_id == test.id)
     db.execute(delete(SheetImage).where(SheetImage.attempt_id.in_(attempt_ids)))
+    db.execute(delete(EssayImage).where(EssayImage.attempt_id.in_(attempt_ids)))
     db.execute(update(WrittenAnswer).where(WrittenAnswer.attempt_id.in_(attempt_ids)).values(image=""))
     test.deleted_at = test.auto_deleted_at = utcnow()
     db.commit()
@@ -1637,7 +1639,6 @@ def build_test_stats(db: Session, test: Test) -> dict:
 # Esse hali baholanmagan bo'lsa — umumiy ball o'rnida faqat test qismi (Rasch) turadi.
 # So'zlar soniga qat'iy talab yo'q (2024-yildan) — qisqa esseni baholovchi o'zi past baholaydi.
 ESSAY_SCALE = 75  # esse balining shkalasi; eski testlar (essay_max=24) shu shkalaga keltiriladi
-ESSAY_SECTION = "Esse"
 ESSAY_KEY = "essay"  # o'quvchi javoblaridagi kalit
 ESSAY_MAX_CHARS = 10000
 
@@ -1647,6 +1648,16 @@ def _essay_ball(test: Test, attempt: Attempt) -> float | None:
     if not test.essay_max or attempt.essay_score is None:
         return None
     return round(min(attempt.essay_score, test.essay_max) / test.essay_max * ESSAY_SCALE, 2)
+
+
+CERTIFICATE_PERCENT_BASE = 65  # Milliy sertifikat foizi shu ballga nisbatan (A darajasi chegarasi)
+
+
+def certificate_percent(ball: float | None) -> float | None:
+    """Milliy sertifikatdagi foiz ko'rsatkichi: 61.11 ball → 94.02 %. 65 va undan yuqori — 100 %."""
+    if ball is None:
+        return None
+    return round(min(100.0, ball / CERTIFICATE_PERCENT_BASE * 100), 2)
 
 
 def _essay_number(test: Test) -> int:
@@ -1804,15 +1815,14 @@ def build_rasch_report(db: Session, test: Test) -> dict:
         section_names.append("Boshqa")
         item_section = [name or "Boshqa" for name in item_section]
     if test.essay_max:
-        section_names.append(ESSAY_SECTION)
+        # Esseli testda natija Milliy sertifikatdagidek: test bali, yozma ish (esse) bali, umumiy ball,
+        # foiz ko'rsatkichi va daraja. Bo'limlar bo'yicha foizlar chiqarilmaydi
+        section_names = []
 
-    def split_sections(row_matrix: list[int], attempt: Attempt) -> dict:
+    def split_sections(row_matrix: list[int]) -> dict:
         """Har bo'lim bo'yicha to'g'ri yechilgan savollar foizi (Algebra 60%, Geometriya 35% ...)."""
         result = {}
         for name in section_names:
-            if name == ESSAY_SECTION:
-                result[name] = round((attempt.essay_score or 0) / test.essay_max * 100, 1)
-                continue
             in_section = [solved for solved, sec in zip(row_matrix, item_section) if sec == name]
             result[name] = round(sum(in_section) / len(in_section) * 100, 1) if in_section else 0.0
         return result
@@ -1846,7 +1856,9 @@ def build_rasch_report(db: Session, test: Test) -> dict:
             "ball": score,
             # Oddiy testda daraja ham, baho ham yo'q — to'g'ri javoblar soni va foiz yetarli
             "grade": grade_for(score) if uses_rasch else None,
-            "sections": split_sections(row_matrix, attempt),
+            "sections": split_sections(row_matrix),
+            # Milliy sertifikatdagi "Umumiy ballga nisbatan foiz ko'rsatkichi": ball / 65 × 100 (ko'pi bilan 100)
+            "cert_percent": certificate_percent(score) if uses_rasch else None,
             "essay": attempt.essay_score,
             # Esseli testda: test qismi (Rasch, 1–44) va esse bali (0–75) alohida; "ball" — ularning o'rtachasi
             "test_ball": test_score if test.essay_max else None,
@@ -2130,6 +2142,22 @@ def _is_dtm(rows: list[dict]) -> bool:
     return bool(rows) and rows[0].get("dtm_ball") is not None
 
 
+def _is_essay(rows: list[dict]) -> bool:
+    """Esseli (Ona tili, Milliy sertifikat formati) test: natijada test va yozma ish bali alohida."""
+    return bool(rows) and rows[0].get("test_ball") is not None
+
+
+def _percent_text(value: float | None) -> str:
+    return "—" if value is None else f"{value:.2f}%"
+
+
+def _essay_cells(row: dict) -> list[str]:
+    """Esseli test qatori: test bali (Rasch, 1–44) va yozma ish bali (0–75; baholanmagan — "kutilmoqda")."""
+    test_ball = f"{row['test_ball']:.2f}" if row.get("test_ball") is not None else "—"
+    essay_ball = "kutilmoqda" if row.get("essay_ball") is None else f"{row['essay_ball']:g}"
+    return [test_ball, essay_ball]
+
+
 def _total_column(rows: list[dict], uses_rasch: bool) -> tuple:
     """Jadvalning "jami" ustuni: DTM testida — DTM bali, aks holda Rasch balli yoki foiz."""
     if _is_dtm(rows):
@@ -2312,15 +2340,21 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
     """Mock natijalari uslubidagi jadval: №, Ism Familiya, bo'limlar (yoki To'g'ri/Foiz), Ball, rangli Baho."""
 
     centered = ParagraphStyle("grid_center", parent=styles["cell"], alignment=1)
-    if section_names:
+    essay = _is_essay(rows)
+    if essay:
+        middle = ["Test bali", "Yozma ish\n(esse)"]
+    elif section_names:
         middle = list(section_names)
     else:
         middle = ["To'g'ri", "Foiz"] if uses_rasch else ["To'g'ri"]
     total_title, total_of = _total_column(rows, uses_rasch)
     dtm = _is_dtm(rows) and bool(section_names)
     show_grade = uses_rasch and not dtm  # oddiy testda baho ustuni yo'q
-    header = ["№", "Ism Familiya", *(_dtm_section_titles(middle) if dtm else middle), "Jami ball" if dtm else total_title,
-              *(["Baho"] if show_grade else [])]
+    if essay:  # Milliy sertifikatdagidek: test, yozma ish, umumiy ball, foiz, daraja
+        header = ["№", "Ism Familiya", *middle, "Umumiy\nball", "Foiz", "Daraja"]
+    else:
+        header = ["№", "Ism Familiya", *(_dtm_section_titles(middle) if dtm else middle),
+                  "Jami ball" if dtm else total_title, *(["Baho"] if show_grade else [])]
     # Ko'p bo'limda (Fizika — 6 ta) ustunlar tor: sarlavha kichikroq shriftda,
     # aks holda "Mexanika" kabi so'zlar o'rtasidan bo'linib ketardi
     many = len(middle) > 4
@@ -2329,7 +2363,9 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
                        styles["cell"] if index == 1 else head_center)
              for index, text in enumerate(header)]]
     for row in rows:
-        if dtm:
+        if essay:
+            middle_values = _essay_cells(row)
+        elif dtm:
             middle_values = [_dtm_cell(row, name) for name in section_names]
         elif section_names:
             middle_values = [f"{row['sections'].get(name, 0):g}%" for name in section_names]
@@ -2341,11 +2377,12 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
             Paragraph(xml_escape(row["name"]), styles["cell"]),
             *[Paragraph(value, centered) for value in middle_values],
             Paragraph(f"<b>{total}</b>", centered),
+            *([Paragraph(_percent_text(row.get("cert_percent")), centered)] if essay else []),
             *([Paragraph(f"<font color='white'><b>{xml_escape(row['grade'])}</b></font>", centered)] if show_grade else []),
         ])
 
     # Bo'limlar ko'p bo'lsa (Fizikada 6 ta) ustunlar torayadi — ism ustuniga kamida 24% qoladi
-    tail = 2 if show_grade else 1
+    tail = (2 if show_grade else 1) + (1 if essay else 0)
     other = min(0.13, (1 - 0.07 - 0.24) / (len(middle) + tail))
     name_share = 1 - 0.07 - other * (len(middle) + tail)
     widths = [0.07, name_share, *([other] * (len(middle) + tail))]
@@ -5509,6 +5546,11 @@ def my_attempt_review(attempt_id: int, user: User = Depends(get_current_user), d
         "grade": row["grade"] if row else None,
         "rank": row["rank"] if row else None,
         "sections": row["sections"] if row else {},
+        # Esseli test: Milliy sertifikatdagidek — test bali, yozma ish bali, foiz ko'rsatkichi
+        "test_ball": row["test_ball"] if row else None,
+        "essay_ball": row["essay_ball"] if row else None,
+        "essay_pending": bool(row and row["essay_pending"]),
+        "cert_percent": row["cert_percent"] if row else None,
         "participants": report["summary"]["participants"],
     }
 # ========== 4) O'qituvchi ro'yxatdan o'tishi ==========
@@ -7018,6 +7060,8 @@ def _teacher_answer_sheet(db: Session, test: Test, attempt: Attempt) -> dict:
         "grade": row["grade"] if row else None,
         # Esseli testda: test qismi (Rasch) va esse kutilyaptimi — umumiy ball shunga qarab tushuniladi
         "test_ball": row["test_ball"] if row else None,
+        "essay_ball": row["essay_ball"] if row else None,
+        "cert_percent": row["cert_percent"] if row else None,
         "essay_pending": bool(row and row["essay_pending"]),
     }
 
@@ -7096,6 +7140,7 @@ def _essay_review(test: Test, attempt: Attempt) -> dict | None:
         "score": attempt.essay_score,
         "text": text_value,
         "words": len(text_value.split()),
+        "photos": len(_essay_photo_pages(object_session(attempt), attempt.id)),  # qog'ozdagi esse rasmlari
         # AI taklifi: o'qituvchi "AI bilan baholash" ni bosganda to'ladi
         "topic": test.essay_topic,
         "ai_enabled": ai_enabled(),
@@ -8608,7 +8653,7 @@ def _draw_certificate_page(pdf, test: Test, teacher: Teacher, row: dict, section
     divider(height - 340)
 
     # Natija
-    ball = f"{row['ball']:.1f}" if row.get("ball") is not None else "—"
+    ball = f"{row['ball']:.2f}" if row.get("ball") is not None else "—"  # Milliy sertifikatdagidek 2 xona
     field(height - 368, "Fan:", test.subject[:40])
     if row.get("dtm_ball") is not None:
         field(height - 392, "DTM bali:", f"{row['dtm_ball']:g} / {DTM_MAX_BALL:g}".replace(".", ","), size=12)
@@ -8616,14 +8661,29 @@ def _draw_certificate_page(pdf, test: Test, teacher: Teacher, row: dict, section
         field(height - 392, "Umumiy to'plagan bali:", ball, size=12)
     else:  # oddiy test — Rasch balli yo'q
         field(height - 392, "To'g'ri javoblar:", f"{row['correct']} / {row['total']}", size=12)
-    field(height - 416, "To'g'ri javoblar foizi:", f"{row['percent']:g} %  ({row['correct']}/{row['total']})", size=12)
+    essay = row.get("test_ball") is not None  # esseli test: Milliy sertifikatdagidek foiz ko'rsatkichi
+    if essay:
+        field(height - 416, "Foiz ko'rsatkichi:", _percent_text(row.get("cert_percent")).replace("%", " %"), size=12)
+    else:
+        field(height - 416, "To'g'ri javoblar foizi:", f"{row['percent']:g} %  ({row['correct']}/{row['total']})", size=12)
     if row.get("dtm_ball") is None and row.get("grade"):  # DTM va oddiy testda daraja yo'q
         field(height - 440, "Sertifikat darajasi:", row["grade"], size=13)
     field(height - 464, "Qatnashchilar orasidagi o'rni:", str(row["rank"]))
 
     # Bo'limlar
     y = height - 502
-    if section_names:
+    if essay:
+        test_value, essay_value = _essay_cells(row)
+        for label, value in (("Test sinovi natijasi:", test_value), ("Yozma ish natijasi:", essay_value)):
+            pdf.setFillColor(CERTIFICATE_INK)
+            pdf.setFont(REPORT_FONT, 10.5)
+            pdf.drawString(left + 14, y, label)
+            pdf.drawRightString(right, y, value)
+            pdf.setStrokeColor(colors.HexColor("#e3d5b3"))
+            pdf.setLineWidth(0.5)
+            pdf.line(left + 14, y - 5, right, y - 5)
+            y -= 20
+    elif section_names:
         pdf.setFillColor(CERTIFICATE_INK)
         pdf.setFont(REPORT_FONT_BOLD, 10.5)
         pdf.drawString(left, y, "Bo'limlar bo'yicha test sinovi natijalari:")
@@ -8951,13 +9011,17 @@ def generate_test_report_xlsx(db: Session, test: Test) -> bytes:
     results.title = "Natijalar"
     dtm = _is_dtm(rows)
     rasch = report["uses_rasch"]
+    essay = _is_essay(rows)  # esseli test: test bali, yozma ish bali va sertifikat foizi alohida ustunda
     header(results, ["O'rin", "Raqam", "Ism-familiya", "To'g'ri", "Xato", "Jami", "Foiz %", *(["DTM bali"] if dtm else []),
-                     *(["Ball", "Daraja"] if rasch else []), *sections],
-           [7, 8, 32, 9, 8, 7, 9, *([10] if dtm else []), *([9, 9] if rasch else []), *[14] * len(sections)])
+                     *(["Test bali", "Yozma ish (esse)"] if essay else []),
+                     *(["Ball", "Daraja"] if rasch else []), *(["Sertifikat foizi %"] if essay else []), *sections],
+           [7, 8, 32, 9, 8, 7, 9, *([10] if dtm else []), *([10, 12] if essay else []), *([9, 9] if rasch else []),
+            *([12] if essay else []), *[14] * len(sections)])
     for row in rows:
         results.append([
             row["rank"], numbers.get(row["attempt_id"]), row["name"], row["correct"], row["wrong"], row["total"],
-            row["percent"], *([row["dtm_ball"]] if dtm else []), *([row["ball"], row["grade"]] if rasch else []),
+            row["percent"], *([row["dtm_ball"]] if dtm else []), *([row["test_ball"], row["essay_ball"]] if essay else []),
+            *([row["ball"], row["grade"]] if rasch else []), *([row["cert_percent"]] if essay else []),
             *[row["sections"].get(name) for name in sections],
         ])
 
@@ -9812,7 +9876,9 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
         # o'quvchi to'xtagan joyidan davom etadi.
         "answers": _read_saved_answers(attempt),
         # Esse: o'quvchi ilovada yozadi (javoblarda "essay" kaliti), o'qituvchi yoki AI baholaydi
-        "essay": {"number": _essay_number(test), "topic": test.essay_topic} if test.essay_max else None,
+        # photos — qog'ozdagi esse rasmlari yuklangan sahifalar ([1, 2]); qayta ochilganda ham ko'rinadi
+        "essay": {"number": _essay_number(test), "topic": test.essay_topic, "photos": _essay_photo_pages(db, attempt.id),
+                  "ai": _ai_on()} if test.essay_max else None,
     }
 
 
@@ -9855,6 +9921,96 @@ def save_attempt_progress(
     db.commit()
 
     return {"saved": len(cleaned)}
+
+
+# ---------- Qog'ozga yozilgan esse rasmi ----------
+# Ayrim o'quvchilar esseni qo'lda varaqqa yozadi: test ichida rasmini yuklaydi (har sahifa alohida).
+# AI rasmni matnga aylantiradi (xatolari bilan — imlo ham baholanadi), o'quvchi matnni rasm bilan
+# solishtirib tuzatadi va odatdagidek topshiradi. O'qituvchi esse matni yonida asl rasmni ko'radi.
+
+ESSAY_PHOTO_PAGES = 4  # bitta essega ko'pi bilan shuncha sahifa
+ESSAY_PHOTO_LIMIT = 2_500_000  # bitta sahifa rasmi (base64 matni) — ko'pi bilan (~1.8 MB JPEG)
+
+
+class EssayPhotoIn(BaseModel):
+    image: str = Field(min_length=30, max_length=ESSAY_PHOTO_LIMIT)
+    page: int = Field(ge=1, le=ESSAY_PHOTO_PAGES)
+
+
+def _ai_on() -> bool:
+    from .ai_reader import ai_enabled
+
+    return ai_enabled()
+
+
+def _essay_photo_pages(db: Session, attempt_id: int) -> list[int]:
+    return list(db.scalars(select(EssayImage.page).where(EssayImage.attempt_id == attempt_id)
+                           .order_by(EssayImage.page)).all())
+
+
+def _own_essay_attempt(db: Session, user: User, attempt_id: int) -> tuple[Attempt, Test]:
+    attempt = db.get(Attempt, attempt_id)
+    if not attempt or attempt.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Urinish topilmadi")
+    if attempt.status != "in_progress":
+        raise HTTPException(status_code=400, detail="Test allaqachon yakunlangan")
+    test = db.get(Test, attempt.test_id)
+    if not test or not test.essay_max:
+        raise HTTPException(status_code=400, detail="Bu testda esse yo'q")
+    return attempt, test
+
+
+@app.post("/api/attempts/{attempt_id}/essay/photo")
+def upload_essay_photo(
+    attempt_id: int, body: EssayPhotoIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """
+    O'quvchi qog'ozga yozgan essesining bitta sahifasi rasmini yuklaydi. Rasm saqlanadi (o'qituvchi ko'radi);
+    AI yoqilgan bo'lsa — shu sahifa matnga aylantiriladi va qaytariladi (o'quvchi tekshirib, maydonga qo'shadi).
+    """
+
+    attempt, test = _own_essay_attempt(db, user, attempt_id)
+    if not re.match(r"^data:image/(jpeg|png|webp);base64,", body.image):
+        raise HTTPException(status_code=422, detail="Rasm formati noto'g'ri (JPEG yoki PNG yuklang)")
+    db.execute(delete(EssayImage).where(EssayImage.attempt_id == attempt.id, EssayImage.page == body.page))
+    db.add(EssayImage(attempt_id=attempt.id, page=body.page, image=body.image))
+    db.commit()  # AI kutilayotganda urinish qulflanib turmasin — rasm avval saqlanadi
+
+    from .ai_reader import AIReadError, ai_enabled, transcribe_essay
+
+    text, error = "", None
+    if ai_enabled():
+        try:
+            text = transcribe_essay(test.subject, body.image)
+        except AIReadError as failure:
+            error = str(failure)
+            logging.getLogger("backend.ai").warning("Esse rasmini o'qib bo'lmadi (urinish %s): %s", attempt.id, failure)
+    return {"page": body.page, "pages": _essay_photo_pages(db, attempt.id), "text": text, "ai": ai_enabled(),
+            "error": error}
+
+
+@app.delete("/api/attempts/{attempt_id}/essay/photo/{page}")
+def delete_essay_photo(attempt_id: int, page: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    attempt, _ = _own_essay_attempt(db, user, attempt_id)
+    db.execute(delete(EssayImage).where(EssayImage.attempt_id == attempt.id, EssayImage.page == page))
+    db.commit()
+    return {"pages": _essay_photo_pages(db, attempt.id)}
+
+
+@app.get("/api/teacher/tests/{test_id}/students/{attempt_id}/essay/photos")
+def student_essay_photos(
+    test_id: int, attempt_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
+):
+    """O'qituvchi: o'quvchi qog'ozga yozib yuklagan esse rasmlari (matnni asl qo'lyozma bilan solishtirish uchun)."""
+
+    test = _get_own_test(db, teacher, test_id)
+    attempt = db.get(Attempt, attempt_id)
+    if not attempt or attempt.test_id != test.id:
+        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    pages = db.scalars(select(EssayImage).where(EssayImage.attempt_id == attempt.id).order_by(EssayImage.page)).all()
+    if not pages:
+        raise HTTPException(status_code=404, detail="Esse rasmi yuklanmagan")
+    return {"pages": [{"page": item.page, "image": item.image} for item in pages]}
 
 
 @app.post("/api/attempts/{attempt_id}/finish")

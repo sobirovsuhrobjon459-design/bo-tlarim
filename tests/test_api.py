@@ -4267,7 +4267,7 @@ def test_ona_tili_essesi_oqituvchi_baholaydi_va_ballga_qoshiladi():
         for index in range(6):
             user = 7400 + index
             started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(user)).json()
-            assert started["essay"] == {"number": 45, "topic": None}  # so'zlar soniga chegara yo'q
+            assert started["essay"] == {"number": 45, "topic": None, "photos": [], "ai": main._ai_on()}  # so'zlar soniga chegara yo'q
             attempt_id = started["attempt_id"]
             attempts[user] = attempt_id
             # 7400 va 7401 — javoblari bir xil (yarmi to'g'ri); qolganlari har xil
@@ -4299,7 +4299,8 @@ def test_ona_tili_essesi_oqituvchi_baholaydi_va_ballga_qoshiladi():
 
     results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=teacher).json()
     assert results["essay_max"] == 75 and results["essay_pending"] == 6
-    assert results["section_names"][-1] == "Esse"
+    # Milliy sertifikatdagidek: bo'limlar yo'q — test bali, esse bali, umumiy ball, foiz ko'rsatkichi va daraja
+    assert results["section_names"] == []
     rows = {row["attempt_id"]: row for row in results["rows"]}
     # Esse baholanguncha — umumiy ball = test qismi (Rasch, 1–44)
     assert all(row["essay_pending"] and row["ball"] == row["test_ball"] for row in rows.values()), rows
@@ -4320,8 +4321,10 @@ def test_ona_tili_essesi_oqituvchi_baholaydi_va_ballga_qoshiladi():
     rows = {row["attempt_id"]: row for row in results["rows"]}
     assert results["essay_pending"] == 4
     graded = rows[attempts[7400]]
-    assert graded["essay"] == 60 and graded["essay_ball"] == 60 and graded["sections"]["Esse"] == 80.0
+    assert graded["essay"] == 60 and graded["essay_ball"] == 60 and graded["sections"] == {}
     assert graded["test_ball"] == test_part  # esse Rasch'ni o'zgartirmaydi
+    # Foiz ko'rsatkichi — Milliy sertifikatdagidek ball / 65 × 100 (ko'pi bilan 100)
+    assert graded["cert_percent"] == round(min(100, graded["ball"] / 65 * 100), 2), graded
     assert graded["ball"] == round((test_part + 60) / 2, 2), graded  # (Rasch + esse) / 2
     assert rows[attempts[7401]]["ball"] == round((test_part + 5) / 2, 2)
     assert graded["grade"] == main.grade_for(graded["ball"])
@@ -4359,6 +4362,91 @@ def test_ona_tili_essesi_oqituvchi_baholaydi_va_ballga_qoshiladi():
     for url in (f"/api/teacher/tests/{created['id']}/pdf", f"/api/teacher/tests/{created['id']}/certificates"):
         pdf = client.get(url, headers=teacher)
         assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF"), url
+    assert client.get(f"/api/teacher/tests/{created['id']}/excel", headers=teacher).status_code == 200
+
+
+def test_sertifikat_foizi_milliy_sertifikatdagidek():
+    """Milliy sertifikat: 61.11 ball → 94.02 % (ball / 65); 65 va undan yuqori — 100 %."""
+    assert main.certificate_percent(61.11) == 94.02
+    assert main.certificate_percent(65) == 100.0 and main.certificate_percent(72.4) == 100.0
+    assert main.certificate_percent(None) is None
+
+
+def test_esse_qogozdagi_rasmi_yuklanadi_va_matnga_aylanadi():
+    """
+    O'quvchi qo'lda yozgan esse rasmini yuklaydi: rasm saqlanadi, AI matnga aylantiradi (o'quvchi tuzatadi),
+    o'qituvchi asl rasmni ko'radi. Uzun mavzu (vaziyat matni bilan) to'liq saqlanadi.
+    """
+    from backend import ai_reader
+
+    reset_database()
+    register_teacher()
+    teacher = as_user(555)
+    key = _subject_key("Ona tili va adabiyot")
+    topic = ("Quyidagi vaziyat yuzasidan o'z munosabatingizni yozma bayon qiling. " * 6).strip()
+    assert len(topic) > 300
+    created = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay=True,
+                          essay_ai=True, essay_topic=topic)
+    plain = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180)
+
+    original = ai_reader.transcribe_essay, os.environ.pop("GEMINI_API_KEY", None), os.environ.pop("ANTHROPIC_API_KEY", None)
+    original_grade = ai_reader.grade_essay
+    os.environ["GEMINI_API_KEY"] = "test"
+    calls = []
+
+    def fake_transcribe(subject, image):
+        calls.append((subject, image[:30]))
+        return "Kitob — bilim bulog'i. Men kitob o'qishni yaxshi koraman."
+
+    ai_reader.transcribe_essay = fake_transcribe
+    ai_reader.grade_essay = lambda subject, text, max_score, topic_text: (50, "Yaxshi")
+    image = "data:image/jpeg;base64," + "A" * 200
+    sent, restore = _capture_result_notices()
+    try:
+        started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(7600)).json()
+        assert started["essay"]["topic"] == topic and started["essay"]["photos"] == [] and started["essay"]["ai"] is True
+        url = f"/api/attempts/{started['attempt_id']}/essay/photo"
+
+        uploaded = client.post(url, json={"image": image, "page": 1}, headers=as_user(7600))
+        assert uploaded.status_code == 200, uploaded.text
+        assert uploaded.json()["text"].startswith("Kitob") and uploaded.json()["pages"] == [1]
+        assert calls == [("Ona tili va adabiyot", image[:30])]
+        assert client.post(url, json={"image": image, "page": 2}, headers=as_user(7600)).json()["pages"] == [1, 2]
+        # Boshqa o'quvchi, noto'g'ri format, sahifa chegarasi
+        assert client.post(url, json={"image": image, "page": 1}, headers=as_user(7601)).status_code == 404
+        assert client.post(url, json={"image": "data:text/html;base64," + "A" * 40, "page": 3},
+                           headers=as_user(7600)).status_code == 422
+        assert client.post(url, json={"image": image, "page": 5}, headers=as_user(7600)).status_code == 422
+        assert client.delete(f"{url}/2", headers=as_user(7600)).json()["pages"] == [1]
+        # Qayta ochilganda yuklangan sahifalar ko'rinadi
+        again = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(7600)).json()
+        assert again["essay"]["photos"] == [1]
+
+        # Essesiz testga rasm yuklab bo'lmaydi
+        plain_start = client.post(f"/api/tests/{plain['code']}/start", json={}, headers=as_user(7602)).json()
+        assert client.post(f"/api/attempts/{plain_start['attempt_id']}/essay/photo", json={"image": image, "page": 1},
+                           headers=as_user(7602)).status_code == 400
+
+        finished = client.post(f"/api/attempts/{started['attempt_id']}/finish", headers=as_user(7600),
+                               json={"answers": {"essay": uploaded.json()["text"]}})
+        assert finished.status_code == 200, finished.text
+        # Yakunlangach rasm yuklab bo'lmaydi
+        assert client.post(url, json={"image": image, "page": 2}, headers=as_user(7600)).status_code == 400
+    finally:
+        restore()
+        ai_reader.transcribe_essay, ai_reader.grade_essay = original[0], original_grade
+        os.environ.pop("GEMINI_API_KEY", None)
+        for name, value in (("GEMINI_API_KEY", original[1]), ("ANTHROPIC_API_KEY", original[2])):
+            if value is not None:
+                os.environ[name] = value
+
+    detail_url = f"/api/teacher/tests/{created['id']}/students/{started['attempt_id']}"
+    detail = client.get(f"{detail_url}/detail", headers=teacher).json()
+    assert detail["essay"]["photos"] == 1 and detail["essay"]["topic"] == topic
+    photos = client.get(f"{detail_url}/essay/photos", headers=teacher)
+    assert photos.status_code == 200 and photos.json()["pages"] == [{"page": 1, "image": image}]
+    register_teacher(556)
+    assert client.get(f"{detail_url}/essay/photos", headers=as_user(556)).status_code in (403, 404)
 
 
 def _wait_essay(url: str, teacher: dict) -> dict:
