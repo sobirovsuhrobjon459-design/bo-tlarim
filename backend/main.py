@@ -69,7 +69,7 @@ from .timetable import ClassInput, Period, TeacherInput, build_timetable
 
 # Ko'p oqimda xotira bo'laklanib, 512 MB'dan oshib ketmasin (qarang: backend/memory.py)
 limit_malloc_arenas()
-from .subjects import default_sections, essay_max, frontend_config, score_weights, subject_keyboard
+from .subjects import band_label, default_sections, essay_max, frontend_config, score_weights, subject_keyboard
 from .regions import REGIONS, is_valid_location
 from .student_import import names_from_rows, parse_student_file, rows_from_text
 from .auth import (
@@ -1581,8 +1581,8 @@ def score_splits(db: Session, test: Test, attempts: list[Attempt]) -> dict[int, 
 
 
 def _key_question_label(key_question: KeyQuestion) -> str:
-    """Savolning ko'rinadigan nomi: odatda "12-savol", a/b qismli bo'lsa — "36a"."""
-    return key_question.label or f"{key_question.number}-savol"
+    """Savolning ko'rinadigan nomi: odatda "12-savol", a/b qismli bo'lsa — "36a", yozma ish bandi — "43.1"."""
+    return band_label(key_question.test.subject, key_question.label) or f"{key_question.number}-savol"
 
 
 def build_test_stats(db: Session, test: Test) -> dict:
@@ -1662,6 +1662,10 @@ def _rasch_items(test: Test) -> list[tuple[int, str]]:
         label = key_question.label or str(key_question.number)
         match = re.fullmatch(r"(\d+)([a-z]+)", label)
         items.append((key_question.number, f"{match.group(1)}({match.group(2)})" if match else label))
+        shown = band_label(test.subject, label)
+        if shown != label:  # yozma ish bandi — imtihondagidek "43.1"
+            items.append((key_question.number, shown))
+            continue
     return items
 
 
@@ -2487,7 +2491,7 @@ def _answer_sheet_items(test: Test, key_override: dict | None = None) -> list[tu
 
     if test.mode == "key":
         return [
-            (kq.label or str(kq.number), kq.question_type, kq.option_count,
+            (band_label(test.subject, kq.label) or str(kq.number), kq.question_type, kq.option_count,
              (key_override or {}).get(kq.number, kq.correct), kq.number)
             for kq in test.key_questions
         ]
@@ -6950,7 +6954,7 @@ def _teacher_answer_sheet(db: Session, test: Test, attempt: Attempt) -> dict:
         for kq in test.key_questions:
             answer = answers.get(kq.number)
             item = {
-                "ref": kq.number, "label": kq.label or str(kq.number), "type": kq.question_type,
+                "ref": kq.number, "label": band_label(test.subject, kq.label) or str(kq.number), "type": kq.question_type,
                 "options": kq.option_count, "chosen": (answer.chosen if answer else "") or "",
                 "key": overrides.get(kq.number, kq.correct), "is_correct": bool(answer and answer.is_correct),
             }
@@ -9658,7 +9662,9 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
                     "question_type": first.question_type,
                     "option_count": first.option_count,
                     "parts": [
-                        {"ref": kq.number, "label": re.sub(r"^\d+", "", kq.label or "")} for kq in group
+                        # "a", "b" — yoki yozma ish bandida imtihondagidek "1", "2" ("43.1" -> "1")
+                        {"ref": kq.number, "label": re.sub(r"^\d+\.?", "", band_label(test.subject, kq.label) or "")}
+                        for kq in group
                     ],
                 }
             )

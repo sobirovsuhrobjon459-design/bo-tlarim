@@ -4345,7 +4345,7 @@ def test_yozma_ish_har_bandi_kalitga_solishtiriladi():
             started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(tg_id)).json()
             assert len(started["questions"]) == 43, len(started["questions"])  # 41 — bitta savol, 3 band
             q41 = next(q for q in started["questions"] if q["number"] == 41)
-            assert [part["label"] for part in q41["parts"]] == ["a", "b", "c"], q41
+            assert [part["label"] for part in q41["parts"]] == ["1", "2", "3"], q41  # imtihondagidek: 41.1, 41.2, 41.3
             answers = {refs[band]: str(ord(band[-1]) - 96) for band in bands}  # 41a→1, 41b→2, 41c→3
             client.post(f"/api/attempts/{started['attempt_id']}/finish", json={"answers": answers}, headers=as_user(tg_id))
     finally:
@@ -4439,6 +4439,13 @@ def test_natija_xabarlari_navbat_bilan_yetkaziladi():
     assert sorted(delivered) == sorted(f"Natija #{index:03d} " + "x" * 40 for index in range(300)), len(delivered)
     assert len(to_teacher) < 30, f"birlashtirilmadi: {len(to_teacher)} ta xabar"
     assert all(len(text) <= 4096 for _, text, _ in to_teacher)
+    # Ko'rinishda — imtihondagidek raqam bilan (41.1, 41.2 …); ichki nom (41a) bazada qoladi
+    shown = {item["label"] for item in client.get(f"/api/teacher/tests/{created['id']}/questions",
+                                                  headers=as_user(555)).json()["questions"]}
+    assert {"41.1", "41.2", "43.3"} <= shown and "41a" not in shown, sorted(shown)
+    assert main.band_label("Kimyo", "41c") == "41.3" and main.band_label("Matematika", "41a") == "41a"
+    assert main.band_label("Biologiya", "42e") == "42.5" and main.band_label("Kimyo", "36") == "36"
+
     gaps = [b[2] - a[2] for a, b in zip(to_teacher, to_teacher[1:])]
     assert all(gap >= 0.29 for gap in gaps), gaps
     assert any(chat == 777 for chat, _, _ in sent)

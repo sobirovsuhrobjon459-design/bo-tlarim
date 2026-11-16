@@ -30,6 +30,8 @@ Rus tili 45 (insho) — matn, kalit bilan solishtirib bo'lmaydi, testga kirmaydi
 Ona tili 45 (esse) — o'qituvchi 0–24 ball qo'yadi (essay), ball Rasch'ga qo'shiladi.
 """
 
+import re
+
 MATCHING = {33: 6, 34: 6, 35: 6}  # moslashtirish topshiriqlari — A–F
 
 SUBJECTS: dict[str, dict] = {
@@ -210,6 +212,21 @@ def essay_max(subject: str | None) -> int | None:
 def part_count(config: dict, number: int) -> int:
     """Yozma savol nechta qismli: [−]/[+] bilan o'zgaradigan band, belgilangan qism yoki fanning odatiy soni."""
     return config.get("part_overrides", {}).get(number) or config.get("fixed_parts", {}).get(number) or config["parts"]
+
+
+def band_label(subject: str | None, label: str | None) -> str | None:
+    """
+    Yozma ish bandining KO'RINADIGAN nomi — imtihondagidek raqam bilan: "43a" -> "43.1".
+
+    Faqat [−]/[+] bilan o'zgaradigan yozma ishlarda (Kimyo, Biologiya 41–43 — part_overrides);
+    boshqa a/b savollar (36a, 36b) o'zgarmaydi. Bazada (kalit, o'quvchi javoblari, skaner)
+    ichki nom "43a" qoladi — eski testlar va javoblar buzilmaydi, faqat ko'rinishi o'zgaradi.
+    """
+    match = re.fullmatch(r"(\d+)([a-z])", label or "")
+    config = subject_config(subject)
+    if not match or not config or int(match.group(1)) not in config.get("part_overrides", {}):
+        return label
+    return f"{match.group(1)}.{ord(match.group(2)) - 96}"
 
 
 def frontend_config() -> dict:

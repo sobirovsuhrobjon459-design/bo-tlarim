@@ -13249,7 +13249,7 @@ function buildKeyQuestionRows(savedAnswers, { resetOptions = false } = {}) {
 
       writtenRows.push(`
         <div class="written-row ${isFirstPart && index && !isBanded ? "written-row-gap" : ""}">
-          <span class="written-number">${label}</span>
+          <span class="written-number">${isBanded ? `${questionNumber}.${partIndex + 1}` : label}</span>
           <div class="written-cell key-row" data-label="${label}" data-kind="text"
                data-answer="${escapeHtml(variants.filter(Boolean).join("|"))}">
             ${variants.map((variant) => mathFieldHtml(variant, 'placeholder="javob"')).join("")}
