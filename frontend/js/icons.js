@@ -598,7 +598,7 @@ const EMOJI_ICONS = {
 "🥉": [
 "medal",
 "bronze"
-]
+],
 "🆓": [
 "gift",
 ""
