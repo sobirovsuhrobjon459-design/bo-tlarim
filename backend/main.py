@@ -7036,11 +7036,13 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
     if required_channel:
         _ensure_bot_can_check_channel(required_channel)
 
-    # Esseni AI baholasa — mavzu majburiy (AI mavzuga moslikni tekshiradi). Oflayn esse qog'ozda — AI o'qiy olmaydi
-    essay_by_ai = bool(body.essay and body.essay_ai and essay_max(body.subject) and body.enrollment_type != "closed")
+    # Esseli testda mavzu majburiy (o'qituvchi ham, AI ham tekshirganda): o'quvchi uni esse maydoni ustida ko'radi,
+    # AI esa mavzuga moslikni ham baholaydi. Oflayn esse qog'ozda — AI o'qiy olmaydi
+    essay_on = bool(body.essay and essay_max(body.subject))
+    essay_by_ai = essay_on and body.essay_ai and body.enrollment_type != "closed"
     essay_topic = (body.essay_topic or "").strip()
-    if essay_by_ai and not essay_topic:
-        raise HTTPException(status_code=422, detail="Esse mavzusini kiriting — AI esseni shu mavzu bo'yicha tekshiradi")
+    if essay_on and not essay_topic:
+        raise HTTPException(status_code=422, detail="Esse mavzusini kiriting — o'quvchilar esseni shu mavzuda yozadi")
 
     code = _new_test_code(db)
 
@@ -7060,7 +7062,7 @@ def create_test(body: TestIn, teacher: Teacher = Depends(get_current_teacher), d
         end_time=end_time,
         essay_max=essay_max(body.subject) if body.essay else None,
         essay_ai=essay_by_ai,
-        essay_topic=essay_topic if essay_by_ai else None,
+        essay_topic=essay_topic if essay_on else None,
         test_type=body.test_type,
         questions=[Question(**question.model_dump()) for question in body.questions] if body.mode == "full" else [],
         key_questions=(

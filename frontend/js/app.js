@@ -12821,18 +12821,25 @@ function renderNewTestForm(testType, draft = {}) {
             o'zi qo'yadi va qisqa izoh yozadi — har birini tasdiqlab chiqish shart emas. Istalgan o'quvchining
             esse balini natijalarda o'zgartirishingiz mumkin.</p>
         </span>
-      </label>
-      <div id="essay-topic-block" style="margin-top:10px;${essayMode === "ai" ? "" : "display:none"}">
+      </label>`
+      }
+      <div id="essay-topic-block" style="margin-top:10px;${essayMode === "teacher" || essayMode === "ai" ? "" : "display:none"}">
         <p class="field-label" style="margin:0 0 4px">Esse mavzusi <span style="color:#dc2626">*</span></p>
         <textarea class="input" id="field-essay-topic" maxlength="2000" rows="4" style="margin:0;resize:vertical;line-height:1.45"
                placeholder="Masalan: Kitob — bilim bulog'i (vaziyat matni va topshiriq shartlari bilan birga yozish mumkin)">${escapeHtml(draft.essayTopic || "")}</textarea>
-        <p class="subtitle" style="margin:4px 0 0;font-size:12px">Majburiy: AI esseni shu mavzuga mosligi bo'yicha ham
-          baholaydi. Mavzu o'quvchiga test ichida, esse maydoni ustida ko'rinadi.</p>
-        <p class="subtitle" style="margin:8px 0 0;color:#d97706">⚠️ <b>Pullik xizmat.</b>
+        <p class="subtitle" style="margin:4px 0 0;font-size:12px">Majburiy. ${
+          offline
+            ? "Mavzu natijalarda esse yonida ko'rinadi — o'quvchilarga uni qog'ozda bering."
+            : "Mavzu o'quvchiga test ichida, esse maydoni ustida ko'rinadi."
+        }<span id="essay-topic-ai-note" style="${essayMode === "ai" ? "" : "display:none"}"> AI esseni shu mavzuga mosligi bo'yicha ham baholaydi.</span></p>
+        ${
+          offline
+            ? ""
+            : `<p class="subtitle" id="essay-ai-warning" style="margin:8px 0 0;color:#d97706;${essayMode === "ai" ? "" : "display:none"}">⚠️ <b>Pullik xizmat.</b>
           AI orqali tekshirish pullik xizmat hisoblanadi. Narxi va to'lov tartibi alohida e'lon qilinadi.
-          AI ham xato qilishi mumkin — shubhali ballarni ko'rib chiqing.</p>
-      </div>`
-      }
+          AI ham xato qilishi mumkin — shubhali ballarni ko'rib chiqing.</p>`
+        }
+      </div>
       <p class="subtitle" style="margin:10px 0 0;font-size:12px">Esseli testda umumiy ball =
         (1–44 savollar bo'yicha Rasch balli + esse bali) ÷ 2. Esse baholanguncha natijada faqat test qismi turadi.</p>
     </div>
@@ -12958,13 +12965,16 @@ function renderNewTestForm(testType, draft = {}) {
   document.getElementById("field-ms-format").addEventListener("change", (event) => rerenderWithFormat(event.target.checked));
 
   // Fan almashtirilganda, o'sha fandagi Milliy sertifikat tuzilishi qo'llanadi
-  // Esse: bitta tanlov (radio); AI tanlansa mavzu maydoni chiqadi
+  // Esse: bitta tanlov (radio); esse bo'lsa (o'qituvchi yoki AI) — mavzu maydoni, AI'da — "pullik xizmat" ham
   document.querySelectorAll('input[name="essay-mode"]').forEach((radio) =>
     radio.addEventListener("change", () => {
-      const block = document.getElementById("essay-topic-block");
-      if (!block) return;
-      block.style.display = radio.value === "ai" && radio.checked ? "" : "none";
-      if (radio.value === "ai" && radio.checked) document.getElementById("field-essay-topic").focus();
+      if (!radio.checked) return;
+      const withEssay = radio.value === "teacher" || radio.value === "ai";
+      document.getElementById("essay-topic-block").style.display = withEssay ? "" : "none";
+      document.getElementById("essay-topic-ai-note").style.display = radio.value === "ai" ? "" : "none";
+      const warning = document.getElementById("essay-ai-warning");
+      if (warning) warning.style.display = radio.value === "ai" ? "" : "none";
+      if (withEssay) document.getElementById("field-essay-topic").focus();
     })
   );
 
@@ -13483,9 +13493,9 @@ async function saveNewTest() {
     document.getElementById("essay-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
     throw new Error("45. Esse bo'yicha tanlang: essesiz, o'qituvchi baholaydi yoki AI orqali tekshirish");
   }
-  if (essayShown && essayByAi && !essayTopic) {
+  if (essayShown && (essayByTeacher || essayByAi) && !essayTopic) {
     document.getElementById("field-essay-topic")?.focus();
-    throw new Error("Esse mavzusini kiriting — AI esseni shu mavzu bo'yicha tekshiradi");
+    throw new Error("Esse mavzusini kiriting — o'quvchilar esseni shu mavzuda yozadi");
   }
 
   const body = {
@@ -13508,7 +13518,7 @@ async function saveNewTest() {
     test_type: { boshlangich: "boshlangich", dtm: "dtm" }[document.getElementById("field-type").value] || "rash",
     essay: essayShown && (essayByTeacher || essayByAi),
     essay_ai: essayShown && essayByAi,
-    essay_topic: essayShown && essayByAi ? essayTopic : null,
+    essay_topic: essayShown && (essayByTeacher || essayByAi) ? essayTopic : null,
   };
 
   const keyRows = [...document.querySelectorAll("#key-questions-container .key-row")];

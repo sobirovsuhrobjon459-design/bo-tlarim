@@ -4332,7 +4332,8 @@ def test_ona_tili_essesi_oqituvchi_baholaydi_va_ballga_qoshiladi():
     reset_database()
     register_teacher()
     key = _subject_key("Ona tili va adabiyot")
-    created = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay=True)
+    created = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay=True,
+                          essay_topic="Vatan")
     plain = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180)
 
     essay_text = "Vatan " * 120
@@ -4342,7 +4343,7 @@ def test_ona_tili_essesi_oqituvchi_baholaydi_va_ballga_qoshiladi():
         for index in range(6):
             user = 7400 + index
             started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(user)).json()
-            assert started["essay"] == {"number": 45, "topic": None, "photos": [], "ai": main._ai_on()}  # so'zlar soniga chegara yo'q
+            assert started["essay"] == {"number": 45, "topic": "Vatan", "photos": [], "ai": False}  # so'zlar soniga chegara yo'q
             attempt_id = started["attempt_id"]
             attempts[user] = attempt_id
             # 7400 va 7401 — javoblari bir xil (yarmi to'g'ri); qolganlari har xil
@@ -4535,7 +4536,8 @@ def test_oqituvchi_tekshiradigan_essening_rasmi_aiga_yuborilmaydi():
     register_teacher()
     teacher = as_user(555)
     key = _subject_key("Ona tili va adabiyot")
-    created = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay=True)
+    created = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay=True,
+                          essay_topic="Ona yurt")
 
     original = ai_reader.transcribe_essay, os.environ.pop("GEMINI_API_KEY", None), os.environ.pop("ANTHROPIC_API_KEY", None)
     os.environ["GEMINI_API_KEY"] = "test"  # AI ulangan — baribir ishlatilmasligi kerak
@@ -4597,22 +4599,24 @@ def test_esse_ai_orqali_tekshirilsa_ballni_ozi_qoyadi():
     key = _subject_key("Ona tili va adabiyot")
     common = dict(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay=True)
 
-    # AI uchun mavzu majburiy
-    for empty_topic in (None, "   "):
-        no_topic = client.post("/api/teacher/tests", headers=teacher, json={
-            "title": "Mavzusiz", "mode": "key", "enrollment_type": "open", "price": 0,
-            **common, "essay_ai": True, "essay_topic": empty_topic,
-        })
-        assert no_topic.status_code == 422 and "mavzu" in no_topic.text, no_topic.text
+    # Esse mavzusi majburiy — AI ham, o'qituvchi ham tekshirganda (onlayn va oflayn)
+    for essay_ai, enrollment in ((True, "open"), (False, "open"), (False, "closed")):
+        for empty_topic in (None, "   "):
+            no_topic = client.post("/api/teacher/tests", headers=teacher, json={
+                "title": "Mavzusiz", "mode": "key", "enrollment_type": enrollment, "price": 0,
+                **common, "essay_ai": essay_ai, "essay_topic": empty_topic,
+            })
+            assert no_topic.status_code == 422 and "mavzu" in no_topic.text, (essay_ai, enrollment, no_topic.text)
 
     topic = "Kitob — bilim bulog'i"
     with_ai = create_test(**common, essay_ai=True, essay_topic=topic)
-    by_teacher = create_test(**common, essay_topic="e'tiborsiz")  # o'qituvchi baholasa — mavzu saqlanmaydi
+    by_teacher = create_test(**common, essay_topic="Ona yurt")  # o'qituvchi baholasa ham mavzu saqlanadi
     no_essay = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay_ai=True,
                            essay_topic=topic)
     with SessionLocal() as session:
         assert session.get(main.Test, no_essay["id"]).essay_ai is False
-        assert session.get(main.Test, by_teacher["id"]).essay_topic is None
+        assert session.get(main.Test, by_teacher["id"]).essay_topic == "Ona yurt"
+        assert session.get(main.Test, no_essay["id"]).essay_topic is None  # essesiz testda mavzu saqlanmaydi
 
     original = ai_reader.grade_essay, os.environ.pop("GEMINI_API_KEY", None), os.environ.pop("ANTHROPIC_API_KEY", None)
     calls = []
