@@ -11375,7 +11375,8 @@ function quizEssayHtml() {
     <div class="panel">
       ${essay.topic ? `<p style="margin:0 0 8px;white-space:pre-line;overflow-wrap:anywhere"><b>Mavzu:</b> ${escapeHtml(essay.topic)}</p>` : ""}
       <p class="subtitle" style="margin:0 0 8px">Berilgan mavzuda esse yozing: kirish, asosiy qism (fikr va dalillar)
-        va xulosa. Lotin yozuvida. So'zlar soniga qat'iy chegara yo'q — mavzuni to'liq ochib bering.</p>
+        va xulosa. Lotin yozuvida. So'zlar soniga qat'iy chegara yo'q — mavzuni to'liq ochib bering.
+        Esseni shu maydonga yozing yoki daftarga yozib, pastdan rasmini yuboring.</p>
       <textarea class="input" id="quiz-essay" rows="12" maxlength="10000" placeholder="Esse matni..."
                 style="min-height:240px;line-height:1.5;resize:vertical">${escapeHtml(quizState.answers[ESSAY_KEY] || "")}</textarea>
       <p class="subtitle" id="essay-word-count" style="margin:6px 0 0"></p>
@@ -17161,7 +17162,11 @@ function essayGradingHtml(essay) {
         essay.photos
           ? `<button type="button" class="btn btn-ghost" id="essay-photos-button" style="margin:0 0 8px">📄 Qo'lda yozilgan esse rasmi (${essay.photos} sahifa)</button>
              <p class="subtitle" style="margin:0 0 8px;font-size:12px">O'quvchi esseni qog'ozga yozib yuklagan${
-               essay.text ? " — quyidagi matn rasmdan o'qilgan va o'quvchi tuzatgan bo'lishi mumkin. Rasm bilan solishtiring" : ""
+               !essay.text
+                 ? " — rasmni ochib, qo'lyozmaning o'zidan baholang"
+                 : essay.ai_auto
+                   ? " — quyidagi matn rasmdan AI o'qigan va o'quvchi tuzatgan bo'lishi mumkin. Rasm bilan solishtiring"
+                   : " va ilovada matn ham yozgan (quyida)"
              }.</p>`
           : ""
       }
@@ -17169,7 +17174,9 @@ function essayGradingHtml(essay) {
         essay.text
           ? `<p class="subtitle" style="margin:0 0 6px">${essay.words} so'z</p>
              <div style="white-space:pre-wrap;line-height:1.55;max-height:50vh;overflow:auto;padding:10px 12px;border-radius:12px;background:var(--color-bg)">${escapeHtml(essay.text)}</div>`
-          : `<p class="subtitle" style="margin:0">Esse ilovada yozilmagan — qog'ozdagi esseni o'qib baholang.</p>`
+          : essay.photos
+            ? ""
+            : `<p class="subtitle" style="margin:0">Esse ilovada yozilmagan — qog'ozdagi esseni o'qib baholang.</p>`
       }
       ${essay.ai_auto && essay.text ? essayAiHtml(essay) : ""}
       <p class="field-label" style="margin-top:12px">Ball (0–${essay.max})</p>

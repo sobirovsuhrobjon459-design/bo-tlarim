@@ -10337,8 +10337,10 @@ def start_test(code: str, user: User = Depends(get_current_user), db: Session = 
         "answers": _read_saved_answers(attempt),
         # Esse: o'quvchi ilovada yozadi (javoblarda "essay" kaliti), o'qituvchi yoki AI baholaydi
         # photos — qog'ozdagi esse rasmlari yuklangan sahifalar ([1, 2]); qayta ochilganda ham ko'rinadi
+        # ai — esse rasmi matnga aylantiriladimi: faqat "AI orqali tekshirish" testida (AI matndan baholaydi);
+        # o'qituvchi tekshiradigan testda rasm o'zgarmay o'qituvchiga boradi
         "essay": {"number": _essay_number(test), "topic": test.essay_topic, "photos": _essay_photo_pages(db, attempt.id),
-                  "ai": _ai_on()} if test.essay_max else None,
+                  "ai": bool(test.essay_ai) and _ai_on()} if test.essay_max else None,
     }
 
 
@@ -10425,8 +10427,10 @@ def upload_essay_photo(
     attempt_id: int, body: EssayPhotoIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
     """
-    O'quvchi qog'ozga yozgan essesining bitta sahifasi rasmini yuklaydi. Rasm saqlanadi (o'qituvchi ko'radi);
-    AI yoqilgan bo'lsa — shu sahifa matnga aylantiriladi va qaytariladi (o'quvchi tekshirib, maydonga qo'shadi).
+    O'quvchi qog'ozga yozgan essesining bitta sahifasi rasmini yuklaydi. Rasm saqlanadi (o'qituvchi ko'radi).
+    "AI orqali tekshirish" testida (va AI ulangan bo'lsa) sahifa matnga aylantiriladi va qaytariladi — o'quvchi
+    tekshirib, maydonga qo'shadi; AI esseni shu matndan baholaydi. Esseni o'qituvchi tekshiradigan testda rasm
+    AI'ga yuborilmaydi — o'qituvchi qo'lyozmaning o'zini o'qib baholaydi.
     """
 
     attempt, test = _own_essay_attempt(db, user, attempt_id)
@@ -10438,14 +10442,15 @@ def upload_essay_photo(
 
     from .ai_reader import AIReadError, ai_enabled, transcribe_essay
 
+    use_ai = bool(test.essay_ai) and ai_enabled()
     text, error = "", None
-    if ai_enabled():
+    if use_ai:
         try:
             text = transcribe_essay(test.subject, body.image)
         except AIReadError as failure:
             error = str(failure)
             logging.getLogger("backend.ai").warning("Esse rasmini o'qib bo'lmadi (urinish %s): %s", attempt.id, failure)
-    return {"page": body.page, "pages": _essay_photo_pages(db, attempt.id), "text": text, "ai": ai_enabled(),
+    return {"page": body.page, "pages": _essay_photo_pages(db, attempt.id), "text": text, "ai": use_ai,
             "error": error}
 
 

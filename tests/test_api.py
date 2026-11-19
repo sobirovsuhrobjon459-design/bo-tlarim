@@ -4524,6 +4524,54 @@ def test_esse_qogozdagi_rasmi_yuklanadi_va_matnga_aylanadi():
     assert client.get(f"{detail_url}/essay/photos", headers=as_user(556)).status_code in (403, 404)
 
 
+def test_oqituvchi_tekshiradigan_essening_rasmi_aiga_yuborilmaydi():
+    """
+    Esseni o'qituvchi tekshiradigan testda o'quvchi esseni maydonga yozadi yoki daftardagi rasmini yuboradi;
+    rasm AI bilan matnga aylantirilmaydi (AI ulangan bo'lsa ham) — o'qituvchi qo'lyozmaning o'zini ko'rib baholaydi.
+    """
+    from backend import ai_reader
+
+    reset_database()
+    register_teacher()
+    teacher = as_user(555)
+    key = _subject_key("Ona tili va adabiyot")
+    created = create_test(subject="Ona tili va adabiyot", key_questions=key, duration=180, essay=True)
+
+    original = ai_reader.transcribe_essay, os.environ.pop("GEMINI_API_KEY", None), os.environ.pop("ANTHROPIC_API_KEY", None)
+    os.environ["GEMINI_API_KEY"] = "test"  # AI ulangan — baribir ishlatilmasligi kerak
+    calls = []
+    ai_reader.transcribe_essay = lambda subject, image: calls.append(subject) or "AI o'qigan matn"
+    image = "data:image/jpeg;base64," + "B" * 200
+    sent, restore = _capture_result_notices()
+    try:
+        started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(7700)).json()
+        assert started["essay"]["ai"] is False  # o'quvchiga: "rasmni o'qituvchi ko'rib baholaydi"
+        url = f"/api/attempts/{started['attempt_id']}/essay/photo"
+        for page in (1, 2):
+            uploaded = client.post(url, json={"image": image, "page": page}, headers=as_user(7700))
+            assert uploaded.status_code == 200, uploaded.text
+            assert uploaded.json()["text"] == "" and uploaded.json()["ai"] is False, uploaded.json()
+        assert calls == []  # rasm AI'ga yuborilmadi
+        # Faqat rasm bilan (maydonga matn yozmay) yakunlash mumkin
+        finished = client.post(f"/api/attempts/{started['attempt_id']}/finish", headers=as_user(7700), json={"answers": {}})
+        assert finished.status_code == 200, finished.text
+    finally:
+        restore()
+        ai_reader.transcribe_essay = original[0]
+        os.environ.pop("GEMINI_API_KEY", None)
+        for name, value in (("GEMINI_API_KEY", original[1]), ("ANTHROPIC_API_KEY", original[2])):
+            if value is not None:
+                os.environ[name] = value
+
+    detail_url = f"/api/teacher/tests/{created['id']}/students/{started['attempt_id']}"
+    essay = client.get(f"{detail_url}/detail", headers=teacher).json()["essay"]
+    assert essay["photos"] == 2 and essay["text"] == "" and essay["ai_auto"] is False, essay
+    photos = client.get(f"{detail_url}/essay/photos", headers=teacher).json()["pages"]
+    assert [item["page"] for item in photos] == [1, 2] and photos[0]["image"] == image
+    assert client.put(f"{detail_url}/essay", json={"score": 18}, headers=teacher).json()["score"] == 18
+    assert calls == []
+
+
 def _wait_essay(url: str, teacher: dict) -> dict:
     """Fondagi AI baholashini kutish (ko'pi bilan 10 s)."""
     import time
