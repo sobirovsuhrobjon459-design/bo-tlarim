@@ -1725,7 +1725,7 @@ function renderHome(userName, backendOk) {
   renderWebSidebar("home", userName);
 
   document.querySelector('[data-action="school-folder"]').addEventListener("click", renderSchoolFolder);
-  // O'qituvchi va O'quvchi — Test markazi papkasini chetlab, to'g'ridan-to'g'ri o'z bo'limiga
+  // O'qituvchi va O'quvchi — to'g'ridan-to'g'ri o'z bo'limiga
   document.querySelector('[data-action="teacher"]').addEventListener("click", guarded(enterTeacherArea));
   document.querySelector('[data-action="student"]').addEventListener("click", guarded(renderStudentHome));
   document.querySelector('[data-action="admin"]')?.addEventListener(
@@ -1741,10 +1741,8 @@ function renderHome(userName, backendOk) {
 }
 
 /*
-  Ikkita papka:
-    • "Ta'lim muassasalari" — Xususiy maktab, O'quv kurslari, To'garaklar (bosh menyudagi "Ta'lim muassasasi");
-    • "Test markazi" — O'quvchi va O'qituvchi bo'limlari (kompyuterdagi chap menyudan; bosh menyuda bu ikkisi
-      alohida tugma).
+  "Ta'lim muassasalari" papkasi — Xususiy maktab, O'quv kurslari, To'garaklar (bosh menyudagi "Ta'lim muassasasi").
+  O'qituvchi va O'quvchi bo'limlari — bosh menyuda alohida tugma ("Test markazi" papkasi olib tashlangan).
   Bo'limlar ichidagi "←" tugmalari o'z papkasiga qaytaradi (bosh sahifaga emas).
 */
 function renderSchoolFolder() {
@@ -1772,25 +1770,6 @@ function renderSchoolFolder() {
   sections.forEach(([action, , , , open]) => {
     document.querySelector(`[data-action="${action}"]`).addEventListener("click", guarded(open));
   });
-}
-
-function renderTestFolder() {
-  setInstKind("school");
-  testForClass = null;
-  showPage(`
-    <div class="page-header">
-      <button class="back-button" type="button" data-action="home" style="margin:0">←</button>
-      <h2 style="margin:0;flex:1">Test markazi</h2>
-    </div>
-    <p class="subtitle fade-up">Kim sifatida kirasiz?</p>
-
-    ${roleCard("student", ROLE_ICONS.student, "O'QUVCHI", "Testlarni topish va ishlash")}
-    ${roleCard("teacher", ROLE_ICONS.teacher, "O'QITUVCHI", "Test yaratish va natijalarni boshqarish")}
-  `);
-
-  document.querySelector('[data-action="home"]').addEventListener("click", loadHome);
-  document.querySelector('[data-action="student"]').addEventListener("click", guarded(renderStudentHome));
-  document.querySelector('[data-action="teacher"]').addEventListener("click", guarded(enterTeacherArea));
 }
 
 /* ---------- Sinflar va davomat ---------- */
@@ -11722,7 +11701,7 @@ function heroAvatarHtml(me) {
 }
 
 function drawTeacherDashboard(me, stats, tests) {
-  // "←" — kelgan joyiga (bosh sahifa yoki Test markazi papkasi)
+  // "←" — kelgan joyiga (odatda bosh sahifa)
   showPage(`
     ${pageHeader("Testlar")}
     <section class="hero-card">
@@ -19059,7 +19038,9 @@ function renderWebSidebar(active, userName) {
         if (target === "home") await loadHome();
         else if (target === "account") await renderAccount();
         else if (target === "school-folder") renderSchoolFolder();
-        else if (target === "tests") renderTestFolder();
+        // Bosh sahifadagi tugmalar bilan bir xil: to'g'ridan-to'g'ri o'z bo'limiga
+        else if (target === "teacher") await enterTeacherArea();
+        else if (target === "student") await renderStudentHome();
         else if (target === "admin") {
           setInstKind("school");
           await renderAdminDashboard();
@@ -19075,8 +19056,9 @@ function renderWebSidebar(active, userName) {
     <div class="web-brand"><span class="web-logo">${WEB_LOGO}</span><span>Chittak</span></div>
     <nav class="web-nav">
       ${item("home", WEB_NAV_ICONS.home, "Bosh sahifa")}
-      ${item("tests", ROLE_ICONS.folder, "Test markazi")}
       ${item("school-folder", ROLE_ICONS.school, "Ta'lim muassasalari")}
+      ${item("teacher", ROLE_ICONS.teacher, "O'qituvchi")}
+      ${item("student", ROLE_ICONS.student, "O'quvchi")}
       ${isAdmin ? item("admin", ROLE_ICONS.admin, "Admin") : ""}
     </nav>
     <div class="web-account">
