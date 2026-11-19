@@ -3651,6 +3651,11 @@ def _evalbee_plan(test: Test, variants: list[str] | None = None, key_override: d
     items = [item for item in all_items if item[1] != "text"]
     # DTM tituli (fanlar bo'yicha guruhlangan) o'zgarmaydi — 10-versiyadagidek chiziladi
     dtm_test = len(items) == 90 and bool(score_weights(test.subject, len(items)))
+    if dtm_test and (test.sheet_version or 1) >= 13:
+        # 13-versiya: DTM tituli rasmiy "Javoblar varaqasi" ko'rinishida (oldin chop etilganlari — o'z joylashuvida)
+        plan = _dtm13_plan(test, items, variants)
+        if plan:
+            return plan
     if (test.sheet_version or 1) >= 11 and not dtm_test:
         # Yozma savollar faqat oflayn testda titulga chiziladi (onlayn testda o'quvchi ilovada yozadi).
         # Faqat 12-versiyadan: oldin chop etilgan titullar o'z joylashuvida qoladi
@@ -3681,6 +3686,412 @@ def _evalbee_plan(test: Test, variants: list[str] | None = None, key_override: d
         pages.append([(item, *slots[index // 5], index % 5) for index, item in enumerate(chunk)])
     return {"width": style["width"], "height": style["height"], "edge_marks": style["edge_marks"], "pages": pages,
             "column_width": style["column_width"], "style": style, "reserved": reserved}
+
+
+# ---------- 13-versiya: DTM tituli — rasmiy "Javoblar varaqasi" ko'rinishida ----------
+#
+# A4 ga to'liq: tepada sarlavha, ko'rsatmalar va F.I.O., bo'yash namunasi; uchta ustun (Majburiy fanlar 1–30,
+# 1-asosiy fan 31–60, 2-asosiy fan 61–90), o'ngda variant va o'quvchi raqami, ism yoziladigan quti; pastda
+# nazoratchilar dalolatnomasi. Ranglari rasmiy varaqdagidek (qizil chiziqlar, pushti ustunlar).
+# Skaner belgilari (burchak kvadratlari, chap/o'ng chet belgilari, imtihon kodi) — boshqa titullardagidek qora:
+# skaner varaqni ular bo'yicha tekislaydi. Pushti fon kulrangda qog'ozdek och — "bo'yalgan" bo'lib qolmaydi,
+# qizil halqalar esa qora ko'rinadi (skaner har qatorni shu halqalar bo'yicha aniqlashtiradi).
+
+DTM13_RED = colors.HexColor("#E0281E")
+DTM13_PINK = colors.HexColor("#FAD2D2")
+DTM13_BANNER = colors.HexColor("#F3A3A3")
+DTM13_LETTER = colors.HexColor("#F2A5A5")  # doiracha ichidagi harf/raqam: ko'rinadi, lekin skaner uchun "qog'oz"
+DTM13_PEN = colors.HexColor("#1F2A44")     # bo'yash namunasi (ruchka rangi)
+DTM13_FRAME = 46.0                          # ramka chetdan (burchak va chet belgilari ramkadan tashqarida)
+DTM13_ROW = 13.7                            # savollar qatori oralig'i
+DTM13_RADIUS = 4.9
+DTM13_PITCH = 13.6                          # A B C D doirachalari orasi
+DTM13_COLUMN = 92.0                         # savollar ustuni kengligi
+DTM13_COLUMN_GAP = 10.0
+DTM13_TITLE_BOTTOM = 80.0                   # tepadan: sarlavha bandining pastki chizig'i
+DTM13_INFO_BOTTOM = 168.0                   # ko'rsatmalar bandining pastki chizig'i (chap tomonda)
+DTM13_HEAD_BOTTOM = 204.0                   # bo'yash namunasi bandining pastki chizig'i
+DTM13_COLUMNS_TOP = 212.0
+DTM13_COLUMN_HEADER = 32.0
+DTM13_BANNER_HEIGHT = 24.0
+DTM13_ACT_HEIGHT = 92.0
+DTM13_SPLIT = 330.0                         # ko'rsatmalar | F.I.O. chegarasi (chapdan)
+
+try:
+    pdfmetrics.registerFont(TTFont("SheetSans", str(FONTS_DIR / "DejaVuSans.ttf")))
+    pdfmetrics.registerFont(TTFont("SheetSans-Bold", str(FONTS_DIR / "DejaVuSans-Bold.ttf")))
+    SHEET_SANS, SHEET_SANS_BOLD = "SheetSans", "SheetSans-Bold"
+except Exception:
+    SHEET_SANS, SHEET_SANS_BOLD = "Helvetica", "Helvetica-Bold"
+
+
+def _dtm13_layout() -> dict:
+    """Titul qismlarining joyi (tepadan sanalgan, punktlarda) — chizish va skaner bir xil o'lchamni ishlatadi."""
+
+    width, height = A4
+    frame_left, frame_right = DTM13_FRAME, width - DTM13_FRAME
+    frame_bottom = height - DTM13_FRAME
+    banner_top = frame_bottom - DTM13_ACT_HEIGHT - DTM13_BANNER_HEIGHT
+    columns_bottom = banner_top - 10
+    first_row = DTM13_COLUMNS_TOP + DTM13_COLUMN_HEADER + 6 + DTM13_ROW / 2  # 1-qator markazi
+    column_x = [frame_left + 10 + index * (DTM13_COLUMN + DTM13_COLUMN_GAP) for index in range(3)]
+    right_left = column_x[2] + DTM13_COLUMN + 12  # o'ng qism: variant, o'quvchi raqami, ism
+    right_right = frame_right - 10
+    side_top = DTM13_COLUMNS_TOP
+    side_header = 34.0
+    id_first = side_top + side_header + 18 + 6 + DTM13_ROW / 2  # o'quvchi raqami: yozish kataklari ostida
+    side_bottom = id_first + 9.5 * DTM13_ROW + 6
+    name_top = side_bottom + 10
+    lines = [name_top + 58 + index * 34 for index in range(3)]  # familiya, ism, otasining ismi chiziqlari
+    return {
+        "width": width, "height": height, "frame": (frame_left, DTM13_FRAME, frame_right, frame_bottom),
+        "banner_top": banner_top, "columns_bottom": columns_bottom, "first_row": first_row,
+        "column_x": column_x, "right": (right_left, right_right), "side": (side_top, side_bottom, side_header),
+        "id_first": id_first, "name_box": (right_left - 4, name_top, right_right + 4, columns_bottom),
+        "name_lines": lines,
+        # Skaner o'qituvchiga ko'rsatadigan ism rasmi: familiya va ism yoziladigan qatorlar
+        "name_area": (right_left, name_top + 34, right_right, lines[1] + 4),
+    }
+
+
+def _dtm13_plan(test: Test, items: list, variants: list[str] | None) -> dict | None:
+    """DTM testi (90 savol, har biri ko'pi bilan 4 variantli) uchun 13-versiya titul rejasi; mos kelmasa — None."""
+
+    if len(items) != 90 or any(item[2] > 4 for item in items) or (variants and len(variants) > 4):
+        return None
+    layout = _dtm13_layout()
+    first_row, rows_room = layout["first_row"], layout["columns_bottom"] - 6 - (layout["first_row"] - DTM13_ROW / 2)
+    if rows_room < 30 * DTM13_ROW:  # o'lchamlar o'zgarsa — titul sig'masligi testda darhol bilinadi
+        raise RuntimeError("DTM titulida savollar ustuniga joy yetmadi")
+    slots = [(item, index // 30, index % 30) for index, item in enumerate(items)]
+    names = [section["name"] for section in _test_sections(test)]
+    if len(names) != 5:
+        names = ["Ona tili", "Matematika", "O'zbekiston tarixi", "1-asosiy fan", "2-asosiy fan"]
+    return {
+        "dtm13": True, "width": layout["width"], "height": layout["height"], "edge_marks": SHEET_EDGE_MARKS,
+        "pages": [slots], "column_width": DTM13_COLUMN, "reserved": 0, "layout": layout,
+        "subjects": [name.replace(" (majburiy)", "") for name in names],
+        "style": {"name_area": layout["name_area"]},
+        "first_row": first_row,
+    }
+
+
+def _dtm13_text(sheet, x: float, y: float, text: str, size: float, font: str | None = None,
+                align: str = "center", color=None, room: float | None = None) -> None:
+    """Matn: joyiga sig'masa shrifti kichrayadi (60% gacha), keyin "…" bilan qisqaradi."""
+
+    font = font or SHEET_SANS
+    if room:
+        start = size
+        while size > start * 0.6 and sheet.stringWidth(text, font, size) > room:
+            size -= 0.25
+        while len(text) > 4 and sheet.stringWidth(text, font, size) > room:
+            text = text[:-2].rstrip() + "…"
+    sheet.setFillColor(color or DTM13_RED)
+    sheet.setFont(font, size)
+    if align == "center":
+        sheet.drawCentredString(x, y, text)
+    elif align == "right":
+        sheet.drawRightString(x, y, text)
+    else:
+        sheet.drawString(x, y, text)
+
+
+def _draw_dtm13_card(sheet, test: Test, plan: dict, page: int, with_answers: bool, student: tuple | None,
+                     bubbles: list | None, variants: list[str] | None, key_variant: str | None) -> None:
+    """13-versiya DTM tituli (A4, (0, 0) — chap-past burchak)."""
+
+    layout = plan["layout"]
+    width, height = layout["width"], layout["height"]
+    frame_left, frame_top, frame_right, frame_bottom = layout["frame"]
+
+    def top(distance: float) -> float:
+        return height - distance
+
+    def note(item: dict) -> None:
+        if bubbles is not None:
+            bubbles.append({"page": page, **item})
+
+    def bubble(x: float, center_top: float, text: str, filled: bool, letter_size: float = 5.6) -> None:
+        y = top(center_top)
+        sheet.setStrokeColor(DTM13_RED)
+        sheet.setLineWidth(0.8)
+        if filled:
+            sheet.setFillColor(colors.black)
+            sheet.circle(x, y, DTM13_RADIUS, stroke=1, fill=1)
+            return
+        sheet.setFillColor(colors.white)
+        sheet.circle(x, y, DTM13_RADIUS, stroke=1, fill=1)
+        sheet.setFillColor(DTM13_LETTER)
+        sheet.setFont(SHEET_SANS, letter_size)
+        sheet.drawCentredString(x, y - letter_size * 0.36, text)
+
+    # Skaner belgilari: burchaklar, chap/o'ng chet belgilari va pastdagi imtihon kodi (qora)
+    sheet.setFillColor(colors.black)
+    _draw_sheet_marks(sheet, test, width, height, bubbles, page, plan["edge_marks"])
+
+    sheet.saveState()
+    sheet.setStrokeColor(DTM13_RED)
+    sheet.setLineWidth(0.9)
+    sheet.rect(frame_left, top(frame_bottom), frame_right - frame_left, frame_bottom - frame_top, stroke=1, fill=0)
+
+    # 1) Sarlavha: logo va "JAVOBLAR VARAQASI"
+    sheet.line(frame_left, top(DTM13_TITLE_BOTTOM), frame_right, top(DTM13_TITLE_BOTTOM))
+    logo_height = 22.0
+    try:
+        sheet.drawImage(str(SHEET_LOGO), frame_left + 10, top(frame_top + (DTM13_TITLE_BOTTOM - frame_top + logo_height) / 2),
+                        logo_height * SHEET_LOGO_RATIO, logo_height, mask="auto")
+    except Exception:
+        logging.getLogger("backend").warning("DTM titul logosi chizilmadi", exc_info=True)
+    _dtm13_text(sheet, (frame_left + frame_right) / 2 + 40, top(DTM13_TITLE_BOTTOM - 11), "JAVOBLAR VARAQASI", 16,
+                REPORT_FONT_BOLD)
+
+    # 2) Ko'rsatmalar (chapda) va F.I.O. (o'ngda)
+    split = DTM13_SPLIT
+    sheet.setStrokeColor(DTM13_RED)
+    sheet.line(frame_left, top(DTM13_HEAD_BOTTOM), frame_right, top(DTM13_HEAD_BOTTOM))
+    sheet.line(split, top(DTM13_TITLE_BOTTOM), split, top(DTM13_HEAD_BOTTOM))
+    sheet.line(frame_left, top(DTM13_INFO_BOTTOM), split, top(DTM13_INFO_BOTTOM))
+    middle = (frame_left + split) / 2
+    rules = [
+        (DTM13_TITLE_BOTTOM + 13, "ABITURIYENT DIQQATIGA!", 7.6, "center"),
+        (DTM13_TITLE_BOTTOM + 25, "1. SHARIKLI HAVORANG PASTALI RUCHKADAN FOYDALANING.", 6.3, "left"),
+        (DTM13_TITLE_BOTTOM + 36, "2. HAR BIR TEST TOPSHIRIG'IDAGI JAVOBLARDAN FAQAT BITTASINI BELGILANG.", 6.3, "left"),
+        (DTM13_TITLE_BOTTOM + 52, "ВНИМАНИЮ АБИТУРИЕНТА!", 7.6, "center"),
+        (DTM13_TITLE_BOTTOM + 64, "1. ИСПОЛЬЗУЙТЕ СИНЮЮ ШАРИКОВУЮ РУЧКУ.", 6.3, "left"),
+        (DTM13_TITLE_BOTTOM + 75, "2. К КАЖДОМУ ТЕСТОВОМУ ЗАДАНИЮ ОТМЕТЬТЕ ТОЛЬКО ОДИН ОТВЕТ.", 6.3, "left"),
+    ]
+    for distance, text, size, align in rules:
+        x = middle if align == "center" else frame_left + 8
+        _dtm13_text(sheet, x, top(distance), text, size, align=align, room=split - frame_left - 14)
+
+    # Bo'yash namunasi: to'g'ri — to'liq bo'yalgan; noto'g'ri — nuqta, chala, chiziqli, X, halqa, belgi
+    _dtm13_text(sheet, middle, top(DTM13_INFO_BOTTOM + 11), "DOIRACHANI BO'YASH NAMUNASI / ОБРАЗЕЦ ЗАКРАШИВАНИЯ КРУЖОЧКОВ",
+                6.3, room=split - frame_left - 14)
+    _dtm13_text(sheet, frame_left + 62, top(DTM13_INFO_BOTTOM + 21), "To'g'ri / Правильно", 5.6)
+    _dtm13_text(sheet, frame_left + 190, top(DTM13_INFO_BOTTOM + 21), "Noto'g'ri / Неправильно", 5.6)
+    sample_y, sample_r = top(DTM13_INFO_BOTTOM + 29), 4.2
+    sheet.setStrokeColor(DTM13_PEN)
+    sheet.setFillColor(DTM13_PEN)
+    sheet.setLineWidth(0.8)
+    sheet.circle(frame_left + 62, sample_y, sample_r, stroke=1, fill=1)
+    for index in range(6):
+        x = frame_left + 150 + index * 17
+        sheet.setFillColor(colors.white)
+        sheet.circle(x, sample_y, sample_r, stroke=1, fill=1)
+        sheet.setFillColor(DTM13_PEN)
+        if index == 0:
+            sheet.circle(x, sample_y, 1.0, stroke=0, fill=1)
+        elif index == 1:
+            sheet.wedge(x - sample_r, sample_y - sample_r, x + sample_r, sample_y + sample_r, 90, 230, stroke=0, fill=1)
+        elif index == 2:
+            for shift in (-2.4, 0, 2.4):
+                sheet.line(x + shift - 1.6, sample_y - 2.6, x + shift + 1.6, sample_y + 2.6)
+        elif index == 3:
+            sheet.line(x - 2.6, sample_y - 2.6, x + 2.6, sample_y + 2.6)
+            sheet.line(x - 2.6, sample_y + 2.6, x + 2.6, sample_y - 2.6)
+        elif index == 4:
+            sheet.circle(x, sample_y, sample_r * 0.55, stroke=1, fill=0)
+        else:
+            path = sheet.beginPath()
+            path.moveTo(x - 2.4, sample_y)
+            path.lineTo(x - 0.6, sample_y - 2.2)
+            path.lineTo(x + 2.8, sample_y + 2.6)
+            sheet.drawPath(path, stroke=1, fill=0)
+
+    # F.I.O.: ismli titulda — o'quvchi ismi, bo'shida — yozuv; pastida imtihon nomi va kodi
+    name_center = (split + frame_right) / 2
+    if student:
+        _dtm13_text(sheet, name_center, top(DTM13_TITLE_BOTTOM + 52), student[1][:60], 15, REPORT_FONT_BOLD,
+                    color=colors.black, room=frame_right - split - 20)
+    else:
+        _dtm13_text(sheet, name_center, top(DTM13_TITLE_BOTTOM + 52), "Abituriyent F. I. O.", 19,
+                    color=colors.HexColor("#5F5F5F"), room=frame_right - split - 20)
+    _dtm13_text(sheet, name_center, top(DTM13_HEAD_BOTTOM - 20), test.title, 7.5, REPORT_FONT_BOLD,
+                color=colors.black, room=frame_right - split - 20)
+    _dtm13_text(sheet, name_center, top(DTM13_HEAD_BOTTOM - 9), f"Kod: {test.code}   ·   Sana: ____________", 6.5,
+                color=REPORT_MUTED)
+
+    # 3) Savollar ustunlari: sarlavha, pushti chiziqlar, raqamlar, A B C D
+    titles = _dtm_section_titles(plan["subjects"])
+    headers = [("", "Majburiy fanlar")]
+    for title in titles[3:5]:
+        parts = title.split("\n")
+        headers.append((parts[0], parts[1]) if len(parts) > 1 else ("", parts[0]))
+    columns_bottom = layout["columns_bottom"]
+    row_top = DTM13_COLUMNS_TOP + DTM13_COLUMN_HEADER + 6
+    for column, x in enumerate(layout["column_x"]):
+        option_x = [x + 26 + option * DTM13_PITCH for option in range(4)]
+        band_left = option_x[3] + DTM13_RADIUS + 5
+        # Pushti chiziqlar: A va C doirachalari ostida, o'ng chetda keng band (rasmiy varaqdagidek)
+        sheet.setFillColor(DTM13_PINK)
+        for option in (0, 2):
+            sheet.rect(option_x[option] - DTM13_RADIUS - 1.6, top(columns_bottom), 2 * DTM13_RADIUS + 3.2,
+                       columns_bottom - DTM13_COLUMNS_TOP - DTM13_COLUMN_HEADER, stroke=0, fill=1)
+        sheet.rect(band_left, top(columns_bottom), x + DTM13_COLUMN - band_left - 4,
+                   columns_bottom - DTM13_COLUMNS_TOP - DTM13_COLUMN_HEADER, stroke=0, fill=1)
+        sheet.setStrokeColor(DTM13_RED)
+        sheet.setLineWidth(0.9)
+        sheet.rect(x, top(columns_bottom), DTM13_COLUMN, columns_bottom - DTM13_COLUMNS_TOP, stroke=1, fill=0)
+        sheet.line(x, top(DTM13_COLUMNS_TOP + DTM13_COLUMN_HEADER), x + DTM13_COLUMN,
+                   top(DTM13_COLUMNS_TOP + DTM13_COLUMN_HEADER))
+        sheet.line(x + 19, top(DTM13_COLUMNS_TOP + DTM13_COLUMN_HEADER), x + 19, top(columns_bottom))
+        caption, name = headers[column]
+        if caption:
+            _dtm13_text(sheet, x + DTM13_COLUMN / 2, top(DTM13_COLUMNS_TOP + 12), caption, 7, room=DTM13_COLUMN - 8)
+            _dtm13_text(sheet, x + DTM13_COLUMN / 2, top(DTM13_COLUMNS_TOP + 25), name, 10, REPORT_FONT,
+                        color=colors.black, room=DTM13_COLUMN - 8)
+        else:
+            _dtm13_text(sheet, x + DTM13_COLUMN / 2, top(DTM13_COLUMNS_TOP + 20), name, 10.5, REPORT_FONT,
+                        color=colors.black, room=DTM13_COLUMN - 8)
+        if column == 0:
+            # Majburiy fanlar: har 10 savol — bitta fan; nomi o'ng bandda tik yoziladi, guruhlar orasida chiziq
+            sheet.saveState()
+            sheet.setDash(1.5, 1.5)
+            sheet.setLineWidth(0.5)
+            for group in (1, 2):
+                line_top = row_top + group * 10 * DTM13_ROW
+                sheet.line(x + 2, top(line_top), band_left - 2, top(line_top))
+            sheet.restoreState()
+            for group, subject in enumerate(plan["subjects"][:3]):
+                center = row_top + (group * 10 + 5) * DTM13_ROW
+                sheet.saveState()
+                sheet.translate((band_left + x + DTM13_COLUMN - 4) / 2 - 2, top(center))
+                sheet.rotate(-90)
+                _dtm13_text(sheet, 0, 0, subject, 6, room=10 * DTM13_ROW - 8)
+                sheet.restoreState()
+
+    for (label, question_type, options, correct, ref), column, row in plan["pages"][page - 1]:
+        x = layout["column_x"][column]
+        center = row_top + (row + 0.5) * DTM13_ROW
+        _dtm13_text(sheet, x + 16, top(center) - 2.9, str(label), 7.8, align="right")
+        correct_letters = set((correct or "").split(","))
+        for option in range(options):
+            letter = chr(65 + option)
+            option_x = x + 26 + option * DTM13_PITCH
+            bubble(option_x, center, letter, with_answers and letter in correct_letters)
+            note({"ref": ref, "label": label, "kind": question_type, "letter": letter,
+                  "x": option_x, "y": top(center), "r": DTM13_RADIUS})
+
+    # 4) O'ng tomon: variant (rasmiy varaqdagi "Chet tili" o'rnida) va o'quvchi raqami ("Kitob raqami" o'rnida)
+    right_left, right_right = layout["right"]
+    side_top, side_bottom, side_header = layout["side"]
+    id_width = 4 * 15 + 16
+    shown_variants = (variants or [])[:4]
+    if shown_variants:
+        variant_box = (right_left, right_left + 18 + 15 * len(shown_variants))
+        id_box = (right_right - id_width, right_right)
+    else:
+        variant_box = None
+        id_box = ((right_left + right_right - id_width) / 2, (right_left + right_right + id_width) / 2)
+    student_variant = student[2] if student and len(student) > 2 else None
+    if variant_box:
+        left, right = variant_box
+        sheet.setStrokeColor(DTM13_RED)
+        sheet.rect(left, top(side_bottom), right - left, side_bottom - side_top, stroke=1, fill=0)
+        sheet.line(left, top(side_top + side_header), right, top(side_top + side_header))
+        _dtm13_text(sheet, (left + right) / 2, top(side_top + 14), "Variant", 8, REPORT_FONT, room=right - left - 4)
+        _dtm13_text(sheet, (left + right) / 2, top(side_top + 26), "Вариант", 7, REPORT_FONT, room=right - left - 4)
+        for index, name in enumerate(shown_variants):
+            x = left + 16 + index * 15
+            if index % 2 == 0:
+                sheet.setFillColor(DTM13_PINK)
+                sheet.rect(x - 6, top(side_bottom - 3), 12, side_bottom - side_top - side_header - 6, stroke=0, fill=1)
+            center = side_top + side_header + 14
+            bubble(x, center, name, student_variant == name, 5.4)
+            note({"ref": "variant", "label": "Variant", "kind": "variant", "letter": name,
+                  "x": x, "y": top(center), "r": DTM13_RADIUS})
+            sheet.saveState()
+            sheet.translate(x - 2.0, top(center + 12))
+            sheet.rotate(-90)
+            _dtm13_text(sheet, 0, 0, f"{name}-variant / Вариант {name}", 5.6, align="left",
+                        room=side_bottom - center - 20)
+            sheet.restoreState()
+
+    left, right = id_box
+    sheet.setStrokeColor(DTM13_RED)
+    sheet.setLineWidth(0.9)
+    sheet.rect(left, top(side_bottom), right - left, side_bottom - side_top, stroke=1, fill=0)
+    sheet.line(left, top(side_top + side_header), right, top(side_top + side_header))
+    _dtm13_text(sheet, (left + right) / 2, top(side_top + 14), "O'quvchi raqami", 8, REPORT_FONT, room=right - left - 4)
+    _dtm13_text(sheet, (left + right) / 2, top(side_top + 26), "Номер ученика", 7, REPORT_FONT, room=right - left - 4)
+    digits = f"{student[0]:04d}" if student else None
+    first_x = left + 8 + 7.5
+    cell_top = side_top + side_header + 4
+    for column in range(4):
+        x = first_x + column * 15
+        if column % 2 == 0:
+            sheet.setFillColor(DTM13_PINK)
+            sheet.rect(x - 6.5, top(side_bottom - 3), 13, side_bottom - cell_top - 21, stroke=0, fill=1)
+        sheet.setStrokeColor(DTM13_RED)
+        sheet.setFillColor(colors.white)
+        sheet.rect(x - 6.5, top(cell_top + 16), 13, 16, stroke=1, fill=1)
+        if digits:
+            _dtm13_text(sheet, x, top(cell_top + 12), digits[column], 9, REPORT_FONT_BOLD, color=colors.black)
+        for row, digit in enumerate([1, 2, 3, 4, 5, 6, 7, 8, 9, 0]):  # rasmiy varaqdagidek: 1 … 9, 0
+            center = layout["id_first"] + row * DTM13_ROW
+            bubble(x, center, str(digit), bool(digits) and int(digits[column]) == digit, 5.6)
+            note({"ref": f"id{column}", "label": "ID", "kind": "id", "letter": str(digit),
+                  "x": x, "y": top(center), "r": DTM13_RADIUS})
+
+    # 5) Ism-familiya qutisi (o'quvchi to'ldiradi) — skaner shu joyni rasm qilib o'qituvchiga ko'rsatadi
+    box_left, box_top, box_right, box_bottom = layout["name_box"]
+    sheet.setStrokeColor(DTM13_RED)
+    sheet.rect(box_left, top(box_bottom), box_right - box_left, box_bottom - box_top, stroke=1, fill=0)
+    sheet.line(box_left, top(box_top + 34), box_right, top(box_top + 34))
+    _dtm13_text(sheet, (box_left + box_right) / 2, top(box_top + 14), "Abituriyent tomonidan to'ldiriladi!", 8,
+                room=box_right - box_left - 8)
+    _dtm13_text(sheet, (box_left + box_right) / 2, top(box_top + 26), "Заполняется абитуриентом!", 8,
+                room=box_right - box_left - 8)
+    for distance, caption in zip(layout["name_lines"], ["(Familiyasi / Фамилия)", "(Ismi / Имя)",
+                                                        "(Otasining ismi / Отчество)"]):
+        sheet.setStrokeColor(DTM13_RED)
+        sheet.line(box_left + 8, top(distance), box_right - 8, top(distance))
+        _dtm13_text(sheet, (box_left + box_right) / 2, top(distance + 9), caption, 6.3)
+    sign = layout["name_lines"][-1] + 30
+    if sign + 10 < box_bottom:
+        sheet.saveState()
+        sheet.setDash(1, 1.5)
+        sheet.line(box_left + 40, top(sign), box_right - 40, top(sign))
+        sheet.restoreState()
+        _dtm13_text(sheet, (box_left + box_right) / 2, top(sign + 9), "Imzosi / Подпись", 6.3)
+
+    # 6) Dalolatnoma: nazoratchilar to'ldiradi (rasmiy varaqdagidek)
+    banner_top = layout["banner_top"]
+    sheet.setFillColor(DTM13_BANNER)
+    sheet.rect(frame_left, top(banner_top + DTM13_BANNER_HEIGHT), frame_right - frame_left, DTM13_BANNER_HEIGHT,
+               stroke=0, fill=1)
+    sheet.setStrokeColor(DTM13_RED)
+    sheet.line(frame_left, top(banner_top), frame_right, top(banner_top))
+    sheet.line(frame_left, top(banner_top + DTM13_BANNER_HEIGHT), frame_right, top(banner_top + DTM13_BANNER_HEIGHT))
+    _dtm13_text(sheet, width / 2, top(banner_top + 10),
+                "Diqqat! Quyidagi dalolatnoma guruh nazoratchilari tomonidan rasmiylashtiriladi!", 7.2,
+                SHEET_SANS_BOLD, color=colors.white)
+    _dtm13_text(sheet, width / 2, top(banner_top + 20),
+                "Внимание! Нижеследующий акт оформляется наблюдателями группы!", 7.2, SHEET_SANS_BOLD,
+                color=colors.white)
+    act = banner_top + DTM13_BANNER_HEIGHT
+    _dtm13_text(sheet, width / 2, top(act + 14),
+                "TEST SINOVIDAN CHETLASHTIRISH DALOLATNOMASI  /  АКТ ОБ ОТСТРАНЕНИИ ОТ ТЕСТОВЫХ ИСПЫТАНИЙ", 7,
+                room=frame_right - frame_left - 20)
+    sheet.setStrokeColor(DTM13_RED)
+    sheet.setLineWidth(0.5)
+    sheet.line(frame_left + 12, top(act + 32), frame_right - 12, top(act + 32))
+    _dtm13_text(sheet, width / 2, top(act + 39), "(Chetlashtirish vaqti va sababi / Время и причина отстранения)", 5.8)
+    for index, distance in enumerate((act + 58, act + 80)):
+        _dtm13_text(sheet, frame_left + 10, top(distance), f"{index + 1})", 8, align="left")
+        sheet.line(frame_left + 22, top(distance), frame_right - 110, top(distance))
+        _dtm13_text(sheet, (frame_left + frame_right - 88) / 2, top(distance + 7),
+                    "Guruh nazoratchisining familiyasi, ismi, otasining ismi / Фамилия, имя, отчество наблюдателя группы",
+                    5.2, room=frame_right - frame_left - 140)
+        sheet.saveState()
+        sheet.setDash(1, 1.5)
+        sheet.line(frame_right - 96, top(distance), frame_right - 12, top(distance))
+        sheet.restoreState()
+        _dtm13_text(sheet, frame_right - 54, top(distance + 7), "Imzosi / Подпись", 5.6)
+    sheet.restoreState()
+    sheet.setFillColor(colors.black)
+    sheet.setStrokeColor(colors.black)
 
 
 def _draw_fill_examples(sheet, top, width: float, y_line: float, style: dict) -> None:
@@ -4132,6 +4543,8 @@ def _draw_compact_sheets(sheet, test: Test, with_answers: bool, bubbles: list | 
     plan = (_evalbee_plan if version >= 8 else _grid_plan if version >= 7 else _compact_plan)(
         test, variants, key_override)
     draw_card = _draw_evalbee_card if version >= 8 else _draw_grid_card if version >= 7 else _draw_compact_card
+    if plan.get("dtm13"):
+        draw_card = _draw_dtm13_card
     page_count = len(plan["pages"])
     per_sheet = int(A4[1] // (plan["height"] - 1)) if page_count == 1 and version < 8 else 1
     left = (A4[0] - plan["width"]) / 2  # titul A4 dan tor bo'lsa — o'rtada

@@ -5722,7 +5722,7 @@ def test_evalbee_uslubidagi_titul():
     for version, anchor_count, height in ((9, 30, 668), (8, 45, 842)):
         test_id = create_test(enrollment_type="closed", key_questions=questions)["id"]
         with SessionLocal() as session:
-            assert session.get(Test, test_id).sheet_version == 12  # yangi test — eng yangi titul
+            assert session.get(Test, test_id).sheet_version == 13  # yangi test — eng yangi titul
             session.get(Test, test_id).sheet_version = version
             session.commit()
         base = f"/api/teacher/tests/{test_id}"
@@ -6048,7 +6048,7 @@ def test_varaqdagi_oquvchi_raqami_boyicha_taniladi():
                 headers=as_user(555))
     detail = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1, "Birinchi Bola"), (2, "Ikkinchi Bola")]
-    assert detail["sheet_version"] == 12
+    assert detail["sheet_version"] == 13
 
     url = f"/api/teacher/tests/{test_id}/scan"
     photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "0", "id3": "2", 1: "B", 2: "C"})
@@ -6332,7 +6332,7 @@ def test_skaner_natijasi_sinf_natijalariga_yoziladi():
     assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json() == {"added": 0}
     detail = client.get(base, headers=as_user(701)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1001, "Ali Valiyev"), (1002, "Zuhra Karimova")]
-    assert detail["sheet_version"] == 12
+    assert detail["sheet_version"] == 13
 
     # Zuhra (1002) varag'i: 1-savol to'g'ri, 2-savol to'g'ri
     scanned = client.post(f"{base}/scan", json={"image_base64": _sheet_photo(test["id"], {
@@ -6711,15 +6711,11 @@ def test_dtm_testi_natijasi_dtm_bali_bilan():
 
 def test_dtm_ismli_titul_skanerlanadi():
     """
-    Sinfga biriktirilgan DTM imtihoni: har o'quvchiga ismli titul (ID bo'yalgan, bitta PDF), bloklar
-    fanlar bo'yicha (namunadagidek). Skaner chop etilgan ismli titulni o'qiydi: o'quvchi ID'dan
-    taniladi, javoblar to'g'ri savollarga tushadi (31–45 — 1-ustun pastida, 76–90 — 4-ustun pastida).
+    Sinfga biriktirilgan DTM imtihoni: har o'quvchiga ismli titul (ID bo'yalgan, bitta PDF). Skaner chop etilgan
+    ismli titulni o'qiydi: o'quvchi ID'dan taniladi, javoblar to'g'ri savollarga tushadi.
+    13-versiya — rasmiy "Javoblar varaqasi" ko'rinishi (3 ustun × 30, o'ngda o'quvchi raqami; rangli, ko'k ruchka,
+    oq-qora chop etilsa ham o'qiladi); 12-versiya — oldin chop etilgan titullar o'z joylashuvida qoladi.
     """
-
-    import fitz
-    from PIL import Image, ImageDraw
-
-    from backend.database import Test
 
     reset_database()
     school_class = _school_with_class(701)
@@ -6734,6 +6730,23 @@ def test_dtm_ismli_titul_skanerlanadi():
         "Ona tili (majburiy): 1-10", "Matematika (majburiy): 11-20", "O'zbekiston tarixi (majburiy): 21-30",
         "Matematika: 31-60", "Fizika: 61-90"])})
     assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json()["added"] == 2
+    from backend.database import Test
+
+    with SessionLocal() as session:
+        assert session.get(Test, created["id"]).sheet_version == 13  # yangi DTM testi — rasmiy ko'rinishdagi titul
+
+    for version, grayscale in ((13, False), (13, True), (12, False)):
+        with SessionLocal() as session:
+            session.get(Test, created["id"]).sheet_version = version
+            session.commit()
+        _scan_personal_dtm_sheet(base, cid, version, grayscale)
+
+
+def _scan_personal_dtm_sheet(base: str, cid: int, version: int, grayscale: bool) -> None:
+    import fitz
+    from PIL import Image, ImageDraw
+
+    from backend.database import Test
 
     # Ismli titullar: har o'quvchiga bitta sahifa
     personal = client.get(f"{base}/answer-sheet?personal=true", headers=as_user(701))
@@ -6742,19 +6755,28 @@ def test_dtm_ismli_titul_skanerlanadi():
     assert len(document) == 2
     texts = [page.get_text() for page in document]
     assert "Ali Valiyev" in texts[0] and "Zuhra Karimova" in texts[1], texts
-    for title in ("1-majburiy fan", "O'zbekiston tarixi", "1-asosiy fan: Matematika (31–60)", "2-asosiy fan: Fizika (61–90)"):
-        assert title in texts[0], title
-
-    # Bloklar namunadagidek: 31 — 1-ustunda (ID ostida), 76 — 4-ustunda; 1 — 2-ustun tepasida
     with SessionLocal() as session:
-        sheet_test = session.get(Test, created["id"])
+        sheet_test = session.get(Test, int(base.rsplit("/", 1)[1]))
         bubbles: list[dict] = []
         main.generate_answer_sheet_pdf(sheet_test, bubbles=bubbles)
         geometry = main._sheet_geometry(sheet_test)
         session.expunge(sheet_test)
     first_x = {bubble["label"]: bubble["x"] for bubble in bubbles if bubble.get("letter") == "A" and bubble["kind"] != "id"}
+    first_y = {bubble["label"]: bubble["y"] for bubble in bubbles if bubble.get("letter") == "A" and bubble["kind"] != "id"}
     id_x = min(bubble["x"] for bubble in bubbles if bubble["kind"] == "id")
-    assert abs(first_x["31"] - id_x) < 1 and first_x["1"] > first_x["31"] and first_x["76"] > first_x["61"], first_x
+    if version >= 13:
+        # Rasmiy varaqdagidek: 1–30, 31–60, 61–90 — uchta ustun (har birida 30 qator), o'quvchi raqami — o'ngda
+        for title in ("JAVOBLAR VARAQASI", "Majburiy fanlar", "1-asosiy fan", "Matematika", "2-asosiy fan", "Fizika",
+                      "O'quvchi raqami", "DALOLATNOMASI", "ABITURIYENT DIQQATIGA!"):
+            assert title in texts[0], title
+        assert abs(first_x["1"] - first_x["30"]) < 0.1 and abs(first_y["1"] - first_y["31"]) < 0.1
+        assert first_x["1"] < first_x["31"] < first_x["61"] < id_x and first_y["1"] > first_y["30"], first_x
+        assert round(geometry["width"]) == 595 and round(geometry["height"]) == 842  # to'liq A4
+    else:
+        for title in ("1-majburiy fan", "O'zbekiston tarixi", "1-asosiy fan: Matematika (31–60)", "2-asosiy fan: Fizika (61–90)"):
+            assert title in texts[0], title
+        # Bloklar namunadagidek: 31 — 1-ustunda (ID ostida), 76 — 4-ustunda; 1 — 2-ustun tepasida
+        assert abs(first_x["31"] - id_x) < 1 and first_x["1"] > first_x["31"] and first_x["76"] > first_x["61"], first_x
 
     # Zuhraning titulini "suratga olamiz": javoblarni bo'yaymiz (ID titulda allaqachon bo'yalgan)
     zuhra_page = next(index for index, text in enumerate(texts) if "Zuhra Karimova" in text)
@@ -6766,12 +6788,16 @@ def test_dtm_ismli_titul_skanerlanadi():
     page = page.crop((round(left * zoom), 0, round((left + width) * zoom), round(height * zoom)))
     draw = ImageDraw.Draw(page)
     answers = {str(n): "ABCD"[n % 4] if n <= 60 else "A" for n in range(1, 91)}  # 61–90: hammasi A
+    # 13-versiyada ko'rsatmadagidek ko'k ruchka; eskisida — qora
+    pen = (35, 60, 190) if version >= 13 else (40, 40, 40)
     for bubble in bubbles:
         if bubble["page"] != 1 or bubble["kind"] in ("code", "mark", "anchor", "id"):
             continue
         if answers.get(bubble["label"]) == bubble["letter"]:
             cx, cy, r = bubble["x"] * zoom, (height - bubble["y"]) * zoom, bubble["r"] * zoom
-            draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline="black", width=2, fill=(40, 40, 40))
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=pen, width=2, fill=pen)
+    if grayscale:
+        page = page.convert("L").convert("RGB")  # oq-qora printerda chop etilgan rangli titul
     background = Image.new("RGB", (page.width + 300, page.height + 300), (90, 70, 60))
     background.paste(page.rotate(4, expand=True, fillcolor=(90, 70, 60)), (120, 110))
     buffer = io.BytesIO()
@@ -6787,6 +6813,9 @@ def test_dtm_ismli_titul_skanerlanadi():
     read = result["answers"]
     assert all(read.get(str(n)) == answers[str(n)] for n in range(1, 91)), {
         n: (read.get(str(n)), answers[str(n)]) for n in range(1, 91) if read.get(str(n)) != answers[str(n)]}
+    # Bo'sh doirachalar ichidagi och harflar "bo'yalgan" deb o'qilmaydi: hech bir savol shubhali emas
+    assert all(question["status"] == "ok" for question in result["questions"]), [
+        (question["label"], question["status"]) for question in result["questions"] if question["status"] != "ok"]
 
 
 def test_yotoqxona_xonalar_joylashtirish_va_kechki_yoqlama():

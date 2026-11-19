@@ -284,7 +284,7 @@ class Test(Base):
     # Eski testlar o'z versiyasida qoladi — oldin chop etilgan varaqlar ham to'g'ri skanerlanishi uchun.
     # 6 — ixcham; 7 — bloklari kvadratli; 8–10 — EvalBee uslubi; 11 — doirachalar o'lchami va oralig'i doim bir xil;
     # 12 — yozma savollar uchun pastda yozish kataklari (36a, 36b …), 33–35 (A–F) qatorlari ustunga sig'adi
-    sheet_version: Mapped[int] = mapped_column(default=12)
+    sheet_version: Mapped[int] = mapped_column(default=13)  # 13 — DTM tituli rasmiy varaq ko'rinishida
     # Esse (Ona tili 45): maksimal bali (24). Bo'sh — testda esse yo'q
     essay_max: Mapped[int | None] = mapped_column(default=None)
     # Esseni kim baholaydi: False — o'qituvchi, True — AI (o'quvchi topshirgach ballni o'zi qo'yadi,
