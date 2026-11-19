@@ -11586,8 +11586,10 @@ STUDENT_CODE_FIRST, STUDENT_CODE_LAST = 1001, 9999
 
 def _assign_student_codes(db: Session, school_id: int) -> None:
     """
-    ID oralig'i belgilangan sinflarda ID'siz (yangi qo'shilgan) o'quvchilarga oraliqdagi
-    keyingi bo'sh raqamni beradi. Oraliq tugagan bo'lsa — ID'siz qoladi (admin oraliqni kengaytiradi).
+    ID oralig'i belgilangan sinflarda ID'siz (yangi qo'shilgan) o'quvchilarga sinfdagi OXIRGI ID'dan
+    keyingisini beradi: 1001–1056 berilgan bo'lsa, yangi o'quvchi — 1057. Oraliq tugagan bo'lsa, u o'zi
+    kengayadi (boshqa sinf oralig'iga kirmasa); kirsa — oraliqda bo'shab qolgan raqam beriladi, u ham
+    bo'lmasa — ID'siz qoladi (admin oraliqni o'zgartiradi).
     """
 
     # Bir vaqtda ikki o'qituvchi o'quvchi qo'shsa ham ID takrorlanmasin
@@ -11613,16 +11615,46 @@ def _assign_student_codes(db: Session, school_id: int) -> None:
             student.student_code = None
             changed = True
     taken = {student.student_code for student, _ in rows if student.student_code}
+    # Har sinfdagi eng katta ID — yangi o'quvchi undan keyingisini oladi (ro'yxat oxiriga qo'shilgandek)
+    last_code: dict[int, int] = {}
+    for student, school_class in rows:
+        if student.student_code and not student.removed_at and student.source_student_id is None:
+            last_code[school_class.id] = max(last_code.get(school_class.id, 0), student.student_code)
+    ranges: dict[int, tuple[int, int]] | None = None  # sinflar oraliqlari — oraliq kengaytirilganda kerak
     for student, school_class in rows:
         # O'chirilgan sinf o'quvchisiga ID berilmaydi — aks holda har chaqiruvda yuqorida olinib, bu yerda
         # qayta berilardi (har sinf ochilishida bazaga o'nlab yozish va sekinlik)
-        if student.student_code or student.removed_at or school_class.deleted_at or school_class.code_start is None:
+        if (student.student_code or student.removed_at or school_class.deleted_at or school_class.code_start is None
+                or student.source_student_id is not None):
             continue
-        code = next((value for value in range(school_class.code_start, school_class.code_end + 1) if value not in taken), None)
+        code = max(last_code.get(school_class.id, 0), school_class.code_start - 1) + 1
+        if code > school_class.code_end:
+            if ranges is None:
+                ranges = {
+                    class_id: (start, end) for class_id, start, end in db.execute(
+                        select(SchoolClass.id, SchoolClass.code_start, SchoolClass.code_end).where(
+                            SchoolClass.school_id == school_id, SchoolClass.deleted_at.is_(None),
+                            SchoolClass.code_start.is_not(None))
+                    ).all()
+                }
+            free = code <= STUDENT_CODE_LAST and code not in taken and not any(
+                start <= code <= end for class_id, (start, end) in ranges.items() if class_id != school_class.id)
+            if free:
+                school_class.code_end = code  # oraliq o'zi kengayadi: 1001–1056 → 1001–1057
+                ranges[school_class.id] = (school_class.code_start, code)
+            else:
+                code = None
+        elif code in taken:
+            code = None
+        if code is None:
+            # Keyingi raqam boshqa sinfniki — oraliqda bo'shab qolgan raqam (sinfdan chiqarilgan o'quvchiniki)
+            code = next((value for value in range(school_class.code_start, school_class.code_end + 1)
+                         if value not in taken), None)
         if code is None:
             continue
         student.student_code = code
         taken.add(code)
+        last_code[school_class.id] = max(last_code.get(school_class.id, 0), code)
         changed = True
     # Fan guruhidagi o'quvchi — asl o'quvchining ID'si bilan (guruh imtihonida titul shu raqam bilan o'qiladi)
     by_id = {student.id: (student, school_class) for student, school_class in rows}
@@ -12275,19 +12307,38 @@ def add_students_bulk(
 def edit_student(
     class_id: int, student_id: int, body: StudentIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    school_class = _managed_class(db, user, class_id)
+    """
+    Ism-familiyani maktabning istalgan o'qituvchisi tahrirlaydi (istalgan sinfda) — xatoni ko'rgan odam
+    o'zi tuzatadi. Tug'ilgan sanani faqat rahbariyat va sinf kuratori o'zgartiradi. Kuratordan boshqa
+    odam ismni o'zgartirsa — kuratorga bot orqali xabar boradi (eski va yangi ismi bilan).
+    """
+
+    school_class, member = _school_class(db, user, class_id)
     student = db.get(ClassStudent, student_id)
     if not student or student.class_id != school_class.id or student.removed_at is not None:
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
     if student.source_student_id is not None:
         raise HTTPException(status_code=422, detail="Ism-familiya o'quvchining o'z sinfida tahrirlanadi")
+    old_name = student.full_name
     student.full_name = body.full_name
-    student.birth_date = body.birth_date
+    if _can_manage_class(school_class, member):
+        student.birth_date = body.birth_date
     for copy in _group_copies(db, [student.id]):
         copy.full_name, copy.birth_date = student.full_name, student.birth_date
     db.commit()
+    if old_name != student.full_name:
+        logging.getLogger("backend").info("O'quvchi ismi o'zgardi: class=%s student=%s user=%s", class_id, student.id, user.id)
+        curator = db.get(User, school_class.curator_user_id) if school_class.curator_user_id else None
+        if curator and curator.id != user.id and curator.tg_id:
+            school = db.get(PrivateSchool, school_class.school_id)
+            unit = "guruhingizdagi" if school and school.kind == "center" else "sinfingizdagi"
+            _send_bot_text_in_background(
+                curator.tg_id,
+                f"✏️ {_member_role_label(member)} {user.full_name} «{school_class.name}» {unit} o'quvchi ismini "
+                f"o'zgartirdi:\n{old_name} → {student.full_name}",
+            )
     db.refresh(school_class)
-    return _class_view(db, school_class, with_details=True, member=_active_membership(db, user))
+    return _class_view(db, school_class, with_details=True, member=member)
 
 
 # O'quvchi holati: maktabda / uyda / ruxsat berilgan (javob) / kasal
@@ -12515,6 +12566,7 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
         "status_history": _status_history(db, owner.id),
         "can_set_status": _can_set_student_status(db, member, school_class, student),
         "can_manage": _can_manage_class(school_class, member),
+        "can_edit_name": student.source_student_id is None,  # maktabning har bir o'qituvchisi (o'z sinfidagi yozuvda)
         "curator": curator.full_name if curator else None,
         "dorm": _student_dorm_view(db, owner),
         "results": _student_results(db, student),

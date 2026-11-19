@@ -3215,10 +3215,14 @@ async function renderStudentProfile(schoolClass, studentId) {
     ${statusHistoryHtml ? `<p class="section-label" style="margin-top:18px">HOLAT TARIXI</p><div class="panel" style="padding:4px 0">${statusHistoryHtml}</div>` : ""}
 
     ${
-      student.can_manage
+      student.can_manage || (student.can_edit_name && !schoolClass.is_group)
         ? `<div class="row-between" style="gap:8px;margin-top:16px">
-             ${schoolClass.is_group ? "" : `<button class="btn btn-ghost" id="edit-student-button" style="margin:0">✏️ Tahrirlash</button>`}
-             <button class="btn btn-ghost" id="remove-student-button" style="margin:0">🚪 ${schoolClass.is_group ? "Guruhdan" : "Sinfdan"} chiqarish</button>
+             ${schoolClass.is_group || !student.can_edit_name ? "" : `<button class="btn btn-ghost" id="edit-student-button" style="margin:0">✏️ Tahrirlash</button>`}
+             ${
+               student.can_manage
+                 ? `<button class="btn btn-ghost" id="remove-student-button" style="margin:0">🚪 ${schoolClass.is_group ? "Guruhdan" : "Sinfdan"} chiqarish</button>`
+                 : ""
+             }
            </div>`
         : ""
     }

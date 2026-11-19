@@ -5193,6 +5193,27 @@ if __name__ == "__main__":
     sys.exit(main_runner())
 
 
+def test_frontend_js_fayllari_sintaksis_jihatdan_togri():
+    """
+    icons.js / app.js dagi bitta sintaksis xatosi (masalan, yetishmagan vergul) butun Mini App'ni ochilmay qo'yadi —
+    fayllar V8 (Chrome / Telegram dvijoki) bilan tekshiriladi. mini-racer o'rnatilmagan muhitda tekshirilmaydi.
+    """
+    try:
+        from py_mini_racer import MiniRacer
+    except ImportError:
+        return
+    frontend = Path(__file__).resolve().parent.parent / "frontend"
+    files = sorted(frontend.glob("js/*.js")) + sorted(frontend.glob("*.js"))
+    assert len(files) >= 3, files
+    for path in files:
+        context = MiniRacer()
+        context.eval("var source = " + json.dumps(path.read_text(encoding="utf-8")) + ";")
+        verdict = context.eval(
+            "(function () { try { new Function(source); return 'OK'; } catch (e) { return e.name + ': ' + e.message; } })()"
+        )
+        assert verdict == "OK", f"{path.name}: {verdict}"
+
+
 def test_start_bosgan_foydalanuvchi_saqlanadi():
     from bot.bot import _remember_user
 
@@ -6244,10 +6265,96 @@ def test_chiqarilgan_oquvchi_idsi_yangisiga_beriladi():
     view = client.post(f"/api/classes/{cid}/students", json={"full_name": "Yangi Bola"}, headers=as_user(701)).json()
     assert [(s["full_name"], s["code"]) for s in view["students"]][-1] == ("Yangi Bola", 1032), view["students"]
 
-    # O'rtadagi (1030) chiqarilsa ham — bo'sh joy keyingi yangisiga
+    # O'rtadagi (1030) chiqarilsa — yangi o'quvchi baribir oxirgidan keyingisini oladi (1033), ro'yxat oxiriga
     client.request("DELETE", f"/api/classes/{cid}/students/{students[0]['id']}", json={"reason": "Boshqa maktabga o'tdi"}, headers=as_user(701))
     view = client.post(f"/api/classes/{cid}/students", json={"full_name": "Yana Bola"}, headers=as_user(701)).json()
-    assert sorted(s["code"] for s in view["students"]) == [1030, 1031, 1032], view["students"]
+    assert sorted(s["code"] for s in view["students"]) == [1031, 1032, 1033], view["students"]
+
+
+def test_yangi_oquvchi_oxirgi_iddan_keyingisini_oladi():
+    """
+    ID oralig'i to'lgan sinfga yangi o'quvchi: oxirgi ID'dan keyingisini oladi (1001–1056 → 1057), oraliq
+    o'zi kengayadi. Keyingi raqam boshqa sinf oralig'ida bo'lsa — bo'shab qolgan raqam, u ham bo'lmasa — ID'siz.
+    """
+    reset_database()
+    h = as_user(701)
+    cid = _school_with_class(701)["id"]
+    names = [f"O'quvchi {index:02d}" for index in range(1, 57)]
+    client.post(f"/api/classes/{cid}/students/bulk", json={"names": names}, headers=h)
+    ranged = client.put(f"/api/classes/{cid}/student-codes", json={"start": 1001, "end": 1056}, headers=h).json()
+    assert sorted(s["code"] for s in ranged["students"]) == list(range(1001, 1057))
+
+    view = client.post(f"/api/classes/{cid}/students", json={"full_name": "Yangi Bola"}, headers=h).json()
+    assert next(s["code"] for s in view["students"] if s["full_name"] == "Yangi Bola") == 1057
+    assert (view["code_start"], view["code_end"]) == (1001, 1057)  # oraliq o'zi kengaydi
+
+    # Ro'yxatdan (Excel) bir nechtasi birga qo'shilsa ham — ketma-ket
+    view = client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Bir Bola", "Ikki Bola"]}, headers=h).json()["class"]
+    codes = {s["full_name"]: s["code"] for s in view["students"]}
+    assert (codes["Bir Bola"], codes["Ikki Bola"]) == (1058, 1059) and view["code_end"] == 1059
+
+    # Qo'shni sinf oralig'i 1060 dan boshlanadi — kengayib bo'lmaydi: bo'shab qolgan raqam beriladi, u ham yo'q — ID'siz
+    other = client.post("/api/classes", json={"name": "10/3"}, headers=h).json()["id"]
+    client.post(f"/api/classes/{other}/students", json={"full_name": "Qo'shni Bola"}, headers=h)
+    assert client.put(f"/api/classes/{other}/student-codes", json={"start": 1060, "end": 1090}, headers=h).status_code == 200
+    gone = next(s for s in view["students"] if s["code"] == 1010)
+    client.request("DELETE", f"/api/classes/{cid}/students/{gone['id']}", json={"reason": "Boshqa maktabga o'tdi"}, headers=h)
+    view = client.post(f"/api/classes/{cid}/students", json={"full_name": "Uch Bola"}, headers=h).json()
+    assert next(s["code"] for s in view["students"] if s["full_name"] == "Uch Bola") == 1010
+    view = client.post(f"/api/classes/{cid}/students", json={"full_name": "To'rt Bola"}, headers=h).json()
+    assert next(s["code"] for s in view["students"] if s["full_name"] == "To'rt Bola") is None
+    assert view["code_end"] == 1059
+
+
+def test_istalgan_oqituvchi_oquvchi_ismini_tahrirlaydi():
+    """
+    Ism-familiyani maktabning istalgan o'qituvchisi tahrirlaydi (kurator bo'lmasa ham); tug'ilgan sana va
+    sinfdan chiqarish — faqat rahbariyat va kurator. Kuratorga xabar boradi; begona odam tahrirlay olmaydi.
+    """
+    from datetime import date
+
+    from backend.database import ClassStudent
+
+    reset_database()
+    _set_name(701, "Maktab", "Admini")
+    school = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                               "name": "Tahrir maktabi"}, headers=as_user(701)).json()["school"]
+    for tg_id in (702, 703):
+        _set_name(tg_id, "Ustoz", f"Nomer{tg_id}")
+        assert client.post("/api/schools/join", json={"phone": "901234567", "code": current_code(school),
+                                                      "subjects": ["Fizika"]}, headers=as_user(tg_id)).status_code == 200
+    ids = {m["name"]: m["user_id"] for m in client.get("/api/schools/me", headers=as_user(701)).json()["school"]["members"]}
+    cls = client.post("/api/classes", json={"name": "7-A"}, headers=as_user(701)).json()
+    client.put(f"/api/classes/{cls['id']}/curator", json={"user_id": ids["Ustoz Nomer702"]}, headers=as_user(701))
+    client.post(f"/api/classes/{cls['id']}/students/bulk", json={"names": ["Aliyev Vali"]}, headers=as_user(701))
+    student = client.get(f"/api/classes/{cls['id']}", headers=as_user(703)).json()["students"][0]
+    with SessionLocal() as session:
+        session.get(ClassStudent, student["id"]).birth_date = date(2012, 5, 1)
+        session.commit()
+    url = f"/api/classes/{cls['id']}/students/{student['id']}"
+
+    # 703 — oddiy fan o'qituvchisi (kurator emas): ism tahrirlaydi, chiqarish tugmasi yo'q
+    profile = client.get(url, headers=as_user(703)).json()
+    assert profile["can_edit_name"] is True and profile["can_manage"] is False, profile
+    sent = []
+    original = main._send_bot_text_in_background
+    main._send_bot_text_in_background = lambda chat_id, text: sent.append((chat_id, text))
+    try:
+        edited = client.put(url, json={"full_name": "Aliyev Valijon", "birth_date": "2000-01-01"}, headers=as_user(703))
+        assert edited.status_code == 200, edited.text
+        # Ism o'zgarmasa — xabar ham yo'q
+        assert client.put(url, json={"full_name": "Aliyev Valijon", "birth_date": None}, headers=as_user(703)).status_code == 200
+    finally:
+        main._send_bot_text_in_background = original
+    assert edited.json()["students"][0]["full_name"] == "Aliyev Valijon"
+    with SessionLocal() as session:
+        assert session.get(ClassStudent, student["id"]).birth_date == date(2012, 5, 1)  # tug'ilgan sana o'zgarmadi
+    assert len(sent) == 1 and sent[0][0] == 702 and "Aliyev Vali → Aliyev Valijon" in sent[0][1], sent
+
+    # Chiqarish — hamon faqat rahbariyat va kurator; begona (maktabda yo'q) odam tahrirlay olmaydi
+    assert client.request("DELETE", url, json={"reason": "Sinov uchun"}, headers=as_user(703)).status_code == 403
+    _set_name(709, "Begona", "Odam")
+    assert client.put(url, json={"full_name": "Boshqa Ism"}, headers=as_user(709)).status_code == 404
 
 
 def test_sinf_id_oraligini_admin_belgilaydi():
@@ -7235,9 +7342,9 @@ def test_har_bir_oqituvchi_oquvchini_bittalab_qoshadi():
     profile = client.get(f"/api/classes/{cid}/students/{student_id}", headers=as_user(701)).json()
     assert profile["added_by"] == "Fizik Ustoz", profile["added_by"]
 
-    # Tahrirlash, o'chirish va Excel'dan yuklash — oddiy o'qituvchiga yopiq; kurator qila oladi
+    # Ism-familiyani tahrirlash — istalgan o'qituvchi; o'chirish va Excel'dan yuklash — oddiy o'qituvchiga yopiq
     url = f"/api/classes/{cid}/students/{student_id}"
-    assert client.put(url, json={"full_name": "Boshqa Ism"}, headers=as_user(704)).status_code == 403
+    assert client.put(url, json={"full_name": "Boshqa Ism"}, headers=as_user(704)).status_code == 200
     assert client.delete(url, headers=as_user(704)).status_code == 403
     assert client.post(f"/api/classes/{cid}/students/import/preview", json={"text": "X Y"}, headers=as_user(704)).status_code == 403
     # Kurator chiqaradi — sababi bilan (o'quvchi "Biriktirilmaganlar"ga tushadi)
@@ -7337,7 +7444,7 @@ def test_sinf_ochilganda_bazaga_yozilmaydi():
     reset_database()
     h = as_user(701)
     cid = _school_with_class(701)["id"]
-    # Oraliq to'lgan: ikkinchi o'quvchi ID'siz qoladi — sinf har ochilganda ID berish tekshiriladi
+    # Oraliq to'lgan: ikkinchi o'quvchi oraliqni kengaytirib 1002 ni oladi — sinf har ochilganda ID berish tekshiriladi
     client.put(f"/api/classes/{cid}/student-codes", json={"start": 1001, "end": 1001}, headers=h)
     client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Ali Valiyev", "Zuhra Karimova"]}, headers=h)
     gone = client.post("/api/classes", json={"name": "Yopilgan"}, headers=h).json()["id"]
@@ -7359,7 +7466,7 @@ def test_sinf_ochilganda_bazaga_yozilmaydi():
     finally:
         event.remove(engine, "before_cursor_execute", count)
     assert writes == [], writes
-    assert sorted((s["code"] or 0) for s in view["students"]) == [0, 1001]
+    assert sorted((s["code"] or 0) for s in view["students"]) == [1001, 1002]
 
 
 def test_maktabga_qoshilgan_oqituvchi_avtomatik_test_markazida_royxatdan_otadi():
