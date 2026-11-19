@@ -1,11 +1,13 @@
 """
-Zaxira nusxadan (admin'ga Telegram orqali keladigan backup_*.json.gz yoki eski backup_*.json) bazani tiklash.
+Zaxira nusxadan (admin'ga Telegram orqali keladigan backup_*.json.gz, uning qismlari
+backup_*.json.gz.part1of2 … yoki eski backup_*.json) bazani tiklash.
 
 Ishlatish (loyihaning bosh papkasidan):
 
     # 1) DATABASE_URL — tiklanadigan (yangi, BO'SH) baza manzili
-    # 2) Fayl — botdan kelgan zaxira nusxa
-    python -m backend.restore_backup backup_2026-10-08_12-00.json
+    # 2) Fayl — botdan kelgan zaxira nusxa. Qismlarga bo'lingan bo'lsa, hammasini bitta papkaga
+    #    qo'ying va istalgan bittasini ko'rsating — qolganlari yonidan o'zi topiladi
+    python -m backend.restore_backup backup_2026-10-08_12-00.json.gz
 
 Xavfsizlik: baza bo'sh bo'lmasa, skript hech narsa yozmaydi (mavjud
 ma'lumotlarni ustidan yozib, aralashtirib yubormaslik uchun). Ataylab
@@ -17,8 +19,10 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import re
 import sys
 from datetime import date, datetime
+from pathlib import Path
 
 from sqlalchemy import Boolean, Date, DateTime, func, insert, select, text
 
@@ -91,21 +95,41 @@ def restore(backup: dict, force: bool = False) -> dict[str, int]:
     return restored
 
 
+def backup_files(file: str | Path) -> list[Path]:
+    """Nusxaning fayllari tartib bilan: oddiy nusxa — o'zi, qismga bo'lingani — hamma qismlari."""
+
+    path = Path(file)
+    match = re.fullmatch(r"(.+)\.part\d+of(\d+)", path.name)
+    if not match:
+        return [path]
+    base, total = match.group(1), int(match.group(2))
+    parts = [path.with_name(f"{base}.part{number}of{total}") for number in range(1, total + 1)]
+    missing = [part.name for part in parts if not part.is_file()]
+    if missing:
+        raise RuntimeError(f"Zaxira nusxaning qismlari yetishmayapti: {', '.join(missing)}")
+    return parts
+
+
+def load_backup(file: str | Path) -> dict:
+    """Nusxani o'qiydi: siqilgan (.gz), qismlarga bo'lingan yoki eski oddiy .json."""
+
+    data = b"".join(part.read_bytes() for part in backup_files(file))
+    if data[:2] == b"\x1f\x8b":
+        data = gzip.decompress(data)
+    return json.loads(data)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Zaxira nusxadan bazani tiklash")
-    parser.add_argument("file", help="botdan kelgan backup_*.json fayli")
+    parser.add_argument("file", help="botdan kelgan backup_*.json.gz fayli yoki uning istalgan qismi")
     parser.add_argument("--force", action="store_true", help="bo'sh bo'lmagan bazani tozalab, ustiga yozish")
     args = parser.parse_args()
 
-    # Yangi nusxalar siqilgan (backup_*.json.gz), eskilari — oddiy .json; ikkalasi ham o'qiladi
-    opener = gzip.open if args.file.endswith(".gz") else open
-    with opener(args.file, "rt", encoding="utf-8") as handle:
-        backup = json.load(handle)
-
-    print(f"Zaxira sanasi: {backup.get('exported_at', '?')}")
     try:
+        backup = load_backup(args.file)
+        print(f"Zaxira sanasi: {backup.get('exported_at', '?')}")
         restored = restore(backup, force=args.force)
-    except RuntimeError as error:
+    except (RuntimeError, OSError, EOFError, ValueError) as error:
         print(f"TO'XTATILDI: {error}")
         return 1
 

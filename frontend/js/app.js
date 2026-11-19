@@ -10238,7 +10238,7 @@ async function adminSystemView() {
         guarded(async () => {
           if (sendsViaBot()) {
             await api("/api/admin/backup", { method: "POST", body: {} });
-            showToast("💾 Zaxira nusxa Telegramga yuborildi");
+            showToast("💾 Zaxira nusxa tayyorlanmoqda — bir necha daqiqada botga keladi");
           } else {
             window.open("/api/admin/backup", "_blank");
           }
@@ -12823,7 +12823,7 @@ function renderNewTestForm(testType, draft = {}) {
             offline
               ? "O'quvchilar esseni qog'ozda yozadi. Siz har biriga"
               : "O'quvchi esseni ilovada yozadi. Siz natijalarda o'qib,"
-          } 0–${SUBJECT_PRESETS[subject]?.essay || 75} ball qo'yasiz.</p>
+          } 0–${SUBJECT_PRESETS[subject]?.essay || 24} ball qo'yasiz — natijada 0–75 ga o'giriladi.</p>
         </span>
       </label>
       ${
@@ -17201,7 +17201,7 @@ function essayGradingHtml(essay) {
           <b>0 ball</b> — yozilmagan, faqat kirish qismi yoki kirillda</button>
       </div>
       <p class="subtitle" style="margin:8px 0 0;font-size:12px">Esse 0–${essay.max} ball${
-        essay.max !== 75 ? " (umumiy natijada 75 ballik shkalaga keltiriladi)" : ""
+        essay.max !== 75 ? ` — natijada 0–75 ga o'giriladi (ball ÷ ${essay.max} × 75)` : ""
       }. Umumiy ball = (1–44 savollar bo'yicha Rasch balli + esse bali) ÷ 2.</p>
       <button class="btn" id="essay-save-button" style="margin-top:10px">💾 Ballni saqlash</button>
     </div>`;

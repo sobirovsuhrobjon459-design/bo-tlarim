@@ -858,9 +858,18 @@ def write_database_export(db: Session, out) -> int:
     write('{"exported_at": ' + json.dumps(utcnow().isoformat()) + ', "tables": {')
     for table_index, table in enumerate(Base.metadata.sorted_tables):
         write(("," if table_index else "") + "\n" + json.dumps(table.name) + ": [")
-        rows = db.execute(select(table).execution_options(yield_per=200)).mappings()
+        # Skaner rasmlari nusxaga tushmaydi — ular deyarli siqilmaydi va nusxani Telegram
+        # chegarasidan oshirib yuboradi. Titul rasmlari umuman olinmaydi; yozma javoblarning
+        # bahosi va AI o'qigan matni qoladi, faqat katak rasmi bo'sh ("") bo'ladi.
+        if table.name == SheetImage.__tablename__:
+            write("]")
+            continue
+        blank = {"image": ""} if table.name == WrittenAnswer.__tablename__ else {}
+        columns = [column for column in table.columns if column.name not in blank]
+        rows = db.execute(select(*columns).execution_options(yield_per=200)).mappings()
         first = True
         for row in rows:
+            row = {**row, **blank}
             # To'lov kalitlari nusxaga tushmaydi: bu fayl Telegram chatiga yuboriladi,
             # maxfiy kalit esa u yerda yotmasligi kerak. Ular HAMMASI chiqariladi (faqat
             # maxfiylari emas): tiklangan bazada Merchant ID bo'lib, kalit bo'lmasa, Payme
@@ -885,54 +894,85 @@ def export_database(db: Session) -> bytes:
     return buffer.getvalue()
 
 
+# Telegram bot 50 MB'dan katta fayl yubora olmaydi — kattaroq nusxa shu o'lchamdagi qismlarga bo'linadi
+BACKUP_PART_BYTES = 45 * 1024 * 1024
+BACKUP_SEND_ATTEMPTS = 3
+BACKUP_RETRY_SECONDS = 5
+
+
+def _copy_backup_part(source, target: Path) -> None:
+    """Nusxaning navbatdagi qismini alohida faylga ko'chiradi (xotiraga butun qism yuklanmaydi)."""
+
+    remaining = BACKUP_PART_BYTES
+    with target.open("wb") as out:
+        while remaining and (chunk := source.read(min(remaining, 1024 * 1024))):
+            out.write(chunk)
+            remaining -= len(chunk)
+
+
+def _send_backup_part(admin_id: int, file_name: str, path: Path, caption: str) -> bool:
+    """Bitta qism: tarmoq uzilsa qayta urinadi — bitta qism yetmasa, butun nusxa yaroqsiz bo'lardi."""
+
+    for attempt in range(1, BACKUP_SEND_ATTEMPTS + 1):
+        try:
+            _send_pdf_to_telegram(admin_id, file_name, path, caption=caption, mime="application/gzip")
+            return True
+        except Exception:
+            logging.getLogger("backend").warning("Zaxira nusxa %s ga yuborilmadi (%s-urinish)", admin_id, attempt, exc_info=True)
+            if attempt < BACKUP_SEND_ATTEMPTS:
+                time.sleep(BACKUP_RETRY_SECONDS)
+    return False
+
+
 def send_backup_to_admin(db: Session) -> bool:
-    """Zaxira nusxani admin'ning Telegram chatiga yuboradi. Xato bo'lsa, ilovani to'xtatmaydi."""
+    """
+    Zaxira nusxani adminlarning Telegram chatiga yuboradi. Xato bo'lsa, ilovani to'xtatmaydi.
+
+    Esse fotosuratlari deyarli siqilmaydi (skaner rasmlari nusxaga tushmaydi), shuning uchun nusxa Telegram chegarasidan
+    oshib ketishi mumkin: unda fayl qismlarga bo'linadi (backup_….json.gz.part1of2, part2of2).
+    Tiklash: python -m backend.restore_backup <istalgan qism> — qolganlarini yonidan o'zi topadi.
+    """
 
     if not ADMIN_ID:
         return False
 
     try:
-        # Nusxa diskdagi vaqtinchalik faylga, siqilgan holda yoziladi (xotirada butun baza yig'ilmaydi).
-        # JSON ~10 barobar siqiladi — Telegram'ning 50 MB chegarasiga ancha kech yetadi.
-        with tempfile.TemporaryFile(dir=_temp_dir()) as handle:
-            with gzip.GzipFile(fileobj=handle, mode="wb") as packed:
+        with tempfile.TemporaryDirectory(dir=_temp_dir()) as folder:
+            packed_path = Path(folder) / "backup.json.gz"
+            # Nusxa diskka, siqilgan holda yoziladi (xotirada butun baza yig'ilmaydi)
+            with packed_path.open("wb") as handle, gzip.GzipFile(fileobj=handle, mode="wb") as packed:
                 row_count = write_database_export(db, packed)
-            handle.seek(0)
-            backup_bytes = handle.read()
 
-        if len(backup_bytes) > BACKUP_MAX_BYTES:
-            _warn_admins_backup_failed(f"fayl juda katta ({len(backup_bytes) // (1024 * 1024)} MB) — Telegram qabul qilmaydi")
-            return False
-
-        sent = False
-        for admin_id in ADMIN_IDS:  # har bir admin'ga; biriga yetmasa ham qolganlariga boradi
-            try:
-                _send_pdf_to_telegram(
-                    admin_id,
-                    f"backup_{datetime.now():%Y-%m-%d_%H-%M}.json.gz",
-                    backup_bytes,
-                    caption=(
-                        "💾 Zaxira nusxa\n\n"
-                        f"Sana: {datetime.now():%d.%m.%Y %H:%M}\n"
-                        f"Jami yozuvlar: {row_count} ta\n\n"
+            now = datetime.now()
+            base_name = f"backup_{now:%Y-%m-%d_%H-%M}.json.gz"
+            total = max(1, math.ceil(packed_path.stat().st_size / BACKUP_PART_BYTES))
+            receivers = list(ADMIN_IDS)  # biror qism yetmagan admin keyingilarini olmaydi
+            with packed_path.open("rb") as source:
+                for number in range(1, total + 1):
+                    part_path = Path(folder) / f"part{number}"
+                    _copy_backup_part(source, part_path)
+                    file_name = base_name if total == 1 else f"{base_name}.part{number}of{total}"
+                    title = f"💾 Zaxira nusxa ({number}/{total}-qism)" if total > 1 else "💾 Zaxira nusxa"
+                    advice = (
+                        "Hamma qismlarni bir papkada saqlang — bittasi yo'qolsa, baza tiklanmaydi."
+                        if total > 1 else
                         "Bu faylni saqlab qo'ying — baza bilan nimadir bo'lsa, hammasi shundan tiklanadi."
-                    ),
-                    mime="application/gzip",
-                )
-                sent = True
-            except Exception:
-                logging.getLogger("backend").warning("Zaxira nusxa %s ga yuborilmadi", admin_id, exc_info=True)
-        if not sent:
-            _warn_admins_backup_failed("fayl hech bir adminga yetib bormadi")
-        return sent
+                    )
+                    caption = f"{title}\n\nSana: {now:%d.%m.%Y %H:%M}\nJami yozuvlar: {row_count} ta\n\n{advice}"
+                    receivers = [admin_id for admin_id in receivers
+                                 if _send_backup_part(admin_id, file_name, part_path, caption)]
+                    part_path.unlink()
+                    if not receivers:
+                        _warn_admins_backup_failed(
+                            f"{number}/{total}-qism hech bir adminga yetib bormadi" if total > 1
+                            else "fayl hech bir adminga yetib bormadi"
+                        )
+                        return False
+        return True
     except Exception:
         logging.getLogger("backend").warning("Zaxira nusxa yuborilmadi", exc_info=True)
         _warn_admins_backup_failed("nusxani tayyorlashda xato (batafsil — server logida)")
         return False
-
-
-# Telegram bot 50 MB'dan katta fayl yubora olmaydi
-BACKUP_MAX_BYTES = 49 * 1024 * 1024
 
 
 def _warn_admins_backup_failed(reason: str) -> None:
@@ -1406,12 +1446,18 @@ async def _daily_backup_loop() -> None:
             logging.getLogger("backend").warning("Zaxira nusxa vazifasi bajarilmadi", exc_info=True)
 
 
+_backup_lock = threading.Lock()  # bir vaqtda bitta nusxa (tugma va jadval ustma-ust tushmasin)
+
+
 def _send_backup_once() -> None:
+    if not _backup_lock.acquire(blocking=False):
+        return
     session = SessionLocal()
     try:
         send_backup_to_admin(session)
     finally:
         session.close()
+        _backup_lock.release()
         _release_memory_and_log()  # nusxa katta bo'lishi mumkin — bo'shagan xotira darhol qaytsin
 
 
@@ -1635,16 +1681,17 @@ def build_test_stats(db: Session, test: Test) -> dict:
     }
 
 
-# Esse (Ona tili 45): 0–75 ball. Umumiy natija = (1–44 savollar bo'yicha Rasch balli + esse bali) / 2.
+# Esse (Ona tili 45): 0–24 ball bilan baholanadi (12 mezon × 0–2) va natijada 0–75 ga o'giriladi
+# (ball / 24 × 75). Umumiy natija = (1–44 savollar bo'yicha Rasch balli + esse 0–75) / 2.
 # Esse hali baholanmagan bo'lsa — umumiy ball o'rnida faqat test qismi (Rasch) turadi.
 # So'zlar soniga qat'iy talab yo'q (2024-yildan) — qisqa esseni baholovchi o'zi past baholaydi.
-ESSAY_SCALE = 75  # esse balining shkalasi; eski testlar (essay_max=24) shu shkalaga keltiriladi
+ESSAY_SCALE = 75  # natijadagi esse shkalasi: ball / essay_max × 75 (essay_max=75 bilan yaratilganlarda — o'zi)
 ESSAY_KEY = "essay"  # o'quvchi javoblaridagi kalit
 ESSAY_MAX_CHARS = 10000
 
 
 def _essay_ball(test: Test, attempt: Attempt) -> float | None:
-    """Esse bali 0–75 shkalada (eski 24 ballik testlarda ham); baholanmagan — None."""
+    """Esse bali natija uchun 0–75 shkalada (0–24 ball / 24 × 75); baholanmagan — None."""
     if not test.essay_max or attempt.essay_score is None:
         return None
     return round(min(attempt.essay_score, test.essay_max) / test.essay_max * ESSAY_SCALE, 2)
@@ -16720,11 +16767,15 @@ def admin_list_teachers(admin: User = Depends(get_current_admin), db: Session = 
 
 
 @app.post("/api/admin/backup")
-def admin_send_backup(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
-    """Butun bazaning zaxira nusxasini JSON fayl ko'rinishida admin'ning Telegram chatiga yuboradi."""
+def admin_send_backup(admin: User = Depends(get_current_admin)):
+    """
+    Zaxira nusxani fonda tayyorlab adminlarning Telegram chatiga yuboradi: katta nusxa bir necha
+    daqiqa oladi, so'rov shuni kutib qolmaydi. Yuborilmasa — bot adminlarga o'zi xabar beradi.
+    """
 
-    if not send_backup_to_admin(db):
-        raise HTTPException(status_code=502, detail="Zaxira nusxa yuborilmadi (botga /start bosganmisiz?)")
+    if not ADMIN_IDS:
+        raise HTTPException(status_code=502, detail="Admin sozlanmagan (ADMIN_ID)")
+    threading.Thread(target=_send_backup_once, name="backup", daemon=True).start()
     return {"ok": True}
 
 

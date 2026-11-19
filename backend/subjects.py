@@ -27,7 +27,8 @@ Maydonlar:
 Yozma ish (Kimyo, Biologiya 41–43) — har bandning YAKUNIY javobi o'qituvchi
 kalitiga solishtiriladi; Rasch'da har band alohida baholanadi (qisman ball).
 Rus tili 45 (insho) — matn, kalit bilan solishtirib bo'lmaydi, testga kirmaydi.
-Ona tili 45 (esse) — 0–75 ball (o'qituvchi yoki AI); umumiy ball = (1–44 Rasch balli + esse) / 2.
+Ona tili 45 (esse) — 0–24 ball (o'qituvchi yoki AI), umumiy natijada 0–75 ga o'giriladi (ball / 24 × 75);
+umumiy ball = (1–44 Rasch balli + esse 0–75) / 2.
 """
 
 import re
@@ -108,7 +109,7 @@ SUBJECTS: dict[str, dict] = {
         # 36–39 — bitta javob, 40–44 — ikki qismli (a, b). ATAYLAB shunday: haqiqiy imtihon varag'i shunday
         # (spetsifikatsiyadagi O-1 ta'rifi "a va b bandli" deydi, lekin amalda 36–39 bitta javobli) — tuzatmang.
         "fixed_parts": {36: 1, 37: 1, 38: 1, 39: 1},
-        "essay": 75,  # esse 0–75; umumiy ball = (Rasch + esse) / 2
+        "essay": 24,  # esse 0–24 (12 mezon × 0–2); natijada 0–75 ga o'giriladi
         "sections": [
             ("Til (imlo, lug'at, grammatika)", "1-12"),
             ("Adabiyot", "13-17"),
@@ -117,7 +118,7 @@ SUBJECTS: dict[str, dict] = {
             ("Lingvistik va badiiy tahlil", "36-44"),
         ],
         "note": "Ona tili va adabiyot: 32 ta test (A–D), 33–35 — moslashtirish (A–F), 36–39 — yozma (1 javob), "
-                "40–44 — yozma (a, b), 45 — esse (0–75 ball), 180 daqiqa",
+                "40–44 — yozma (a, b), 45 — esse (0–24 ball, natijada 0–75 ga o'giriladi), 180 daqiqa",
     },
     "Rus tili": {
         "tests": 35, "options": MATCHING, "written": 9, "parts": 2, "duration": 180, "keyboard": "text",
@@ -204,7 +205,7 @@ def score_weights(subject: str | None, question_count: int) -> dict[int, float] 
 
 
 def essay_max(subject: str | None) -> int | None:
-    """Fanda esse bo'lsa — uning maksimal bali (Ona tili: 75), aks holda None."""
+    """Fanda esse bo'lsa — uning maksimal bali (Ona tili: 24), aks holda None."""
     config = subject_config(subject)
     return config.get("essay") if config else None
 

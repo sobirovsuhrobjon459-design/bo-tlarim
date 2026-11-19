@@ -468,7 +468,8 @@ def _essay_ocr_with_claude(subject: str, media_type: str, data: str) -> str:
 ESSAY_PROMPT = """You are an experienced examiner of the Uzbek national certificate exam (Milliy sertifikat), \
 subject "Ona tili va adabiyot". You grade the essay task (esse) written in Uzbek (Latin script) by a student.
 
-Give one integer score from 0 to {max_score} for the whole essay. Judge: how fully and relevantly it develops \
+{scheme}
+Judge: how fully and relevantly it develops \
 the given topic with a clear position; structure (introduction, a developed main part, conclusion); \
 argumentation with relevant evidence and examples (from literature, history or life); logical coherence and \
 paragraphing; richness and accuracy of vocabulary and style; grammar; spelling (imlo); punctuation.
@@ -497,7 +498,12 @@ def grade_essay(subject: str, text: str, max_score: int, topic: str) -> tuple[in
     """
 
     global last_error
-    system = ESSAY_PROMPT.format(max_score=max_score)
+    scheme = (
+        "Scoring follows the official scheme: 12 criteria, each scored 0, 1 or 2 points, total 0–24. "
+        "Give one integer score for the whole essay."
+        if max_score == 24 else f"Give one integer score from 0 to {max_score} for the whole essay."
+    )
+    system = ESSAY_PROMPT.format(max_score=max_score, scheme=scheme)
     user_text = (f"Subject: {subject}. Maximum score: {max_score}.\n\n<topic>\n{topic}\n</topic>\n\n"
                  f"Student's essay:\n<essay>\n{text}\n</essay>")
     provider = ai_provider()
