@@ -4574,6 +4574,61 @@ def test_oqituvchi_tekshiradigan_essening_rasmi_aiga_yuborilmaydi():
     assert calls == []
 
 
+def test_rasch_natijasida_foiz_korsatkichi_milliy_sertifikatdagidek():
+    """
+    Milliy sertifikat uslubidagi (Rasch) testda foiz ko'rsatkichi = ball / 65 × 100 (65 va undan yuqori — 100 %),
+    to'g'ri javoblar foizi emas: natijalarda, sertifikatda, PDF hisobotda, Excel'da va o'quvchiga xabarda.
+    """
+    import fitz
+    from openpyxl import load_workbook
+
+    from backend.database import Test
+
+    reset_database()
+    register_teacher()
+    teacher = as_user(555)
+    key = [{"number": n, "question_type": "single", "option_count": 4, "correct": "ABCD"[n % 4]} for n in range(1, 21)]
+    created = create_test(key_questions=key)
+    sent, restore = _capture_result_notices()
+    try:
+        for index, solved in enumerate((20, 17, 14, 11, 8, 5)):
+            started = client.post(f"/api/tests/{created['code']}/start", json={}, headers=as_user(7800 + index)).json()
+            answers = {str(n): ("ABCD"[n % 4] if n <= solved else "Z") for n in range(1, 21)}
+            client.post(f"/api/attempts/{started['attempt_id']}/finish", json={"answers": answers}, headers=as_user(7800 + index))
+    finally:
+        restore()
+    base = f"/api/teacher/tests/{created['id']}"
+    rows = client.get(f"{base}/results", headers=teacher).json()["rows"]
+    assert len(rows) == 6 and rows[0]["ball"] > 65 > rows[-1]["ball"], [row["ball"] for row in rows]
+    for row in rows:
+        assert row["cert_percent"] == round(min(100.0, row["ball"] / 65 * 100), 2), row
+    assert rows[0]["cert_percent"] == 100.0
+    middle = rows[3]
+    shown = f"{middle['cert_percent']:.2f}%"
+    assert middle["cert_percent"] != middle["percent"]  # to'g'ri javoblar foizi emas
+
+    # Sertifikat: "Foiz ko'rsatkichi" (rasmiy sertifikatdagidek), "To'g'ri javoblar foizi" emas
+    certificates = fitz.open(stream=client.get(f"{base}/certificates", headers=teacher).content, filetype="pdf")
+    text = "\n".join(page.get_text() for page in certificates)
+    assert "Foiz ko'rsatkichi:" in text and "To'g'ri javoblar foizi" not in text, text[:500]
+    assert shown.replace("%", " %") in text, shown
+
+    # PDF hisobot va Excel
+    report = "\n".join(page.get_text() for page in fitz.open(stream=client.get(f"{base}/pdf", headers=teacher).content,
+                                                               filetype="pdf"))
+    assert shown in report, shown
+    book = load_workbook(io.BytesIO(client.get(f"{base}/excel", headers=teacher).content))
+    sheet = book["Natijalar"]
+    header = [cell.value for cell in sheet[1]]
+    column = header.index("Sertifikat foizi %")
+    assert sorted(row[column].value for row in sheet.iter_rows(min_row=2)) == sorted(row["cert_percent"] for row in rows)
+
+    # O'quvchiga boradigan xabar
+    with SessionLocal() as session:
+        caption = main._certificate_caption(session.get(Test, created["id"]), middle)
+    assert f"Foiz ko'rsatkichi: {shown}" in caption, caption
+
+
 def _wait_essay(url: str, teacher: dict) -> dict:
     """Fondagi AI baholashini kutish (ko'pi bilan 10 s)."""
     import time

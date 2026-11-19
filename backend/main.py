@@ -2393,15 +2393,17 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
     elif section_names:
         middle = list(section_names)
     else:
-        middle = ["To'g'ri", "Foiz"] if uses_rasch else ["To'g'ri"]
+        middle = ["To'g'ri"]
     total_title, total_of = _total_column(rows, uses_rasch)
     dtm = _is_dtm(rows) and bool(section_names)
     show_grade = uses_rasch and not dtm  # oddiy testda baho ustuni yo'q
+    # Milliy sertifikat uslubidagi (Rasch) natijada foiz ko'rsatkichi: ball / 65 × 100 (65 dan yuqori — 100 %)
+    cert = uses_rasch and not _is_dtm(rows)
     if essay:  # Milliy sertifikatdagidek: test, yozma ish, umumiy ball, foiz, daraja
         header = ["№", "Ism Familiya", *middle, "Umumiy\nball", "Foiz", "Daraja"]
     else:
         header = ["№", "Ism Familiya", *(_dtm_section_titles(middle) if dtm else middle),
-                  "Jami ball" if dtm else total_title, *(["Baho"] if show_grade else [])]
+                  "Jami ball" if dtm else total_title, *(["Foiz"] if cert else []), *(["Baho"] if show_grade else [])]
     # Ko'p bo'limda (Fizika — 6 ta) ustunlar tor: sarlavha kichikroq shriftda,
     # aks holda "Mexanika" kabi so'zlar o'rtasidan bo'linib ketardi
     many = len(middle) > 4
@@ -2417,19 +2419,19 @@ def _results_grid(rows: list[dict], styles: dict, width: float, uses_rasch: bool
         elif section_names:
             middle_values = [f"{row['sections'].get(name, 0):g}%" for name in section_names]
         else:
-            middle_values = [f"{row['correct']}/{row['total']}"] + ([f"{row['percent']}%"] if uses_rasch else [])
+            middle_values = [f"{row['correct']}/{row['total']}"]
         total = total_of(row)
         data.append([
             Paragraph(str(row["rank"]), centered),
             Paragraph(xml_escape(row["name"]), styles["cell"]),
             *[Paragraph(value, centered) for value in middle_values],
             Paragraph(f"<b>{total}</b>", centered),
-            *([Paragraph(_percent_text(row.get("cert_percent")), centered)] if essay else []),
+            *([Paragraph(_percent_text(row.get("cert_percent")), centered)] if cert else []),
             *([Paragraph(f"<font color='white'><b>{xml_escape(row['grade'])}</b></font>", centered)] if show_grade else []),
         ])
 
     # Bo'limlar ko'p bo'lsa (Fizikada 6 ta) ustunlar torayadi — ism ustuniga kamida 24% qoladi
-    tail = (2 if show_grade else 1) + (1 if essay else 0)
+    tail = (2 if show_grade else 1) + (1 if cert else 0)
     other = min(0.13, (1 - 0.07 - 0.24) / (len(middle) + tail))
     name_share = 1 - 0.07 - other * (len(middle) + tail)
     widths = [0.07, name_share, *([other] * (len(middle) + tail))]
@@ -9123,8 +9125,9 @@ def _draw_certificate_page(pdf, test: Test, teacher: Teacher, row: dict, section
         field(height - 392, "Umumiy to'plagan bali:", ball, size=12)
     else:  # oddiy test — Rasch balli yo'q
         field(height - 392, "To'g'ri javoblar:", f"{row['correct']} / {row['total']}", size=12)
-    essay = row.get("test_ball") is not None  # esseli test: Milliy sertifikatdagidek foiz ko'rsatkichi
-    if essay:
+    essay = row.get("test_ball") is not None  # esseli test: test va yozma ish natijasi alohida (pastda)
+    if row.get("dtm_ball") is None and row.get("cert_percent") is not None:
+        # Milliy sertifikatdagidek: "Umumiy ballga nisbatan foiz ko'rsatkichi" — ball / 65 × 100
         field(height - 416, "Foiz ko'rsatkichi:", _percent_text(row.get("cert_percent")).replace("%", " %"), size=12)
     else:
         field(height - 416, "To'g'ri javoblar foizi:", f"{row['percent']:g} %  ({row['correct']}/{row['total']})", size=12)
@@ -9212,6 +9215,8 @@ def _certificate_caption(test: Test, row: dict) -> str:
         score = (f"🎯 DTM bali: {row['dtm_ball']:g} / {DTM_MAX_BALL:g}".replace(".", ",") + "\n")
     else:
         score = f"📊 Ball: {row['ball']:.1f}\n🏅 Daraja: {row['grade']}\n"
+        if row.get("cert_percent") is not None:  # Milliy sertifikatdagidek: ball / 65 × 100
+            score += f"📈 Foiz ko'rsatkichi: {_percent_text(row['cert_percent'])}\n"
     return (
         f"🎓 «{test.title}» testi natijangiz\n\n"
         + score
@@ -9473,17 +9478,18 @@ def generate_test_report_xlsx(db: Session, test: Test) -> bytes:
     results.title = "Natijalar"
     dtm = _is_dtm(rows)
     rasch = report["uses_rasch"]
-    essay = _is_essay(rows)  # esseli test: test bali, yozma ish bali va sertifikat foizi alohida ustunda
+    essay = _is_essay(rows)  # esseli test: test bali va yozma ish bali alohida ustunda
+    cert = rasch and not dtm  # Milliy sertifikat foizi (ball / 65 × 100) — har bir Rasch testida
     header(results, ["O'rin", "Raqam", "Ism-familiya", "To'g'ri", "Xato", "Jami", "Foiz %", *(["DTM bali"] if dtm else []),
                      *(["Test bali", "Yozma ish (esse)"] if essay else []),
-                     *(["Ball", "Daraja"] if rasch else []), *(["Sertifikat foizi %"] if essay else []), *sections],
+                     *(["Ball", "Daraja"] if rasch else []), *(["Sertifikat foizi %"] if cert else []), *sections],
            [7, 8, 32, 9, 8, 7, 9, *([10] if dtm else []), *([10, 12] if essay else []), *([9, 9] if rasch else []),
-            *([12] if essay else []), *[14] * len(sections)])
+            *([12] if cert else []), *[14] * len(sections)])
     for row in rows:
         results.append([
             row["rank"], numbers.get(row["attempt_id"]), row["name"], row["correct"], row["wrong"], row["total"],
             row["percent"], *([row["dtm_ball"]] if dtm else []), *([row["test_ball"], row["essay_ball"]] if essay else []),
-            *([row["ball"], row["grade"]] if rasch else []), *([row["cert_percent"]] if essay else []),
+            *([row["ball"], row["grade"]] if rasch else []), *([row["cert_percent"]] if cert else []),
             *[row["sections"].get(name) for name in sections],
         ])
 

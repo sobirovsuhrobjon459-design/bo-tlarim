@@ -10606,7 +10606,12 @@ async function renderMyAttemptReview(attemptId) {
           ? `<div class="stat-tile"><span class="stat-value">${Number(review.test_ball).toFixed(2)}</span>Test bali</div>
              <div class="stat-tile"><span class="stat-value">${review.essay_pending ? "⏳" : formatNumber(review.essay_ball)}</span>Yozma ish (esse)</div>
              <div class="stat-tile"><span class="stat-value">${certPercentText(review.cert_percent)}</span>Foiz ko'rsatkichi</div>`
-          : `<div class="stat-tile"><span class="stat-value">${review.correct}/${review.total}</span>To'g'ri (${review.percent}%)</div>`
+          : `<div class="stat-tile"><span class="stat-value">${review.correct}/${review.total}</span>To'g'ri (${review.percent}%)</div>
+             ${
+               review.cert_percent != null && review.dtm_ball == null
+                 ? `<div class="stat-tile"><span class="stat-value">${certPercentText(review.cert_percent)}</span>Foiz ko'rsatkichi</div>`
+                 : ""
+             }`
       }
       ${review.rank ? `<div class="stat-tile"><span class="stat-value">${review.rank}</span>O'rin (${review.participants} tadan)</div>` : ""}
     </div>
@@ -16865,7 +16870,8 @@ async function renderStudentDetail(testId, attemptId) {
                  : `<div class="stat-tile"><span class="stat-value">${formatNumber(detail.edit.test_ball)}</span>Test bali</div>`
              }
              ${detail.edit.cert_percent != null ? `<div class="stat-tile"><span class="stat-value">${certPercentText(detail.edit.cert_percent)}</span>Foiz ko'rsatkichi</div>` : ""}`
-          : `<div class="stat-tile"><span class="stat-value">${formatNumber(detail.edit.ball)}</span>Rasch ball${detail.edit.grade ? ` · ${escapeHtml(detail.edit.grade)}` : ""}</div>`
+          : `<div class="stat-tile"><span class="stat-value">${formatNumber(detail.edit.ball)}</span>Rasch ball${detail.edit.grade ? ` · ${escapeHtml(detail.edit.grade)}` : ""}</div>
+             ${detail.edit.cert_percent != null ? `<div class="stat-tile"><span class="stat-value">${certPercentText(detail.edit.cert_percent)}</span>Foiz ko'rsatkichi</div>` : ""}`
         : ""
     }
     ${detail.essay ? `<div class="stat-tile"><span class="stat-value">${detail.essay.score ?? "—"}/${detail.essay.max}</span>Esse</div>` : ""}`;
@@ -17678,7 +17684,7 @@ function resultLineHtml(row, results) {
               ? essayResultMeta(row)
               : testSectionNames(results).length
                 ? testSectionNames(results).map((name) => `${escapeHtml(name)}: ${row.sections[name]}%`).join(" • ")
-                : `✅ ${row.correct} • ❌ ${row.wrong} • ${row.percent}%`
+                : `✅ ${row.correct} • ❌ ${row.wrong} • ${usesRasch && row.dtm_ball == null ? certPercentText(row.cert_percent) : `${row.percent}%`}`
           }</small>
         </span>
         ${
@@ -17992,8 +17998,11 @@ async function renderTestResults(testId) {
   const tableRow = (row) => isDtm ? dtmRow(row) : isEssay ? essayRow(row) : `
         <tr class="result-row">
           <td>${row.rank}</td><td>${escapeHtml(row.name)}</td>
-          <td>${row.correct}</td><td>${row.wrong}</td><td>${row.percent}%</td>
-          ${results.uses_rasch ? `<td><b>${ballText(row.ball)}</b></td><td><b>${escapeHtml(row.grade)}</b></td>` : ""}
+          <td>${row.correct}</td><td>${row.wrong}</td>${
+            results.uses_rasch
+              ? `<td><b>${ballText(row.ball)}</b></td><td>${certPercentText(row.cert_percent)}</td><td><b>${escapeHtml(row.grade)}</b></td>`
+              : `<td>${row.percent}%</td>`
+          }
         </tr>`;
 
   showPage(`
@@ -18033,7 +18042,7 @@ async function renderTestResults(testId) {
                 .join("")}<th style="text-align:center">Jami ball</th></tr>`
             : isEssay
             ? `<tr><th>O'rin</th><th>O'quvchi</th><th>Test</th><th>Esse</th><th>Ball</th><th>%</th><th>Daraja</th></tr>`
-            : `<tr><th>O'rin</th><th>O'quvchi</th><th>✅</th><th>❌</th><th>%</th>${results.uses_rasch ? "<th>Ball</th><th>Daraja</th>" : ""}</tr>`
+            : `<tr><th>O'rin</th><th>O'quvchi</th><th>✅</th><th>❌</th>${results.uses_rasch ? "<th>Ball</th><th>%</th><th>Daraja</th>" : "<th>%</th>"}</tr>`
         }</thead>
         <tbody id="results-table-body"></tbody>
       </table>
