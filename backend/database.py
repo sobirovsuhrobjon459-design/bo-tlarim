@@ -1854,7 +1854,6 @@ class SheetScanSaveIn(BaseModel):
     # Yozma javob kataklari rasmi: {savol_kaliti: "data:image/jpeg;base64,…"}
     written: dict[str, str] = {}
     # Titulning o'zi (tekislangan rasm): {sahifa: "data:image/jpeg;base64,…"} — o'quvchi profiliga saqlanadi
-    sheet_images: dict[str, str] = {}
 
 
 class WrittenVerdictIn(BaseModel):

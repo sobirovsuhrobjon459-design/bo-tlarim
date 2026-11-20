@@ -3165,12 +3165,6 @@ async function renderStudentProfile(schoolClass, studentId) {
                   item.source === "center" ? " · Imtihon" : ""
                 }</small>
               </span>
-              ${
-                // Skanerlangan titul rasmi saqlangan bo'lsa — ochib ko'rish
-                item.sheet_attempt_id
-                  ? `<button type="button" class="icon-button" data-sheet-attempt="${item.sheet_attempt_id}" title="Titul rasmi" aria-label="Titul rasmi">🧾</button>`
-                  : ""
-              }
               <span class="result-score"><b>${formatNumber(item.score)}/${formatNumber(item.max_score)}</b>${
                 item.percent !== null ? `<small>${item.percent}%</small>` : ""
               }</span>
@@ -3286,12 +3280,6 @@ async function renderStudentProfile(schoolClass, studentId) {
   const reload = () => renderStudentProfile(schoolClass, student.id);
   document.querySelector('[data-action="back-students"]').addEventListener("click", guarded(() => renderClass(schoolClass.id, "students")));
   document.getElementById("student-status-button")?.addEventListener("click", () => openStudentStatusSheet(schoolClass, student, reload));
-  document.querySelectorAll("[data-sheet-attempt]").forEach((button) =>
-    button.addEventListener(
-      "click",
-      guarded(() => openSheetImages(`/api/classes/${schoolClass.id}/students/${studentId}/sheet/${button.dataset.sheetAttempt}`))
-    )
-  );
 
   document.querySelector(".student-hub").addEventListener(
     "click",
@@ -13971,9 +13959,6 @@ function mergeScan(scan, collected) {
   // Yozma javob kataklari rasmi (titulda bo'lsa): {savol: {label, image}}
   merged.written = { ...(merged.written || {}) };
   for (const item of scan.written || []) merged.written[String(item.ref)] = { label: item.label, image: item.image };
-  // Titul rasmi (har sahifa) — saqlanganda o'quvchi natijasiga biriktiriladi
-  merged.sheetImages = { ...(merged.sheetImages || {}) };
-  if (scan.sheet_image) merged.sheetImages[String(scan.page)] = scan.sheet_image;
   if (scan.name_image) merged.nameImage = scan.name_image;
   if (scan.page === 1) {
     merged.variants = scan.variants || [];
@@ -15145,11 +15130,6 @@ function sheetWrittenImages(sheet, boxes) {
     .filter(Boolean);
 }
 
-// Titulning o'zi (tekislangan, oq-qora) — o'quvchi profiliga saqlanadi
-function sheetPhotoImage(sheet) {
-  return sheetCropImage(sheet, 0, 0, sheet.W, sheet.H, "image/jpeg", 0.7);
-}
-
 function sheetCropImage(sheet, left, top, width, height, type = "image/png", quality = 0.8) {
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -15334,7 +15314,6 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
       positions: undefined,
       highlights: undefined,
       written: sheetWrittenImages(sheet, result.written),
-      sheet_image: sheetPhotoImage(sheet),
       name_image: page === 1 && SHEET_PAGE.nameBox ? sheetNameImage(sheet) : null,
       match: page === 1 ? localSheetMatch(layout, result.sheet_number) : null,
       variants: layout.variants || [],
@@ -15739,7 +15718,6 @@ function renderScanReview(testId, test, scan) {
       sheet_number: scan.sheetNumber || null,
       variant: scan.variants?.length ? scan.variant || "A" : null,
       written: Object.fromEntries(writtenItems.map(([ref, item]) => [ref, item.image])),
-      sheet_images: scan.sheetImages || {},
     };
     const result = scan.local
       ? await saveCheckedSheet(testId, scan, body, scan.match?.name || select?.selectedOptions[0]?.textContent || name)
@@ -16238,7 +16216,6 @@ async function processScanQueue() {
               answers,
               variant: scan.variants?.length ? scan.variant : null,
               written,
-              sheet_images: scan.sheetImages || {},
             },
           });
           await queueDelete(item.id);
@@ -17089,7 +17066,7 @@ async function renderStudentDetail(testId, attemptId) {
           : `<div class="ans-callout">Javobni o'zgartirsangiz — pastda «💾 Saqlash» chiqadi: bosganingizda ball, foiz va Rasch qayta hisoblanadi</div>`
     }
     <div class="row-between" style="gap:10px;margin:4px 0 12px;flex-wrap:wrap">
-      ${detail.has_sheet ? `<button class="btn btn-ghost" id="student-sheet-button" style="margin:0;width:auto;padding:10px 14px">🧾 Titul rasmi</button>` : "<span></span>"}
+      <span></span>
       ${canEdit ? variantChipsHtml(edit.variants, variant) : edit.variants.length ? `<span class="subtitle" style="margin:0">Variant: <b>${variant}</b></span>` : ""}
     </div>
     ${edit.dtm ? dtmCertificatesHtml(edit.dtm) : ""}
@@ -17296,9 +17273,6 @@ async function renderStudentDetail(testId, attemptId) {
       await renderTestDetail(testId);
     })
   );
-  document
-    .getElementById("student-sheet-button")
-    ?.addEventListener("click", guarded(() => openSheetImages(`/api/teacher/tests/${testId}/students/${attemptId}/sheet`)));
   if (detail.essay) bindEssayGrading(testId, attemptId, detail.essay);
   if (edit.dtm) bindDtmCertificates(testId, attemptId);
   document

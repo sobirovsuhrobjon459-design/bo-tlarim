@@ -5897,6 +5897,28 @@ def test_yotiq_titulli_natijasiz_test_tik_titulga_otadi():
         assert session.get(Test, scanned).sheet_version == 7
 
 
+def test_skanerlangan_titul_rasmi_saqlanmaydi():
+    """Oflayn testda titul skanerlanganda faqat javoblar saqlanadi — titulning o'zi (rasmi) bazaga yozilmaydi."""
+    from backend.database import SheetImage
+
+    reset_database()
+    register_teacher()
+    test_id = create_test(enrollment_type="closed")["id"]
+    client.post(f"/api/teacher/tests/{test_id}/students", json={"names": ["Bola"]}, headers=as_user(555))
+    photo = "data:image/jpeg;base64," + "Q" * 400
+    # Eski ilova versiyasi rasmni yuborsa ham — e'tiborsiz qoldiriladi
+    saved = client.post(f"/api/teacher/tests/{test_id}/scan/save", headers=as_user(555),
+                        json={"sheet_number": 1, "answers": {"1": "B"}, "sheet_images": {"1": photo}})
+    assert saved.status_code == 200, saved.text
+    with SessionLocal() as session:
+        assert session.scalars(main.select(SheetImage)).all() == []
+    student = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()["students"][0]
+    assert "has_sheet" not in student
+    assert client.get(f"/api/teacher/tests/{test_id}/students/{student['id']}/sheet", headers=as_user(555)).status_code == 404
+    detail = client.get(f"/api/teacher/tests/{test_id}/students/{student['id']}/detail", headers=as_user(555)).json()
+    assert detail["edit"]["items"][0]["chosen"] == "B" and "has_sheet" not in detail
+
+
 def test_skanerlash_yakunlansa_natijalar_botga_yuboriladi():
     """«Yakunlash»: o'qituvchi chatiga reyting (ism, ID, ball) va PDF hisobot ketadi."""
 
