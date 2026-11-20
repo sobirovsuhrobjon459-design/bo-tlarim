@@ -2566,6 +2566,60 @@ function renderClassAttendanceTab(schoolClass) {
 /* --- 👨‍🎓 O'quvchilar tabi --- */
 
 // O'quvchini tahrirlash oynasi — ro'yxatdan ham, profildan ham ochiladi
+// O'quvchi profiliga sertifikat: fan, turi (Milliy sertifikat — ball / chet tili — daraja), amal qilish muddati
+const CERTIFICATE_SUBJECTS = [
+  "Ona tili va adabiyot", "Matematika", "Tarix", "Ingliz tili", "Nemis tili", "Fransuz tili", "Rus tili",
+  "Fizika", "Kimyo", "Biologiya", "Geografiya", "Huquq",
+];
+
+function openAddCertificateSheet(schoolClass, student, onSaved) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 6px">🎓 Sertifikat qo'shish</h3>
+    <p class="subtitle" style="margin:0 0 10px;font-size:12px">${escapeHtml(student.full_name)}. ${DTM_CERT_HINT}</p>
+    <label class="field-label" for="cert-subject">Fan</label>
+    <input class="input" id="cert-subject" list="cert-subjects" maxlength="100" placeholder="Masalan: Matematika" />
+    <datalist id="cert-subjects">${CERTIFICATE_SUBJECTS.map((name) => `<option value="${escapeHtml(name)}"></option>`).join("")}</datalist>
+    <label class="field-label" for="cert-kind" style="margin-top:8px">Turi</label>
+    <select class="input" id="cert-kind">
+      <option value="ms">Milliy sertifikat (ball)</option>
+      <option value="lang">Chet tili sertifikati (CEFR daraja)</option>
+    </select>
+    <div id="cert-ball-block">
+      <label class="field-label" for="cert-ball" style="margin-top:8px">Umumiy to'plagan bali (sertifikatdagi)</label>
+      <input class="input" id="cert-ball" type="text" inputmode="decimal" placeholder="Masalan: 55.49" />
+    </div>
+    <div id="cert-level-block" hidden>
+      <label class="field-label" for="cert-level" style="margin-top:8px">Daraja</label>
+      <select class="input" id="cert-level"><option>C1</option><option selected>B2</option><option>B1</option></select>
+    </div>
+    <label class="field-label" for="cert-until" style="margin-top:8px">Amal qilish muddati (ixtiyoriy)</label>
+    <input class="input" id="cert-until" type="date" />
+    <button class="btn" id="cert-save" style="margin-top:12px">💾 Saqlash</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+  const kind = sheet.querySelector("#cert-kind");
+  kind.addEventListener("change", () => {
+    sheet.querySelector("#cert-ball-block").hidden = kind.value !== "ms";
+    sheet.querySelector("#cert-level-block").hidden = kind.value !== "lang";
+  });
+  sheet.querySelector("#cert-save").addEventListener(
+    "click",
+    guarded(async () => {
+      const subject = sheet.querySelector("#cert-subject").value.trim();
+      if (subject.length < 2) throw new Error("Sertifikat qaysi fandan ekanini yozing");
+      const value = kind.value === "ms" ? sheet.querySelector("#cert-ball").value.trim() : sheet.querySelector("#cert-level").value;
+      if (!value) throw new Error("Sertifikatdagi umumiy balni kiriting");
+      await api(`/api/classes/${schoolClass.id}/students/${student.id}/certificates`, {
+        method: "POST",
+        body: { subject, kind: kind.value, value, valid_until: sheet.querySelector("#cert-until").value || null },
+      });
+      close();
+      showToast("🎓 Sertifikat qo'shildi — DTM testlarida o'zi hisoblanadi");
+      await onSaved();
+    })
+  );
+}
+
 function openEditStudentSheet(schoolClass, student, onSaved) {
   const { sheet, close } = openSheet(`
     <h3 style="margin:0 0 10px">✏️ O'quvchini tahrirlash</h3>
@@ -3178,6 +3232,28 @@ async function renderStudentProfile(schoolClass, studentId) {
       }
     </div>
 
+    <p class="section-label" style="margin-top:18px">🎓 SERTIFIKATLAR (${student.certificates.length})</p>
+    <div class="panel" style="padding:4px 12px">${
+      student.certificates.length
+        ? student.certificates
+            .map(
+              (item) => `
+          <div class="row-between" style="gap:8px;padding:8px 0;border-bottom:1px solid var(--color-border)">
+            <span style="min-width:0">
+              <b>${escapeHtml(item.subject)}</b> — ${escapeHtml(item.label)}${item.percent != null ? ` (${certPercentText(item.percent)})` : ""}
+              <small class="subtitle" style="display:block;margin:0${item.expired ? ";color:#dc2626" : ""}">${
+                item.valid_until ? `${formatDate(item.valid_until)} gacha${item.expired ? " — muddati o'tgan" : ""}` : "muddatsiz"
+              }</small>
+            </span>
+            <button type="button" class="btn btn-ghost" data-cert-delete="${item.id}" aria-label="O'chirish"
+                    style="margin:0;width:auto;padding:6px 10px">🗑</button>
+          </div>`
+            )
+            .join("")
+        : `<p class="subtitle" style="margin:8px 0">Sertifikat kiritilmagan. DTM testlarida sertifikati bor fanning bloki o'zi hisoblanadi.</p>`
+    }</div>
+    ${schoolClass.is_group ? "" : `<button class="btn btn-ghost" id="add-certificate-button" style="margin-top:8px">+ Sertifikat qo'shish</button>`}
+
     <p class="section-label" style="margin-top:18px">NATIJALAR (${student.results.length})</p>
     <div class="panel" style="padding:4px 0">${resultsHtml}</div>
 
@@ -3229,6 +3305,18 @@ async function renderStudentProfile(schoolClass, studentId) {
   );
 
   document.getElementById("edit-student-button")?.addEventListener("click", () => openEditStudentSheet(schoolClass, student, reload));
+  document.getElementById("add-certificate-button")?.addEventListener("click", () => openAddCertificateSheet(schoolClass, student, reload));
+  document.querySelectorAll("[data-cert-delete]").forEach((button) =>
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        if (!(await askConfirm("Sertifikat o'chirilsinmi? Keyingi DTM testlarida hisoblanmaydi."))) return;
+        await api(`/api/classes/${schoolClass.id}/students/${student.id}/certificates/${button.dataset.certDelete}`, { method: "DELETE" });
+        showToast("Sertifikat o'chirildi");
+        await reload();
+      })
+    )
+  );
 
   document.getElementById("remove-student-button")?.addEventListener(
     "click",
@@ -12519,6 +12607,78 @@ function dtmNumber(value) {
   return value == null ? "—" : String(value).replace(".", ",");
 }
 
+const DTM_CERT_HINT =
+  "Sertifikati bor fanning bloki ishlanmaydi: majburiy fanda — 10 dan 10, asosiy fanda — foiz ko'rsatkichi bo'yicha " +
+  "(Milliy sertifikat: ball ÷ 65 × 100, ko'pi bilan 100 %; chet tili: C1 va B2 — 100 %, B1 — 75 %).";
+
+// DTM natijasi: har blok uchun sertifikat — profildagisi (o'zi), shu testga kiritilgani yoki yo'q
+function dtmCertificatesHtml(dtm) {
+  const option = (value, label, selected) =>
+    `<option value="${value}"${selected ? " selected" : ""}>${escapeHtml(label)}</option>`;
+  const rows = dtm.blocks.map((block) => {
+    const current = block.override?.kind || "auto";
+    const value = block.override?.value || "";
+    const auto = option("auto", block.profile ? `Profildan: ${block.profile.label}` : "Yo'q", current === "auto");
+    const none = block.profile ? [option("none", "Yo'q (shu testda hisoblanmasin)", current === "none")] : [];
+    const choices = block.mandatory
+      ? [option("cert", "Sertifikati bor — 10 dan 10", current === "cert")]
+      : [
+          option("ms", "Milliy sertifikat (ball)", current === "ms"),
+          ...dtm.levels.map((level) => option(`lang:${level}`, `Chet tili sertifikati — ${level}`, current === "lang" && value === level)),
+        ];
+    return `
+      <div class="dtm-cert-row" data-index="${block.index}" style="padding:8px 0;border-bottom:1px solid var(--color-border)">
+        <div class="row-between" style="gap:8px">
+          <b>${escapeHtml(block.name)}</b>
+          <span>${dtmNumber(block.ball)} / ${dtmNumber(block.max)}${block.certificate ? " 🎓" : ""}</span>
+        </div>
+        <div class="row-between" style="gap:8px;margin-top:6px">
+          <select class="input" data-cert-kind style="margin:0;flex:1;min-width:0">${[auto, ...none, ...choices].join("")}</select>
+          <input class="input" data-cert-ball type="text" inputmode="decimal" placeholder="57.90"
+                 value="${current === "ms" ? escapeHtml(value) : ""}" style="margin:0;width:92px;${current === "ms" ? "" : "display:none"}" />
+        </div>
+      </div>`;
+  });
+  return `
+    <p class="section-label" style="margin-top:6px">🎓 SERTIFIKATLAR</p>
+    <div class="panel">
+      <p class="subtitle" style="margin:0 0 4px;font-size:12px">${DTM_CERT_HINT} O'quvchi profiliga kiritilgan sertifikat o'zi qo'llanadi.</p>
+      ${rows.join("")}
+      <p style="margin:10px 0 0">DTM bali: <b>${dtmNumber(dtm.dtm_ball)}</b></p>
+      <button class="btn" id="dtm-cert-save" style="margin-top:10px">💾 Sertifikatlarni saqlash</button>
+    </div>`;
+}
+
+function bindDtmCertificates(testId, attemptId) {
+  document.querySelectorAll(".dtm-cert-row").forEach((row) => {
+    const select = row.querySelector("[data-cert-kind]");
+    const ball = row.querySelector("[data-cert-ball]");
+    select.addEventListener("change", () => {
+      ball.style.display = select.value === "ms" ? "" : "none";
+      if (select.value === "ms") ball.focus();
+    });
+  });
+  document.getElementById("dtm-cert-save").addEventListener(
+    "click",
+    guarded(async () => {
+      const blocks = Array.from(document.querySelectorAll(".dtm-cert-row")).map((row) => {
+        const index = Number(row.dataset.index);
+        const choice = row.querySelector("[data-cert-kind]").value;
+        if (choice.startsWith("lang:")) return { index, kind: "lang", value: choice.slice(5) };
+        if (choice === "ms") {
+          const value = row.querySelector("[data-cert-ball]").value.trim();
+          if (!value) throw new Error("Milliy sertifikat balini kiriting (masalan 57.90)");
+          return { index, kind: "ms", value };
+        }
+        return { index, kind: choice };
+      });
+      await api(`/api/teacher/tests/${testId}/students/${attemptId}/certificates`, { method: "PUT", body: { blocks } });
+      showToast("🎓 Sertifikatlar saqlandi — DTM bali qayta hisoblandi");
+      await renderStudentDetail(testId, attemptId);
+    })
+  );
+}
+
 // Natijalar jadvali ustunlari: "1-majburiy fan / Ona tili", "1-asosiy fan / Fizika"
 function dtmSectionTitle(name, index) {
   const subject = name.replace(" (majburiy)", "");
@@ -16932,6 +17092,7 @@ async function renderStudentDetail(testId, attemptId) {
       ${detail.has_sheet ? `<button class="btn btn-ghost" id="student-sheet-button" style="margin:0;width:auto;padding:10px 14px">🧾 Titul rasmi</button>` : "<span></span>"}
       ${canEdit ? variantChipsHtml(edit.variants, variant) : edit.variants.length ? `<span class="subtitle" style="margin:0">Variant: <b>${variant}</b></span>` : ""}
     </div>
+    ${edit.dtm ? dtmCertificatesHtml(edit.dtm) : ""}
     ${
       closed.length
         ? `<p class="section-label">${span(closed)}: TEST JAVOBLARI${canEdit ? " — HARFNI BOSIB O'ZGARTIRING" : ""}</p>
@@ -17139,6 +17300,7 @@ async function renderStudentDetail(testId, attemptId) {
     .getElementById("student-sheet-button")
     ?.addEventListener("click", guarded(() => openSheetImages(`/api/teacher/tests/${testId}/students/${attemptId}/sheet`)));
   if (detail.essay) bindEssayGrading(testId, attemptId, detail.essay);
+  if (edit.dtm) bindDtmCertificates(testId, attemptId);
   document
     .getElementById("essay-photos-button")
     ?.addEventListener(
@@ -17981,7 +18143,9 @@ async function renderTestResults(testId) {
         }${results.section_names
           .map((name) => {
             const score = row.section_scores?.[name];
-            return `<td style="text-align:center">${score ? `${dtmNumber(score.ball)}<br><small>(${score.correct}/${score.total})</small>` : "—"}</td>`;
+            return `<td style="text-align:center">${
+              score ? `${dtmNumber(score.ball)}<br><small>${score.certificate ? "🎓 sertifikat" : `(${score.correct}/${score.total})`}</small>` : "—"
+            }</td>`;
           })
           .join("")}<td style="text-align:center"><b>${dtmNumber(row.dtm_ball)}</b></td></tr>`;
 

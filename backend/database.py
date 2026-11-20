@@ -405,6 +405,9 @@ class Attempt(Base):
     variant: Mapped[str | None] = mapped_column(String(2), default=None)
     # Maktab sinfidagi o'quvchi (offline imtihon sinfga biriktirilganda) — natija sinfga ham yoziladi
     class_student_id: Mapped[int | None] = mapped_column(default=None, index=True)
+    # DTM testi: o'qituvchi shu natijaga kiritgan sertifikatlar (JSON): {"3": {"kind": "ms", "value": "57.90"},
+    # "0": {"kind": "cert"}, "1": {"kind": "none"}} — blok raqami bo'yicha; o'quvchi profilidagisidan ustun
+    dtm_certificates: Mapped[str | None] = mapped_column(Text, default=None)
     started_at: Mapped[datetime] = mapped_column(default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(default=None)
     # pending  — o'qituvchi yopiq testga qo'shgan, javoblari hali kiritilmagan
@@ -1187,6 +1190,25 @@ class DormCheckMark(Base):
     status: Mapped[str] = mapped_column(String(10), default="present")
 
 
+class StudentCertificate(Base):
+    """
+    O'quvchining sertifikati — Milliy sertifikat (ball) yoki chet tili (CEFR: C1, B2, B1). DTM testlarida
+    shu fan bloki ishlanmaydi: o'rniga sertifikat bo'yicha ball qo'yiladi (majburiy fanda — 10 dan 10,
+    asosiy fanda — foiz ko'rsatkichi bo'yicha). Sinfdagi (asl) o'quvchiga bog'lanadi; muddati o'tgach qo'llanmaydi.
+    """
+
+    __tablename__ = "student_certificates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("class_students.id"), index=True)
+    subject: Mapped[str] = mapped_column(String(100))
+    kind: Mapped[str] = mapped_column(String(10))  # "ms" — Milliy sertifikat, "lang" — chet tili
+    value: Mapped[str] = mapped_column(String(20))  # ball ("57.90") yoki daraja ("B2")
+    valid_until: Mapped[date | None] = mapped_column(default=None)
+    added_by_user_id: Mapped[int | None] = mapped_column(default=None)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
 class StudentStatus(Base):
     """
     O'quvchining hozirgi holati: maktabda, uyda, ruxsat berilgan (javob), kasal.
@@ -1587,6 +1609,28 @@ class AdminSchoolDeleteIn(BaseModel):
     """Muassasani o'chirishni tasdiqlash: nomi aynan yoziladi (tasodifan o'chib ketmasin)."""
 
     confirm: str = Field(min_length=1, max_length=200)
+
+
+class DtmBlockCertificateIn(BaseModel):
+    """DTM natijasidagi bitta blok: auto — profildagisi, none — sertifikat hisoblanmasin, cert — majburiy fanda,
+    ms — Milliy sertifikat (value — ball), lang — chet tili (value — C1 / B2 / B1)."""
+
+    index: int = Field(ge=0, le=20)
+    kind: str = Field(pattern="^(auto|none|cert|ms|lang)$")
+    value: str | None = Field(None, max_length=20)
+
+
+class DtmCertificatesIn(BaseModel):
+    blocks: list[DtmBlockCertificateIn] = Field(default_factory=list, max_length=20)
+
+
+class StudentCertificateIn(BaseModel):
+    """O'quvchi profiliga sertifikat: fan, turi, ball yoki daraja, amal qilish muddati (ixtiyoriy)."""
+
+    subject: str = Field(min_length=2, max_length=100)
+    kind: str = Field(pattern="^(ms|lang)$")
+    value: str = Field(min_length=1, max_length=20)
+    valid_until: date | None = None
 
 
 class EssayScoreIn(BaseModel):

@@ -6889,9 +6889,11 @@ def test_dtm_testi_natijasi_dtm_bali_bilan():
     assert results["summary"]["dtm_max"] == 189.0 and results["summary"]["max_dtm_ball"] == 64.0, results["summary"]
     assert len(results["section_names"]) == 5, results["section_names"]
     # Har fan bo'yicha: ball va to'g'ri/jami ("Ona tili: 11 (10/10)", "1-asosiy fan: 31 (10/30)")
-    hasan_scores = rows["Hasan Hasanov"]["section_scores"]
+    hasan_scores = {name: {key: score[key] for key in ("ball", "correct", "total")}
+                    for name, score in rows["Hasan Hasanov"]["section_scores"].items()}
     assert hasan_scores["Ona tili (majburiy)"] == {"ball": 11.0, "correct": 10, "total": 10}, hasan_scores
     assert hasan_scores["1-asosiy fan"] == {"ball": 31.0, "correct": 10, "total": 30}, hasan_scores
+    assert rows["Hasan Hasanov"]["section_scores"]["1-asosiy fan"]["max"] == 93.0
     assert hasan_scores["2-asosiy fan"]["ball"] == 0, hasan_scores
 
     # Asosiy fanlar nomi bilan (o'qituvchi formada tanlaydi) — natijada ustun shu nom bilan
@@ -6902,7 +6904,8 @@ def test_dtm_testi_natijasi_dtm_bali_bilan():
     results = client.get(f"/api/teacher/tests/{created['id']}/results", headers=as_user(555)).json()
     assert results["section_names"][3:] == ["Matematika", "Fizika"], results["section_names"]
     zuhra_row = next(row for row in results["rows"] if row["name"] == "Zuhra Karimova")
-    assert zuhra_row["section_scores"]["Fizika"] == {"ball": 63.0, "correct": 30, "total": 30}, zuhra_row
+    fizika = zuhra_row["section_scores"]["Fizika"]
+    assert (fizika["ball"], fizika["correct"], fizika["total"], fizika["certificate"]) == (63.0, 30, 30, None), zuhra_row
 
     # Javobi kiritilmagan o'quvchi — "Kiritilmagan" ro'yxatida
     client.post(f"/api/teacher/tests/{created['id']}/students", json={"names": ["Otabek Qodirov"]}, headers=as_user(555))
@@ -7030,6 +7033,103 @@ def _scan_personal_dtm_sheet(base: str, cid: int, version: int, grayscale: bool)
     # Bo'sh doirachalar ichidagi och harflar "bo'yalgan" deb o'qilmaydi: hech bir savol shubhali emas
     assert all(question["status"] == "ok" for question in result["questions"]), [
         (question["label"], question["status"]) for question in result["questions"] if question["status"] != "ok"]
+
+
+def test_dtm_sertifikatli_oquvchi_bali_rasmiy_natijadagidek():
+    """
+    DTM'da sertifikati bor fanning bloki sertifikat bo'yicha hisoblanadi (rasmiy natija namunasidagidek, 178.40):
+    1-blok — chet tili B2 (100 % → 93), 2-blok — Milliy sertifikat 59.74 ball (91.91 % → 57.90), majburiy
+    Ona tili (shu sertifikat bilan) va Tarix (testga kiritilgan) — 10 dan 10 (11 + 11), Matematika — 5 ta to'g'ri (5.5).
+    Sertifikat o'quvchi profilida (keyingi testlarga ham) va shu test natijasida kiritiladi; testdagisi ustun.
+    """
+    import fitz
+
+    reset_database()
+    school_class = _school_with_class(701)
+    register_teacher(701, "Aziza", "Karimova")
+    cid = school_class["id"]
+    client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Irodaxon Abdulaliyeva", "Ali Valiyev"]},
+                headers=as_user(701))
+    students = {s["full_name"]: s["id"] for s in client.get(f"/api/classes/{cid}", headers=as_user(701)).json()["students"]}
+    iroda = students["Irodaxon Abdulaliyeva"]
+    key = [{"number": n, "question_type": "single", "option_count": 4, "correct": "ABCD"[n % 4]} for n in range(1, 91)]
+    created = create_test(701, enrollment_type="closed", subject="DTM testi", duration=180, key_questions=key)
+    base = f"/api/teacher/tests/{created['id']}"
+    client.put(f"{base}/sections", headers=as_user(701), json={"text": "\n".join([
+        "Ona tili (majburiy): 1-10", "Matematika (majburiy): 11-20", "O'zbekiston tarixi (majburiy): 21-30",
+        "Ingliz tili: 31-60", "Ona tili va adabiyot: 61-90"])})
+    assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json()["added"] == 2
+
+    # Profilga: chet tili B2 va Milliy sertifikat (ona tili); noto'g'ri qiymatlar rad etiladi
+    url = f"/api/classes/{cid}/students/{iroda}/certificates"
+    assert client.post(url, json={"subject": "Ingliz tili", "kind": "lang", "value": "A2"}, headers=as_user(701)).status_code == 422
+    assert client.post(url, json={"subject": "Ona tili", "kind": "ms", "value": "80"}, headers=as_user(701)).status_code == 422
+    client.post(url, json={"subject": "Ingliz tili", "kind": "lang", "value": "b2"}, headers=as_user(701))
+    added = client.post(url, json={"subject": "Ona tili va adabiyot", "kind": "ms", "value": "59,74",
+                                   "valid_until": "2029-03-25"}, headers=as_user(701))
+    assert added.status_code == 200, added.text
+    certificates = added.json()["certificates"]
+    assert [(c["subject"], c["value"], c["percent"]) for c in certificates] == [
+        ("Ingliz tili", "B2", 100.0), ("Ona tili va adabiyot", "59.74", 91.91)], certificates
+    expired = client.post(url, json={"subject": "Matematika", "kind": "ms", "value": "70", "valid_until": "2020-01-01"},
+                          headers=as_user(701)).json()["certificates"][-1]
+    assert expired["expired"] is True  # muddati o'tgan — DTM'da qo'llanmaydi
+    profile = client.get(f"/api/classes/{cid}/students/{iroda}", headers=as_user(701)).json()
+    assert len(profile["certificates"]) == 3
+
+    # Javoblar: faqat majburiy matematikada 5 ta to'g'ri (11, 14, 15, 17, 18)
+    with SessionLocal() as session:
+        attempt_ids = {name: attempt_id for attempt_id, name in session.execute(
+            main.select(main.Attempt.id, main.Attempt.offline_name).where(main.Attempt.test_id == created["id"])).all()}
+    answers = {str(n): "ABCD"[n % 4] for n in (11, 14, 15, 17, 18)}
+    answers.update({str(n): "ABCD"[(n + 1) % 4] for n in (12, 13, 16, 19, 20)})
+    for name, attempt_id in attempt_ids.items():
+        saved = client.post(f"{base}/students/{attempt_id}/answers", json={"answers": answers}, headers=as_user(701))
+        assert saved.status_code == 200, saved.text
+    detail_url = f"{base}/students/{attempt_ids['Irodaxon Abdulaliyeva']}"
+
+    # Profildan: ona tili (majburiy va 2-blok) va ingliz tili (1-blok) — tarix hali hisoblanmaydi
+    dtm = client.get(f"{detail_url}/detail", headers=as_user(701)).json()["edit"]["dtm"]
+    balls = {block["name"]: block["ball"] for block in dtm["blocks"]}
+    assert balls == {"Ona tili (majburiy)": 11.0, "Matematika (majburiy)": 5.5, "O'zbekiston tarixi (majburiy)": 0,
+                     "Ingliz tili": 93.0, "Ona tili va adabiyot": 57.9}, balls
+    assert dtm["dtm_ball"] == 167.4 and dtm["blocks"][3]["certificate"]["source"] == "profile"
+
+    # Shu testga: tarix — sertifikati bor (10 dan 10); asosiy fanda qiymatsiz "cert" — rad etiladi
+    certificates_url = f"{detail_url}/certificates"
+    assert client.put(certificates_url, json={"blocks": [{"index": 3, "kind": "cert"}]}, headers=as_user(701)).status_code == 422
+    assert client.put(certificates_url, json={"blocks": [{"index": 4, "kind": "ms", "value": "99"}]},
+                      headers=as_user(701)).status_code == 422
+    dtm = client.put(certificates_url, json={"blocks": [{"index": 2, "kind": "cert"}]}, headers=as_user(701)).json()
+    assert dtm["dtm_ball"] == 178.4 and dtm["blocks"][2]["certificate"]["source"] == "test", dtm  # 93 + 57.90 + 11 + 11 + 5.5
+
+    results = client.get(f"{base}/results", headers=as_user(701)).json()
+    row = next(row for row in results["rows"] if row["name"] == "Irodaxon Abdulaliyeva")
+    other = next(row for row in results["rows"] if row["name"] == "Ali Valiyev")
+    assert row["dtm_ball"] == 178.4 and other["dtm_ball"] == 5.5 and row["rank"] == 1, (row, other)
+    assert {item["label"] for item in row["dtm_certificates"]} == {
+        "Chet tili sertifikati: B2", "Milliy sertifikat: 59.74 ball", "Sertifikat"}, row["dtm_certificates"]
+    english = row["section_scores"]["Ingliz tili"]
+    assert (english["ball"], english["correct"], english["total"]) == (93.0, 30.0, 30)
+
+    # Testda profildagisini bekor qilish ("none") va qaytarish ("auto"); boshqa o'qituvchi o'zgartira olmaydi
+    dtm = client.put(certificates_url, json={"blocks": [{"index": 3, "kind": "none"}]}, headers=as_user(701)).json()
+    assert dtm["blocks"][3]["certificate"] is None and dtm["blocks"][3]["profile"]["value"] == "B2" and dtm["dtm_ball"] == 85.4
+    dtm = client.put(certificates_url, json={"blocks": [{"index": 3, "kind": "auto"}, {"index": 4, "kind": "lang", "value": "B1"}]},
+                     headers=as_user(701)).json()
+    assert dtm["blocks"][4]["ball"] == 47.25 and dtm["dtm_ball"] == 167.75, dtm  # B1 — 75 %: 63 × 0.75
+    register_teacher(556)
+    assert client.put(certificates_url, json={"blocks": []}, headers=as_user(556)).status_code in (403, 404)
+
+    # PDF hisobotda sertifikatli blok belgisi
+    report = "\n".join(page.get_text() for page in fitz.open(stream=client.get(f"{base}/pdf", headers=as_user(701)).content,
+                                                               filetype="pdf"))
+    assert "(sertifikat)" in report
+
+    # Profildan o'chirish
+    certificate_id = certificates[0]["id"]
+    left = client.delete(f"{url}/{certificate_id}", headers=as_user(701)).json()["certificates"]
+    assert [c["subject"] for c in left] == ["Ona tili va adabiyot", "Matematika"]
 
 
 def test_yotoqxona_xonalar_joylashtirish_va_kechki_yoqlama():
