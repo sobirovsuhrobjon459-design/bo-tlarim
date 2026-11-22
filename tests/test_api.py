@@ -5850,7 +5850,7 @@ def test_evalbee_uslubidagi_titul():
     for version, anchor_count, height in ((9, 30, 668), (8, 45, 842)):
         test_id = create_test(enrollment_type="closed", key_questions=questions)["id"]
         with SessionLocal() as session:
-            assert session.get(Test, test_id).sheet_version == 13  # yangi test — eng yangi titul
+            assert session.get(Test, test_id).sheet_version == 14  # yangi test — eng yangi titul
             session.get(Test, test_id).sheet_version = version
             session.commit()
         base = f"/api/teacher/tests/{test_id}"
@@ -6198,7 +6198,7 @@ def test_varaqdagi_oquvchi_raqami_boyicha_taniladi():
                 headers=as_user(555))
     detail = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1, "Birinchi Bola"), (2, "Ikkinchi Bola")]
-    assert detail["sheet_version"] == 13
+    assert detail["sheet_version"] == 14
 
     url = f"/api/teacher/tests/{test_id}/scan"
     photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "0", "id3": "2", 1: "B", 2: "C"})
@@ -6568,7 +6568,7 @@ def test_skaner_natijasi_sinf_natijalariga_yoziladi():
     assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json() == {"added": 0}
     detail = client.get(base, headers=as_user(701)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1001, "Ali Valiyev"), (1002, "Zuhra Karimova")]
-    assert detail["sheet_version"] == 13
+    assert detail["sheet_version"] == 14
 
     # Zuhra (1002) varag'i: 1-savol to'g'ri, 2-savol to'g'ri
     scanned = client.post(f"{base}/scan", json={"image_base64": _sheet_photo(test["id"], {
@@ -6953,7 +6953,8 @@ def test_dtm_ismli_titul_skanerlanadi():
     Sinfga biriktirilgan DTM imtihoni: har o'quvchiga ismli titul (ID bo'yalgan, bitta PDF). Skaner chop etilgan
     ismli titulni o'qiydi: o'quvchi ID'dan taniladi, javoblar to'g'ri savollarga tushadi.
     13-versiya — rasmiy "Javoblar varaqasi" ko'rinishi (3 ustun × 30, o'ngda o'quvchi raqami; rangli, ko'k ruchka,
-    oq-qora chop etilsa ham o'qiladi); 12-versiya — oldin chop etilgan titullar o'z joylashuvida qoladi.
+    oq-qora chop etilsa ham o'qiladi); 14-versiya — shu, o'quvchi raqami ostida "SERTIFIKAT" bo'limi bilan;
+    12–13-versiya — oldin chop etilgan titullar o'z joylashuvida qoladi.
     """
 
     reset_database()
@@ -6972,9 +6973,9 @@ def test_dtm_ismli_titul_skanerlanadi():
     from backend.database import Test
 
     with SessionLocal() as session:
-        assert session.get(Test, created["id"]).sheet_version == 13  # yangi DTM testi — rasmiy ko'rinishdagi titul
+        assert session.get(Test, created["id"]).sheet_version == 14  # yangi DTM testi — sertifikat bo'limi bilan
 
-    for version, grayscale in ((13, False), (13, True), (12, False)):
+    for version, grayscale in ((14, False), (14, True), (13, False), (12, False)):
         with SessionLocal() as session:
             session.get(Test, created["id"]).sheet_version = version
             session.commit()
@@ -7152,6 +7153,165 @@ def test_dtm_sertifikatli_oquvchi_bali_rasmiy_natijadagidek():
     certificate_id = certificates[0]["id"]
     left = client.delete(f"{url}/{certificate_id}", headers=as_user(701)).json()["certificates"]
     assert [c["subject"] for c in left] == ["Ona tili va adabiyot", "Matematika"]
+
+
+def _dtm14_scanned_sheet(sections: list[str], profile: list[tuple[str, str, str]], marks: set[tuple[str, str]],
+                         answers: dict[str, str]) -> tuple[str, dict, list[dict]]:
+    """
+    14-versiya DTM ismli titulini "to'ldirib, suratga olib" skanerlaydi: marks — (ref, harf) bo'yaladigan sertifikat
+    doirachalari, answers — savol javoblari. Qaytaradi: test manzili, skaner natijasi, titul doirachalari.
+    """
+    import fitz
+    from PIL import Image, ImageDraw
+
+    from backend.database import Test
+
+    reset_database()
+    school_class = _school_with_class(701)
+    register_teacher(701, "Aziza", "Karimova")
+    cid = school_class["id"]
+    client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Zuhra Karimova"]}, headers=as_user(701))
+    client.put(f"/api/classes/{cid}/student-codes", json={"start": 1001, "end": 1038}, headers=as_user(701))
+    zuhra = client.get(f"/api/classes/{cid}", headers=as_user(701)).json()["students"][0]
+    for subject, kind, value in profile:
+        client.post(f"/api/classes/{cid}/students/{zuhra['id']}/certificates", headers=as_user(701),
+                    json={"subject": subject, "kind": kind, "value": value})
+    key = [{"number": n, "question_type": "single", "option_count": 4, "correct": "ABCD"[n % 4]} for n in range(1, 91)]
+    created = create_test(701, enrollment_type="closed", subject="DTM testi", duration=180, key_questions=key)
+    base = f"/api/teacher/tests/{created['id']}"
+    client.put(f"{base}/sections", headers=as_user(701), json={"text": "\n".join(sections)})
+    assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json()["added"] == 1
+
+    personal = client.get(f"{base}/answer-sheet?personal=true", headers=as_user(701)).content
+    with SessionLocal() as session:
+        sheet_test = session.get(Test, created["id"])
+        assert sheet_test.sheet_version == 14
+        bubbles: list[dict] = []
+        main.generate_answer_sheet_pdf(sheet_test, bubbles=bubbles)
+        session.expunge(sheet_test)
+
+    zoom, height = 2.0, A4_HEIGHT
+    rendered = fitz.open(stream=personal, filetype="pdf")[0].get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+    page = Image.frombytes("RGB", (rendered.width, rendered.height), rendered.samples)
+    draw = ImageDraw.Draw(page)
+    for bubble in bubbles:
+        fill = ((bubble["kind"].startswith("cert") and (bubble["ref"], bubble["letter"]) in marks)
+                or (bubble["kind"] == "single" and answers.get(bubble["label"]) == bubble["letter"]))
+        if fill:
+            cx, cy, r = bubble["x"] * zoom, (height - bubble["y"]) * zoom, bubble["r"] * zoom
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(35, 60, 190))
+    buffer = io.BytesIO()
+    page.rotate(3, expand=True, fillcolor=(90, 70, 60)).save(buffer, "JPEG", quality=85)
+    scanned = client.post(f"{base}/scan", json={"image_base64": base64.b64encode(buffer.getvalue()).decode()},
+                          headers=as_user(701)).json()
+    assert scanned["answers"] == answers, scanned["answers"]
+    assert all(not str(question["ref"]).startswith("cert") for question in scanned["questions"])
+    return base, scanned, bubbles
+
+
+def _ball_marks(key: str, digits: str) -> set[tuple[str, str]]:
+    """Ball ustunlari: "65__" — 6 va 5 bo'yalgan, verguldan keyingilari bo'sh."""
+    return {(f"certball{key}#{index}", digit) for index, digit in enumerate(digits) if digit != "_"}
+
+
+def test_dtm_titulida_sertifikat_bali_boyaladi():
+    """
+    14-versiya DTM tituli: o'quvchi raqami ostida "SERTIFIKAT" bo'limi. Majburiy fan — "Ha / Yo'q" (Ha — 10 dan 10);
+    asosiy fan — Milliy sertifikat bali (4 ustun × 0–9, tepadan pastga); asosiy fan majburiylar ichida ham bo'lsa
+    (Matematika 11–20 va 31–60) — bitta ball ikkala blokka. Profilda sertifikat bo'lsa — profildagisi ustun,
+    bo'lmasa — tituldagi ball. Bo'yalmagan — javoblari (profilda sertifikat bo'lsa ham).
+    """
+
+    sections = ["Ona tili (majburiy): 1-10", "Matematika (majburiy): 11-20", "O'zbekiston tarixi (majburiy): 21-30",
+                "Matematika: 31-60", "Fizika: 61-90"]
+    answers = {str(n): "ABCD"[n % 4] for n in list(range(21, 31)) + list(range(61, 71))}
+    # Ona tili — Ha, Tarix — Yo'q; Matematika — 55,00 (profilda 61,11 — u ustun); Fizika — 65 (profilda yo'q)
+    marks = {("cert0", "yes"), ("cert2", "no")} | _ball_marks("1-3", "5500") | _ball_marks("4", "65__")
+    base, scanned, bubbles = _dtm14_scanned_sheet(sections, [("Matematika", "ms", "61.11")], marks, answers)
+
+    rows = {bubble["ref"]: bubble["label"] for bubble in bubbles if bubble["kind"] == "cert"}
+    assert rows == {"cert0": "Ona tili (1–10)", "cert2": "O'zbekiston tarixi (21–30)"}, rows
+    columns = {bubble["ref"] for bubble in bubbles if bubble["kind"] == "certball"}
+    assert columns == {f"certball{key}#{index}" for key in ("1-3", "4") for index in range(4)}, columns
+    # Ball ustunlari vertikal: 0 tepada, 9 pastda, ustun bo'ylab x bir xil
+    column = sorted((bubble for bubble in bubbles if bubble["ref"] == "certball1-3#0"), key=lambda b: int(b["letter"]))
+    assert len(column) == 10 and len({round(b["x"], 2) for b in column}) == 1 and column[0]["y"] > column[9]["y"]
+    assert not any(bubble["kind"] == "certlevel" for bubble in bubbles)  # chet tili yo'q — CEFR qatori ham yo'q
+
+    assert [(item["index"], item["kind"], item["value"]) for item in scanned["certificates"]] == [
+        ("0", "yesno", "yes"), ("1-3", "ms", "ms:55.00"), ("2", "yesno", "no"), ("4", "ms", "ms:65.00")], \
+        scanned["certificates"]
+
+    attempt_id = scanned["match"]["id"]
+    saved = client.post(f"{base}/scan/save", headers=as_user(701), json={
+        "attempt_id": attempt_id, "answers": scanned["answers"],
+        "certificates": {item["index"]: item["value"] for item in scanned["certificates"]}})
+    assert saved.status_code == 200, saved.text
+    dtm = client.get(f"{base}/students/{attempt_id}/detail", headers=as_user(701)).json()["edit"]["dtm"]
+    balls = {block["name"]: block["ball"] for block in dtm["blocks"]}
+    # Ona tili, Matematika (majburiy) — sertifikat: 11 + 11; Tarix — "Yo'q": javoblari 11; Matematika (asosiy) —
+    # profildagi 61.11 ball (94.02 %): 93 × 0.9402 = 87.44; Fizika — tituldagi 65 ball (100 %): 30 × 2.1 = 63
+    assert balls == {"Ona tili (majburiy)": 11.0, "Matematika (majburiy)": 11.0, "O'zbekiston tarixi (majburiy)": 11.0,
+                     "Matematika": 87.44, "Fizika": 63.0}, balls
+    assert dtm["dtm_ball"] == 183.44
+    assert dtm["blocks"][3]["certificate"]["value"] == "61.11" and dtm["blocks"][3]["certificate"]["source"] == "titul"
+    assert dtm["blocks"][4]["certificate"]["value"] == "65.00" and "titulda" in dtm["blocks"][4]["certificate"]["label"]
+    assert dtm["blocks"][4]["override"] == {"kind": "claimed", "sheet_kind": "ms", "sheet_value": "65.00"}
+
+    # O'qituvchi panelda saqlasa ("titulda" qoladi) — bo'yalgan ball yo'qolmaydi; "Profildan" — profilda yo'q: javoblari
+    url = f"{base}/students/{attempt_id}/certificates"
+    kept = client.put(url, headers=as_user(701), json={"blocks": [{"index": 4, "kind": "claimed"}]})
+    assert kept.status_code == 200 and kept.json()["dtm_ball"] == 183.44, kept.text
+    auto = client.put(url, headers=as_user(701), json={"blocks": [{"index": 4, "kind": "auto"}]}).json()
+    assert auto["blocks"][4]["ball"] == 21.0 and auto["dtm_ball"] == 141.44, auto
+
+
+def test_dtm_titulida_chet_tili_darajasi_boyaladi():
+    """Chet tili (Ingliz tili) — CEFR darajasi (C1 / B2 / B1) bo'yaladi; Ona tili asosiy fanda — ball ikkala blokka."""
+
+    sections = ["Ona tili (majburiy): 1-10", "Matematika (majburiy): 11-20", "O'zbekiston tarixi (majburiy): 21-30",
+                "Ingliz tili: 31-60", "Ona tili va adabiyoti: 61-90"]
+    answers = {str(n): "ABCD"[n % 4] for n in range(21, 26)}
+    marks = {("cert1", "yes"), ("certlevel3", "B2")} | _ball_marks("0-4", "7050")
+    base, scanned, bubbles = _dtm14_scanned_sheet(sections, [], marks, answers)
+
+    levels = sorted(bubble["letter"] for bubble in bubbles if bubble["kind"] == "certlevel")
+    assert levels == ["B1", "B2", "C1"] and {b["ref"] for b in bubbles if b["kind"] == "certlevel"} == {"certlevel3"}
+    assert not any(bubble["ref"].startswith("certball3") for bubble in bubbles if bubble["kind"] == "certball")
+    assert [(item["index"], item["value"]) for item in scanned["certificates"]] == [
+        ("0-4", "ms:70.50"), ("1", "yes"), ("2", None), ("3", "lang:B2")], scanned["certificates"]
+
+    attempt_id = scanned["match"]["id"]
+    saved = client.post(f"{base}/scan/save", headers=as_user(701), json={
+        "attempt_id": attempt_id, "answers": scanned["answers"],
+        "certificates": {item["index"]: item["value"] for item in scanned["certificates"]}})
+    assert saved.status_code == 200, saved.text
+    dtm = client.get(f"{base}/students/{attempt_id}/detail", headers=as_user(701)).json()["edit"]["dtm"]
+    balls = [block["ball"] for block in dtm["blocks"]]
+    # Ona tili (majburiy) — tituldagi ball bilan: 11; Matematika — Ha: 11; Tarix — bo'yalmagan: 5 × 1.1;
+    # Ingliz tili — B2 (100 %): 93; Ona tili va adabiyoti — 70,50 (100 %): 63
+    assert balls == [11.0, 11.0, 5.5, 93.0, 63.0] and dtm["dtm_ball"] == 183.5, dtm
+
+
+def test_titul_sertifikat_bolimini_oqish_qoidalari():
+    """Ball ustunlari: bir nechta raqam, o'nlar/birlar bo'sh yoki 75 dan katta — "unclear"; bo'sh — None."""
+    from backend.omr import read_certificates
+
+    def columns(*digits):
+        return {"label": "Fizika", "columns": {index: {str(d): (0.9 if str(d) == digit else 0.05) for d in range(10)}
+                                               for index, digit in enumerate(digits)}}
+
+    balls = {"1": columns("6", "1", "1", "1"), "2": columns("6", "5", None, None), "3": columns(None, "5", "0", "0"),
+             "4": columns("8", "0", "0", "0"), "5": columns(None, None, None, None)}
+    balls["6"] = columns("6", "1", "0", "0")
+    balls["6"]["columns"][0]["7"] = 0.9  # o'nlar ustunida ikkita raqam
+    levels = {"7": {"label": "Ingliz tili", "ratios": {"C1": 0.9, "B2": 0.9, "B1": 0.0}}}
+    read = {item["index"]: item["value"] for item in read_certificates({}, balls, levels)}
+    assert read == {"1": "ms:61.11", "2": "ms:65.00", "3": "unclear", "4": "unclear", "5": None, "6": "unclear",
+                    "7": "unclear"}, read
+
+
+A4_HEIGHT = 841.8897637795275
 
 
 def test_yotoqxona_xonalar_joylashtirish_va_kechki_yoqlama():

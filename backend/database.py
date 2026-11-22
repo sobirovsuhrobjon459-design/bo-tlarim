@@ -284,7 +284,7 @@ class Test(Base):
     # Eski testlar o'z versiyasida qoladi — oldin chop etilgan varaqlar ham to'g'ri skanerlanishi uchun.
     # 6 — ixcham; 7 — bloklari kvadratli; 8–10 — EvalBee uslubi; 11 — doirachalar o'lchami va oralig'i doim bir xil;
     # 12 — yozma savollar uchun pastda yozish kataklari (36a, 36b …), 33–35 (A–F) qatorlari ustunga sig'adi
-    sheet_version: Mapped[int] = mapped_column(default=13)  # 13 — DTM tituli rasmiy varaq ko'rinishida
+    sheet_version: Mapped[int] = mapped_column(default=14)  # 13 — DTM tituli rasmiy ko'rinishda; 14 — sertifikat bo'limi bilan
     # Esse (Ona tili 45): maksimal bali (24). Bo'sh — testda esse yo'q
     essay_max: Mapped[int | None] = mapped_column(default=None)
     # Esseni kim baholaydi: False — o'qituvchi, True — AI (o'quvchi topshirgach ballni o'zi qo'yadi,
@@ -1616,7 +1616,7 @@ class DtmBlockCertificateIn(BaseModel):
     ms — Milliy sertifikat (value — ball), lang — chet tili (value — C1 / B2 / B1)."""
 
     index: int = Field(ge=0, le=20)
-    kind: str = Field(pattern="^(auto|none|cert|ms|lang)$")
+    kind: str = Field(pattern="^(auto|none|cert|ms|lang|claimed)$")  # claimed — titulda "Ha" bo'yalgan
     value: str | None = Field(None, max_length=20)
 
 
@@ -1853,7 +1853,10 @@ class SheetScanSaveIn(BaseModel):
     answers: dict[str, str] = {}
     # Yozma javob kataklari rasmi: {savol_kaliti: "data:image/jpeg;base64,…"}
     written: dict[str, str] = {}
-    # Titulning o'zi (tekislangan rasm): {sahifa: "data:image/jpeg;base64,…"} — o'quvchi profiliga saqlanadi
+    # DTM titulidagi sertifikat bo'limi (14-versiya): {bloklar: "yes" | "no" | "both" | "ms:61.11" | "lang:B2" |
+    # "unclear" | None}. "yes", ball yoki daraja — sertifikat qo'llanadi (profilda bo'lsa — profildagisi ustun);
+    # qolgani — o'quvchining javoblari
+    certificates: dict[str, str | None] | None = None
 
 
 class WrittenVerdictIn(BaseModel):

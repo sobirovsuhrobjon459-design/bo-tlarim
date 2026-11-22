@@ -1808,6 +1808,7 @@ def _dtm_certificates_for(db: Session, attempts: list[Attempt], section_names: l
     for attempt in attempts:
         day = (attempt.finished_at or utcnow()).date()
         blocks: dict[int, dict] = {}
+        profile_blocks = blocks  # titulda "Ha" — shu (profildagi) sertifikat qo'llanadi
         for certificate in profiles.get(owners.get(attempt.class_student_id or -1, -1), []):
             if certificate.valid_until and certificate.valid_until < day:
                 continue
@@ -1820,6 +1821,7 @@ def _dtm_certificates_for(db: Session, attempts: list[Attempt], section_names: l
                                      "label": _certificate_label(certificate.kind, certificate.value),
                                      "source": "profile", "subject": certificate.subject}
         if with_overrides:
+            profile_blocks = dict(blocks)
             try:
                 overrides = json.loads(attempt.dtm_certificates or "{}")
             except ValueError:
@@ -1830,6 +1832,28 @@ def _dtm_certificates_for(db: Session, attempts: list[Attempt], section_names: l
                     continue
                 if entry.get("kind") == "none":
                     blocks.pop(index, None)
+                    continue
+                if entry.get("kind") == "claimed":
+                    # Titulda belgilangan: majburiy fanda — 10 dan 10; asosiy fanda — profildagi sertifikat (ustun),
+                    # u bo'lmasa — titulda bo'yalgan ball / daraja; ikkalasi ham yo'q bo'lsa — bali noma'lum
+                    # (o'qituvchi kiritadi), blok javoblar bo'yicha qoladi
+                    sheet_kind, sheet_value = entry.get("sheet_kind"), entry.get("sheet_value")
+                    sheet_percent = (_certificate_block_percent(sheet_kind, sheet_value, False)
+                                     if sheet_kind in ("ms", "lang") and sheet_value else None)
+                    if mandatory[index]:
+                        blocks[index] = {"kind": "claimed", "value": None, "percent": 100.0,
+                                         "label": (f"Sertifikat (titulda: {_certificate_label(sheet_kind, sheet_value)})"
+                                                   if sheet_percent is not None else "Sertifikat (titulda «Ha»)"),
+                                         "source": "titul"}
+                    elif index in profile_blocks:
+                        blocks[index] = {**profile_blocks[index], "source": "titul"}
+                    elif sheet_percent is not None:
+                        blocks[index] = {"kind": sheet_kind, "value": sheet_value, "percent": sheet_percent,
+                                         "label": f"{_certificate_label(sheet_kind, sheet_value)} (titulda)",
+                                         "source": "titul"}
+                    else:
+                        blocks[index] = {"kind": "claimed", "value": None, "percent": None,
+                                         "label": "Titulda «Ha», lekin sertifikat bali kiritilmagan", "source": "titul"}
                     continue
                 percent = _certificate_block_percent(entry.get("kind"), entry.get("value"), mandatory[index])
                 if percent is not None:
@@ -2028,6 +2052,9 @@ def build_rasch_report(db: Session, test: Test) -> dict:
         attempt_certificates = certificates.get(attempt.id, {})
         for position, (name, columns) in enumerate(zip(section_names, block_columns)):
             certificate = attempt_certificates.get(position)
+            missing = bool(certificate and certificate["percent"] is None)
+            if missing:
+                certificate = None
             if certificate:
                 share = certificate["percent"] / 100
                 result[name] = {"ball": round(block_max[position] * share, 2),
@@ -2039,7 +2066,7 @@ def build_rasch_report(db: Session, test: Test) -> dict:
                     "total": len(columns),
                 }
             result[name].update({"max": round(block_max[position], 2), "mandatory": block_mandatory[position],
-                                 "certificate": certificate})
+                                 "certificate": certificate, "missing": missing})
         return result
 
     def dtm_ball(row_matrix: list[int], scores: dict) -> float | None:
@@ -3897,8 +3924,11 @@ except Exception:
     SHEET_SANS, SHEET_SANS_BOLD = "Helvetica", "Helvetica-Bold"
 
 
-def _dtm13_layout() -> dict:
-    """Titul qismlarining joyi (tepadan sanalgan, punktlarda) — chizish va skaner bir xil o'lchamni ishlatadi."""
+def _dtm13_layout(certificates: bool = False) -> dict:
+    """
+    Titul qismlarining joyi (tepadan sanalgan, punktlarda) — chizish va skaner bir xil o'lchamni ishlatadi.
+    certificates (14-versiya): o'ngdagi ism qutisi o'rnida "SERTIFIKAT" bo'limi, ism — tepadagi F.I.O. qutisiga.
+    """
 
     width, height = A4
     frame_left, frame_right = DTM13_FRAME, width - DTM13_FRAME
@@ -3913,17 +3943,35 @@ def _dtm13_layout() -> dict:
     side_header = 34.0
     id_first = side_top + side_header + 18 + 6 + DTM13_ROW / 2  # o'quvchi raqami: yozish kataklari ostida
     side_bottom = id_first + 9.5 * DTM13_ROW + 6
-    name_top = side_bottom + 10
-    lines = [name_top + 58 + index * 34 for index in range(3)]  # familiya, ism, otasining ismi chiziqlari
+    if certificates:
+        cert_box = (side_bottom + 8, columns_bottom)
+        name_box, lines = None, []
+        # Bo'sh titulda ism tepadagi "Abituriyent F.I.O." qutisiga yoziladi (ismli titulda — bosilgan)
+        name_area = (DTM13_SPLIT + 8, DTM13_TITLE_BOTTOM + 8, frame_right - 8, DTM13_HEAD_BOTTOM - 28)
+    else:
+        cert_box = None
+        name_top = side_bottom + 10
+        lines = [name_top + 58 + index * 34 for index in range(3)]  # familiya, ism, otasining ismi chiziqlari
+        name_box = (right_left - 4, name_top, right_right + 4, columns_bottom)
+        name_area = (right_left, name_top + 34, right_right, lines[1] + 4)
     return {
         "width": width, "height": height, "frame": (frame_left, DTM13_FRAME, frame_right, frame_bottom),
         "banner_top": banner_top, "columns_bottom": columns_bottom, "first_row": first_row,
         "column_x": column_x, "right": (right_left, right_right), "side": (side_top, side_bottom, side_header),
-        "id_first": id_first, "name_box": (right_left - 4, name_top, right_right + 4, columns_bottom),
-        "name_lines": lines,
-        # Skaner o'qituvchiga ko'rsatadigan ism rasmi: familiya va ism yoziladigan qatorlar
-        "name_area": (right_left, name_top + 34, right_right, lines[1] + 4),
+        "id_first": id_first, "name_box": name_box, "cert_box": cert_box, "name_lines": lines,
+        # Skaner o'qituvchiga ko'rsatadigan ism rasmi: ism yoziladigan joy
+        "name_area": name_area,
     }
+
+
+LANGUAGE_SUBJECT_WORDS = ("ingliz", "nemis", "fransuz", "chet til", "english", "german", "french", "deutsch")
+
+
+def _is_language_subject(name: str) -> bool:
+    """Chet tili fani — sertifikati CEFR darajasida (C1/B2/B1), Milliy sertifikat bali emas."""
+
+    text = (name or "").lower().replace("’", "'").replace("ʻ", "'")
+    return any(word in text for word in LANGUAGE_SUBJECT_WORDS)
 
 
 def _dtm13_plan(test: Test, items: list, variants: list[str] | None) -> dict | None:
@@ -3931,21 +3979,152 @@ def _dtm13_plan(test: Test, items: list, variants: list[str] | None) -> dict | N
 
     if len(items) != 90 or any(item[2] > 4 for item in items) or (variants and len(variants) > 4):
         return None
-    layout = _dtm13_layout()
+    certificates = (test.sheet_version or 1) >= 14
+    layout = _dtm13_layout(certificates)
     first_row, rows_room = layout["first_row"], layout["columns_bottom"] - 6 - (layout["first_row"] - DTM13_ROW / 2)
     if rows_room < 30 * DTM13_ROW:  # o'lchamlar o'zgarsa — titul sig'masligi testda darhol bilinadi
         raise RuntimeError("DTM titulida savollar ustuniga joy yetmadi")
     slots = [(item, index // 30, index % 30) for index, item in enumerate(items)]
     names = [section["name"] for section in _test_sections(test)]
-    if len(names) != 5:
+    real_sections = len(names) == 5
+    if not real_sections:
         names = ["Ona tili", "Matematika", "O'zbekiston tarixi", "1-asosiy fan", "2-asosiy fan"]
+    ranges = ["1–10", "11–20", "21–30", "31–60", "61–90"]
+    # 14-versiya: "SERTIFIKAT" bo'limi. Asosiy fan — o'quvchi Milliy sertifikat balini (4 raqam: 61.11), chet tili
+    # bo'lsa — darajasini (C1/B2/B1) bo'yaydi; bo'yalgan bo'lsa — sertifikatdan foydalanadi. Majburiylar ichida shu fan
+    # bo'lsa (Matematika 11–20 va 31–60) — ikkala blok ham shu bilan. Qolgan majburiy fanlar — "Ha / Yo'q".
+    # Kalit — bloklar raqami ("1-3"), skaner shuni qaytaradi.
+    cert_section = None
+    if certificates and real_sections:
+        main_groups = []
+        for main_index in (3, 4):
+            group = [index for index in range(3) if _subject_matches(names[index], names[main_index])] + [main_index]
+            blocks = ", ".join(ranges[index] for index in group)
+            main_groups.append({"label": f"{names[main_index]} ({blocks})", "name": names[main_index],
+                                "blocks": f"({blocks})", "key": "-".join(str(index) for index in group),
+                                "language": _is_language_subject(names[main_index])})
+        covered = {int(part) for group in main_groups for part in group["key"].split("-")}
+        mandatory_rows = [(f"{names[index].replace(' (majburiy)', '')} ({ranges[index]})", str(index))
+                          for index in range(3) if index not in covered]
+        cert_section = {"mandatory": mandatory_rows, "main": main_groups}
     return {
-        "dtm13": True, "width": layout["width"], "height": layout["height"], "edge_marks": SHEET_EDGE_MARKS,
+        "dtm13": True, "cert_section": cert_section, "width": layout["width"], "height": layout["height"], "edge_marks": SHEET_EDGE_MARKS,
         "pages": [slots], "column_width": DTM13_COLUMN, "reserved": 0, "layout": layout,
         "subjects": [name.replace(" (majburiy)", "") for name in names],
         "style": {"name_area": layout["name_area"]},
         "first_row": first_row,
     }
+
+
+DTM14_CERT_ROW = 12.6        # sertifikat bo'limidagi qatorlar oralig'i (majburiy fanlar)
+DTM14_CERT_RADIUS = 4.5
+DTM14_DIGIT_ROW = 12.4       # ball raqamlari: 0–9 tepadan pastga (o'quvchi raqamidagidek)
+DTM14_DIGIT_PITCH = 14.0     # ball ustunlari oralig'i
+
+
+def _draw_dtm14_certificates(sheet, plan: dict, layout: dict, top, note, bubble) -> None:
+    """
+    "SERTIFIKAT" bo'limi (o'ngda, o'quvchi raqami ostida):
+      • majburiy fan — "Ha / Yo'q" (Ha — 10 dan 10);
+      • asosiy fan — Milliy sertifikat bali: 4 ustun × 0–9, tepadan pastga (masalan 6, 1, 1, 1 → 61.11);
+      • chet tili — CEFR darajasi (C1 / B2 / B1), ustunda.
+    Ikkala asosiy fan yonma-yon (chapda 1-asosiy, o'ngda 2-asosiy).
+    Bo'yalmagan bo'lsa — sertifikatdan foydalanmaydi (javoblari hisoblanadi).
+    """
+
+    right_left, right_right = layout["right"]
+    cert_top, cert_bottom = layout["cert_box"]
+    box_left, box_right = right_left - 4, right_right + 4
+    pitch, radius = DTM14_CERT_ROW, DTM14_CERT_RADIUS
+    sheet.setStrokeColor(DTM13_RED)
+    sheet.setLineWidth(0.9)
+    sheet.rect(box_left, top(cert_bottom), box_right - box_left, cert_bottom - cert_top, stroke=1, fill=0)
+    sheet.line(box_left, top(cert_top + 22), box_right, top(cert_top + 22))
+    _dtm13_text(sheet, box_left + 5, top(cert_top + 10), "SERTIFIKAT / СЕРТИФИКАТ", 7.4, SHEET_SANS_BOLD, align="left")
+    _dtm13_text(sheet, box_left + 5, top(cert_top + 19), "Faqat sertifikati borlar to'ldiradi", 5.8, align="left",
+                room=box_right - box_left - 10)
+
+    def ring(x: float, center: float, text: str, kind: str, ref: str, letter: str, label: str) -> None:
+        sheet.setStrokeColor(DTM13_RED)
+        sheet.setLineWidth(0.8)
+        sheet.setFillColor(colors.white)
+        sheet.circle(x, top(center), radius, stroke=1, fill=1)
+        if text:
+            sheet.setFillColor(DTM13_LETTER)
+            sheet.setFont(SHEET_SANS, 5.2)
+            sheet.drawCentredString(x, top(center) - 1.9, text)
+        note({"ref": ref, "label": label, "kind": kind, "letter": letter, "x": x, "y": top(center), "r": radius})
+
+    y = cert_top + 22
+    section = plan["cert_section"]
+    if section["mandatory"]:
+        yes_x, no_x = box_right - 30, box_right - 11
+        _dtm13_text(sheet, box_left + 5, top(y + 9), "Majburiy fan — sertifikatingiz bormi?", 6.0, SHEET_SANS_BOLD,
+                    align="left", room=yes_x - box_left - 16)
+        _dtm13_text(sheet, yes_x, top(y + 9), "Ha", 6.0, SHEET_SANS_BOLD)
+        _dtm13_text(sheet, no_x, top(y + 9), "Yo'q", 6.0, SHEET_SANS_BOLD)
+        y += 11
+        for label, key in section["mandatory"]:
+            center = y + pitch / 2
+            _dtm13_text(sheet, box_left + 5, top(center) - 2.2, label, 6.2, align="left", color=colors.black,
+                        room=yes_x - box_left - 16)
+            ring(yes_x, center, "", "cert", f"cert{key}", "yes", label)
+            ring(no_x, center, "", "cert", f"cert{key}", "no", label)
+            y += pitch
+        y += 3
+        sheet.setStrokeColor(DTM13_RED)
+        sheet.line(box_left, top(y), box_right, top(y))
+
+    digit_row = DTM14_DIGIT_ROW
+    if y + 12 + 39 + 10 * digit_row + 10 <= cert_bottom:  # 3 ta majburiy qator bo'lsa — sarlavhasiz
+        _dtm13_text(sheet, (box_left + box_right) / 2, top(y + 9), "Asosiy fan — sertifikat bali yoki darajasi", 6.0,
+                    SHEET_SANS_BOLD, room=box_right - box_left - 10)
+        y += 12
+    halves = [(box_left, (box_left + box_right) / 2), ((box_left + box_right) / 2, box_right)]
+    bottoms = []
+    for (half_left, half_right), group in zip(halves, section["main"]):
+        middle = (half_left + half_right) / 2
+        room = half_right - half_left - 8
+        label, key = group["label"], group["key"]
+        _dtm13_text(sheet, middle, top(y + 8), group["name"], 6.4, SHEET_SANS_BOLD, color=colors.black, room=room)
+        _dtm13_text(sheet, middle, top(y + 16), group["blocks"], 5.8, color=colors.black, room=room)
+        if group["language"]:
+            # Chet tili: CEFR darajasi — ustunda C1, B2, B1
+            _dtm13_text(sheet, middle, top(y + 29), "CEFR darajasi", 5.8, room=room)
+            center = y + 33 + digit_row / 2 + 4
+            for level in DTM_LANG_PERCENT:
+                ring(middle, center, level, "certlevel", f"certlevel{key}", level, label)
+                center += digit_row + 4
+            bottoms.append(center - digit_row / 2)
+            continue
+        # Ball yoziladigan kataklar [ ][ ] , [ ][ ] va ularning ostida 4 ustun × 0–9
+        columns = [middle + (index - 1.5) * DTM14_DIGIT_PITCH + (3 if index >= 2 else -3) for index in range(4)]
+        cells_top = y + 21
+        sheet.setStrokeColor(DTM13_RED)
+        sheet.setLineWidth(0.6)
+        sheet.setFillColor(colors.white)
+        for x in columns:
+            sheet.rect(x - 5.5, top(cells_top + 12), 11, 12, stroke=1, fill=1)
+        _dtm13_text(sheet, middle, top(cells_top + 11), ",", 10, SHEET_SANS_BOLD)
+        first = cells_top + 12 + 4 + digit_row / 2
+        for index in (0, 2):  # pushti ustunlar — o'quvchi raqamidagidek
+            sheet.setFillColor(DTM13_PINK)
+            sheet.rect(columns[index] - radius - 1.5, top(first + 9.5 * digit_row), 2 * radius + 3, 10 * digit_row,
+                       stroke=0, fill=1)
+        for index, x in enumerate(columns):
+            for digit in range(10):
+                ring(x, first + digit * digit_row, str(digit), "certball", f"certball{key}#{index}", str(digit), label)
+        bottoms.append(first + 9.5 * digit_row)
+    if bottoms:
+        sheet.setStrokeColor(DTM13_RED)
+        sheet.setLineWidth(0.6)
+        sheet.line(halves[0][1], top(y - 2), halves[0][1], top(max(bottoms) + 2))
+        y = max(bottoms) + 2
+    if y > cert_bottom + 0.5:  # o'lchamlar o'zgarsa — darhol bilinsin
+        raise RuntimeError("DTM titulida sertifikat bo'limi sig'madi")
+    if y + 9 < cert_bottom:
+        _dtm13_text(sheet, (box_left + box_right) / 2, top(cert_bottom - 4.5),
+                    "Bo'yalmagan fan — javoblari bo'yicha hisoblanadi", 5.6, room=box_right - box_left - 10)
 
 
 def _dtm13_text(sheet, x: float, y: float, text: str, size: float, font: str | None = None,
@@ -4076,6 +4255,12 @@ def _draw_dtm13_card(sheet, test: Test, plan: dict, page: int, with_answers: boo
     if student:
         _dtm13_text(sheet, name_center, top(DTM13_TITLE_BOTTOM + 52), student[1][:60], 15, REPORT_FONT_BOLD,
                     color=colors.black, room=frame_right - split - 20)
+    elif not layout["name_box"]:
+        _dtm13_text(sheet, name_center, top(DTM13_TITLE_BOTTOM + 14), "Abituriyent F. I. O. / Ф. И. О. абитуриента", 7,
+                    room=frame_right - split - 20)
+        for distance in (DTM13_TITLE_BOTTOM + 40, DTM13_TITLE_BOTTOM + 64):
+            sheet.setStrokeColor(DTM13_RED)
+            sheet.line(split + 14, top(distance), frame_right - 14, top(distance))
     else:
         _dtm13_text(sheet, name_center, top(DTM13_TITLE_BOTTOM + 52), "Abituriyent F. I. O.", 19,
                     color=colors.HexColor("#5F5F5F"), room=frame_right - split - 20)
@@ -4206,27 +4391,32 @@ def _draw_dtm13_card(sheet, test: Test, plan: dict, page: int, with_answers: boo
             note({"ref": f"id{column}", "label": "ID", "kind": "id", "letter": str(digit),
                   "x": x, "y": top(center), "r": DTM13_RADIUS})
 
-    # 5) Ism-familiya qutisi (o'quvchi to'ldiradi) — skaner shu joyni rasm qilib o'qituvchiga ko'rsatadi
-    box_left, box_top, box_right, box_bottom = layout["name_box"]
-    sheet.setStrokeColor(DTM13_RED)
-    sheet.rect(box_left, top(box_bottom), box_right - box_left, box_bottom - box_top, stroke=1, fill=0)
-    sheet.line(box_left, top(box_top + 34), box_right, top(box_top + 34))
-    _dtm13_text(sheet, (box_left + box_right) / 2, top(box_top + 14), "Abituriyent tomonidan to'ldiriladi!", 8,
-                room=box_right - box_left - 8)
-    _dtm13_text(sheet, (box_left + box_right) / 2, top(box_top + 26), "Заполняется абитуриентом!", 8,
-                room=box_right - box_left - 8)
-    for distance, caption in zip(layout["name_lines"], ["(Familiyasi / Фамилия)", "(Ismi / Имя)",
-                                                        "(Otasining ismi / Отчество)"]):
+    # 4.5) 14-versiya: "SERTIFIKAT" — faqat sertifikati borlar to'ldiradi
+    if plan.get("cert_section"):
+        _draw_dtm14_certificates(sheet, plan, layout, top, note, bubble)
+
+    # 5) Ism-familiya qutisi (13-versiya; o'quvchi to'ldiradi) — skaner shu joyni rasm qilib o'qituvchiga ko'rsatadi
+    if layout["name_box"]:
+        box_left, box_top, box_right, box_bottom = layout["name_box"]
         sheet.setStrokeColor(DTM13_RED)
-        sheet.line(box_left + 8, top(distance), box_right - 8, top(distance))
-        _dtm13_text(sheet, (box_left + box_right) / 2, top(distance + 9), caption, 6.3)
-    sign = layout["name_lines"][-1] + 30
-    if sign + 10 < box_bottom:
-        sheet.saveState()
-        sheet.setDash(1, 1.5)
-        sheet.line(box_left + 40, top(sign), box_right - 40, top(sign))
-        sheet.restoreState()
-        _dtm13_text(sheet, (box_left + box_right) / 2, top(sign + 9), "Imzosi / Подпись", 6.3)
+        sheet.rect(box_left, top(box_bottom), box_right - box_left, box_bottom - box_top, stroke=1, fill=0)
+        sheet.line(box_left, top(box_top + 34), box_right, top(box_top + 34))
+        _dtm13_text(sheet, (box_left + box_right) / 2, top(box_top + 14), "Abituriyent tomonidan to'ldiriladi!", 8,
+                    room=box_right - box_left - 8)
+        _dtm13_text(sheet, (box_left + box_right) / 2, top(box_top + 26), "Заполняется абитуриентом!", 8,
+                    room=box_right - box_left - 8)
+        for distance, caption in zip(layout["name_lines"], ["(Familiyasi / Фамилия)", "(Ismi / Имя)",
+                                                            "(Otasining ismi / Отчество)"]):
+            sheet.setStrokeColor(DTM13_RED)
+            sheet.line(box_left + 8, top(distance), box_right - 8, top(distance))
+            _dtm13_text(sheet, (box_left + box_right) / 2, top(distance + 9), caption, 6.3)
+        sign = layout["name_lines"][-1] + 30
+        if sign + 10 < box_bottom:
+            sheet.saveState()
+            sheet.setDash(1, 1.5)
+            sheet.line(box_left + 40, top(sign), box_right - 40, top(sign))
+            sheet.restoreState()
+            _dtm13_text(sheet, (box_left + box_right) / 2, top(sign + 9), "Imzosi / Подпись", 6.3)
 
     # 6) Dalolatnoma: nazoratchilar to'ldiradi (rasmiy varaqdagidek)
     banner_top = layout["banner_top"]
@@ -7721,7 +7911,7 @@ def _dtm_attempt_view(db: Session, attempt: Attempt, row: dict) -> dict | None:
         "blocks": [
             {"index": index, "name": name, "mandatory": score["mandatory"], "total": score["total"], "max": score["max"],
              "ball": score["ball"], "correct": score["correct"], "certificate": score.get("certificate"),
-             "profile": profile.get(index), "override": overrides.get(str(index))}
+             "missing": bool(score.get("missing")), "profile": profile.get(index), "override": overrides.get(str(index))}
             for index, (name, score) in enumerate(scores.items())
         ],
     }
@@ -7757,6 +7947,11 @@ def set_dtm_certificates(
         key = str(block.index)
         if block.kind == "auto":
             overrides.pop(key, None)
+        elif block.kind == "claimed":
+            # Titulda bo'yalgan ball / daraja saqlanib qoladi
+            previous = overrides.get(key) if isinstance(overrides.get(key), dict) else {}
+            overrides[key] = {**{name: previous[name] for name in ("sheet_kind", "sheet_value") if name in previous},
+                              "kind": "claimed"}
         elif block.kind == "none":
             overrides[key] = {"kind": "none"}
         elif blocks[block.index]["mandatory"]:
@@ -7773,6 +7968,33 @@ def set_dtm_certificates(
     attempt.dtm_certificates = json.dumps(overrides, ensure_ascii=False) if overrides else None
     db.commit()
     return _teacher_answer_sheet(db, test, attempt)["dtm"]
+
+
+def _store_sheet_certificates(attempt: Attempt, marks: dict[str, str | None]) -> None:
+    """
+    DTM titulidagi sertifikat bo'limi: majburiy fanda "Ha" — 10 dan 10; asosiy fanda bo'yalgan ball ("ms:61.11")
+    yoki daraja ("lang:B2") — sertifikat qo'llanadi (o'quvchi profilida sertifikat bo'lsa — profildagisi ustun).
+    "Yo'q", bo'yalmagan yoki aniq o'qilmagan — o'quvchining javoblari.
+    """
+
+    try:
+        overrides = json.loads(attempt.dtm_certificates or "{}")
+    except ValueError:
+        overrides = {}
+    for key, value in marks.items():
+        entry: dict = {"kind": "none"}
+        if value == "yes":
+            entry = {"kind": "claimed"}
+        elif isinstance(value, str) and ":" in value:
+            kind, raw = value.split(":", 1)
+            clean = _clean_certificate_value(kind, raw) if kind in ("ms", "lang") else None
+            if clean:
+                entry = {"kind": "claimed", "sheet_kind": kind, "sheet_value": clean}
+        # Kalit — fan bloklari: "1-3" (Matematika majburiyda ham, asosiy fanda ham) yoki bittasi "4"
+        for part in str(key).split("-"):
+            if part.isdigit() and int(part) <= 20:
+                overrides[str(int(part))] = dict(entry)
+    attempt.dtm_certificates = json.dumps(overrides, ensure_ascii=False) if overrides else None
 
 
 def _attempt_review(db: Session, test: Test, attempt: Attempt) -> dict:
@@ -8673,6 +8895,9 @@ def save_scanned_sheet(
         attempt.variant = body.variant
         db.flush()
     _store_written_images(db, test, attempt, body.written)
+    if body.certificates is not None:
+        _store_sheet_certificates(attempt, body.certificates)
+        db.flush()  # saqlashda yozuv bazadan qayta o'qiladi — tanlov yo'qolmasin
     result = _store_offline_answers(db, test, teacher, attempt, body.answers)
     if body.written:
         _queue_ai_reading(db, [attempt.id])  # AI yoqilgan bo'lsa — kataklarni fonda o'qiydi

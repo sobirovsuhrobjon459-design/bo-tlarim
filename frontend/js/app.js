@@ -12607,7 +12607,17 @@ function dtmCertificatesHtml(dtm) {
     const current = block.override?.kind || "auto";
     const value = block.override?.value || "";
     const auto = option("auto", block.profile ? `Profildan: ${block.profile.label}` : "Yo'q", current === "auto");
-    const none = block.profile ? [option("none", "Yo'q (shu testda hisoblanmasin)", current === "none")] : [];
+    const none = block.profile || current === "none" ? [option("none", "Yo'q (shu testda hisoblanmasin)", current === "none")] : [];
+    const sheetValue = block.override?.sheet_value;
+    const sheetText = sheetValue ? (block.override.sheet_kind === "ms" ? `${sheetValue.replace(".", ",")} ball` : sheetValue) : null;
+    const claimedText = block.mandatory
+      ? `Titulda ${sheetText ? sheetText : "«Ha»"} — 10 dan 10`
+      : block.profile
+        ? `Titulda ${sheetText || "«Ha»"} — profildagisi ustun: ${block.profile.label}`
+        : sheetText
+          ? `Titulda: ${sheetText}`
+          : "Titulda «Ha» — bali kiritilmagan";
+    const claimed = current === "claimed" ? [option("claimed", claimedText, true)] : [];
     const choices = block.mandatory
       ? [option("cert", "Sertifikati bor — 10 dan 10", current === "cert")]
       : [
@@ -12620,8 +12630,14 @@ function dtmCertificatesHtml(dtm) {
           <b>${escapeHtml(block.name)}</b>
           <span>${dtmNumber(block.ball)} / ${dtmNumber(block.max)}${block.certificate ? " 🎓" : ""}</span>
         </div>
+        ${
+          block.missing
+            ? `<p class="subtitle" style="margin:4px 0 0;font-size:12px;color:#d97706">⚠️ Titulda «Ha» bo'yalgan, lekin sertifikat bali yo'q —
+                 o'quvchi profiliga sertifikat qo'shing yoki shu yerda kiriting.</p>`
+            : ""
+        }
         <div class="row-between" style="gap:8px;margin-top:6px">
-          <select class="input" data-cert-kind style="margin:0;flex:1;min-width:0">${[auto, ...none, ...choices].join("")}</select>
+          <select class="input" data-cert-kind style="margin:0;flex:1;min-width:0">${[...claimed, auto, ...none, ...choices].join("")}</select>
           <input class="input" data-cert-ball type="text" inputmode="decimal" placeholder="57.90"
                  value="${current === "ms" ? escapeHtml(value) : ""}" style="margin:0;width:92px;${current === "ms" ? "" : "display:none"}" />
         </div>
@@ -13952,6 +13968,69 @@ async function readSheetImage(testId, image, page, collected) {
   return mergeScan(scan, collected);
 }
 
+// DTM titulidagi sertifikat bo'limi:
+//   majburiy fan ("yesno"): "yes" / "no" / "both" (ikkalasi) / null;
+//   asosiy fan ("ms"): "ms:61.11" / "unclear" (ustunda bir nechta raqam, o'nlar-birlar bo'sh, 75 dan katta) / null;
+//   chet tili ("lang"): "lang:B2" / "unclear" / null.
+const CERT_BALL_MAX = 75;
+
+function readSheetCertificates(certRows, certBalls, certLevels) {
+  const filledOf = (ratios) => Object.entries(ratios).filter(([, ratio]) => ratio >= FILLED_RATIO).map(([letter]) => letter);
+  const list = [];
+  for (const [ref, row] of certRows) {
+    const filled = filledOf(row.ratios);
+    list.push({ index: ref.replace(/^cert/, ""), label: row.label, kind: "yesno", value: filled.length === 1 ? filled[0] : filled.length ? "both" : null });
+  }
+  for (const [key, group] of certBalls) {
+    const columns = Object.keys(group.columns).map(Number).sort((a, b) => a - b);
+    let value = null;
+    const digits = columns.map((column) => {
+      const filled = filledOf(group.columns[column]);
+      if (filled.length > 1) value = "unclear";
+      return filled.length === 1 ? filled[0] : null;
+    });
+    if (value === null && digits.some((digit) => digit !== null)) {
+      if (digits.length !== 4 || digits[0] === null || digits[1] === null) value = "unclear";
+      else {
+        const ball = Number(`${digits[0]}${digits[1]}.${digits[2] ?? "0"}${digits[3] ?? "0"}`);
+        value = ball <= CERT_BALL_MAX ? `ms:${ball.toFixed(2)}` : "unclear";
+      }
+    }
+    list.push({ index: key, label: group.label, kind: "ms", value });
+  }
+  for (const [key, group] of certLevels) {
+    const filled = filledOf(group.ratios);
+    list.push({ index: key, label: group.label, kind: "lang", value: filled.length === 1 ? `lang:${filled[0]}` : filled.length ? "unclear" : null });
+  }
+  return list.sort((a, b) => Number(a.index.split("-")[0]) - Number(b.index.split("-")[0]));
+}
+
+// Serverga {bloklar: qiymat} — qarang readSheetCertificates
+function sheetCertificateMarks(certificates) {
+  return certificates?.length ? Object.fromEntries(certificates.map((item) => [item.index, item.value])) : null;
+}
+
+function scanCertificatesHtml(certificates) {
+  if (!certificates?.length) return "";
+  const text = (item) => {
+    const value = item.value;
+    if (value === "yes") return "<b>Ha</b>";
+    if (value === "both") return "⚠️ ikkalasi bo'yalgan — «Yo'q» deb olinadi";
+    if (value === "unclear") return "⚠️ aniq o'qilmadi — sertifikatsiz hisoblanadi (natijada kiriting)";
+    if (value?.startsWith("ms:")) return `<b>${escapeHtml(value.slice(3).replace(".", ","))} ball</b>`;
+    if (value?.startsWith("lang:")) return `<b>${escapeHtml(value.slice(5))}</b>`;
+    return item.kind === "yesno" || value === "no" ? "Yo'q" : "—";
+  };
+  return `
+    <div class="card" style="cursor:default;display:block;margin-top:8px">
+      <p class="subtitle" style="margin:0 0 6px">🎓 Sertifikat (titulda):</p>
+      ${certificates.map((item) => `<p style="margin:2px 0">${escapeHtml(item.label)}: ${text(item)}</p>`).join("")}
+      <p class="subtitle" style="margin:6px 0 0;font-size:12px">Belgilangan fan sertifikat bo'yicha hisoblanadi (majburiyda 10 dan 10,
+        asosiy fanda — ball yoki daraja; o'quvchi profilida sertifikat bo'lsa — profildagisi ustun).
+        O'zgartirish — natijadagi «🎓 Sertifikatlar» panelida.</p>
+    </div>`;
+}
+
 function mergeScan(scan, collected) {
   const merged = collected || { questions: [], nameImage: null, pending: scan.pending_students };
   merged.questions = merged.questions.filter((question) => !scan.questions.some((item) => item.ref === question.ref));
@@ -13961,6 +14040,7 @@ function mergeScan(scan, collected) {
   for (const item of scan.written || []) merged.written[String(item.ref)] = { label: item.label, image: item.image };
   if (scan.name_image) merged.nameImage = scan.name_image;
   if (scan.page === 1) {
+    merged.certificates = scan.certificates?.length ? scan.certificates : null;
     merged.variants = scan.variants || [];
     merged.variant = scan.variant || scan.match?.variant || null;
     merged.match = scan.match;
@@ -14753,6 +14833,9 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
   const highlights = []; // bo'yalgan ID va variant doirachalari — natija rasmida sariq halqa
   const idRows = new Map();
   const variantRatios = new Map();
+  const certRows = new Map(); // DTM: majburiy fan sertifikati — Ha / Yo'q
+  const certBalls = new Map(); // 14-versiya: asosiy fan — Milliy sertifikat bali (4 ustun × 0–9)
+  const certLevels = new Map(); // 14-versiya: chet tili — CEFR darajasi
   const written = []; // yozma javob kataklari: varaqdagi joyi (punktlarda) — rasm qilib qirqiladi
   for (const bubble of pageBubbles) {
     if (bubble.kind === "mark" || bubble.kind === "anchor") continue;
@@ -14778,6 +14861,24 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
     let ratio = 0;
     for (const ox of [-0.1, 0, 0.1]) {
       for (const oy of [-0.1, 0, 0.1]) ratio = Math.max(ratio, maskFill(sheet, inner, x + dx + ox * bubble.r, y + dy + oy * bubble.r));
+    }
+    if (bubble.kind === "cert" || bubble.kind === "certball" || bubble.kind === "certlevel") {
+      if (ratio >= FILLED_RATIO) highlights.push([x + dx, y + dy, bubble.r]);
+      if (bubble.kind === "cert") {
+        if (!certRows.has(bubble.ref)) certRows.set(bubble.ref, { label: bubble.label, ratios: {} });
+        certRows.get(bubble.ref).ratios[bubble.letter] = ratio;
+      } else if (bubble.kind === "certball") {
+        const [key, column] = bubble.ref.replace(/^certball/, "").split("#");
+        if (!certBalls.has(key)) certBalls.set(key, { label: bubble.label, columns: {} });
+        const columns = certBalls.get(key).columns;
+        if (!columns[column]) columns[column] = {};
+        columns[column][bubble.letter] = ratio;
+      } else {
+        const key = bubble.ref.replace(/^certlevel/, "");
+        if (!certLevels.has(key)) certLevels.set(key, { label: bubble.label, ratios: {} });
+        certLevels.get(key).ratios[bubble.letter] = ratio;
+      }
+      continue;
     }
     if (bubble.kind === "id" || bubble.kind === "variant") {
       if (ratio >= FILLED_RATIO) highlights.push([x + dx, y + dy, bubble.r]);
@@ -14832,6 +14933,8 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
   const markedVariants = [...variantRatios.entries()].filter(([, ratio]) => ratio >= FILLED_RATIO).map(([name]) => name);
   const variant = markedVariants.length === 1 ? markedVariants[0] : null;
 
+  const certificates = readSheetCertificates(certRows, certBalls, certLevels);
+
   let sheetCode = null;
   if (codeBits.size && [...codeBits.values()].every((ratio) => ratio >= FILLED_RATIO || ratio < UNSURE_RATIO)) {
     sheetCode = 0;
@@ -14844,6 +14947,7 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
     sheet_number: sheetNumber,
     sheet_number_status: numberStatus,
     variant,
+    certificates,
     sheet_code: sheetCode,
     positions,
     highlights,
@@ -14920,6 +15024,7 @@ function createScanWorker() {
     `let READ_SCALE = 2;`,
     `const FILLED_RATIO = ${FILLED_RATIO};`,
     `const UNSURE_RATIO = ${UNSURE_RATIO};`,
+    `const CERT_BALL_MAX = ${CERT_BALL_MAX};`,
     ...[
       perspectiveMatrix,
       perspectiveMap,
@@ -14937,6 +15042,7 @@ function createScanWorker() {
       locateMark,
       interpolateOffset,
       readSheetAnswers,
+      readSheetCertificates,
       analyzeFrame,
     ].map(String),
     `let layout = null;
@@ -15572,6 +15678,7 @@ function renderScanReview(testId, test, scan) {
     </div>
     ${variantChipsHtml(scan.variants, scan.variant || "A")}
     ${scan.variants?.length && !scan.variant ? `<div class="notice">🔀 Varaqdagi variant aniq o'qilmadi — to'g'risini tanlang.</div>` : ""}
+    ${scanCertificatesHtml(scan.certificates)}
     <p class="subtitle" style="margin:4px 4px 10px">
       ✅ O'qildi: <b>${scan.questions.length - needsCheck.length - empty}</b> ·
       ⚠️ Tekshiring: <b>${needsCheck.length}</b> · ⬜ Bo'sh: <b>${empty}</b>
@@ -15718,6 +15825,7 @@ function renderScanReview(testId, test, scan) {
       sheet_number: scan.sheetNumber || null,
       variant: scan.variants?.length ? scan.variant || "A" : null,
       written: Object.fromEntries(writtenItems.map(([ref, item]) => [ref, item.image])),
+      certificates: sheetCertificateMarks(scan.certificates),
     };
     const result = scan.local
       ? await saveCheckedSheet(testId, scan, body, scan.match?.name || select?.selectedOptions[0]?.textContent || name)
@@ -16202,7 +16310,9 @@ async function processScanQueue() {
           continue;
         }
         const scan = await readSheetImage(item.testId, item.image, 1, null);
-        const flagged = scan.questions.some((question) => question.status === "multiple" || question.status === "unsure");
+        const flagged =
+          scan.questions.some((question) => question.status === "multiple" || question.status === "unsure") ||
+          Boolean(scan.certificates?.some((item) => item.value === "both" || item.value === "unclear"));
         const variantKnown = !scan.variants?.length || Boolean(scan.variant);
         if (scan.match?.status === "pending" && !flagged && variantKnown && scan.pageCount === 1) {
           const answers = Object.fromEntries(
@@ -16216,6 +16326,7 @@ async function processScanQueue() {
               answers,
               variant: scan.variants?.length ? scan.variant : null,
               written,
+              certificates: sheetCertificateMarks(scan.certificates),
             },
           });
           await queueDelete(item.id);

@@ -607,6 +607,9 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
     code_bits: dict[int, float] = {}
     questions: dict = {}
     id_rows: dict[str, dict[str, float]] = {}
+    cert_rows: dict[str, dict] = {}  # DTM: majburiy fan sertifikati — Ha / Yo'q
+    cert_balls: dict[str, dict] = {}  # 14-versiya: asosiy fan — Milliy sertifikat bali (4 ustun × 0–9)
+    cert_levels: dict[str, dict] = {}  # 14-versiya: chet tili — CEFR darajasi (C1 / B2 / B1)
     variant_ratios: dict[str, float] = {}
     # Har savol qatori (va raqam/variant qatori) chop etilgan halqalari bo'yicha tekislanadi
     rows: dict = {}
@@ -651,6 +654,19 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
             continue
         if bubble["kind"] == "variant":
             variant_ratios[bubble["letter"]] = ratio
+            continue
+        if bubble["kind"] == "cert":
+            row = cert_rows.setdefault(bubble["ref"], {"label": bubble["label"], "ratios": {}})
+            row["ratios"][bubble["letter"]] = ratio
+            continue
+        if bubble["kind"] == "certball":
+            key, column = bubble["ref"].removeprefix("certball").split("#")
+            group = cert_balls.setdefault(key, {"label": bubble["label"], "columns": {}})
+            group["columns"].setdefault(int(column), {})[bubble["letter"]] = ratio
+            continue
+        if bubble["kind"] == "certlevel":
+            group = cert_levels.setdefault(bubble["ref"].removeprefix("certlevel"), {"label": bubble["label"], "ratios": {}})
+            group["ratios"][bubble["letter"]] = ratio
             continue
         entry = questions.setdefault(bubble["ref"], {
             "ref": bubble["ref"], "label": bubble["label"], "kind": bubble["kind"], "options": [], "ratios": {},
@@ -708,9 +724,51 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
     if code_bits and all(ratio >= FILLED_RATIO or ratio < UNSURE_RATIO for ratio in code_bits.values()):
         sheet_code = sum(1 << bit for bit, ratio in code_bits.items() if ratio >= FILLED_RATIO)
 
-    return {"answers": answers, "questions": result, "name_image": name_image,
+    certificates = read_certificates(cert_rows, cert_balls, cert_levels)
+
+    return {"answers": answers, "questions": result, "name_image": name_image, "certificates": certificates,
             "sheet_number": sheet_number, "sheet_number_status": number_status, "variant": variant,
             "sheet_code": sheet_code, "written": written}
+
+
+CERT_BALL_MAX = 75.0  # Milliy sertifikatning eng katta bali
+
+
+def read_certificates(cert_rows: dict, cert_balls: dict, cert_levels: dict) -> list[dict]:
+    """
+    DTM titulidagi sertifikat bo'limi. index — fan bloklari ("1-3": majburiy va asosiy Matematika), saqlashda
+    shu kalit bilan yuboriladi. value:
+      • majburiy fan (kind "yesno"): "yes" / "no"; "both" — ikkalasi bo'yalgan; None — bo'yalmagan;
+      • asosiy fan (kind "ms"): "ms:61.11"; "unclear" — ustunda bir nechta raqam, o'nlar/birlar bo'sh yoki 75 dan
+        katta; None — bo'yalmagan. Verguldan keyingi bo'sh ustun — 0 (61 → 61.00);
+      • chet tili (kind "lang"): "lang:B2"; "unclear" — bir nechtasi; None — bo'yalmagan.
+    """
+
+    certificates = []
+    for ref, row in cert_rows.items():
+        filled = [letter for letter, ratio in row["ratios"].items() if ratio >= FILLED_RATIO]
+        value = filled[0] if len(filled) == 1 else ("both" if filled else None)
+        certificates.append({"index": ref.removeprefix("cert"), "label": row["label"], "kind": "yesno", "value": value})
+    for key, group in cert_balls.items():
+        digits: list[str | None] = []
+        value: str | None = None
+        for column in sorted(group["columns"]):
+            filled = [digit for digit, ratio in group["columns"][column].items() if ratio >= FILLED_RATIO]
+            if len(filled) > 1:
+                value = "unclear"
+            digits.append(filled[0] if len(filled) == 1 else None)
+        if value is None and any(digit is not None for digit in digits):
+            if len(digits) != 4 or digits[0] is None or digits[1] is None:
+                value = "unclear"
+            else:
+                ball = float(f"{digits[0]}{digits[1]}.{digits[2] or '0'}{digits[3] or '0'}")
+                value = f"ms:{ball:.2f}" if ball <= CERT_BALL_MAX else "unclear"
+        certificates.append({"index": key, "label": group["label"], "kind": "ms", "value": value})
+    for key, group in cert_levels.items():
+        filled = [level for level, ratio in group["ratios"].items() if ratio >= FILLED_RATIO]
+        value = f"lang:{filled[0]}" if len(filled) == 1 else ("unclear" if filled else None)
+        certificates.append({"index": key, "label": group["label"], "kind": "lang", "value": value})
+    return sorted(certificates, key=lambda item: int(item["index"].split("-")[0]))
 
 
 WRITTEN_MARGIN = 3.0  # yozma katak atrofidan qo'shib olinadigan joy (pt): chetga chiqqan yozuv ham kirsin
