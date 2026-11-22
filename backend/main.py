@@ -1514,28 +1514,43 @@ def _all_participants(db: Session, test: Test) -> list[tuple[Attempt, str]]:
 
 
 def _ensure_sheet_numbers(db: Session, test: Test) -> None:
-    """O'qituvchi qo'shgan o'quvchilarga varaq raqami (1, 2, 3 ...) — hali yo'q bo'lsa, qo'shilish tartibida."""
+    """
+    O'qituvchi qo'shgan o'quvchilarga varaq raqami (ID) — hali yo'q bo'lsa, qo'shilish tartibida, ro'yxatdagi
+    OXIRGI raqamdan keyingisi: 1, 2, 3 …; imtihonga sinf biriktirilgan bo'lsa (1001–1057) — 1058.
+    Maktab o'quvchilarining ID'lari band — skaner varaqni ID bo'yicha taniydi, boshqa o'quvchiga tushmasin.
+    """
 
     offline = db.scalars(
         select(Attempt)
         .where(Attempt.test_id == test.id, Attempt.user_id.is_(None), Attempt.status.in_(("pending", "done")))
         .order_by(Attempt.id)
     ).all()
+    missing = [attempt for attempt in offline if not attempt.sheet_number]
+    if not missing:
+        return
     taken = {attempt.sheet_number for attempt in offline if attempt.sheet_number}
-    next_number = 1
-    changed = False
-    for attempt in offline:
-        if attempt.sheet_number:
-            continue
-        while next_number in taken:
+    reserved: set[int] = set()
+    class_student_ids = {attempt.class_student_id for attempt in offline if attempt.class_student_id}
+    if class_student_ids:
+        schools = (select(SchoolClass.school_id).join(ClassStudent, ClassStudent.class_id == SchoolClass.id)
+                   .where(ClassStudent.id.in_(class_student_ids)))
+        reserved = set(db.scalars(
+            select(ClassStudent.student_code).join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
+            .where(SchoolClass.school_id.in_(schools), ClassStudent.student_code.is_not(None),
+                   ClassStudent.removed_at.is_(None))
+        ).all())
+    next_number = max(taken, default=0) + 1
+    for attempt in missing:
+        while next_number in taken or next_number in reserved:
             next_number += 1
-        if next_number > 9999:
-            break
+        if next_number > 9999:  # raqamlar tugagan — bo'shab qolgan eng kichigi
+            next_number = next((number for number in range(1, 10000) if number not in taken and number not in reserved),
+                               None)
+            if next_number is None:
+                break
         attempt.sheet_number = next_number
         taken.add(next_number)
-        changed = True
-    if changed:
-        db.commit()
+    db.commit()
 
 
 def _get_offline_attempt(db: Session, test: Test, attempt_id: int) -> Attempt:

@@ -7155,6 +7155,48 @@ def test_dtm_sertifikatli_oquvchi_bali_rasmiy_natijadagidek():
     assert [c["subject"] for c in left] == ["Ona tili va adabiyot", "Matematika"]
 
 
+def test_imtihonga_qoshilgan_oquvchi_oxirgi_iddan_keyingisini_oladi():
+    """
+    Imtihonga sinf biriktirilgan (1001–1002) bo'lsa, test sahifasidan qo'shilgan o'quvchi 1 emas, ro'yxatdagi oxirgi
+    ID'dan keyingisini oladi (1003). Boshqa sinf o'quvchisining ID'si (1004) band — o'tkazib yuboriladi.
+    Sinfsiz testda — avvalgidek 1, 2, 3 …; o'chirilgan raqam qayta berilmaydi (oxirgisidan keyingisi).
+    """
+
+    reset_database()
+    school_class = _school_with_class(701)
+    register_teacher(701, "Aziza", "Karimova")
+    cid = school_class["id"]
+    client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Ali Valiyev", "Zuhra Karimova"]}, headers=as_user(701))
+    assert client.put(f"/api/classes/{cid}/student-codes", json={"start": 1001, "end": 1002},
+                      headers=as_user(701)).status_code == 200
+    other = client.post("/api/classes", json={"name": "5-B"}, headers=as_user(701))
+    assert other.status_code == 200, other.text
+    other_id = other.json()["id"]
+    client.post(f"/api/classes/{other_id}/students/bulk", json={"names": ["Boshqa Sinf"]}, headers=as_user(701))
+    assert client.put(f"/api/classes/{other_id}/student-codes", json={"start": 1004, "end": 1010},
+                      headers=as_user(701)).status_code == 200
+
+    created = create_test(701, enrollment_type="closed")
+    base = f"/api/teacher/tests/{created['id']}"
+    assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json()["added"] == 2
+    client.post(f"{base}/students", json={"names": ["Mehmon Birinchi"]}, headers=as_user(701))
+    client.post(f"{base}/students", json={"names": ["Mehmon Ikkinchi", "Mehmon Uchinchi"]}, headers=as_user(701))
+    numbers = {s["name"]: s["number"] for s in client.get(base, headers=as_user(701)).json()["students"]}
+    assert numbers == {"Ali Valiyev": 1001, "Zuhra Karimova": 1002, "Mehmon Birinchi": 1003,
+                       "Mehmon Ikkinchi": 1005, "Mehmon Uchinchi": 1006}, numbers
+
+    plain = create_test(701, enrollment_type="closed")
+    plain_base = f"/api/teacher/tests/{plain['id']}"
+    client.post(f"{plain_base}/students", json={"names": ["Bir", "Ikki", "Uch"]}, headers=as_user(701))
+    students = client.get(plain_base, headers=as_user(701)).json()["students"]
+    assert [s["number"] for s in students] == [1, 2, 3], students
+    second = next(s["id"] for s in students if s["number"] == 2)
+    assert client.delete(f"{plain_base}/students/{second}", headers=as_user(701)).status_code == 200
+    client.post(f"{plain_base}/students", json={"names": ["To'rt"]}, headers=as_user(701))
+    numbers = {s["name"]: s["number"] for s in client.get(plain_base, headers=as_user(701)).json()["students"]}
+    assert numbers == {"Bir": 1, "Uch": 3, "To'rt": 4}, numbers
+
+
 def _dtm14_scanned_sheet(sections: list[str], profile: list[tuple[str, str, str]], marks: set[tuple[str, str]],
                          answers: dict[str, str]) -> tuple[str, dict, list[dict]]:
     """
