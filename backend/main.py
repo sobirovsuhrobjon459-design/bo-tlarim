@@ -12008,6 +12008,26 @@ def _school_attendance(db: Session, user: User, attendance_id: int) -> tuple[Att
 STUDENT_CODE_FIRST, STUDENT_CODE_LAST = 1001, 9999
 
 
+def _exam_guest_numbers(db: Session, school_id: int) -> set[int]:
+    """
+    Maktab sinflari biriktirilgan, hali yakunlanmagan imtihonlarga test sahifasidan (sinfsiz) qo'shilgan
+    o'quvchilarning raqamlari: sinfga yangi qo'shilgan o'quvchi ularni olmaydi — titul boshqasiga tushmasin.
+    """
+
+    school_tests = (
+        select(Attempt.test_id)
+        .join(ClassStudent, ClassStudent.id == Attempt.class_student_id)
+        .join(SchoolClass, SchoolClass.id == ClassStudent.class_id)
+        .where(SchoolClass.school_id == school_id)
+    )
+    return set(db.scalars(
+        select(Attempt.sheet_number)
+        .join(Test, Test.id == Attempt.test_id)
+        .where(Attempt.test_id.in_(school_tests), Test.status != "closed", Attempt.class_student_id.is_(None),
+               Attempt.user_id.is_(None), Attempt.sheet_number.is_not(None), Attempt.status.in_(("pending", "done")))
+    ).all())
+
+
 def _assign_student_codes(db: Session, school_id: int) -> None:
     """
     ID oralig'i belgilangan sinflarda ID'siz (yangi qo'shilgan) o'quvchilarga sinfdagi OXIRGI ID'dan
@@ -12045,13 +12065,18 @@ def _assign_student_codes(db: Session, school_id: int) -> None:
         if student.student_code and not student.removed_at and student.source_student_id is None:
             last_code[school_class.id] = max(last_code.get(school_class.id, 0), student.student_code)
     ranges: dict[int, tuple[int, int]] | None = None  # sinflar oraliqlari — oraliq kengaytirilganda kerak
+    guests: set[int] | None = None  # imtihonga sinfsiz qo'shilgan o'quvchilar raqami — kerak bo'lganda o'qiladi
     for student, school_class in rows:
         # O'chirilgan sinf o'quvchisiga ID berilmaydi — aks holda har chaqiruvda yuqorida olinib, bu yerda
         # qayta berilardi (har sinf ochilishida bazaga o'nlab yozish va sekinlik)
         if (student.student_code or student.removed_at or school_class.deleted_at or school_class.code_start is None
                 or student.source_student_id is not None):
             continue
+        if guests is None:
+            guests = _exam_guest_numbers(db, school_id)
         code = max(last_code.get(school_class.id, 0), school_class.code_start - 1) + 1
+        while code in guests:  # imtihon ro'yxatiga qo'shilgan mehmon raqami (1058) — keyingisi (1059)
+            code += 1
         if code > school_class.code_end:
             if ranges is None:
                 ranges = {
@@ -12073,7 +12098,7 @@ def _assign_student_codes(db: Session, school_id: int) -> None:
         if code is None:
             # Keyingi raqam boshqa sinfniki — oraliqda bo'shab qolgan raqam (sinfdan chiqarilgan o'quvchiniki)
             code = next((value for value in range(school_class.code_start, school_class.code_end + 1)
-                         if value not in taken), None)
+                         if value not in taken and value not in guests), None)
         if code is None:
             continue
         student.student_code = code

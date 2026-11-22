@@ -7158,8 +7158,9 @@ def test_dtm_sertifikatli_oquvchi_bali_rasmiy_natijadagidek():
 def test_imtihonga_qoshilgan_oquvchi_oxirgi_iddan_keyingisini_oladi():
     """
     Imtihonga sinf biriktirilgan (1001–1002) bo'lsa, test sahifasidan qo'shilgan o'quvchi 1 emas, ro'yxatdagi oxirgi
-    ID'dan keyingisini oladi (1003). Boshqa sinf o'quvchisining ID'si (1004) band — o'tkazib yuboriladi.
-    Sinfsiz testda — avvalgidek 1, 2, 3 …; o'chirilgan raqam qayta berilmaydi (oxirgisidan keyingisi).
+    ID'dan keyingisini oladi (1003, 1004, 1005). Keyin sinfga qo'shilgan o'quvchi bu raqamlarni olmaydi — 1006
+    (sinf oralig'i o'zi kengayadi). Maktab o'quvchilarining ID'lari (1006, boshqa sinfdagi 1007) band — keyingi mehmon
+    1008 ni oladi. Sinfsiz testda — avvalgidek 1, 2, 3 …; o'chirilgan raqam qayta berilmaydi.
     """
 
     reset_database()
@@ -7173,7 +7174,7 @@ def test_imtihonga_qoshilgan_oquvchi_oxirgi_iddan_keyingisini_oladi():
     assert other.status_code == 200, other.text
     other_id = other.json()["id"]
     client.post(f"/api/classes/{other_id}/students/bulk", json={"names": ["Boshqa Sinf"]}, headers=as_user(701))
-    assert client.put(f"/api/classes/{other_id}/student-codes", json={"start": 1004, "end": 1010},
+    assert client.put(f"/api/classes/{other_id}/student-codes", json={"start": 1007, "end": 1010},
                       headers=as_user(701)).status_code == 200
 
     created = create_test(701, enrollment_type="closed")
@@ -7181,9 +7182,25 @@ def test_imtihonga_qoshilgan_oquvchi_oxirgi_iddan_keyingisini_oladi():
     assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json()["added"] == 2
     client.post(f"{base}/students", json={"names": ["Mehmon Birinchi"]}, headers=as_user(701))
     client.post(f"{base}/students", json={"names": ["Mehmon Ikkinchi", "Mehmon Uchinchi"]}, headers=as_user(701))
-    numbers = {s["name"]: s["number"] for s in client.get(base, headers=as_user(701)).json()["students"]}
-    assert numbers == {"Ali Valiyev": 1001, "Zuhra Karimova": 1002, "Mehmon Birinchi": 1003,
-                       "Mehmon Ikkinchi": 1005, "Mehmon Uchinchi": 1006}, numbers
+
+    def test_numbers() -> dict:
+        return {s["name"]: s["number"] for s in client.get(base, headers=as_user(701)).json()["students"]}
+
+    assert test_numbers() == {"Ali Valiyev": 1001, "Zuhra Karimova": 1002, "Mehmon Birinchi": 1003,
+                              "Mehmon Ikkinchi": 1004, "Mehmon Uchinchi": 1005}
+
+    # Sinfga yangi o'quvchi: 1003–1005 imtihon mehmonlariniki — 1006 (oraliq 1001–1006 ga kengayadi)
+    client.post(f"/api/classes/{cid}/students/bulk", json={"names": ["Yangi Sinfdosh"]}, headers=as_user(701))
+    school = client.get(f"/api/classes/{cid}", headers=as_user(701)).json()
+    codes = {s["full_name"]: s["code"] for s in school["students"]}
+    assert codes == {"Ali Valiyev": 1001, "Zuhra Karimova": 1002, "Yangi Sinfdosh": 1006}, codes
+
+    # Keyingi mehmon: 1006 (Yangi Sinfdosh) va 1007 (boshqa sinf) band — 1008; sinf qayta biriktirilsa —
+    # Yangi Sinfdosh o'z ID'si bilan
+    client.post(f"{base}/students", json={"names": ["Mehmon To'rtinchi"]}, headers=as_user(701))
+    assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json()["added"] == 1
+    numbers = test_numbers()
+    assert numbers["Mehmon To'rtinchi"] == 1008 and numbers["Yangi Sinfdosh"] == 1006, numbers
 
     plain = create_test(701, enrollment_type="closed")
     plain_base = f"/api/teacher/tests/{plain['id']}"
