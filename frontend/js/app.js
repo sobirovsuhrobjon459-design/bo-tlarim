@@ -1640,7 +1640,7 @@ function homePlacesHtml(data) {
     ];
     return homeCard(
       icons[place.kind] || ROLE_ICONS.school,
-      escapeHtml(place.name),
+      escapeHtml(place.name) + (place.verified ? VERIFIED_BADGE : ""),
       escapeHtml(parts.filter(Boolean).join(" · ")),
       `data-home-place="${place.kind}"`
     );
@@ -4257,7 +4257,66 @@ async function wireLocationSelects({ allDistricts = false, onChange }) {
 // Admin tasdiqlagan (haqiqiy) muassasa belgisi — Telegram'dagidek ko'k to'lqinsimon nishon va oq galochka.
 // Animatsiya (style.css → .verified-badge): paydo bo'lganda "sakrab" chiqadi va galochka chiziladi,
 // so'ng nishon sekin aylanib turadi (galochka tik qoladi). "Kamroq harakat" sozlamasida — animatsiyasiz.
-const VERIFIED_BADGE = `<span class="verified-badge" role="img" aria-label="Tasdiqlangan muassasa" title="Tasdiqlangan muassasa"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="verified-badge-seal" d="M12.00 0.93 L12.57 1.06 L13.11 1.42 L13.60 1.93 L14.03 2.45 L14.45 2.87 L14.88 3.12 L15.39 3.18 L15.97 3.08 L16.63 2.91 L17.32 2.79 L17.96 2.82 L18.51 3.05 L18.89 3.49 L19.12 4.10 L19.21 4.79 L19.26 5.46 L19.34 6.05 L19.55 6.51 L19.92 6.85 L20.46 7.12 L21.09 7.37 L21.71 7.67 L22.22 8.08 L22.53 8.58 L22.58 9.17 L22.40 9.79 L22.07 10.40 L21.71 10.98 L21.44 11.51 L21.33 12.00 L21.44 12.49 L21.71 13.02 L22.07 13.60 L22.40 14.21 L22.58 14.83 L22.53 15.42 L22.22 15.92 L21.71 16.33 L21.09 16.63 L20.46 16.88 L19.92 17.15 L19.55 17.49 L19.34 17.95 L19.26 18.54 L19.21 19.21 L19.12 19.90 L18.89 20.51 L18.51 20.95 L17.96 21.18 L17.32 21.21 L16.63 21.09 L15.97 20.92 L15.39 20.82 L14.88 20.88 L14.45 21.13 L14.03 21.55 L13.60 22.07 L13.11 22.58 L12.57 22.94 L12.00 23.07 L11.43 22.94 L10.89 22.58 L10.40 22.07 L9.97 21.55 L9.55 21.13 L9.12 20.88 L8.61 20.82 L8.03 20.92 L7.37 21.09 L6.68 21.21 L6.04 21.18 L5.49 20.95 L5.11 20.51 L4.88 19.90 L4.79 19.21 L4.74 18.54 L4.66 17.95 L4.45 17.49 L4.08 17.15 L3.54 16.88 L2.91 16.63 L2.29 16.33 L1.78 15.92 L1.47 15.42 L1.42 14.83 L1.60 14.21 L1.93 13.60 L2.29 13.02 L2.56 12.49 L2.67 12.00 L2.56 11.51 L2.29 10.98 L1.93 10.40 L1.60 9.79 L1.42 9.17 L1.47 8.58 L1.78 8.08 L2.29 7.67 L2.91 7.37 L3.54 7.12 L4.08 6.85 L4.45 6.51 L4.66 6.05 L4.74 5.46 L4.79 4.79 L4.88 4.10 L5.11 3.49 L5.49 3.05 L6.04 2.82 L6.68 2.79 L7.37 2.91 L8.03 3.08 L8.61 3.18 L9.12 3.12 L9.55 2.87 L9.97 2.45 L10.40 1.93 L10.89 1.42 L11.43 1.06Z"/><path class="verified-badge-check" d="M7.6 12.3l3 3 5.9-6.2"/></svg></span>`;
+const VERIFIED_SEAL_PATH = "M12.00 0.93 L12.57 1.06 L13.11 1.42 L13.60 1.93 L14.03 2.45 L14.45 2.87 L14.88 3.12 L15.39 3.18 L15.97 3.08 L16.63 2.91 L17.32 2.79 L17.96 2.82 L18.51 3.05 L18.89 3.49 L19.12 4.10 L19.21 4.79 L19.26 5.46 L19.34 6.05 L19.55 6.51 L19.92 6.85 L20.46 7.12 L21.09 7.37 L21.71 7.67 L22.22 8.08 L22.53 8.58 L22.58 9.17 L22.40 9.79 L22.07 10.40 L21.71 10.98 L21.44 11.51 L21.33 12.00 L21.44 12.49 L21.71 13.02 L22.07 13.60 L22.40 14.21 L22.58 14.83 L22.53 15.42 L22.22 15.92 L21.71 16.33 L21.09 16.63 L20.46 16.88 L19.92 17.15 L19.55 17.49 L19.34 17.95 L19.26 18.54 L19.21 19.21 L19.12 19.90 L18.89 20.51 L18.51 20.95 L17.96 21.18 L17.32 21.21 L16.63 21.09 L15.97 20.92 L15.39 20.82 L14.88 20.88 L14.45 21.13 L14.03 21.55 L13.60 22.07 L13.11 22.58 L12.57 22.94 L12.00 23.07 L11.43 22.94 L10.89 22.58 L10.40 22.07 L9.97 21.55 L9.55 21.13 L9.12 20.88 L8.61 20.82 L8.03 20.92 L7.37 21.09 L6.68 21.21 L6.04 21.18 L5.49 20.95 L5.11 20.51 L4.88 19.90 L4.79 19.21 L4.74 18.54 L4.66 17.95 L4.45 17.49 L4.08 17.15 L3.54 16.88 L2.91 16.63 L2.29 16.33 L1.78 15.92 L1.47 15.42 L1.42 14.83 L1.60 14.21 L1.93 13.60 L2.29 13.02 L2.56 12.49 L2.67 12.00 L2.56 11.51 L2.29 10.98 L1.93 10.40 L1.60 9.79 L1.42 9.17 L1.47 8.58 L1.78 8.08 L2.29 7.67 L2.91 7.37 L3.54 7.12 L4.08 6.85 L4.45 6.51 L4.66 6.05 L4.74 5.46 L4.79 4.79 L4.88 4.10 L5.11 3.49 L5.49 3.05 L6.04 2.82 L6.68 2.79 L7.37 2.91 L8.03 3.08 L8.61 3.18 L9.12 3.12 L9.55 2.87 L9.97 2.45 L10.40 1.93 L10.89 1.42 L11.43 1.06Z";
+const VERIFIED_BADGE = `<span class="verified-badge" role="img" aria-label="Tasdiqlangan muassasa" title="Tasdiqlangan muassasa"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="verified-badge-seal" d="${VERIFIED_SEAL_PATH}"/><path class="verified-badge-check" d="M7.6 12.3l3 3 5.9-6.2"/></svg></span>`;
+
+/*
+  Tasdiqlanmagan muassasa rahbariyatiga — bo'yalmagan, uzuq chiziqli "bo'sh" belgi va uni bosayotgan
+  kursor animatsiyasi (sotib olishga undaydi). Bosilsa — sotib olish oynasi (Payme). Narx admin panelda.
+*/
+function verifyPromoBadgeHtml() {
+  return `<button type="button" class="verify-promo" data-verify-buy aria-label="Tasdiq belgisini olish"
+      title="✓ Tasdiq belgisini olish"><svg viewBox="0 0 24 24" aria-hidden="true">
+      <path class="verify-promo-seal" d="${VERIFIED_SEAL_PATH}"/><path class="verify-promo-check" d="M7.6 12.3l3 3 5.9-6.2"/></svg>
+      <span class="verify-promo-cursor" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 3.5a1.5 1.5 0 0 1 3 0V11l.6-.1a1.5 1.5 0 0 1 2.4.9l.1.3.5-.1a1.5 1.5 0 0 1 2 1l.5-.1a1.5 1.5 0 0 1 1.9 1.4V17a6 6 0 0 1-6 6h-1.3a6 6 0 0 1-4.6-2.2L4.4 16.3a1.6 1.6 0 0 1 2.3-2.2L9 16V3.5Z"/></svg></span>
+    </button>`;
+}
+
+// Muassasa nomi yonidagi belgi: tasdiqlangan — ko'k ✓; sotib olsa bo'ladigan rahbariyatga — bo'sh belgi
+function schoolNameBadgeHtml(school) {
+  if (school?.verified) return VERIFIED_BADGE;
+  return school?.verify_price > 0 ? verifyPromoBadgeHtml() : "";
+}
+
+function wireVerifyPromo(school, onDone) {
+  document.querySelectorAll("[data-verify-buy]").forEach((button) =>
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openVerifyPurchaseSheet(school, onDone);
+    })
+  );
+}
+
+function openVerifyPurchaseSheet(school, onDone) {
+  const { sheet, close } = openSheet(`
+    <div style="text-align:center">
+      <div style="font-size:52px;line-height:1;margin:4px 0 10px">${VERIFIED_BADGE}</div>
+      <h3 style="margin:0 0 6px">Tasdiq belgisini oling</h3>
+      <p class="subtitle" style="margin:0 0 12px">«${escapeHtml(school.name)}» nomi yonida ko'k ✓ belgisi chiqadi.</p>
+    </div>
+    <div class="panel" style="padding:10px 14px">
+      <p style="margin:4px 0">✅ Ota-onalar va o'qituvchilar haqiqiy muassasa ekanini darhol ko'radi</p>
+      <p style="margin:4px 0">🔝 Qidiruvda muassasangiz eng tepada turadi — o'qituvchilar oson topadi</p>
+      <p style="margin:4px 0">🛡 Nomi o'xshash soxta muassasalardan ajralib turasiz</p>
+    </div>
+    <div class="row-between" style="margin:14px 2px 0">
+      <span>Narxi (bir martalik)</span>
+      <b style="font-size:20px;color:var(--color-primary)">${formatNumber(school.verify_price)} so'm</b>
+    </div>
+    <button class="btn" id="verify-pay" style="margin-top:12px">💳 Payme orqali to'lash</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Keyinroq</button>
+  `);
+  sheet.querySelector("#verify-pay").addEventListener(
+    "click",
+    guarded(async () => {
+      const order = await api(`/api/schools/${school.id}/verify-purchase`, { method: "POST", body: {} });
+      openExternalLink(order.checkout_url);
+      close();
+      showToast("💳 Payme sahifasi ochildi — to'lov o'tishi bilan ✓ belgisi o'zi qo'yiladi");
+      onDone?.();
+    })
+  );
+}
 
 function schoolListHtml(schools, emptyText) {
   if (!schools.length) return `<p class="subtitle" style="margin:8px 0 0">${emptyText}</p>`;
@@ -4895,7 +4954,7 @@ function renderMySchool(school, { refresh = true } = {}) {
           <div class="school-hero-icon">${svgIcon("school")}</div>
           <div class="hero-who">
             <small class="hero-kicker">MAKTAB</small>
-            <div class="hero-hello">${escapeHtml(school.name)}</div>
+            <div class="hero-hello">${escapeHtml(school.name)}${schoolNameBadgeHtml(school)}</div>
             <div class="hero-chips">
               <span class="hero-chip is-sun">${schoolRoleLabel(school)}</span>
               <span class="hero-chip">📍 ${escapeHtml(school.district)}</span>
@@ -4966,6 +5025,7 @@ function renderMySchool(school, { refresh = true } = {}) {
   `);
 
   wireSchoolTab("school");
+  wireVerifyPromo(school);
   document.querySelector('[data-action="fill-subjects"]')?.addEventListener("click", guarded(() => renderSchoolProfileEdit(school)));
   document.querySelector('[data-action="fill-phone"]')?.addEventListener("click", guarded(() => renderSchoolProfileEdit(school)));
   // Bo'limlar, tezkor amallar va "diqqat" qatorlari — bitta umumiy tinglovchi (keyin qayta chizilsa ham ishlaydi)
@@ -8864,7 +8924,7 @@ const ADMIN_TABS = [
   { id: "users", label: "👥 Odamlar" },
   { id: "schools", label: "🏫 Muassasalar" },
   { id: "broadcast", label: "📢 E'lon" },
-  { id: "adprice", label: "💰 E'lon narxi" },
+  { id: "adprice", label: "💰 Narxlar" },
   { id: "promo", label: "🎁 Promo" },
   { id: "system", label: "⚙️ Tizim" },
 ];
@@ -9766,7 +9826,7 @@ async function adminSystemView() {
           <p style="margin:6px 0"><b>👥 Odamlar</b> — istalgan foydalanuvchini topish; o'qituvchiga token berish yoki ayirish; bot orqali xabar yozish.</p>
           <p style="margin:6px 0"><b>🏫 Muassasalar</b> — barcha maktab, o'quv markazi va to'garaklar: qayerda, kimniki, nechta o'quvchi.</p>
           <p style="margin:6px 0"><b>📢 E'lon</b> — o'qituvchilar, xodimlar yoki hammaga bot orqali xabar. Avval o'zingizga sinab ko'ring.</p>
-          <p style="margin:6px 0"><b>💰 E'lon narxi</b> — o'qituvchilar testini bot orqali e'lon qilishi uchun narx (Payme orqali to'lanadi). 0 — bepul.</p>
+          <p style="margin:6px 0"><b>💰 Narxlar</b> — test e'loni narxi va muassasalar uchun ✓ tasdiq belgisi narxi (ikkalasi ham Payme orqali).</p>
           <p style="margin:6px 0"><b>🎁 Promo</b> — o'qituvchilarga bepul token beruvchi kodlar.</p>
           <p style="margin:6px 0"><b>⚙️ Tizim</b> — Payme/Click kalitlari (onlayn to'lovni yoqadi) va bazaning zaxira nusxasi.</p>
         </div>
@@ -9948,7 +10008,7 @@ async function adminBroadcastView() {
 // O'qituvchi testini bot foydalanuvchilariga e'lon qilishi uchun to'lov (Payme). 0 — bepul.
 
 async function adminBroadcastPriceView() {
-  const info = await api("/api/admin/broadcast-price");
+  const [info, verify] = await Promise.all([api("/api/admin/broadcast-price"), api("/api/admin/verify-price")]);
   const recent =
     info.recent
       .map(
@@ -9989,6 +10049,26 @@ async function adminBroadcastPriceView() {
         </div>
       </div>
 
+      <div class="card" style="cursor:default">
+        <div class="card-body" style="width:100%">
+          <h3>${VERIFIED_BADGE} Tasdiq belgisi narxi</h3>
+          <p>
+            Muassasa rahbariyati nomi yonidagi bo'sh (chiziqli) belgini bosib, ko'k ✓ belgisini <b>Payme</b> orqali
+            sotib oladi — to'lov o'tishi bilan belgi o'zi qo'yiladi. <b>0</b> — sotilmaydi (belgini faqat siz
+            «🏫 Muassasalar» bo'limida qo'yasiz).
+          </p>
+          <p class="subtitle" style="margin:6px 0 10px">
+            Hozirgi narx: <b>${verify.price ? `${formatNumber(verify.price)} so'm` : "sotilmaydi"}</b>
+            · Sotilgan: <b>${formatNumber(verify.paid_count)}</b> ta (${formatNumber(verify.revenue)} so'm)
+            · Tasdiqlangan muassasalar: <b>${formatNumber(verify.verified_count)}</b>
+          </p>
+          <label class="field-label" for="verifyprice-input">Narx (so'm, bir martalik)</label>
+          <input class="input" id="verifyprice-input" inputmode="numeric" autocomplete="off" placeholder="masalan: 150000"
+                 value="${verify.price || ""}" />
+          <button class="btn" id="verifyprice-save" style="margin-top:12px">💾 Saqlash</button>
+        </div>
+      </div>
+
       <div class="stats-grid">
         <div class="stat-tile">📢<span class="stat-value">${formatNumber(info.paid_count)}</span>Pullik e'lon</div>
         <div class="stat-tile">💵<span class="stat-value">${formatNumber(info.revenue)}</span>Tushum (so'm)</div>
@@ -10006,6 +10086,17 @@ async function adminBroadcastPriceView() {
           const price = Number(digits) || 0;
           await api("/api/admin/broadcast-price", { method: "POST", body: { price } });
           showToast(price ? `✅ E'lon narxi: ${formatNumber(price)} so'm` : "✅ E'lon endi bepul");
+          await renderAdminDashboard("adprice");
+        })
+      );
+      document.getElementById("verifyprice-save").addEventListener(
+        "click",
+        guarded(async () => {
+          const digits = document.getElementById("verifyprice-input").value.replace(/\s/g, "");
+          if (digits && !/^\d+$/.test(digits)) throw new Error("Narxni faqat raqam bilan yozing");
+          const price = Number(digits) || 0;
+          await api("/api/admin/verify-price", { method: "POST", body: { price } });
+          showToast(price ? `✅ Tasdiq belgisi narxi: ${formatNumber(price)} so'm` : "✅ Tasdiq belgisi endi sotilmaydi");
           await renderAdminDashboard("adprice");
         })
       );

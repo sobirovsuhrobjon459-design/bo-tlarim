@@ -237,6 +237,20 @@ COLUMN_BACKFILLS = {
 }
 
 
+# Olib tashlangan bo'limlarning jadvallari — bazadan butunlay o'chiriladi (ma'lumotlari bilan).
+# «Video darslar» bo'limi kerak emas: video_lessons jadvali ham o'chiriladi.
+REMOVED_TABLES = ("video_lessons",)
+
+
+def _drop_removed_tables() -> None:
+    with engine.begin() as connection:
+        existing = set(inspect(connection).get_table_names())
+        for name in REMOVED_TABLES:
+            if name in existing:
+                connection.execute(text(f"DROP TABLE {name}"))
+                logging.getLogger("backend").warning("Olib tashlangan jadval o'chirildi: %s", name)
+
+
 def _add_missing_columns() -> None:
     """
     Mavjud bazaga keyinchalik qo'shilgan ustunlarni qo'shadi.
@@ -301,7 +315,6 @@ def _add_missing_columns() -> None:
             "deleted_by": "INTEGER",
         },
         "key_questions": {"label": "VARCHAR(20)"},
-        "video_lessons": {"duration_seconds": "INTEGER", "test_code": "VARCHAR(10) DEFAULT ''"},
         "app_logins": {"code": "VARCHAR(6) DEFAULT ''", "attempts": "INTEGER DEFAULT 0"},
         "app_sessions": {"last_seen_at": "TIMESTAMP", "user_agent": "VARCHAR(300) DEFAULT ''"},
         "payments": {
@@ -327,6 +340,7 @@ def _add_missing_columns() -> None:
             "payme_time": "BIGINT",
             "payme_cancel_reason": "INTEGER",
             "test_id": "INTEGER",
+            "school_id": "INTEGER",
         },
         # Yozma javoblarni AI o'qishi (jadval oldingi yangilanishda AI ustunlarisiz yaratilgan)
         "written_answers": {
@@ -355,6 +369,7 @@ def _add_missing_columns() -> None:
 
 
 _add_missing_columns()
+_drop_removed_tables()
 
 
 def _upgrade_sheet_versions() -> None:
@@ -5483,6 +5498,8 @@ def _purchase_label(purchase: CreditPurchase) -> str:
     """Xarid nomi: "50 ta token", "3 oylik obuna" yoki "«AB12» testi e'loni"."""
     if purchase.kind == "broadcast":
         return f"«{purchase.test.code}» testi e'loni" if purchase.test else "Test e'loni"
+    if purchase.kind == "verify":
+        return f"«{purchase.school.name}» — ✓ tasdiq belgisi" if purchase.school else "✓ Tasdiq belgisi"
     if purchase.kind == "subscription":
         return f"{purchase.months} oylik obuna"
     return f"{purchase.credits} ta token"
@@ -5508,6 +5525,11 @@ def _grant_purchase(purchase: CreditPurchase) -> None:
     if purchase.kind == "broadcast":
         _grant_broadcast(purchase)
         return
+    if purchase.kind == "verify":
+        school = object_session(purchase).get(PrivateSchool, purchase.school_id, with_for_update=True)
+        if school and school.verified_at is None:
+            school.verified_at = utcnow()
+        return
     if purchase.kind != "subscription":
         add_credits(teacher, purchase.credits)
         return
@@ -5526,6 +5548,12 @@ def _revoke_purchase(purchase: CreditPurchase) -> None:
         # Yuborilgan e'lonni qaytarib bo'lmaydi — pul qaytarilgani faqat log'da qoladi
         logging.getLogger("backend").warning("Pullik e'lon to'lovi bekor qilindi: purchase=%s", purchase.id)
         return
+    if purchase.kind == "verify":
+        # Pul qaytarildi — sotib olingan belgi olib tashlanadi
+        school = object_session(purchase).get(PrivateSchool, purchase.school_id) if purchase.school_id else None
+        if school:
+            school.verified_at = None
+        return
     if purchase.kind != "subscription":
         add_credits(teacher, -purchase.credits)
         return
@@ -5539,6 +5567,8 @@ def _purchase_granted_text(purchase: CreditPurchase, teacher: Teacher) -> str:
 
     if purchase.kind == "broadcast":
         return f"📢 {_purchase_label(purchase)} to'landi — bot foydalanuvchilariga yuborilmoqda."
+    if purchase.kind == "verify":
+        return f"✅ {_purchase_label(purchase)} faollashdi — muassasa nomi yonida ko'k ✓ belgisi chiqadi."
     if purchase.kind == "subscription":
         until = (teacher.subscription_until + TASHKENT_OFFSET).strftime("%d.%m.%Y")
         return f"⭐ {purchase.months} oylik obuna faollashdi — {until} gacha tekshiruvlar cheksiz, token yechilmaydi."
@@ -5551,15 +5581,27 @@ def _purchase_granted_text(purchase: CreditPurchase, teacher: Teacher) -> str:
 # orqali: to'lov o'tgach (Payme PerformTransaction) e'lon o'zi yuboriladi.
 
 BROADCAST_PRICE_KEY = "broadcast_price"
+# ✓ Tasdiq belgisi narxi (muassasa rahbariyati Payme orqali sotib oladi); 0 — sotilmaydi (faqat admin beradi)
+VERIFY_PRICE_KEY = "verify_price"
+
+
+def _setting_price(db: Session, key: str) -> int:
+    """Admin panelda belgilangan narx (so'm); yo'q yoki buzilgan — 0."""
+    row = db.get(AppSetting, key)
+    try:
+        return max(0, int(row.value or 0)) if row else 0
+    except ValueError:
+        return 0
 
 
 def _broadcast_price(db: Session) -> int:
     """Bitta test e'loni narxi (so'm); 0 — bepul."""
-    row = db.get(AppSetting, BROADCAST_PRICE_KEY)
-    try:
-        return max(0, int(row.value or 0)) if row else 0
-    except ValueError:
-        return 0  # buzilgan qiymat — bepul
+    return _setting_price(db, BROADCAST_PRICE_KEY)
+
+
+def _verify_price(db: Session) -> int:
+    """✓ Tasdiq belgisi narxi (so'm); 0 — sotilmaydi."""
+    return _setting_price(db, VERIFY_PRICE_KEY)
 
 
 def _broadcast_blocker(test: Test | None) -> str | None:
@@ -6660,6 +6702,7 @@ def home_summary(user: User = Depends(get_current_user), db: Session = Depends(g
             "school_id": school.id, "kind": school.kind or "school", "name": school.name,
             "role": member.role, "position": member.position, "classes": len(classes),
             "curated": [item.name for item in classes if item.curator_user_id == user.id],
+            "verified": school.verified_at is not None,
         })
     return {
         "today": local_now.date(),
@@ -11471,6 +11514,10 @@ def _school_view(db: Session, member: SchoolMember, user: User) -> dict:
         "district": school.district,
         # Kod faqat adminda: o'qituvchilarni maktabga faqat admin qo'shadi
         "code": school.code if member.role == "owner" else None,
+        # ✓ Tasdiq belgisi: rahbariyat sotib olishi mumkin bo'lsa — narxi (aks holda 0: bo'sh belgi ko'rinmaydi)
+        "verified": school.verified_at is not None,
+        "verify_price": (_verify_price(db) if leader and school.verified_at is None
+                         and "payme" in _enabled_providers() else 0),
         "created_at": school.created_at,
         # Admin o'chirishga qo'ygan bo'lsa — qachon o'chishi (hamma xodimga ogohlantirish ko'rinadi)
         "delete_at": _school_delete_at(school),
@@ -17026,6 +17073,10 @@ def _test_already_paid(db: Session, order) -> bool:
     o'z buyurtmasi bilan. Ikkinchisi ham oxirigacha bosilsa, pul ikki marta yechilardi;
     shuning uchun to'lov yakunlanishidan oldin shu tekshiriladi va ikkinchisi rad etiladi.
     """
+    if isinstance(order, CreditPurchase) and order.kind == "verify":
+        # Muassasa o'chgan yoki allaqachon tasdiqlangan — pul yechilmaydi
+        school = db.get(PrivateSchool, order.school_id) if order.school_id else None
+        return not school or school.deleted_at is not None or school.verified_at is not None
     if isinstance(order, CreditPurchase) and order.kind == "broadcast":
         # Pullik e'lon: test allaqachon e'lon qilingan, yakunlangan yoki o'chgan bo'lsa — pul yechilmaydi
         return _broadcast_blocker(db.get(Test, order.test_id) if order.test_id else None) is not None
@@ -18040,6 +18091,42 @@ def _broadcast_settings_view(db: Session) -> dict:
     }
 
 
+class VerifyPriceIn(BaseModel):
+    """Admin panelidan: ✓ tasdiq belgisi narxi (so'm). 0 — sotilmaydi (belgini faqat admin qo'yadi)."""
+
+    price: int = Field(ge=0, le=100_000_000)
+
+
+def _verify_settings_view(db: Session) -> dict:
+    paid = (CreditPurchase.kind == "verify", CreditPurchase.status == "paid")
+    return {
+        "price": _verify_price(db),
+        "paid_count": db.scalar(select(func.count()).select_from(CreditPurchase).where(*paid)) or 0,
+        "revenue": db.scalar(select(func.sum(CreditPurchase.amount)).where(*paid)) or 0,
+        "verified_count": db.scalar(select(func.count()).select_from(PrivateSchool).where(
+            PrivateSchool.verified_at.is_not(None), PrivateSchool.deleted_at.is_(None))) or 0,
+    }
+
+
+@app.get("/api/admin/verify-price")
+def admin_verify_price(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    return _verify_settings_view(db)
+
+
+@app.post("/api/admin/verify-price")
+def admin_save_verify_price(body: VerifyPriceIn, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """✓ Tasdiq belgisi narxini saqlaydi — darhol kuchga kiradi."""
+
+    row = db.get(AppSetting, VERIFY_PRICE_KEY)
+    if row:
+        row.value, row.updated_at, row.updated_by = str(body.price), utcnow(), admin.id
+    else:
+        db.add(AppSetting(key=VERIFY_PRICE_KEY, value=str(body.price), updated_by=admin.id))
+    db.commit()
+    logging.getLogger("backend").info("Tasdiq belgisi narxi yangilandi: %s so'm (admin=%s)", body.price, admin.id)
+    return _verify_settings_view(db)
+
+
 @app.get("/api/admin/broadcast-price")
 def admin_broadcast_price(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
     """Test e'loni narxi va pullik e'lonlar statistikasi."""
@@ -18475,6 +18562,34 @@ def admin_list_schools(q: str = "", admin: User = Depends(get_current_admin), db
         }
         for school, owner, staff_count, class_count, student_count in rows
     ]
+
+
+@app.post("/api/schools/{school_id}/verify-purchase")
+def buy_school_verification(school_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Muassasa rahbariyati ✓ tasdiq belgisini Payme orqali sotib oladi: belgi to'lov o'tishi bilan qo'yiladi."""
+
+    member = db.scalar(select(SchoolMember).where(SchoolMember.school_id == school_id, SchoolMember.user_id == user.id,
+                                                  SchoolMember.left_at.is_(None)))
+    school = member.school if member else None
+    if not school or school.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Muassasa topilmadi")
+    if not _is_director(member):
+        raise HTTPException(status_code=403, detail="Tasdiq belgisini muassasa rahbariyati sotib oladi")
+    if school.verified_at is not None:
+        raise HTTPException(status_code=409, detail="Muassasa allaqachon tasdiqlangan")
+    price = _verify_price(db)
+    if price <= 0:
+        raise HTTPException(status_code=409, detail="Tasdiq belgisi hozircha sotilmaydi")
+    if "payme" not in _enabled_providers():
+        raise HTTPException(status_code=503, detail="Onlayn to'lov (Payme) hali sozlanmagan, admin bilan bog'laning")
+    teacher = ensure_school_teacher(db, user)
+    if not teacher:
+        raise HTTPException(status_code=403, detail="Tasdiq belgisini muassasa rahbariyati sotib oladi")
+    purchase = CreditPurchase(teacher_id=teacher.id, kind="verify", school_id=school.id, credits=0,
+                              amount=price, method="payme")
+    db.add(purchase)
+    db.commit()
+    return {"ok": True, "amount": price, "checkout_url": _checkout_url("payme", purchase, price)}
 
 
 class AdminSchoolVerifyIn(BaseModel):

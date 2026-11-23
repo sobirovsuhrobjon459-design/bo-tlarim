@@ -525,37 +525,6 @@ class PupilSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(default=None)
 
 
-class VideoLesson(Base):
-    """
-    Video dars (YouTube havolasi). Ta'lim muassasasining rahbariyati (admin, direktor, zam direktor)
-    qo'shadi; ilovadagi hamma o'quvchilar "Video darslar" bo'limida bepul ko'radi. Video o'zimizning
-    serverda saqlanmaydi — faqat YouTube ID'si (ilova uni o'z ichida o'ynatadi).
-
-    ESKIRGAN: «Video darslar» bo'limi olib tashlandi — jadval endi ishlatilmaydi va hech qayerda
-    ko'rinmaydi. Faqat eski zaxira nusxalar xatosiz tiklanishi uchun qoldirilgan.
-    """
-
-    __tablename__ = "video_lessons"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    school_id: Mapped[int] = mapped_column(ForeignKey("private_schools.id"), index=True)
-    added_by: Mapped[int | None] = mapped_column(default=None)
-    title: Mapped[str] = mapped_column(String(200))
-    subject: Mapped[str] = mapped_column(String(100), index=True)
-    grade: Mapped[int | None] = mapped_column(default=None)  # 1–11; bo'sh — hamma sinflar uchun
-    description: Mapped[str] = mapped_column(Text, default="")
-    youtube_id: Mapped[str] = mapped_column(String(20))
-    views: Mapped[int] = mapped_column(default=0)
-    # Dars davomiyligi (soniya) — pleyer videoni ochganda o'zi xabar beradi.
-    # Ko'rilgan ulush esa qurilmaning o'zida saqlanadi (serverga yuborilmaydi).
-    duration_seconds: Mapped[int | None] = mapped_column(default=None)
-    # Darsni mustahkamlash uchun test kodi (ixtiyoriy)
-    test_code: Mapped[str] = mapped_column(String(10), default="")
-    created_at: Mapped[datetime] = mapped_column(default=utcnow)
-    updated_at: Mapped[datetime | None] = mapped_column(default=None)
-    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
-
-
 class WrittenAnswer(Base):
     """
     Tituldagi yozma javob katagi (36a, 36b …): skaner qirqib olgan rasm va o'qituvchi bahosi.
@@ -660,6 +629,8 @@ class CreditPurchase(Base):
     # "broadcast" — test_id testini bot foydalanuvchilariga pullik e'lon qilish (credits = 0)
     kind: Mapped[str] = mapped_column(String(15), default="tokens")
     test_id: Mapped[int | None] = mapped_column(ForeignKey("tests.id"), default=None, index=True)
+    # "verify" — school_id muassasasiga ✓ (tasdiqlangan) belgisini sotib olish (credits = 0)
+    school_id: Mapped[int | None] = mapped_column(ForeignKey("private_schools.id"), default=None, index=True)
     months: Mapped[int] = mapped_column(default=0)
     credits: Mapped[int]
     amount: Mapped[int]  # so'm
@@ -687,6 +658,7 @@ class CreditPurchase(Base):
 
     teacher: Mapped["Teacher"] = relationship()
     test: Mapped["Test | None"] = relationship()
+    school: Mapped["PrivateSchool | None"] = relationship()
 
 
 class PrivateSchool(Base):

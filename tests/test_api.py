@@ -9074,3 +9074,51 @@ def test_video_darslar_bolimi_olib_tashlangan():
         assert status in (404, 405), (method, url, status)
     home = client.get("/api/home", headers=as_user(701)).json()
     assert "videos" not in home and home["places"], home
+
+
+def test_tasdiq_belgisini_payme_orqali_sotib_olish():
+    """Admin narx qo'yadi; muassasa rahbari Payme orqali to'laydi; ✓ to'lovdan keyin qo'yiladi; qaytarilsa — olinadi."""
+    reset_database()
+    _school_with_class(701)
+    admin = as_user(4242)
+    school = client.get("/api/schools/me", headers=as_user(701)).json()["school"]
+    assert school["verified"] is False and school["verify_price"] == 0  # narx yo'q — bo'sh belgi ko'rinmaydi
+    url = f"/api/schools/{school['id']}/verify-purchase"
+    assert client.post(url, json={}, headers=as_user(701)).status_code == 409  # sotilmaydi
+
+    assert client.post("/api/admin/verify-price", json={"price": 150_000}, headers=as_user(701)).status_code == 403
+    assert client.post("/api/admin/verify-price", json={"price": 150_000}, headers=admin).json()["price"] == 150_000
+    assert client.get("/api/schools/me", headers=as_user(701)).json()["school"]["verify_price"] == 150_000
+    assert client.post(url, json={}, headers=as_user(999)).status_code == 404  # a'zo emas
+
+    order = client.post(url, json={}, headers=as_user(701)).json()
+    assert order["amount"] == 150_000 and "paycom" in order["checkout_url"], order
+    with main.SessionLocal() as db:
+        purchase = db.scalar(main.select(main.CreditPurchase).where(main.CreditPurchase.kind == "verify"))
+        account, amount = {"order_id": f"c{purchase.id}"}, 150_000 * 100
+    check = payme("CheckPerformTransaction", {"account": account, "amount": amount})
+    assert check["result"]["allow"] and "tasdiq" in str(check), check
+    payme("CreateTransaction", {"id": "tx-ver", "time": 1, "account": account, "amount": amount})
+    assert client.get("/api/schools/me", headers=as_user(701)).json()["school"]["verified"] is False
+
+    payme("PerformTransaction", {"id": "tx-ver"})
+    mine = client.get("/api/schools/me", headers=as_user(701)).json()["school"]
+    assert mine["verified"] is True and mine["verify_price"] == 0
+    assert client.get("/api/home", headers=as_user(701)).json()["places"][0]["verified"] is True
+    assert client.post(url, json={}, headers=as_user(701)).status_code == 409  # allaqachon tasdiqlangan
+    info = client.get("/api/admin/verify-price", headers=admin).json()
+    assert info["paid_count"] == 1 and info["revenue"] == 150_000 and info["verified_count"] == 1, info
+
+    payme("CancelTransaction", {"id": "tx-ver", "reason": 5})  # pul qaytarildi — belgi olinadi
+    assert client.get("/api/schools/me", headers=as_user(701)).json()["school"]["verified"] is False
+
+
+def test_video_jadvali_bazadan_ochiriladi():
+    """Olib tashlangan «Video darslar» jadvali (video_lessons) ishga tushishda bazadan o'chiriladi."""
+    with main.engine.begin() as connection:
+        connection.execute(main.text("CREATE TABLE IF NOT EXISTS video_lessons (id INTEGER PRIMARY KEY, title TEXT)"))
+        connection.execute(main.text("INSERT INTO video_lessons (title) VALUES ('Kasrlar')"))
+    assert "video_lessons" in main.inspect(main.engine).get_table_names()
+    main._drop_removed_tables()
+    assert "video_lessons" not in main.inspect(main.engine).get_table_names()
+    main._drop_removed_tables()  # ikkinchi marta — xatosiz
