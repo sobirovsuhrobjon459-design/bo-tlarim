@@ -16739,33 +16739,43 @@ async function renderStudentDetail(testId, attemptId) {
   const span = (list) => (list.length ? `${list[0].label}–${list[list.length - 1].label}` : "");
   const sameSet = (a, b) => a.size === b.size && [...a].every((letter) => b.has(letter));
 
-  // Rasch testida ikki ustun: chapda — javoblar (test, yozma, esse, foiz ko'rsatkichi), o'ngda — ballar
-  // (test, yozma, esse, umumiy). Rasch hisobi o'zgarmaydi: 1–44 savollar bo'yicha bitta Rasch bali faqat
-  // KO'RSATISH uchun to'g'ri javoblar ulushiga qarab test va yozma qismga bo'linadi (yig'indisi — o'sha ball).
+  // Rasch testida ikki ustun: chapda — javoblar (test, yozma, esse, foiz ko'rsatkichi), o'ngda — ballar.
+  // Test va yozma javoblar bitta Rasch modelda hisoblanadi — shuning uchun o'ngda bitta "Test bali" (1–44),
+  // u chapdagi ikkala katak (test savollari va yozma javoblar) ro'parasida ikki qator egallaydi.
   const raschStatsHtml = () => {
     const e = detail.edit;
-    const tile = (value, label) => `<div class="stat-tile"><span class="stat-value">${value}</span>${label}</div>`;
+    const place = (column, row, span = 1) =>
+      `grid-column:${column};grid-row:${row}${span > 1 ? ` / span ${span}` : ""}`;
+    const tile = (value, label, style) =>
+      `<div class="stat-tile" style="${style}"><span class="stat-value">${value}</span>${label}</div>`;
     const ball = (value) => (value === null || value === undefined ? "—" : formatNumber(Math.round(value * 100) / 100));
-    const partBall = e.test_ball ?? e.ball; // 1–44 savollar bo'yicha Rasch bali (esseli testda — test qismi)
-    const solved = detail.closed_correct + (detail.written_correct || 0);
-    const closedPart = solved ? Math.round((partBall * detail.closed_correct) / solved * 100) / 100 : 0;
-    const writtenPart = solved ? Math.round((partBall - closedPart) * 100) / 100 : 0;
     const grade = e.grade ? ` · ${escapeHtml(e.grade)}` : "";
-    const left = [
-      tile(`${detail.closed_correct}/${detail.closed_total}`, "Test savollari"),
-      detail.written_total ? tile(`${detail.written_correct}/${detail.written_total}`, "Yozma javoblar") : null,
-      detail.essay ? tile(`${detail.essay.score ?? "—"}/${detail.essay.max}`, "Esse") : null,
+    const written = Boolean(detail.written_total);
+    const essay = Boolean(detail.essay);
+    let row = 1;
+    const html = [
+      tile(`${detail.closed_correct}/${detail.closed_total}`, "Test savollari", place(1, row)),
+      tile(
+        ball(e.test_ball ?? e.ball),
+        written ? `Test bali<small style="display:block;opacity:.7;font-size:12px">test + yozma javoblar</small>` : "Test bali",
+        place(2, row, written ? 2 : 1) + (written ? ";display:flex;flex-direction:column;justify-content:center" : "")
+      ),
+    ];
+    if (written) html.push(tile(`${detail.written_correct}/${detail.written_total}`, "Yozma javoblar", place(1, ++row)));
+    if (essay) {
+      row += 1;
+      html.push(
+        tile(`${detail.essay.score ?? "—"}/${detail.essay.max}`, "Esse", place(1, row)),
+        tile(e.essay_pending ? "—" : ball(e.essay_ball), e.essay_pending ? "Esse bali · kutilmoqda" : "Esse bali", place(2, row))
+      );
+    }
+    row += 1;
+    html.push(
       tile(e.cert_percent != null ? certPercentText(e.cert_percent) : `${detail.percent}%`,
-           e.cert_percent != null ? "Foiz ko'rsatkichi" : "Foiz"),
-    ].filter(Boolean);
-    const right = [
-      tile(ball(closedPart), "Test bali"),
-      detail.written_total ? tile(ball(writtenPart), "Yozma bali") : null,
-      detail.essay ? tile(e.essay_pending ? "—" : ball(e.essay_ball), e.essay_pending ? "Esse bali · kutilmoqda" : "Esse bali") : null,
-      tile(ball(e.ball), (detail.essay && e.essay_pending ? "Umumiy ball · esse kutilmoqda" : "Umumiy ball") + grade),
-    ].filter(Boolean);
-    // stats-grid ikki ustunli: qatorlab chap / o'ng navbatma-navbat joylanadi
-    return left.map((item, index) => item + (right[index] || "")).join("");
+           e.cert_percent != null ? "Foiz ko'rsatkichi" : "Foiz", place(1, row)),
+      tile(ball(e.ball), (essay && e.essay_pending ? "Umumiy ball · esse kutilmoqda" : "Umumiy ball") + grade, place(2, row))
+    );
+    return html.join("");
   };
 
   const statsHtml = () =>
