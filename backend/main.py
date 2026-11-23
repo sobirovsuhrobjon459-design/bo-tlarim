@@ -1156,20 +1156,20 @@ def _finish_expired_tests_once() -> None:
 # ========== 1.2) Testlarni avtomatik yopish va o'chirish ==========
 #
 # Baza (bepul tarifda 1 GB) skanerlangan titul rasmlari bilan to'lib qolmasligi uchun:
-# - yopilmagan test yaratilganidan (qayta ochilganidan) 20 kun o'tib o'zi yopiladi;
-# - yopilgan test 20 kundan keyin o'chiriladi: avval barcha ma'lumotlari — natijalar (Excel),
-#   hisobot (PDF) va titul rasmlari — bitta ZIP bo'lib o'qituvchining Telegram'iga yuboriladi;
-#   3 kun oldin ogohlantiriladi. ZIP yetib bormasa (bot bloklangan, Telegram xatosi) — hech
-#   narsa o'chirilmaydi, ertasi kuni qayta uriniladi.
+# - har qanday test (yopilgan-yopilmaganidan qat'i nazar) yaratilganidan (qayta ochilganidan)
+#   10 kun o'tib o'zi yopiladi va o'sha zahoti o'chiriladi: avval barcha ma'lumotlari — natijalar
+#   (Excel), hisobot (PDF) va titul rasmlari — bitta ZIP bo'lib o'qituvchining Telegram'iga
+#   yuboriladi; 3 kun oldin ogohlantiriladi (ogohlantirishdan kamida 3 kun o'tmay o'chmaydi).
+#   Tugash vaqti keyinroq qo'yilgan bo'lsa — o'sha vaqtda. ZIP yetib bormasa (bot bloklangan,
+#   Telegram xatosi) — hech narsa o'chirilmaydi, ertasi kuni qayta uriniladi.
 # Bazadan faqat og'ir qism — titul va yozma javob rasmlari — butunlay o'chadi. Test yozuvi,
 # ballar va to'lovlar qoladi (sinf jurnali, o'quvchi profili, to'lov hisobi buzilmasin):
 # test xuddi o'qituvchi o'zi o'chirgandek ro'yxatdan yashiriladi.
 
-TEST_AUTO_CLOSE_AFTER = timedelta(days=20)
-TEST_AUTO_DELETE_AFTER = timedelta(days=20)
+TEST_LIFETIME = timedelta(days=10)  # yaratilganidan shuncha vaqtda yopiladi va o'chiriladi
 TEST_DELETE_WARNING = timedelta(days=3)
 TEST_ARCHIVE_RETRY = timedelta(days=1)
-# Qoida shu kuni ishga tushdi: oldingi testlar uchun 20 kun shu kundan sanaladi —
+# Qoida shu kuni ishga tushdi: oldingi testlar uchun muddat shu kundan sanaladi —
 # eski testlar yangilanish chiqqan kuni birdaniga yopilib, o'chib ketmasin
 TEST_CLEANUP_SINCE = datetime(2026, 11, 15)
 # Telegram bot 50 MB'dan katta fayl yubora olmaydi — ZIP shundan oshsa, qismlarga bo'linadi
@@ -1180,7 +1180,8 @@ TEST_ARCHIVES_PER_RUN = 3  # bir tekshiruvda ko'pi bilan nechta test arxivlanadi
 def _mark_test_closed(test: Test) -> None:
     test.status = "closed"
     test.closed_at = utcnow()
-    test.delete_warned_at = test.archive_tried_at = None
+    # delete_warned_at qoladi: o'chirish muddati yopilgan kundan emas, yaratilgan kundan sanaladi
+    test.archive_tried_at = None
 
 
 def _mark_test_reopened(test: Test) -> None:
@@ -1189,21 +1190,27 @@ def _mark_test_reopened(test: Test) -> None:
     test.closed_at = test.delete_warned_at = test.archive_tried_at = None
 
 
-def _test_auto_close_at(test: Test) -> datetime | None:
-    """Ochiq test qachon o'zi yopiladi (tugash vaqti keyinroq qo'yilgan bo'lsa — o'sha vaqtda)."""
+def _test_lifetime_end(test: Test) -> datetime:
+    """Yaratilgan (qayta ochilgan) kundan 10 kun; tugash vaqti keyinroq qo'yilgan bo'lsa — o'sha vaqt."""
 
-    if test.status == "closed" or test.deleted_at:
-        return None
-    due = max(test.created_at, test.reopened_at or test.created_at, TEST_CLEANUP_SINCE) + TEST_AUTO_CLOSE_AFTER
+    due = max(test.created_at, test.reopened_at or test.created_at, TEST_CLEANUP_SINCE) + TEST_LIFETIME
     return max(due, test.end_time) if test.end_time else due
 
 
-def _test_auto_delete_at(test: Test) -> datetime | None:
-    """Yopilgan test qachon o'chiriladi (ogohlantirishdan keyin kamida 3 kun o'tadi)."""
+def _test_auto_close_at(test: Test) -> datetime | None:
+    """Ochiq test qachon o'zi yopiladi."""
 
-    if test.status != "closed" or test.deleted_at:
+    if test.status == "closed" or test.deleted_at:
         return None
-    due = max(test.closed_at or TEST_CLEANUP_SINCE, TEST_CLEANUP_SINCE) + TEST_AUTO_DELETE_AFTER
+    return _test_lifetime_end(test)
+
+
+def _test_auto_delete_at(test: Test) -> datetime | None:
+    """Test qachon o'chiriladi (ochiq bo'lsa — o'sha kuni yopilib; ogohlantirishdan keyin kamida 3 kun o'tadi)."""
+
+    if test.deleted_at:
+        return None
+    due = _test_lifetime_end(test)
     if test.delete_warned_at:
         due = max(due, test.delete_warned_at + TEST_DELETE_WARNING)
     return due
@@ -1301,7 +1308,7 @@ def _archive_and_delete_test(db: Session, test: Test) -> None:
         for index, path in enumerate(parts, start=1):
             if index == 1:
                 caption = NEWLINE.join([
-                    f"🗂 «{test.title}» ({test.code}) testi yopilganiga 20 kun bo'lgani uchun avtomatik o'chirildi.",
+                    f"🗂 «{test.title}» ({test.code}) testi yaratilganiga {TEST_LIFETIME.days} kun bo'lgani uchun avtomatik o'chirildi.",
                     "",
                     "Barcha ma'lumotlari shu faylda:",
                     "• natijalar — Excel",
@@ -1332,29 +1339,31 @@ def _auto_cleanup_tests_once() -> None:
     now = utcnow()
     logger = logging.getLogger("backend")
     with SessionLocal() as db:
-        # 1) Yaratilganiga 20 kun bo'lgan ochiq testlar yopiladi
+        # 1) Yaratilganiga 10 kun bo'lgan ochiq testlar yopiladi (o'chirish — pastda, 3-qadamda)
         for test in db.scalars(
             select(Test).where(Test.status != "closed", Test.deleted_at.is_(None),
-                               Test.created_at <= now - TEST_AUTO_CLOSE_AFTER)
+                               Test.created_at <= now - TEST_LIFETIME)
         ).all():
             due = _test_auto_close_at(test)
             if not due or due > now:
                 continue
             _mark_test_closed(test)
             db.commit()
-            if BOT_TOKEN:
+            delete_at = _test_auto_delete_at(test)
+            # Odatda shu zahoti o'chiriladi va ZIP xabari keladi; ogohlantirish kech ketgan bo'lsa — kun aytiladi
+            if BOT_TOKEN and delete_at and delete_at > now:
                 _notify_teacher(test.teacher, NEWLINE.join([
-                    f"🔒 «{test.title}» ({test.code}) testi yaratilganiga 20 kun bo'lgani uchun avtomatik yopildi.",
+                    f"🔒 «{test.title}» ({test.code}) testi yaratilganiga {TEST_LIFETIME.days} kun bo'lgani uchun avtomatik yopildi.",
                     "",
-                    f"{_local_date(_test_auto_delete_at(test))} kuni test o'chiriladi — natijalar (Excel, PDF) va "
+                    f"{_local_date(delete_at)} kuni test o'chiriladi — natijalar (Excel, PDF) va "
                     "titullar Telegram'ingizga ZIP fayl bo'lib keladi.",
                     "Test hali kerak bo'lsa — uni ochib «Qayta ochish»ni bosing.",
                 ]))
 
-        # 2) O'chirilishiga 3 kun qolgan testlar — o'qituvchiga bitta xabar (har bir test uchun alohida emas)
+        # 2) O'chirilishiga 3 kun qolgan testlar (ochiq yoki yopiq) — o'qituvchiga bitta xabar
         warn_by_teacher: dict[int, list[Test]] = {}
         for test in db.scalars(
-            select(Test).where(Test.status == "closed", Test.deleted_at.is_(None), Test.delete_warned_at.is_(None))
+            select(Test).where(Test.deleted_at.is_(None), Test.delete_warned_at.is_(None))
         ).all():
             due = _test_auto_delete_at(test)
             if due and due - TEST_DELETE_WARNING <= now:
@@ -1369,7 +1378,7 @@ def _auto_cleanup_tests_once() -> None:
             if len(tests) > 30:
                 lines.append(f"…va yana {len(tests) - 30} ta")
             _notify_teacher(tests[0].teacher, NEWLINE.join([
-                "⏳ Quyidagi yopilgan testlar 3 kundan keyin avtomatik o'chiriladi:",
+                "⏳ Quyidagi testlar 3 kundan keyin avtomatik yopilib, o'chiriladi:",
                 *lines,
                 "",
                 "O'sha kuni har birining natijalari (Excel, PDF) va titullari Telegram'ingizga ZIP fayl bo'lib keladi.",
@@ -18741,7 +18750,7 @@ to'lov tizimlari (Payme, Click) to'lovni amalga oshirish uchun, hamda qonunchili
 <h2>4. Saqlash va himoya</h2>
 <p>Ma'lumotlar himoyalangan serverda saqlanadi. Kirish seanslarining o'zi emas, faqat ularning shifrlangan izi saqlanadi.
 Brauzerda faqat kirish seansi tokeni saqlanadi; reklama yoki kuzatuv cookie'lari ishlatilmaydi.</p>
-<p>Testlar 20 kundan keyin avtomatik yopiladi, yana 20 kundan keyin esa o'chiriladi — undan oldin
+<p>Testlar yaratilganidan 10 kun o'tib avtomatik yopiladi va o'chiriladi — undan oldin
 natijalar arxivi o'qituvchiga Telegram orqali yuboriladi.</p>
 
 <h2>5. O'quvchilar va voyaga yetmaganlar</h2>

@@ -16851,13 +16851,13 @@ async function renderTestDetail(testId) {
     }
     ${isClosedTest ? `<div id="scan-queue-slot"></div>` : ""}
     ${
-      // Avtomatik tozalash: yopilgan test 20 kundan keyin o'chadi (ma'lumotlari ZIP bo'lib Telegram'ga keladi)
+      // Avtomatik tozalash: test yaratilganidan 10 kun o'tib yopiladi va o'chadi (ma'lumotlari ZIP bo'lib Telegram'ga keladi)
       isFinished && test.auto_delete_at
         ? `<div class="notice">🗂 Bu test <b>${formatDateTime(test.auto_delete_at).split(" - ")[0]}</b> kuni avtomatik o'chiriladi.
              O'sha kuni natijalar (Excel, PDF) va titullar Telegram'ingizga bitta ZIP faylda yuboriladi.
              Test hali kerak bo'lsa — «Qayta ochish»ni bosing.</div>`
         : !isFinished && test.auto_close_at
-          ? `<p class="subtitle" style="margin:4px 4px 10px">🔒 Test <b>${formatDateTime(test.auto_close_at).split(" - ")[0]}</b> kuni avtomatik yopiladi, yana 20 kundan keyin o'chiriladi.</p>`
+          ? `<p class="subtitle" style="margin:4px 4px 10px">🔒 Test <b>${formatDateTime(test.auto_close_at).split(" - ")[0]}</b> kuni avtomatik yopiladi va o'chiriladi (natijalar Telegram'ingizga ZIP bo'lib keladi).</p>`
           : ""
     }
     ${

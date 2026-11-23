@@ -298,9 +298,9 @@ class Test(Base):
     # to'lovlar (pul hisobi) va o'quvchilar natijalari saqlanib qoladi, test esa
     # hamma joydan yashiriladi. Kerak bo'lsa admin uni qayta tiklay oladi.
     deleted_at: Mapped[datetime | None] = mapped_column(default=None)
-    # Avtomatik tozalash (backend/main.py, "Testlarni avtomatik yopish va o'chirish"): yopilmagan test
-    # yaratilganidan (qayta ochilganidan) 20 kun o'tib o'zi yopiladi, yopilganidan 20 kun o'tib
-    # ma'lumotlari ZIP bo'lib o'qituvchiga yuboriladi va test o'chiriladi.
+    # Avtomatik tozalash (backend/main.py, "Testlarni avtomatik yopish va o'chirish"): har qanday test
+    # yaratilganidan (qayta ochilganidan) 10 kun o'tib o'zi yopiladi, ma'lumotlari ZIP bo'lib
+    # o'qituvchiga yuboriladi va test o'chiriladi.
     closed_at: Mapped[datetime | None] = mapped_column(default=None)  # oxirgi marta yopilgan vaqt
     reopened_at: Mapped[datetime | None] = mapped_column(default=None)  # oxirgi marta qayta ochilgan vaqt
     delete_warned_at: Mapped[datetime | None] = mapped_column(default=None)  # "3 kundan keyin o'chadi" xabari

@@ -3746,8 +3746,8 @@ def _set_test_fields(test_id: int, **fields) -> None:
         session.close()
 
 
-def test_test_20_kunda_yopiladi_ogohlantiriladi_va_zip_bilan_ochiriladi():
-    """B variant: 20 kunda o'zi yopiladi, yana 20 kunda ZIP (Excel, PDF, titullar) yuborilib o'chiriladi."""
+def test_test_10_kunda_yopiladi_ogohlantiriladi_va_zip_bilan_ochiriladi():
+    """Yaratilganidan 10 kunda o'zi yopiladi va ZIP (Excel, PDF, titullar) yuborilib o'chiriladi."""
     import zipfile
 
     reset_database()
@@ -3787,38 +3787,34 @@ def test_test_20_kunda_yopiladi_ogohlantiriladi_va_zip_bilan_ochiriladi():
         now = main.utcnow()
         detail = lambda: client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
 
-        # 19 kun — hali ochiq, sahifada yopilish sanasi ko'rinadi
-        _set_test_fields(test_id, created_at=now - timedelta(days=19))
+        # 6 kun — hali ochiq, ogohlantirish yo'q; sahifada yopilish sanasi ko'rinadi
+        _set_test_fields(test_id, created_at=now - timedelta(days=6))
         main._auto_cleanup_tests_once()
-        assert detail()["status"] == "active" and detail()["auto_close_at"]
+        assert detail()["status"] == "active" and detail()["auto_close_at"] and not notes
 
-        # 21 kun — o'zi yopiladi va o'qituvchiga aytiladi
-        _set_test_fields(test_id, created_at=now - timedelta(days=21))
-        main._auto_cleanup_tests_once()
-        assert detail()["status"] == "closed" and detail()["auto_delete_at"]
-        assert "avtomatik yopildi" in notes[-1], notes
-
-        # Qayta ochilsa — 20 kun shu kundan qayta sanaladi
+        # Qo'lda yopilgan test ham yaratilgan kundan sanaladi; qayta ochilsa — 10 kun shu kundan
+        closed = client.post(f"/api/teacher/tests/{test_id}/close?force=true", headers=as_user(555))
+        assert closed.status_code == 200, closed.text
+        assert main.datetime.fromisoformat(str(detail()["auto_delete_at"])) < now + timedelta(days=5)
         assert client.post(f"/api/teacher/tests/{test_id}/reopen", headers=as_user(555)).status_code == 200
         reopened = detail()
         assert reopened["status"] == "active"
-        assert main.datetime.fromisoformat(str(reopened["auto_close_at"])) > now + timedelta(days=19)
-        closed = client.post(f"/api/teacher/tests/{test_id}/close?force=true", headers=as_user(555))
-        assert closed.status_code == 200, closed.text
-        code = detail()["code"]
+        assert main.datetime.fromisoformat(str(reopened["auto_close_at"])) > now + timedelta(days=9)
+        code = reopened["code"]
         files.clear()  # yakunlanganda natijalar PDF'i darhol keladi — bu arxiv emas
-
-        # O'chirilishiga 3 kun qolganda — ogohlantirish (fayl hali yo'q)
-        _set_test_fields(test_id, closed_at=now - timedelta(days=18))
         notes.clear()
+
+        # 8 kun (2 kun qoldi) — ochiq test ham ogohlantiriladi (fayl hali yo'q)
+        _set_test_fields(test_id, created_at=now - timedelta(days=8), reopened_at=None)
         main._auto_cleanup_tests_once()
         assert len(notes) == 1 and "3 kundan keyin" in notes[0] and code in notes[0], notes
-        assert not files
+        assert not files and detail()["status"] == "active"
 
-        # 20 kun o'tgan, lekin ogohlantirishdan 3 kun o'tmagan — o'chmaydi
-        _set_test_fields(test_id, closed_at=now - timedelta(days=25))
+        # 11 kun, lekin ogohlantirishdan 3 kun o'tmagan — yopiladi (kun aytiladi), hali o'chmaydi
+        _set_test_fields(test_id, created_at=now - timedelta(days=11))
         main._auto_cleanup_tests_once()
         assert not files and detail()["status"] == "closed"
+        assert "avtomatik yopildi" in notes[-1], notes
 
         # Telegram xato bersa — hech narsa o'chmaydi, ertaga qayta uriniladi
         _set_test_fields(test_id, delete_warned_at=now - timedelta(days=4))
@@ -3865,7 +3861,7 @@ def test_test_20_kunda_yopiladi_ogohlantiriladi_va_zip_bilan_ochiriladi():
          main.TEST_ARCHIVE_PART_LIMIT) = saved
 
 
-def test_eski_testlar_yangilanish_kunidan_20_kun_kutadi():
+def test_eski_testlar_yangilanish_kunidan_10_kun_kutadi():
     """Qoida chiqqan kuni eski testlar birdaniga yopilib/o'chib ketmaydi."""
     reset_database()
     register_teacher()
@@ -3873,12 +3869,13 @@ def test_eski_testlar_yangilanish_kunidan_20_kun_kutadi():
     _set_test_fields(created["id"], created_at=datetime(2025, 1, 1))
     since = main.TEST_CLEANUP_SINCE
     detail = client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()
-    assert main.datetime.fromisoformat(str(detail["auto_close_at"])) == since + timedelta(days=20)
+    assert main.datetime.fromisoformat(str(detail["auto_close_at"])) == since + timedelta(days=10)
+    assert main.datetime.fromisoformat(str(detail["auto_delete_at"])) == since + timedelta(days=10)
     closed = client.post(f"/api/teacher/tests/{created['id']}/close", headers=as_user(555))
     assert closed.status_code == 200, closed.text
     _set_test_fields(created["id"], closed_at=None)  # qoida chiqishidan oldin yopilgan test
     detail = client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()
-    assert main.datetime.fromisoformat(str(detail["auto_delete_at"])) == since + timedelta(days=20)
+    assert main.datetime.fromisoformat(str(detail["auto_delete_at"])) == since + timedelta(days=10)
 
 
 def test_oquvchini_royxatdan_ochirish():
