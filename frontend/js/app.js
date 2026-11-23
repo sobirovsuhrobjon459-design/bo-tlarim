@@ -600,7 +600,7 @@ function showPage(html, { exitRoot = false } = {}) {
 */
 const NAV_DISPATCHERS = [
   "enterInstitution", "enterTeacherArea", "loadHome", "openClassTab", "openSchoolTab", "openPaymentsEntry", "renderClass",
-  "renderStudentHome", "renderTeacherDashboard",
+  "renderStudentHome", "renderTeacherDashboard", "renderTeacherTests",
 ];
 const NAV_UNTRACKED = new Set([
   "showPage", "startLiveScan", "renderSkeleton", "renderWithCache", "renderFullQuizQuestion", "renderKeyQuizQuestion",
@@ -1310,11 +1310,12 @@ const ICON_NAMES = {
 };
 const svgIcon = (name) => phIcon(ICON_NAMES[name] || name);
 
-// O'qituvchi bo'limining pastki menyusi: Testlar | Yaratish | Natijalar
+// O'qituvchi bo'limining pastki menyusi: Bosh sahifa | Yaratish | Testlar.
+// Natijalar alohida bo'lim emas — har bir testning ichida («📊 Natijalar»).
 const TEACHER_TABS = [
-  { id: "tests", label: "Testlar", icon: svgIcon("exam") },
+  { id: "tests", label: "Bosh sahifa", icon: svgIcon("house") },
   { id: "create", label: "Yaratish", icon: svgIcon("plus") },
-  { id: "results", label: "Natijalar", icon: svgIcon("chart") },
+  { id: "list", label: "Testlar", icon: svgIcon("exam") },
 ];
 
 function navMarkup() {
@@ -1360,7 +1361,7 @@ function showBottomNav(activeTab) {
         // Ma'lumot yuklanguncha bo'sh karta ko'rinadi
         renderSkeleton(tab);
         if (tab === "tests") await renderTeacherDashboard();
-        else await renderResultsTab();
+        else await renderTeacherTests();
       })
     );
   }
@@ -11487,11 +11488,6 @@ function drawTeacherDashboard(me, stats, tests) {
       </div>
     </div>
     ${stats.referral ? referralCardHtml(stats.referral) : ""}
-    <div class="tabs">
-      <button class="tab ${teacherTestsTab === "active" ? "active" : ""}" data-tab="active">Jarayondagi testlar</button>
-      <button class="tab ${teacherTestsTab === "closed" ? "active" : ""}" data-tab="closed">Yopilgan testlar</button>
-    </div>
-    <div id="teacher-test-list"></div>
   `);
 
   wireTeacherChrome("tests");
@@ -11512,10 +11508,26 @@ function drawTeacherDashboard(me, stats, tests) {
     () => copyToClipboard(stats.referral.link, "📋 Havola nusxalandi")
   );
   document.getElementById("new-test-button").addEventListener("click", () => renderNewTestKindChoice());
+}
 
-  // Tab almashganda faqat ro'yxat qayta chiziladi — testlar allaqachon
-  // yuklangan. Ilgari butun sahifa serverdan qayta olinib, 1–2 soniya
-  // "yangilanib" turardi va sahifa tepaga sakrardi.
+// «Testlar» bo'limi (pastki menyu): jarayondagi va yopilgan testlar. Natijalar — test ichida.
+async function renderTeacherTests() {
+  testForClass = null;
+  await renderWithCache("teacher-tests", () => api("/api/teacher/tests"), drawTeacherTests, "#teacher-test-list");
+}
+
+function drawTeacherTests(tests) {
+  showPage(`
+    ${pageHeader("Testlar")}
+    <div class="tabs">
+      <button class="tab ${teacherTestsTab === "active" ? "active" : ""}" data-tab="active">Jarayondagi testlar</button>
+      <button class="tab ${teacherTestsTab === "closed" ? "active" : ""}" data-tab="closed">Yopilgan testlar</button>
+    </div>
+    <div id="teacher-test-list"></div>
+  `);
+  wireTeacherChrome("list");
+
+  // Tab almashganda faqat ro'yxat qayta chiziladi — testlar allaqachon yuklangan
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.addEventListener("click", () => {
       if (teacherTestsTab === tab.dataset.tab) return;
@@ -11735,7 +11747,7 @@ function renderTeacherTestList(tests) {
 
         await api(`/api/teacher/tests/${testId}`, { method: "DELETE" });
         showToast("🗑 Test o'chirildi");
-        await renderTeacherDashboard();
+        await renderTeacherTests();
       })
     );
   });
@@ -16542,7 +16554,7 @@ async function renderTestDetail(testId) {
     <div id="students-list"></div>
   `);
 
-  document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherDashboard));
+  document.querySelector('[data-action="dashboard"]').addEventListener("click", guarded(renderTeacherTests));
   document.getElementById("written-review-button")?.addEventListener("click", guarded(() => renderWrittenOverview(testId)));
   document
     .getElementById("key-missing-button")
@@ -17387,215 +17399,6 @@ const RASCH_SCORE_NOTE =
 // Rasch balli; natija hali yo'q bo'lsa (o'rtacha / eng yuqori — null) — chiziqcha
 const ballText = (value) => (value == null ? "—" : Number(value).toFixed(2));
 
-async function renderResultsTab(selectedId) {
-  const tests = await api("/api/teacher/tests");
-
-  if (!tests.length) {
-    showPage(`
-      ${pageHeader("Natijalar")}
-      <p class="subtitle">Hali test yaratilmagan. Avval test yarating.</p>
-      `);
-    wireTeacherChrome("results");
-    return;
-  }
-
-  // Avval testlar ro'yxati: o'qituvchi qaysi testning natijasini ochayotganini
-  // aniq ko'rsin. Ilgari birinchi test o'zi ochilib, boshqasini tanlash
-  // ro'yxati oddiy matn maydoniga o'xshab qolgani uchun bilinmasdi.
-  if (!selectedId) {
-    renderResultsTestList(tests);
-    return;
-  }
-
-  const testId = selectedId;
-  const test = tests.find((item) => item.id === testId);
-  if (!test) {
-    renderResultsTestList(tests);
-    return;
-  }
-
-  // Faqat natijalar so'raladi — ishtirokchilar soni va o'rtacha foiz shu
-  // javobning o'zidan hisoblanadi, qo'shimcha so'rov kerak emas.
-  const results = await api(`/api/teacher/tests/${testId}/results`);
-  const summary = results.summary;
-
-  // DTM testda — DTM bali (sertifikat darajalari va Rasch izohi yo'q), Rash testda — Rasch darajalari
-  // (Milliy sertifikat), oddiy testda — faqat foiz
-  const dtmMax = summary.dtm_max || 0;
-  const usesRasch = Boolean(results.uses_rasch) && !dtmMax;
-  const dtmBucket = (from, to) => ({
-    label: `${Math.round(dtmMax * from)}–${Math.round(dtmMax * to)}`,
-    from: dtmMax * from,
-    to: to >= 1 ? Infinity : dtmMax * to,
-  });
-  const buckets = (
-    dtmMax
-      ? [dtmBucket(0, 0.2), dtmBucket(0.2, 0.4), dtmBucket(0.4, 0.6), dtmBucket(0.6, 0.8), dtmBucket(0.8, 1)]
-      : usesRasch
-      ? [
-          { label: "NC", from: 0, to: 46 },
-          { label: "C", from: 46, to: 50 },
-          { label: "C+", from: 50, to: 55 },
-          { label: "B", from: 55, to: 60 },
-          { label: "B+", from: 60, to: 65 },
-          { label: "A", from: 65, to: 70 },
-          { label: "A+", from: 70, to: 101 },
-        ]
-      : [
-          // Oddiy test — baho yo'q, faqat to'g'ri javoblar foizi
-          { label: "0–55%", from: 0, to: 56 },
-          { label: "56–70%", from: 56, to: 71 },
-          { label: "71–85%", from: 71, to: 86 },
-          { label: "86–100%", from: 86, to: 101 },
-        ]
-  ).map((bucket) => ({
-    ...bucket,
-    count: results.rows.filter((row) => {
-      const value = dtmMax ? row.dtm_ball : usesRasch ? row.ball : row.percent;
-      return value >= bucket.from && value < bucket.to;
-    }).length,
-  }));
-
-  const maxCount = Math.max(1, ...buckets.map((bucket) => bucket.count));
-
-  const chart = buckets
-    .map(
-      (bucket) => `
-      <div class="chart-column">
-        <span class="chart-value">${bucket.count}</span>
-        <div class="chart-bar" style="height:${Math.max(4, (bucket.count / maxCount) * 96)}px"></div>
-        <span class="chart-label">${bucket.label}</span>
-      </div>`
-    )
-    .join("");
-
-  const TOP_COUNT = 10;
-  const rows = results.rows
-    .slice(0, TOP_COUNT)
-    .map((row) => resultLineHtml(row, results))
-    .join("") || `<p class="subtitle" style="padding:14px">Hali natija yo'q</p>`;
-
-  showPage(`
-    ${pageHeader("Natijalar")}
-    <button class="btn btn-ghost" id="all-results-button" style="width:auto;padding:8px 14px;margin:0 0 10px">
-      ← Barcha testlar
-    </button>
-    <div class="card results-test-card" style="cursor:default">
-      <div class="card-body" style="width:100%">
-        <h3 style="margin-bottom:6px">${escapeHtml(test.title)} ${testBadges(test)}</h3>
-        <p style="margin:0"><b>${escapeHtml(test.subject)}</b> • Kod: ${copyCodeChip(test.code)}</p>
-        <p class="subtitle" style="margin:4px 0 0">${test.count} ta savol • Yaratilgan: ${formatDateTime(test.created_at)}</p>
-      </div>
-    </div>
-
-    <div class="panel">
-      <div class="stats-grid" style="margin:0 0 16px">
-        <div class="stat-tile"><span class="stat-value">${summary.participants}</span>Ishtirokchi</div>
-        ${
-          dtmMax
-            ? `<div class="stat-tile"><span class="stat-value">${dtmNumber(summary.avg_dtm_ball)}</span>O'rtacha DTM bali</div>
-               <div class="stat-tile"><span class="stat-value">${dtmNumber(summary.max_dtm_ball)}</span>Eng yuqori (${dtmMax} dan)</div>
-               <div class="stat-tile"><span class="stat-value">${summary.avg_percent}%</span>O'rtacha foiz</div>`
-            : usesRasch
-            ? `<div class="stat-tile"><span class="stat-value">${ballText(summary.avg_ball)}</span>O'rtacha ball</div>
-               <div class="stat-tile"><span class="stat-value">${ballText(summary.max_ball)}</span>Eng yuqori ball</div>
-               <div class="stat-tile"><span class="stat-value">${summary.top_count} ta</span>A+ va A</div>`
-            : `<div class="stat-tile"><span class="stat-value">${summary.avg_percent}%</span>O'rtacha foiz</div>
-               <div class="stat-tile"><span class="stat-value">${summary.max_percent}%</span>Eng yuqori</div>`
-        }
-      </div>
-      <p class="section-label" style="margin:0 0 10px">${
-        dtmMax ? `DTM BALLARI (${dtmMax} DAN)` : usesRasch ? "DARAJALAR (RASCH BALLI)" : "TO'G'RI JAVOBLAR FOIZI"
-      }</p>
-      <div class="chart">${chart}</div>
-      ${usesRasch ? `<p class="subtitle" style="margin:10px 0 0;font-size:13px">${RASCH_SCORE_NOTE}</p>` : ""}
-    </div>
-    ${
-      results.essay_pending
-        ? `<div class="notice is-info" style="margin:12px 0 0">📝 ${results.essay_pending} ta o'quvchining essesi baholanmagan.
-             Ularning umumiy bali hozircha faqat test qismi bo'yicha. O'quvchini bosib, esse balini qo'ying —
-             umumiy ball (test + esse) ÷ 2 bo'lib qayta hisoblanadi.</div>`
-        : ""
-    }
-
-    <button class="btn" id="results-pdf-button" style="margin-top:14px">📄 PDF HISOBOT</button>
-    <button class="btn btn-ghost" id="results-image-button">🖼 RASM (guruhga yuborish uchun)</button>
-    <button class="btn btn-ghost" id="results-excel-button">📊 EXCEL (javoblar va tahlil)</button>
-    <div class="contact-actions" style="margin-top:10px">
-      <button class="btn btn-ghost" id="results-sections-button">🧩 Bo'limlar${testSectionNames(results).length ? ` (${testSectionNames(results).length})` : ""}</button>
-      <button class="btn btn-ghost" id="results-certificates-button">🎓 Sertifikatlar</button>
-    </div>
-    <button class="btn btn-ghost" id="results-send-students-button" style="margin-top:10px">📨 Sertifikatlarni o'quvchilarga yuborish</button>
-    ${
-      results.status === "closed"
-        ? ""
-        : `<p class="subtitle" style="margin:6px 4px 0;font-size:12px">🔒 Test yakunlangach yuborish mumkin bo'ladi</p>`
-    }
-
-    <div class="row-between" style="margin:18px 0 8px">
-      <span class="section-label" style="margin:0">${results.rows.length > TOP_COUNT ? `TOP-${TOP_COUNT}` : "ISHTIROKCHILAR (O'RIN BO'YICHA)"}</span>
-      <span class="subtitle" style="margin:0;font-size:12px">${dtmMax ? "DTM bali" : usesRasch ? "ball • daraja" : "foiz • to'g'ri"}</span>
-    </div>
-    <div class="result-cards">${rows}</div>
-    <div class="contact-actions" style="margin-top:10px">
-      ${
-        results.rows.length > TOP_COUNT
-          ? `<button class="btn btn-ghost" id="all-participants-button">👥 Barchasi (${results.rows.length}) ›</button>`
-          : ""
-      }
-      <button class="btn btn-ghost" id="question-stats-button">📊 Savol statistikasi ›</button>
-    </div>
-  `);
-
-  wireTeacherChrome("results");
-
-  document.getElementById("all-results-button").addEventListener("click", () => renderResultsTestList(tests));
-  document.getElementById("results-pdf-button").addEventListener("click", guarded(() => downloadOrSendPdf(testId)));
-  document.getElementById("results-excel-button").addEventListener("click", guarded(() => downloadOrSendExcel(testId)));
-  document.getElementById("results-image-button").addEventListener("click", guarded(() => downloadOrSendImage(testId)));
-  document.getElementById("results-certificates-button").addEventListener(
-    "click",
-    guarded(async () => {
-      if (!results.rows.length) throw new Error("Hali natija yo'q");
-      await deliverPdf(`/api/teacher/tests/${testId}/certificates`, "sertifikatlar.pdf", "🎓 Sertifikatlar Telegram chatga yuborildi");
-    })
-  );
-  document.getElementById("results-sections-button").addEventListener("click", () => openSectionsSheet(testId, results));
-  // Har bir o'quvchiga o'z sertifikati bot chatiga boradi — qaytarib bo'lmaydi, shuning uchun so'raladi
-  document.getElementById("results-send-students-button").addEventListener(
-    "click",
-    guarded(async () => {
-      if (results.status !== "closed") {
-        throw new Error("Avval testni yakunlang (🏁 Yakunlash) — sertifikatlar faqat yakunlangan testdan yuboriladi");
-      }
-      if (!results.rows.length) throw new Error("Hali natija yo'q");
-      const sure = await askConfirm(
-        `${results.rows.length} ta o'quvchining har biriga o'z sertifikati (ball, foiz, daraja) bot orqali yuborilsinmi?`
-      );
-      if (!sure) return;
-      const sent = await api(`/api/teacher/tests/${testId}/certificates/send-students`, { method: "POST" });
-      showToast(
-        `📨 ${sent.queued} ta o'quvchiga yuborilmoqda` +
-          (sent.skipped ? ` (${sent.skipped} tasi Telegram'siz — o'tkazib yuborildi)` : "") +
-          ". Tugagach, botda hisobot keladi."
-      );
-    })
-  );
-
-  document.querySelectorAll("[data-detail-id]").forEach((line) => {
-    line.addEventListener(
-      "click",
-      guarded(() => renderStudentDetail(testId, Number(line.dataset.detailId)))
-    );
-  });
-  const backToResults = () => renderResultsTab(testId);
-  document.getElementById("all-participants-button")?.addEventListener("click", () => renderParticipantsPage(testId, results, backToResults));
-  document.getElementById("question-stats-button").addEventListener(
-    "click",
-    guarded(() => renderQuestionStatsPage(testId, results.mode, backToResults))
-  );
-}
-
 // Savollar bo'limlari (esseli testda bo'limlar yo'q — Milliy sertifikatdagidek test va yozma ish bali)
 function testSectionNames(results) {
   return (results.section_names || []).filter((name) => name !== ESSAY_SECTION);
@@ -17604,59 +17407,6 @@ function testSectionNames(results) {
 // Milliy sertifikatdagi "umumiy ballga nisbatan foiz ko'rsatkichi" (ball / 65 × 100)
 function certPercentText(value) {
   return value == null ? "—" : `${Number(value).toFixed(2)}%`;
-}
-
-// Esseli test qatori: "Test: 66.72 • Esse: 55.5 • 94.02%"
-function essayResultMeta(row) {
-  const essay = row.essay_pending ? "⏳ kutilmoqda (ball — faqat test qismi)" : formatNumber(row.essay_ball);
-  return `Test: ${formatNumber(row.test_ball)} • 📝 Esse: ${essay} • ${certPercentText(row.cert_percent)}`;
-}
-
-// Natijalar ro'yxatidagi bitta qator (o'rin, ism, bo'limlar/foiz, ball va daraja)
-function resultLineHtml(row, results) {
-  const usesRasch = Boolean(results.uses_rasch);
-  return `
-      <div class="result-line" data-detail-id="${row.attempt_id}">
-        <span class="result-rank">${row.rank}</span>
-        <span class="result-name">
-          ${escapeHtml(row.name)}
-          <small class="result-meta">${
-            results.essay_max && row.test_ball != null
-              ? essayResultMeta(row)
-              : testSectionNames(results).length
-                ? testSectionNames(results).map((name) => `${escapeHtml(name)}: ${row.sections[name]}%`).join(" • ")
-                : `✅ ${row.correct} • ❌ ${row.wrong} • ${usesRasch && row.dtm_ball == null ? certPercentText(row.cert_percent) : `${row.percent}%`}`
-          }</small>
-        </span>
-        ${
-          row.dtm_ball != null
-            ? `<span class="result-percent">${row.dtm_ball}<small class="result-grade">DTM bali</small></span>`
-            : `<span class="result-percent">${usesRasch ? ballText(row.ball) : `${row.percent}%`}<small class="result-grade">${usesRasch ? escapeHtml(row.grade) : `${row.correct}/${row.total}`}</small></span>`
-        }
-      </div>`;
-}
-
-// Barcha ishtirokchilar — alohida sahifa: qidiruv va 50 tadan
-function renderParticipantsPage(testId, results, onBack) {
-  showPage(`
-    <button class="back-button" data-action="back">←</button>
-    <h2>${escapeHtml(results.title)} — ishtirokchilar (${results.rows.length})</h2>
-    <input class="input is-search" id="participants-filter" placeholder="O'quvchini qidirish..." />
-    <div class="result-cards" id="participants-list"></div>
-  `);
-  document.querySelector('[data-action="back"]').addEventListener("click", guarded(onBack));
-  mountPagedList({
-    container: document.getElementById("participants-list"),
-    items: results.rows,
-    renderItem: (row) => resultLineHtml(row, results),
-    emptyHtml: `<p class="subtitle" style="padding:14px">Hech kim topilmadi</p>`,
-    filterInput: document.getElementById("participants-filter"),
-    matches: (row, query) => row.name.toLowerCase().includes(query),
-    onRender: (elements) =>
-      findWithin(elements, "[data-detail-id]").forEach((line) =>
-        line.addEventListener("click", guarded(() => renderStudentDetail(testId, Number(line.dataset.detailId))))
-      ),
-  });
 }
 
 // Savol statistikasi — alohida sahifa. Ko'p o'quvchida eng foydalisi: qaysi savolda ko'p xato
@@ -17856,7 +17606,7 @@ function openSectionsSheet(testId, results) {
   const saveText = async (text) => {
     await api(`/api/teacher/tests/${testId}/sections`, { method: "PUT", body: { text } });
     showToast(text ? "✅ Bo'limlar saqlandi" : "Bo'limlar olib tashlandi");
-    setTimeout(() => renderResultsTab(testId), 0);
+    setTimeout(() => renderTestResults(testId), 0);
   };
   if (saved.length > 2) {
     openSectionsTextSheet({ text: results.sections_text || "", onSave: saveText });
@@ -17870,40 +17620,8 @@ function openSectionsSheet(testId, results) {
     onSave: async ({ text }) => {
       await api(`/api/teacher/tests/${testId}/sections`, { method: "PUT", body: { text } });
       showToast(text ? "✅ Bo'limlar saqlandi" : "Bo'limlar olib tashlandi");
-      setTimeout(() => renderResultsTab(testId), 0);
+      setTimeout(() => renderTestResults(testId), 0);
     },
-  });
-}
-
-function renderResultsTestList(tests) {
-  const cards = tests
-    .map(
-      (test) => `
-        <div class="card card-entrance" data-results-test-id="${test.id}">
-          <div class="card-body" style="width:100%">
-            <div class="row-between" style="align-items:flex-start">
-              <div>
-                <h3 style="margin-bottom:6px">${escapeHtml(test.title)} ${testBadges(test)}</h3>
-                <p style="margin:0"><b>${escapeHtml(test.subject)}</b> • Kod: <b>${escapeHtml(test.code)}</b></p>
-                <p class="subtitle" style="margin:4px 0 0">👥 ${test.students} ta qatnashchi • ${formatDateTime(test.created_at)}</p>
-              </div>
-              <span style="color:var(--color-text-muted);font-size:22px">›</span>
-            </div>
-          </div>
-        </div>`
-    )
-    .join("");
-
-  showPage(`
-    ${pageHeader("Natijalar")}
-    <p class="subtitle">Qaysi testning natijalarini ko'rmoqchisiz?</p>
-    ${cards}
-  `);
-
-  wireTeacherChrome("results");
-
-  document.querySelectorAll("[data-results-test-id]").forEach((card) => {
-    card.addEventListener("click", guarded(() => renderResultsTab(Number(card.dataset.resultsTestId))));
   });
 }
 
@@ -17974,6 +17692,16 @@ async function renderTestResults(testId) {
     <button class="btn" id="pdf-button">📄 PDF HISOBOT</button>
     <button class="btn btn-ghost" id="image-button">🖼 RASM (guruhga yuborish uchun)</button>
     <button class="btn btn-ghost" id="excel-button">📊 EXCEL (javoblar va tahlil)</button>
+    <div class="contact-actions" style="margin-top:10px">
+      <button class="btn btn-ghost" id="results-sections-button">🧩 Bo'limlar${testSectionNames(results).length ? ` (${testSectionNames(results).length})` : ""}</button>
+      <button class="btn btn-ghost" id="results-certificates-button">🎓 Sertifikatlar</button>
+    </div>
+    <button class="btn btn-ghost" id="results-send-students-button" style="margin-top:10px">📨 Sertifikatlarni o'quvchilarga yuborish</button>
+    ${
+      results.status === "closed"
+        ? ""
+        : `<p class="subtitle" style="margin:6px 4px 0;font-size:12px">🔒 Test yakunlangach yuborish mumkin bo'ladi</p>`
+    }
     <h3>Natijalar</h3>
     <input class="input is-search" id="filter-input" placeholder="O'quvchini qidirish..." />
     <div style="overflow-x:auto">
@@ -17997,6 +17725,34 @@ async function renderTestResults(testId) {
   document.getElementById("pdf-button").addEventListener("click", guarded(() => downloadOrSendPdf(testId)));
   document.getElementById("excel-button").addEventListener("click", guarded(() => downloadOrSendExcel(testId)));
   document.getElementById("image-button").addEventListener("click", guarded(() => downloadOrSendImage(testId)));
+  document.getElementById("results-certificates-button").addEventListener(
+    "click",
+    guarded(async () => {
+      if (!results.rows.length) throw new Error("Hali natija yo'q");
+      await deliverPdf(`/api/teacher/tests/${testId}/certificates`, "sertifikatlar.pdf", "🎓 Sertifikatlar Telegram chatga yuborildi");
+    })
+  );
+  document.getElementById("results-sections-button").addEventListener("click", () => openSectionsSheet(testId, results));
+  // Har bir o'quvchiga o'z sertifikati bot chatiga boradi — qaytarib bo'lmaydi, shuning uchun so'raladi
+  document.getElementById("results-send-students-button").addEventListener(
+    "click",
+    guarded(async () => {
+      if (results.status !== "closed") {
+        throw new Error("Avval testni yakunlang (🏁 Yakunlash) — sertifikatlar faqat yakunlangan testdan yuboriladi");
+      }
+      if (!results.rows.length) throw new Error("Hali natija yo'q");
+      const sure = await askConfirm(
+        `${results.rows.length} ta o'quvchining har biriga o'z sertifikati (ball, foiz, daraja) bot orqali yuborilsinmi?`
+      );
+      if (!sure) return;
+      const sent = await api(`/api/teacher/tests/${testId}/certificates/send-students`, { method: "POST" });
+      showToast(
+        `📨 ${sent.queued} ta o'quvchiga yuborilmoqda` +
+          (sent.skipped ? ` (${sent.skipped} tasi Telegram'siz — o'tkazib yuborildi)` : "") +
+          ". Tugagach, botda hisobot keladi."
+      );
+    })
+  );
 
   document.getElementById("edit-price-button").addEventListener("click", () => showPriceEditor(testId, results.price));
   document.getElementById("question-stats-button").addEventListener(
