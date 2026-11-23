@@ -9151,3 +9151,27 @@ def test_pullik_elon_payme_orqali():
         assert not response.get("payment_required") and free["id"] in started, response
     finally:
         main._start_broadcast = original_start
+
+
+def test_admin_maktabni_tasdiqlaydi_va_u_tepada_turadi():
+    """Admin haqiqiy maktabga ✓ qo'yadi: ro'yxatda "verified" va tasdiqlanganlar tepada; faqat admin."""
+    reset_database()
+    for tg_id, name in ((701, "A maktab"), (702, "Z maktab")):
+        _set_name(tg_id, "Ism", "Familiya")
+        made = client.post("/api/schools", json={"region": "Toshkent shahri", "district": "Chilonzor tumani",
+                                                 "name": name, "phone": "+998 90 111 22 33"}, headers=as_user(tg_id))
+        assert made.status_code == 200, made.text
+    listing = lambda: client.get("/api/schools", params={"region": "Toshkent shahri", "district": "Chilonzor tumani"},
+                                 headers=as_user(900)).json()
+    assert [(s["name"], s["verified"]) for s in listing()] == [("A maktab", False), ("Z maktab", False)]
+
+    target = next(s for s in client.get("/api/admin/schools", headers=as_user(4242)).json() if s["name"] == "Z maktab")
+    url = f"/api/admin/schools/{target['id']}/verify"
+    assert client.post(url, json={"verified": True}, headers=as_user(701)).status_code == 403
+    assert client.post(url, json={"verified": True}, headers=as_user(4242)).json()["verified"] is True
+    assert [(s["name"], s["verified"]) for s in listing()] == [("Z maktab", True), ("A maktab", False)]
+    assert next(s for s in client.get("/api/admin/schools", headers=as_user(4242)).json() if s["id"] == target["id"])["verified"]
+
+    assert client.post(url, json={"verified": False}, headers=as_user(4242)).json()["verified"] is False
+    assert [s["name"] for s in listing()] == ["A maktab", "Z maktab"]
+    assert client.post("/api/admin/schools/99999/verify", json={"verified": True}, headers=as_user(4242)).status_code == 404

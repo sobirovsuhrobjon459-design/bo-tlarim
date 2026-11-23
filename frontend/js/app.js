@@ -4275,8 +4275,17 @@ async function wireLocationSelects({ allDistricts = false, onChange }) {
   notify();
 }
 
+// Admin tasdiqlagan (haqiqiy) muassasa belgisi
+const VERIFIED_BADGE = `<span class="verified-badge" title="Tasdiqlangan muassasa"
+  style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:4px;
+         border-radius:50%;background:#1d9bf0;color:#fff;font-size:11px;font-weight:700;vertical-align:middle">✓</span>`;
+
 function schoolListHtml(schools, emptyText) {
   if (!schools.length) return `<p class="subtitle" style="margin:8px 0 0">${emptyText}</p>`;
+  const badge = (school) => (school.verified ? VERIFIED_BADGE : "");
+  const hint = schools.some((school) => school.verified)
+    ? `<p class="subtitle" style="margin:6px 0 0;font-size:12px">${VERIFIED_BADGE} — haqiqiyligi tasdiqlangan muassasa</p>`
+    : "";
   // Faqat nomi va tumani — o'qituvchi/o'quvchi soni ko'rsatilmaydi, begona maktabga kirib bo'lmaydi
   return `
     <div class="panel pick-list">
@@ -4284,19 +4293,19 @@ function schoolListHtml(schools, emptyText) {
         .map((school, index) =>
           school.is_mine
             ? `<button type="button" class="pick-item" data-school-index="${index}">
-                 <span class="pick-title">🏫 ${escapeHtml(school.name)}
+                 <span class="pick-title">🏫 ${escapeHtml(school.name)}${badge(school)}
                    <small>📍 ${escapeHtml(school.district)} · 👑 sizning maktabingiz</small>
                  </span>
                  <span>›</span>
                </button>`
             : `<div class="pick-item" style="cursor:default">
-                 <span class="pick-title">🏫 ${escapeHtml(school.name)}
+                 <span class="pick-title">🏫 ${escapeHtml(school.name)}${badge(school)}
                    <small>📍 ${escapeHtml(school.district)}</small>
                  </span>
                </div>`
         )
         .join("")}
-    </div>`;
+    </div>${hint}`;
 }
 
 async function fetchSchools(regionName, district = "") {
@@ -9939,7 +9948,7 @@ async function adminSchoolsView() {
         <div class="card" style="cursor:default">
           <div class="card-body" style="width:100%">
             <div class="row-between">
-              <b>${escapeHtml(school.name)}</b>
+              <b>${escapeHtml(school.name)}${school.verified ? VERIFIED_BADGE : ""}</b>
               <span class="badge badge-blue">${instTerms(school.kind).title}</span>
             </div>
             <p class="subtitle" style="margin:4px 0 0">
@@ -9951,8 +9960,12 @@ async function adminSchoolsView() {
               <span>👥 <b>${school.classes}</b> ${instTerms(school.kind).group}</span>
               <span>🎒 <b>${formatNumber(school.students)}</b> o'quvchi</span>
             </div>
-            <button type="button" class="btn btn-ghost danger-text" data-delete-school="${school.id}"
-                    style="width:auto;padding:6px 14px;margin:10px 0 0">🗑 O'chirish</button>
+            <div class="row-between" style="gap:8px;margin-top:10px;justify-content:flex-start;flex-wrap:wrap">
+              <button type="button" class="btn ${school.verified ? "btn-ghost" : ""}" data-verify-school="${school.id}"
+                      style="width:auto;padding:6px 14px;margin:0">${school.verified ? "✖ Tasdiqni olib tashlash" : "✓ Tasdiqlash"}</button>
+              <button type="button" class="btn btn-ghost danger-text" data-delete-school="${school.id}"
+                      style="width:auto;padding:6px 14px;margin:0">🗑 O'chirish</button>
+            </div>
           </div>
         </div>`
     )
@@ -9961,6 +9974,7 @@ async function adminSchoolsView() {
   return {
     html: `
       ${adminHint("Platformadagi barcha xususiy maktab, o'quv markazi va to'garaklar. Asoschi ismini bossangiz — uning kartochkasi ochiladi.")}
+      ${adminHint(`«✓ Tasdiqlash» — haqiqiy muassasaga ${VERIFIED_BADGE} belgisi: ro'yxatdan o'tish va qo'shilishdagi qidiruvda u tepada va belgi bilan turadi. Tasdiqlangan: <b>${schools.filter((s) => s.verified).length}</b> ta.`)}
       <div class="stats-grid">
         <div class="stat-tile">🏫<span class="stat-value">${byKind.school || 0}</span>Maktab</div>
         <div class="stat-tile">📘<span class="stat-value">${byKind.course || 0}</span>O'quv markazi</div>
@@ -9983,6 +9997,17 @@ async function adminSchoolsView() {
         })
       );
       document.querySelectorAll("a[data-admin-user]").forEach((link) => link.addEventListener("click", (event) => event.preventDefault()));
+      document.querySelectorAll("[data-verify-school]").forEach((button) => {
+        const school = schools.find((item) => item.id === Number(button.dataset.verifySchool));
+        button.addEventListener(
+          "click",
+          guarded(async () => {
+            await api(`/api/admin/schools/${school.id}/verify`, { method: "POST", body: { verified: !school.verified } });
+            showToast(school.verified ? `«${school.name}» tasdig'i olib tashlandi` : `✓ «${school.name}» tasdiqlandi`);
+            await renderAdminDashboard("schools");
+          })
+        );
+      });
       document.querySelectorAll("[data-delete-school]").forEach((button) => {
         const school = schools.find((item) => item.id === Number(button.dataset.deleteSchool));
         button.addEventListener("click", () => openDeleteSchoolSheet(school));

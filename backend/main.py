@@ -284,7 +284,7 @@ def _add_missing_columns() -> None:
             "monthly_fee": "INTEGER", "subject": "VARCHAR(100)", "assistant_user_id": "INTEGER",
         },
         "private_schools": {"monthly_fee": "INTEGER DEFAULT 0", "kind": "VARCHAR(10) DEFAULT 'school'",
-                            "deleted_at": "TIMESTAMP", "delete_requested_at": "TIMESTAMP"},
+                            "deleted_at": "TIMESTAMP", "delete_requested_at": "TIMESTAMP", "verified_at": "TIMESTAMP"},
         "class_students": {"discount_percent": "INTEGER DEFAULT 0", "student_code": "INTEGER", "added_by_user_id": "INTEGER",
                            "source_student_id": "INTEGER", "removed_reason": "TEXT", "removed_by_user_id": "INTEGER",
                            "basket_closed_at": "TIMESTAMP", "reassigned_to_id": "INTEGER"},
@@ -11562,7 +11562,9 @@ def list_schools(
                                         PrivateSchool.deleted_at.is_(None))
     if district:
         query = query.where(PrivateSchool.district == district)
-    schools = db.scalars(query.order_by(PrivateSchool.district, PrivateSchool.name)).all()
+    # Admin tasdiqlagan (haqiqiy) muassasalar — tepada, o'qituvchi o'zinikini oson topsin
+    schools = db.scalars(query.order_by(PrivateSchool.verified_at.is_(None), PrivateSchool.district,
+                                        PrivateSchool.name)).all()
 
     return [
         {
@@ -11570,6 +11572,7 @@ def list_schools(
             "name": school.name,
             "region": school.region,
             "district": school.district,
+            "verified": school.verified_at is not None,
             # O'qituvchi/o'quvchi soni berilmaydi — ro'yxatda faqat nomi ko'rinadi
             "founder": _founder_contact(db, school),
             "is_mine": school.owner_user_id == user.id,
@@ -18710,12 +18713,31 @@ def admin_list_schools(q: str = "", admin: User = Depends(get_current_admin), db
             "owner": owner.full_name,
             "owner_user_id": owner.id,
             "created_at": school.created_at,
+            "verified": school.verified_at is not None,
             "staff": staff_count or 0,
             "classes": class_count or 0,
             "students": student_count or 0,
         }
         for school, owner, staff_count, class_count, student_count in rows
     ]
+
+
+class AdminSchoolVerifyIn(BaseModel):
+    verified: bool
+
+
+@app.post("/api/admin/schools/{school_id}/verify")
+def admin_verify_school(school_id: int, body: AdminSchoolVerifyIn, admin: User = Depends(get_current_admin),
+                        db: Session = Depends(get_db)):
+    """Muassasaga ✓ (haqiqiy) belgisini qo'yadi yoki olib tashlaydi — qidiruvda tasdiqlanganlar tepada turadi."""
+
+    school = db.get(PrivateSchool, school_id)
+    if not school or school.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Muassasa topilmadi")
+    school.verified_at = (school.verified_at or utcnow()) if body.verified else None
+    db.commit()
+    logging.getLogger("backend").info("Muassasa tasdig'i: id=%s verified=%s admin=%s", school.id, body.verified, admin.id)
+    return {"ok": True, "verified": school.verified_at is not None}
 
 
 @app.post("/api/admin/schools/{school_id}/delete")
