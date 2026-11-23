@@ -331,6 +331,7 @@ def _add_missing_columns() -> None:
             "payme_created_at": "TIMESTAMP",
             "payme_time": "BIGINT",
             "payme_cancel_reason": "INTEGER",
+            "test_id": "INTEGER",
         },
         # Yozma javoblarni AI o'qishi (jadval oldingi yangilanishda AI ustunlarisiz yaratilgan)
         "written_answers": {
@@ -5520,7 +5521,9 @@ def _charges_tokens(test: Test, teacher: Teacher) -> bool:
 
 
 def _purchase_label(purchase: CreditPurchase) -> str:
-    """Xarid nomi: "50 ta token" yoki "3 oylik obuna"."""
+    """Xarid nomi: "50 ta token", "3 oylik obuna" yoki "«AB12» testi e'loni"."""
+    if purchase.kind == "broadcast":
+        return f"«{purchase.test.code}» testi e'loni" if purchase.test else "Test e'loni"
     if purchase.kind == "subscription":
         return f"{purchase.months} oylik obuna"
     return f"{purchase.credits} ta token"
@@ -5543,6 +5546,9 @@ def _grant_purchase(purchase: CreditPurchase) -> None:
     """To'langan xaridni kuchga kiritadi: token qo'shiladi yoki obuna muddati uzayadi."""
 
     teacher = purchase.teacher
+    if purchase.kind == "broadcast":
+        _grant_broadcast(purchase)
+        return
     if purchase.kind != "subscription":
         add_credits(teacher, purchase.credits)
         return
@@ -5557,6 +5563,10 @@ def _revoke_purchase(purchase: CreditPurchase) -> None:
     """Bekor qilingan (pul qaytarilgan) xarid: berilgan token yoki obuna kunlari olib qo'yiladi."""
 
     teacher = purchase.teacher
+    if purchase.kind == "broadcast":
+        # Yuborilgan e'lonni qaytarib bo'lmaydi — pul qaytarilgani faqat log'da qoladi
+        logging.getLogger("backend").warning("Pullik e'lon to'lovi bekor qilindi: purchase=%s", purchase.id)
+        return
     if purchase.kind != "subscription":
         add_credits(teacher, -purchase.credits)
         return
@@ -5568,10 +5578,67 @@ def _revoke_purchase(purchase: CreditPurchase) -> None:
 def _purchase_granted_text(purchase: CreditPurchase, teacher: Teacher) -> str:
     """Xarid kuchga kirgach o'qituvchiga boradigan xabar."""
 
+    if purchase.kind == "broadcast":
+        return f"📢 {_purchase_label(purchase)} to'landi — bot foydalanuvchilariga yuborilmoqda."
     if purchase.kind == "subscription":
         until = (teacher.subscription_until + TASHKENT_OFFSET).strftime("%d.%m.%Y")
         return f"⭐ {purchase.months} oylik obuna faollashdi — {until} gacha tekshiruvlar cheksiz, token yechilmaydi."
     return f"Hisobingizga {purchase.credits} ta token qo'shildi.\nJoriy token: {teacher.credits} ta"
+
+
+# ---------- Pullik test e'loni ----------
+# O'qituvchi testini bot foydalanuvchilarining barchasiga e'lon qiladi. Narxni admin panelda admin
+# belgilaydi (AppSetting "broadcast_price"); 0 — e'lon bepul (ilgarigidek). Narx bo'lsa — faqat Payme
+# orqali: to'lov o'tgach (Payme PerformTransaction) e'lon o'zi yuboriladi.
+
+BROADCAST_PRICE_KEY = "broadcast_price"
+
+
+def _broadcast_price(db: Session) -> int:
+    """Bitta test e'loni narxi (so'm); 0 — bepul."""
+    row = db.get(AppSetting, BROADCAST_PRICE_KEY)
+    try:
+        return max(0, int(row.value or 0)) if row else 0
+    except ValueError:
+        return 0  # buzilgan qiymat — bepul
+
+
+def _broadcast_blocker(test: Test | None) -> str | None:
+    """Testni hozir e'lon qilib bo'lmasa — sababi (aks holda None)."""
+    if not test or test.deleted_at:
+        return "Test topilmadi"
+    if test.broadcast_at:
+        return "Bu test allaqachon e'lon qilingan"
+    if test.status != "active" or (test.end_time and test.end_time <= utcnow()):
+        return "Test yakunlangan — e'lon qilib bo'lmaydi"
+    if test.enrollment_type == "closed":
+        return "Offline testga o'quvchilar o'zi kira olmaydi — e'lon qilib bo'lmaydi"
+    return None
+
+
+def _grant_broadcast(purchase: CreditPurchase) -> None:
+    """To'langan e'lon: test e'lon qilingan deb belgilanadi, yuborish — commit'dan keyin fonda."""
+
+    session = object_session(purchase)
+    test = session.get(Test, purchase.test_id, with_for_update=True) if purchase.test_id else None
+    if not test or test.broadcast_at:
+        # Ikki marta to'lansa (yoki test o'chgan bo'lsa) — ikkinchi marta yuborilmaydi
+        logging.getLogger("backend").warning("Pullik e'lon yuborilmadi (test yo'q yoki e'lon qilingan): purchase=%s",
+                                             purchase.id)
+        return
+    test.broadcast_at = utcnow()
+    session.info.setdefault("broadcast_tests", set()).add(test.id)
+
+
+@event.listens_for(Session, "after_commit")
+def _start_paid_broadcasts(session: Session) -> None:
+    for test_id in sorted(session.info.pop("broadcast_tests", None) or ()):
+        _start_broadcast(test_id)
+
+
+@event.listens_for(Session, "after_rollback")
+def _forget_paid_broadcasts(session: Session) -> None:
+    session.info.pop("broadcast_tests", None)
 
 
 def _build_payme_checkout_url(account_field: str, order_id: int | str, amount: int) -> str:
@@ -7381,7 +7448,7 @@ def list_own_credit_purchases(teacher: Teacher = Depends(get_current_teacher), d
     ).all()
     return [
         {"id": p.id, "kind": p.kind, "months": p.months, "credits": p.credits, "amount": p.amount,
-         "status": p.status, "method": p.method}
+         "status": p.status, "method": p.method, "label": _purchase_label(p)}
         for p in purchases
         if p.method == "card" or p.status == "paid" or p.performed_at is not None
     ]
@@ -7839,16 +7906,23 @@ def broadcast_test(test_id: int, teacher: Teacher = Depends(get_current_teacher)
     """Testni bot foydalanuvchilarining barchasiga e'lon qiladi — har bir test uchun bir marta."""
 
     test = db.scalar(select(Test).where(Test.id == test_id, Test.teacher_id == teacher.id).with_for_update())
-    if not test or test.deleted_at:
-        raise HTTPException(status_code=404, detail="Test topilmadi")
-    if test.broadcast_at:
-        raise HTTPException(status_code=409, detail="Bu test allaqachon e'lon qilingan")
-    if test.status != "active" or (test.end_time and test.end_time <= utcnow()):
-        raise HTTPException(status_code=409, detail="Test yakunlangan — e'lon qilib bo'lmaydi")
-    if test.enrollment_type == "closed":
-        raise HTTPException(status_code=409, detail="Offline testga o'quvchilar o'zi kira olmaydi — e'lon qilib bo'lmaydi")
+    blocker = _broadcast_blocker(test)
+    if blocker:
+        raise HTTPException(status_code=404 if blocker == "Test topilmadi" else 409, detail=blocker)
     if not BOT_TOKEN:
         raise HTTPException(status_code=503, detail="Bot ulanmagan")
+
+    # Pullik e'lon: Payme buyurtmasi yaratiladi, e'lon to'lov o'tgach o'zi yuboriladi (_grant_broadcast)
+    price = _broadcast_price(db)
+    if price > 0:
+        if "payme" not in _enabled_providers():
+            raise HTTPException(status_code=503, detail="Onlayn to'lov (Payme) hali sozlanmagan, admin bilan bog'laning")
+        purchase = CreditPurchase(teacher_id=teacher.id, kind="broadcast", test_id=test.id, credits=0,
+                                  amount=price, method="payme")
+        db.add(purchase)
+        db.commit()
+        return {"ok": True, "payment_required": True, "amount": price,
+                "checkout_url": _checkout_url("payme", purchase, price)}
 
     test.broadcast_at = utcnow()
     db.commit()
@@ -7908,6 +7982,7 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
         "end_time": test.end_time,
         "has_attempts": _test_has_attempts(db, test),
         "broadcast_at": test.broadcast_at,
+        "broadcast_price": _broadcast_price(db),
         "sheet_version": test.sheet_version or 1,
         "variants": _variant_names(db, test),
         "students": students,
@@ -17286,6 +17361,9 @@ def _test_already_paid(db: Session, order) -> bool:
     o'z buyurtmasi bilan. Ikkinchisi ham oxirigacha bosilsa, pul ikki marta yechilardi;
     shuning uchun to'lov yakunlanishidan oldin shu tekshiriladi va ikkinchisi rad etiladi.
     """
+    if isinstance(order, CreditPurchase) and order.kind == "broadcast":
+        # Pullik e'lon: test allaqachon e'lon qilingan, yakunlangan yoki o'chgan bo'lsa — pul yechilmaydi
+        return _broadcast_blocker(db.get(Test, order.test_id) if order.test_id else None) is not None
     if not isinstance(order, Payment):
         return False  # token/obunani ikki marta sotib olish — ikki alohida xarid, bu normal
     return db.scalar(
@@ -18265,6 +18343,58 @@ def admin_save_subscription_settings(body: SubscriptionSettingsIn, admin: User =
     db.commit()
     logging.getLogger("backend").info("Obuna narxlari yangilandi: %s (admin=%s)", body.prices, admin.id)
     return _subscription_settings_view(db)
+
+
+# ---------- Pullik test e'loni narxi ----------
+
+
+class BroadcastPriceIn(BaseModel):
+    """Admin panelidan: bitta test e'loni narxi (so'm). 0 — e'lon bepul."""
+
+    price: int = Field(ge=0, le=100_000_000)
+
+
+def _broadcast_settings_view(db: Session) -> dict:
+    paid = (CreditPurchase.kind == "broadcast", CreditPurchase.status == "paid")
+    recent = db.scalars(
+        select(CreditPurchase).where(*paid).order_by(CreditPurchase.performed_at.desc().nulls_last(),
+                                                     CreditPurchase.id.desc()).limit(20)
+    ).all()
+    return {
+        "price": _broadcast_price(db),
+        "payme_enabled": "payme" in _enabled_providers(),
+        "paid_count": db.scalar(select(func.count()).select_from(CreditPurchase).where(*paid)) or 0,
+        "revenue": db.scalar(select(func.sum(CreditPurchase.amount)).where(*paid)) or 0,
+        "recent": [
+            {"id": p.id, "label": _purchase_label(p), "amount": p.amount,
+             "teacher": p.teacher.user.full_name if p.teacher and p.teacher.user else "—",
+             "user_id": p.teacher.user_id if p.teacher else None,
+             "paid_at": p.performed_at or p.created_at}
+            for p in recent
+        ],
+    }
+
+
+@app.get("/api/admin/broadcast-price")
+def admin_broadcast_price(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Test e'loni narxi va pullik e'lonlar statistikasi."""
+
+    return _broadcast_settings_view(db)
+
+
+@app.post("/api/admin/broadcast-price")
+def admin_save_broadcast_price(body: BroadcastPriceIn, admin: User = Depends(get_current_admin),
+                               db: Session = Depends(get_db)):
+    """E'lon narxini saqlaydi — darhol kuchga kiradi (allaqachon yaratilgan to'lov havolalari eski narxda qoladi)."""
+
+    row = db.get(AppSetting, BROADCAST_PRICE_KEY)
+    if row:
+        row.value, row.updated_at, row.updated_by = str(body.price), utcnow(), admin.id
+    else:
+        db.add(AppSetting(key=BROADCAST_PRICE_KEY, value=str(body.price), updated_by=admin.id))
+    db.commit()
+    logging.getLogger("backend").info("E'lon narxi yangilandi: %s so'm (admin=%s)", body.price, admin.id)
+    return _broadcast_settings_view(db)
 
 
 @app.get("/api/admin/top-students")

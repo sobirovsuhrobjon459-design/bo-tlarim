@@ -9110,3 +9110,60 @@ def test_admin_ai_holati(monkeypatch):
     ai = response.json()["ai"]
     assert ai["enabled"] is True and ai["provider"] == "anthropic" and ai["keys"]["anthropic"] is True
     assert "sk-ant-maxfiy" not in response.text
+
+
+def test_pullik_elon_payme_orqali():
+    """Admin e'lon narxini qo'yadi; o'qituvchi Payme orqali to'laydi; e'lon faqat to'lovdan keyin ketadi."""
+    reset_database()
+    register_teacher()
+    admin = as_user(4242)
+    created = create_test(title="Kimyo")
+    url = f"/api/teacher/tests/{created['id']}/broadcast"
+
+    # Narxni faqat admin o'zgartiradi
+    assert client.post("/api/admin/broadcast-price", json={"price": 20_000}, headers=as_user(555)).status_code == 403
+    assert client.post("/api/admin/broadcast-price", json={"price": -5}, headers=admin).status_code == 422
+    assert client.post("/api/admin/broadcast-price", json={"price": 20_000}, headers=admin).json()["price"] == 20_000
+    assert client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()["broadcast_price"] == 20_000
+
+    started = []
+    original_start = main._start_broadcast
+    main._start_broadcast = started.append
+    try:
+        answer = client.post(url, json={}, headers=as_user(555)).json()
+        assert answer["payment_required"] and answer["amount"] == 20_000 and "paycom" in answer["checkout_url"], answer
+        assert started == [] and not client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()["broadcast_at"]
+
+        purchase = main.SessionLocal().scalar(main.select(main.CreditPurchase).where(main.CreditPurchase.kind == "broadcast"))
+        account, amount = {"order_id": f"c{purchase.id}"}, 20_000 * 100
+        assert payme("CheckPerformTransaction", {"account": account, "amount": 100})["error"]["code"] == -31001
+        check = payme("CheckPerformTransaction", {"account": account, "amount": amount})
+        assert check["result"]["allow"] and "Kimyo" not in str(check) and created["code"] in str(check), check
+        payme("CreateTransaction", {"id": "tx-elon", "time": 1, "account": account, "amount": amount})
+        assert started == []
+
+        payme("PerformTransaction", {"id": "tx-elon"})
+        assert started == [created["id"]], started
+        assert client.get(f"/api/teacher/tests/{created['id']}", headers=as_user(555)).json()["broadcast_at"]
+        assert client.post(url, json={}, headers=as_user(555)).status_code == 409  # qayta e'lon yo'q
+
+        # Ikkinchi (eski) buyurtma endi to'lanmaydi — test allaqachon e'lon qilingan
+        with main.SessionLocal() as db:
+            extra = main.CreditPurchase(teacher_id=purchase.teacher_id, kind="broadcast", test_id=created["id"],
+                                        credits=0, amount=20_000, method="payme")
+            db.add(extra)
+            db.commit()
+            extra_id = extra.id
+        assert payme("CheckPerformTransaction", {"account": {"order_id": f"c{extra_id}"}, "amount": amount})["error"]
+
+        info = client.get("/api/admin/broadcast-price", headers=admin).json()
+        assert info["paid_count"] == 1 and info["revenue"] == 20_000 and info["recent"][0]["amount"] == 20_000, info
+        assert client.get("/api/admin/stats", headers=admin).json()["credits_revenue"] >= 20_000
+
+        # Narx 0 — e'lon yana bepul va darhol ketadi
+        client.post("/api/admin/broadcast-price", json={"price": 0}, headers=admin)
+        free = create_test(title="Fizika")
+        response = client.post(f"/api/teacher/tests/{free['id']}/broadcast", json={}, headers=as_user(555)).json()
+        assert not response.get("payment_required") and free["id"] in started, response
+    finally:
+        main._start_broadcast = original_start

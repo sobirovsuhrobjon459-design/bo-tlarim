@@ -9440,6 +9440,7 @@ const ADMIN_TABS = [
   { id: "users", label: "👥 Odamlar" },
   { id: "schools", label: "🏫 Muassasalar" },
   { id: "broadcast", label: "📢 E'lon" },
+  { id: "adprice", label: "💰 E'lon narxi" },
   { id: "promo", label: "🎁 Promo" },
   { id: "system", label: "⚙️ Tizim" },
 ];
@@ -10325,6 +10326,7 @@ async function adminSystemView() {
           <p style="margin:6px 0"><b>👥 Odamlar</b> — istalgan foydalanuvchini topish; o'qituvchiga token berish yoki ayirish; bot orqali xabar yozish.</p>
           <p style="margin:6px 0"><b>🏫 Muassasalar</b> — barcha maktab, o'quv markazi va to'garaklar: qayerda, kimniki, nechta o'quvchi.</p>
           <p style="margin:6px 0"><b>📢 E'lon</b> — o'qituvchilar, xodimlar yoki hammaga bot orqali xabar. Avval o'zingizga sinab ko'ring.</p>
+          <p style="margin:6px 0"><b>💰 E'lon narxi</b> — o'qituvchilar testini bot orqali e'lon qilishi uchun narx (Payme orqali to'lanadi). 0 — bepul.</p>
           <p style="margin:6px 0"><b>🎁 Promo</b> — o'qituvchilarga bepul token beruvchi kodlar.</p>
           <p style="margin:6px 0"><b>⚙️ Tizim</b> — Payme/Click kalitlari (onlayn to'lovni yoqadi) va bazaning zaxira nusxasi.</p>
         </div>
@@ -10502,6 +10504,75 @@ async function adminBroadcastView() {
   };
 }
 
+/* ---------- 💰 E'lon narxi ---------- */
+// O'qituvchi testini bot foydalanuvchilariga e'lon qilishi uchun to'lov (Payme). 0 — bepul.
+
+async function adminBroadcastPriceView() {
+  const info = await api("/api/admin/broadcast-price");
+  const recent =
+    info.recent
+      .map(
+        (item) => `
+          <div class="card row-between" style="cursor:${item.user_id ? "pointer" : "default"}"
+               ${item.user_id ? `data-admin-user="${item.user_id}"` : ""}>
+            <span>${escapeHtml(item.teacher)}<br /><span class="subtitle">${escapeHtml(item.label)} · ${formatDateTime(item.paid_at)}</span></span>
+            <b>${formatNumber(item.amount)} so'm</b>
+          </div>`
+      )
+      .join("") || adminHint("Hali pullik e'lon bo'lmagan.");
+
+  return {
+    html: `
+      <div class="card" style="cursor:default">
+        <div class="card-body" style="width:100%">
+          <h3>💰 Test e'loni narxi</h3>
+          <p>
+            O'qituvchi «📢 E'lon qilish» tugmasini bossa, testi botning barcha foydalanuvchilariga yuboriladi.
+            Narx qo'yilsa, o'qituvchi avval <b>Payme</b> orqali to'laydi — to'lov o'tishi bilan e'lon o'zi ketadi.
+            <b>0</b> — e'lon bepul.
+          </p>
+          <p class="subtitle" style="margin:6px 0 10px">
+            Hozirgi narx: <b>${info.price ? `${formatNumber(info.price)} so'm` : "bepul"}</b>
+            · Payme: ${paymentStateBadge(info.payme_enabled)}
+          </p>
+          ${
+            info.price && !info.payme_enabled
+              ? `<p class="subtitle" style="margin:0 0 10px;color:var(--color-danger, #d33)">
+                   ⚠️ Payme sozlanmagan — o'qituvchilar hozir e'lon qila olmaydi. «⚙️ Tizim» bo'limida Payme kalitlarini kiriting.
+                 </p>`
+              : ""
+          }
+          <label class="field-label" for="adprice-input">Narx (so'm)</label>
+          <input class="input" id="adprice-input" inputmode="numeric" autocomplete="off" placeholder="masalan: 20000"
+                 value="${info.price || ""}" />
+          <button class="btn" id="adprice-save" style="margin-top:12px">💾 Saqlash</button>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-tile">📢<span class="stat-value">${formatNumber(info.paid_count)}</span>Pullik e'lon</div>
+        <div class="stat-tile">💵<span class="stat-value">${formatNumber(info.revenue)}</span>Tushum (so'm)</div>
+      </div>
+
+      <h3>🧾 Oxirgi to'langan e'lonlar</h3>
+      ${recent}
+    `,
+    wire() {
+      document.getElementById("adprice-save").addEventListener(
+        "click",
+        guarded(async () => {
+          const digits = document.getElementById("adprice-input").value.replace(/\s/g, "");
+          if (digits && !/^\d+$/.test(digits)) throw new Error("Narxni faqat raqam bilan yozing");
+          const price = Number(digits) || 0;
+          await api("/api/admin/broadcast-price", { method: "POST", body: { price } });
+          showToast(price ? `✅ E'lon narxi: ${formatNumber(price)} so'm` : "✅ E'lon endi bepul");
+          await renderAdminDashboard("adprice");
+        })
+      );
+    },
+  };
+}
+
 const ADMIN_VIEWS = {
   home: adminHomeView,
   payments: adminPaymentsView,
@@ -10509,6 +10580,7 @@ const ADMIN_VIEWS = {
   schools: adminSchoolsView,
   promo: adminPromoView,
   broadcast: adminBroadcastView,
+  adprice: adminBroadcastPriceView,
   system: adminSystemView,
 };
 
@@ -12212,7 +12284,11 @@ function subscriptionUntilText(isoString) {
 
 // Xarid nomi tarixda va tasdiqlashda: "50 ta token" yoki "3 oylik obuna"
 const purchaseLabel = (purchase) =>
-  purchase.kind === "subscription" ? `⭐ ${purchase.months} oylik obuna` : `🎫 ${formatNumber(purchase.credits)} ta token`;
+  purchase.kind === "broadcast"
+    ? `📢 ${escapeHtml(purchase.label || "Test e'loni")}`
+    : purchase.kind === "subscription"
+      ? `⭐ ${purchase.months} oylik obuna`
+      : `🎫 ${formatNumber(purchase.credits)} ta token`;
 
 const planTitle = (months) => (months === 12 ? "1 yil" : `${months} oy`);
 
@@ -16777,7 +16853,9 @@ function testMenuHtml(test, groups, isClosedTest, isFinished) {
     group("sheets"),
     group("key"),
     group("students"),
-    !isFinished && !isClosedTest && !test.broadcast_at ? testMenuButton('id="broadcast-button"', "📢", "E'lon qilish") : "",
+    !isFinished && !isClosedTest && !test.broadcast_at
+      ? testMenuButton('id="broadcast-button"', "📢", test.broadcast_price ? `E'lon qilish · ${formatNumber(test.broadcast_price)} so'm` : "E'lon qilish")
+      : "",
     isFinished ? testMenuButton('id="reopen-button"', "🔓", "Qayta ochish") : testMenuButton('id="finish-button"', "🏁", "Yakunlash"),
   ].filter(Boolean);
   // Guruh ichidagi amallarning o'z tugmalari — ko'rinmaydi, oynadagi band ularni bosadi
@@ -17021,11 +17099,20 @@ async function renderTestDetail(testId) {
   document.getElementById("broadcast-button")?.addEventListener(
     "click",
     guarded(async () => {
+      const price = test.broadcast_price || 0;
       const question =
         "Test bot foydalanuvchilarining barchasiga yuboriladi: nomi, pullik yoki bepulligi, kodi va sizning profilingiz. " +
-        "Har bir test uchun faqat bir marta. Yuborilsinmi?";
+        "Har bir test uchun faqat bir marta. " +
+        (price
+          ? `E'lon narxi — ${formatNumber(price)} so'm, Payme orqali to'lanadi. To'lov o'tishi bilan e'lon o'zi yuboriladi. To'lashga o'tilsinmi?`
+          : "Yuborilsinmi?");
       if (!(await askConfirm(question))) return;
       const sent = await api(`/api/teacher/tests/${testId}/broadcast`, { method: "POST", body: {} });
+      if (sent.payment_required) {
+        openExternalLink(sent.checkout_url);
+        showToast("💳 Payme sahifasi ochildi — to'lov o'tgach e'lon o'zi yuboriladi va botga hisobot keladi");
+        return;
+      }
       showToast(`📢 E'lon ${formatNumber(sent.recipients)} ta foydalanuvchiga yuborilmoqda`);
       await renderTestDetail(testId);
     })

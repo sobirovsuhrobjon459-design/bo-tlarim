@@ -653,8 +653,10 @@ class CreditPurchase(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     teacher_id: Mapped[int] = mapped_column(ForeignKey("teachers.id"), index=True)
-    # "tokens" — token paketi (credits ta); "subscription" — months oylik obuna (credits = 0)
+    # "tokens" — token paketi (credits ta); "subscription" — months oylik obuna (credits = 0);
+    # "broadcast" — test_id testini bot foydalanuvchilariga pullik e'lon qilish (credits = 0)
     kind: Mapped[str] = mapped_column(String(15), default="tokens")
+    test_id: Mapped[int | None] = mapped_column(ForeignKey("tests.id"), default=None, index=True)
     months: Mapped[int] = mapped_column(default=0)
     credits: Mapped[int]
     amount: Mapped[int]  # so'm
@@ -681,6 +683,7 @@ class CreditPurchase(Base):
     receipt_file_id: Mapped[str | None] = mapped_column(String(200), default=None)
 
     teacher: Mapped["Teacher"] = relationship()
+    test: Mapped["Test | None"] = relationship()
 
 
 class PrivateSchool(Base):
