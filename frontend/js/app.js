@@ -15960,7 +15960,7 @@ async function renderVariantsPage(testId, test) {
               <p>${variant.students ? `👥 ${variant.students} ta o'quvchi` : "Hali o'quvchi yo'q"}</p>
             </div>
             <div style="display:flex;gap:8px;flex-shrink:0">
-              <button class="icon-button" data-variant-key="${variant.name}" title="Kalit PDF">🔑</button>
+              <button class="icon-button" data-variant-key="${variant.name}" title="Kalitni yuklab olish">🔑</button>
               <button class="icon-button" data-variant-edit="${variant.name}" title="Tahrirlash">✏️</button>
               ${variant.main || variant.students ? "" : deleteButton("data-variant-delete", variant.name)}
             </div>
@@ -15984,17 +15984,7 @@ async function renderVariantsPage(testId, test) {
     );
   });
   document.querySelectorAll("[data-variant-key]").forEach((button) => {
-    const name = button.dataset.variantKey;
-    button.addEventListener(
-      "click",
-      guarded(() =>
-        deliverPdf(
-          `/api/teacher/tests/${testId}/answer-sheet?answers=true&variant=${name}`,
-          `${test.code}_kalit_${name}.pdf`,
-          `🔑 ${name} variant kaliti Telegramga yuborildi`
-        )
-      )
-    );
+    button.addEventListener("click", () => openAnswerKeyDownload(testId, test, button.dataset.variantKey));
   });
   document.querySelectorAll("[data-variant-delete]").forEach((button) => {
     button.addEventListener(
@@ -16716,7 +16706,7 @@ function testMenuGroups(test, isClosedTest, isFinished) {
       icon: "🔑",
       label: "Kalit",
       items: [
-        isClosedTest && ["answer-key-button", "🔑", "Kalit PDF", "To'g'ri javoblar — chop etish uchun"],
+        isClosedTest && ["answer-key-button", "🔑", "Kalitlarni yuklab olish", "To'g'ri javoblar — PDF yoki rasm"],
         test.mode === "key" && ["edit-key-button", "📝", "Kalitni tuzatish", "Javoblar kalitini tahrirlash"],
       ],
     },
@@ -16929,16 +16919,9 @@ async function renderTestDetail(testId) {
     )
   );
 
-  document.getElementById("answer-key-button")?.addEventListener(
-    "click",
-    guarded(() =>
-      deliverPdf(
-        `/api/teacher/tests/${testId}/answer-sheet?answers=true`,
-        `${test.code}_kalit.pdf`,
-        "🔑 Javoblar kaliti Telegramga yuborildi"
-      )
-    )
-  );
+  document
+    .getElementById("answer-key-button")
+    ?.addEventListener("click", () => openAnswerKeyDownload(testId, test));
 
   // Skaner Android ilovada (APK) va web saytda (brauzer kamerasi yoki surat); Telegram botida — ilovani yuklab olish taklifi
   document
@@ -18372,6 +18355,44 @@ async function downloadOrSendImage(testId) {
     return;
   }
   await downloadPageImages(`/api/teacher/tests/${testId}/image`, "natijalar");
+}
+
+// Javoblar kaliti: PDF yoki rasm — ikkalasi bir xil ko'rinadi (rasm PDF sahifasining o'zi). variant — variantli testda
+function openAnswerKeyDownload(testId, test, variant = null) {
+  const query = variant ? `variant=${encodeURIComponent(variant)}` : "";
+  const suffix = variant ? `_${variant}` : "";
+  const label = variant ? `${variant} variant kaliti` : "Javoblar kaliti";
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 4px">🔑 ${escapeHtml(label)}</h3>
+    <p class="subtitle" style="margin:0 0 12px">Qaysi ko'rinishda yuklab olasiz? Ikkalasi ham bir xil ko'rinadi.</p>
+    <button class="btn" data-key-format="pdf">📄 PDF — chop etish uchun</button>
+    <button class="btn btn-ghost" data-key-format="image" style="margin-top:8px">🖼 Rasm — guruhga yuborish uchun</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Yopish</button>
+  `);
+  sheet.querySelector('[data-key-format="pdf"]').addEventListener(
+    "click",
+    guarded(async () => {
+      close();
+      await deliverPdf(
+        `/api/teacher/tests/${testId}/answer-sheet?answers=true${query ? `&${query}` : ""}`,
+        `${test.code}_kalit${suffix}.pdf`,
+        `🔑 ${label} Telegramga yuborildi`
+      );
+    })
+  );
+  sheet.querySelector('[data-key-format="image"]').addEventListener(
+    "click",
+    guarded(async () => {
+      close();
+      const url = `/api/teacher/tests/${testId}/answer-key/image`;
+      if (sendsViaBot()) {
+        const { pages } = await api(`${url}/send${query ? `?${query}` : ""}`, { method: "POST", body: {} });
+        showToast(pages > 1 ? `🖼 ${pages} ta rasm Telegram chatga yuborildi` : "🖼 Kalit rasmi Telegram chatga yuborildi");
+        return;
+      }
+      await downloadPageImages(`${url}${query ? `?${query}` : ""}`, `${test.code}_kalit${suffix}`);
+    })
+  );
 }
 
 // Oddiy brauzer: PDF sahifalari rasmlari — har sahifa alohida fayl (server X-Page-Count bilan sonini aytadi)

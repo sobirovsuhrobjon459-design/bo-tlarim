@@ -6017,10 +6017,8 @@ def test_qisman_korinmagan_varaq_rad_etiladi():
     assert whole.status_code == 200 and whole.json()["answers"] == {"1": "B"}, whole.text
 
 
-def test_javoblar_kaliti_royxat_korinishida():
-    """O'qituvchi kaliti titul emas — "1 — B" ro'yxati (yozma javob matn bo'lib)."""
-
-    import re
+def test_javoblar_kaliti_kartochkalar_pdf_va_rasm():
+    """Kalit — kartochkalar: yopiq javoblar, yozma javob formulasi; rasm varianti — o'sha PDF sahifasi."""
 
     import fitz
 
@@ -6028,14 +6026,81 @@ def test_javoblar_kaliti_royxat_korinishida():
     register_teacher()
     test_id = create_test(enrollment_type="closed")["id"]
     key = client.get(f"/api/teacher/tests/{test_id}/answer-sheet", params={"answers": "true"}, headers=as_user(555))
-    assert key.status_code == 200
-    text = fitz.open(stream=key.content, filetype="pdf")[0].get_text()
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    assert "JAVOBLAR KALITI" in lines[0]
-    answers = [line for line in lines if re.match(r"^\d+ — ", line)]
-    assert ["1 — B", "2 — C", "3 — A, C", "4 — 2sqrt(3)"] == answers, lines
-    # Chittak brendi: sarlavhada nom va hujjat turi, pastda sahifa raqami
-    assert "Chittak" in lines and "Javoblar kaliti" in lines and "1 / 1" in lines, lines
+    assert key.status_code == 200 and key.content.startswith(b"%PDF")
+    document = fitz.open(stream=key.content, filetype="pdf")
+    lines = [line.strip() for line in document[0].get_text().splitlines() if line.strip()]
+    assert "JAVOBLAR KALITI" in lines and "Chittak" in lines, lines
+    assert "Yopiq testlar" in lines and "Ochiq (yozma) testlar" in lines, lines
+    # 1 — B, 2 — C, 3 — A, C (bir nechta javob); yozma 4-savol — 2√3 (ildiz belgisi chiziladi, matn emas)
+    assert lines[lines.index("1") + 1] == "B" and lines[lines.index("2") + 1] == "C", lines
+    assert "A, C" in lines and "sqrt" not in " ".join(lines), lines
+
+    # Rasm: PDF bilan bir xil sahifalar soni, PNG
+    image = client.get(f"/api/teacher/tests/{test_id}/answer-key/image", headers=as_user(555))
+    assert image.status_code == 200 and image.content.startswith(b"\x89PNG"), image.status_code
+    assert image.headers["X-Page-Count"] == str(document.page_count) == "1"
+    assert client.get(f"/api/teacher/tests/{test_id}/answer-key/image?page=2", headers=as_user(555)).status_code == 404
+    # Boshqa o'qituvchiga — yo'q
+    register_teacher(777)
+    assert client.get(f"/api/teacher/tests/{test_id}/answer-key/image", headers=as_user(777)).status_code == 404
+
+    # Telegram'ga albom bo'lib ketadi
+    sent = []
+    saved_album = main._send_photo_album
+    main._send_photo_album = lambda chat_id, prefix, images, caption="": sent.append((prefix, len(images), caption))
+    try:
+        response = client.post(f"/api/teacher/tests/{test_id}/answer-key/image/send", headers=as_user(555))
+    finally:
+        main._send_photo_album = saved_album
+    assert response.status_code == 200 and response.json()["pages"] == 1, response.text
+    assert sent and "javoblar kaliti" in sent[0][2] and "tarqatmang" in sent[0][2], sent
+
+
+def test_dtm_kaliti_fanlar_boyicha_ustunlarda():
+    """DTM kaliti: majburiy fanlar 10 tadan (har biri bitta ustun), asosiy fanlar 15 tadan 2 ustun, fan nomlari bilan."""
+
+    import fitz
+
+    reset_database()
+    register_teacher()
+    key = [{"number": n, "question_type": "single", "option_count": 4, "correct": "A"} for n in range(1, 91)]
+    test_id = create_test(enrollment_type="closed", subject="DTM testi", duration=180, key_questions=key,
+                          test_type="dtm")["id"]
+    client.put(f"/api/teacher/tests/{test_id}/sections", headers=as_user(555), json={"text": "\n".join([
+        "Ona tili (majburiy): 1-10", "Matematika (majburiy): 11-20", "O'zbekiston tarixi (majburiy): 21-30",
+        "Matematika: 31-60", "Fizika: 61-90"])})
+    columns = main._dtm_key_columns(main.SessionLocal().get(main.Test, test_id), [(str(n), "A") for n in range(1, 91)])
+    assert [(name, [len(chunk) for chunk in chunks]) for name, chunks in columns] == [
+        ("Ona tili", [10]), ("Matematika", [10]), ("O'zbekiston tarixi", [10]),
+        ("1-asosiy fan: Matematika", [15, 15]), ("2-asosiy fan: Fizika", [15, 15])], columns
+    assert [label for label, _ in columns[3][1][1]][0] == "46"
+
+    pdf = client.get(f"/api/teacher/tests/{test_id}/answer-sheet?answers=true", headers=as_user(555)).content
+    text = fitz.open(stream=pdf, filetype="pdf")[0].get_text()
+    assert "MAJBURIY FANLAR" in text and "ASOSIY FANLAR" in text and "2-asosiy fan: Fizika" in text, text
+    # Oddiy (DTM bo'lmagan) testda fanlar ustuni yo'q
+    plain = create_test(enrollment_type="closed")["id"]
+    assert main._dtm_key_columns(main.SessionLocal().get(main.Test, plain), [("1", "B")]) is None
+
+
+def test_kalit_kop_sahifaga_bolinadi_va_formula_xato_bermaydi():
+    """150 ta yopiq + yozma savol — bir necha sahifa; tushunarsiz LaTeX oddiy matn bo'lib chiqadi."""
+
+    from backend import keymath
+
+    reset_database()
+    register_teacher()
+    key = [{"number": n, "question_type": "single", "option_count": 4, "correct": "A"} for n in range(1, 151)]
+    key += [{"number": 151 + i, "label": f"{151 + i // 2}{'ab'[i % 2]}", "question_type": "text",
+             "correct": r"\frac{1}{\sqrt[3]{x^{2}}}|\left|x\right|" if i % 2 else r"\frac{\frac{1}{2"} for i in range(40)]
+    test_id = create_test(enrollment_type="closed", key_questions=key)["id"]
+    image = client.get(f"/api/teacher/tests/{test_id}/answer-key/image", headers=as_user(555))
+    assert image.status_code == 200 and int(image.headers["X-Page-Count"]) >= 2, image.headers
+
+    fonts = ("Helvetica", "Helvetica-Oblique")
+    assert keymath.math_box(r"\frac{20\sqrt{5}}{3}", 11, fonts, None).w > 0
+    broken = keymath.math_box(r"\frac{1}{", 11, fonts, None, plain=lambda value: "matn")
+    assert broken.w > 0
 
 
 def test_telefon_internetsiz_tekshirgan_varaq_id_boyicha_saqlanadi():

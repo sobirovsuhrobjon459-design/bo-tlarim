@@ -63,6 +63,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import String, case, cast, delete, distinct, event, func, inspect, or_, select, text, update
 from sqlalchemy.orm import Session, defer, object_session, selectinload
 
+from . import keymath
 from .memory import MEMORY_WARN_MB, limit_malloc_arenas, release_memory, rss_mb, storage_report
 from .rasch import grade_for, rasch_scores
 from .timetable import ClassInput, Period, TeacherInput, build_timetable
@@ -4996,61 +4997,347 @@ def generate_answer_sheet_pdf(test: Test, with_answers: bool = False, bubbles: l
     return buffer.getvalue()
 
 
-KEY_ROW = 17          # kalit ro'yxatida qatorlar orasi
-KEY_ROWS = 36         # bitta ustunda (tepada brend sarlavhasiga joy qoladi)
-KEY_COLUMNS = 4       # bitta sahifada ko'pi bilan
+# ---------- Javoblar kaliti ("kartochkalar" dizayni; PDF va rasm bir xil — rasm PDF sahifasining o'zi) ----------
+
+try:
+    pdfmetrics.registerFont(TTFont("KeySans", str(FONTS_DIR / "DejaVuSans.ttf")))
+    pdfmetrics.registerFont(TTFont("KeySans-Bold", str(FONTS_DIR / "DejaVuSans-Bold.ttf")))
+    KEY_SANS, KEY_SANS_BOLD = "KeySans", "KeySans-Bold"
+except Exception:
+    logging.getLogger("backend").warning("Kalit shrifti topilmadi — Helvetica ishlatiladi", exc_info=True)
+    KEY_SANS, KEY_SANS_BOLD = "Helvetica", "Helvetica-Bold"
+
+KEY_MARGIN = 40
+KEY_BOTTOM = 52                       # pastda imzo qatoriga joy
+KEY_TILE_ROW = 7                      # yopiq test: qatorda nechta kartochka
+KEY_TILE_H, KEY_TILE_GAP = 34, 7
+KEY_GRID = colors.HexColor("#DCE5E2")
+KEY_TILE = colors.HexColor("#F2F6F5")
+KEY_LIGHT = colors.HexColor("#C9D6DA")
+
+
+def _key_kind(test: Test) -> str:
+    if test.test_type == "dtm":
+        return "DTM testi"
+    return "Oddiy test" if test.test_type == "boshlangich" else "Milliy sertifikat"
+
+
+def _answer_key_data(test: Test, key_override: dict | None) -> dict:
+    """Kalit uchun: yopiq savollar (raqam, javob), izohlar va yozma savollar (raqam, [qismlar javoblari])."""
+
+    items = _answer_sheet_items(test, key_override)
+    closed = [(label, (correct or "").replace(",", ", ") or "—") for label, kind, _, correct, _ in items if kind != "text"]
+    notes = []
+    for band in _group_similar_questions([item for item in items if item[1] != "text"]):
+        span = f"{band[0][0]}–{band[-1][0]}" if band[0][0] != band[-1][0] else band[0][0]
+        if any(item[1] == "multi" for item in band):
+            notes.append(f"{span}: bir nechta to'g'ri javob")
+        elif band[0][2] > 4:
+            notes.append(f"{span}: moslashtirish (A–{chr(64 + min(band[0][2], 26))})")
+        else:
+            notes.append(f"{span}: bitta to'g'ri javob")
+    written: list[tuple[str, list[list[str]]]] = []
+    for label, kind, _, correct, _ in items:
+        if kind != "text":
+            continue
+        base = re.sub(r"[a-z]+$", "", label) or label
+        answers = [variant for variant in _split_accepted_variants(correct or "") if variant.strip()]
+        if written and written[-1][0] == base and re.search(r"[a-z]$", label):
+            written[-1][1].append(answers)
+        else:
+            written.append((base, [answers]))
+    return {"closed": closed, "notes": notes, "written": written,
+            "parts": max([len(parts) for _, parts in written] or [1])}
+
+
+KEY_DTM_COLUMN = 15  # DTM kalitida bitta ustunda ko'pi bilan (asosiy fan 30 ta — 15 tadan 2 ustun)
+
+
+def _dtm_key_columns(test: Test, closed: list[tuple[str, str]]) -> list[tuple[str, list[list[tuple[str, str]]]]] | None:
+    """
+    DTM kaliti fanlar bo'yicha: [(fan nomi, [ustun, ...]), ...] — har ustunda ko'pi bilan 15 ta savol.
+    Bo'limlar savollarni to'liq va bir martadan qamrab olmasa yoki ustunlar 7 tadan oshsa — None (oddiy tartib).
+    """
+
+    if test.test_type != "dtm":
+        return None
+    by_label = dict(closed)
+    sections = _test_sections(test)
+    columns, used = [], set()
+    for index, section in enumerate(sections):
+        labels = [str(number) for number in section.get("numbers", []) if str(number) in by_label]
+        if not labels or used & set(labels):
+            return None
+        used |= set(labels)
+        name = str(section.get("name", "")).replace(" (majburiy)", "").strip()
+        if index >= 3 and not re.fullmatch(r"\d+-asosiy fan", name):
+            name = f"{index - 2}-asosiy fan: {name}"
+        items = [(label, by_label[label]) for label in labels]
+        columns.append((name, [items[start: start + KEY_DTM_COLUMN] for start in range(0, len(items), KEY_DTM_COLUMN)]))
+    if len(used) != len(closed) or sum(len(chunks) for _, chunks in columns) > KEY_TILE_ROW:
+        return None
+    return columns
+
+
+def _key_answer_box(variants: list[str], size: float, max_width: float):
+    """Yozma javob formulasi (bir nechta qabul qilinadigan javob — " yoki " bilan), katakka sig'adigan o'lchamda."""
+
+    def build(current: float):
+        boxes = []
+        for index, variant in enumerate(variants or ["—"]):
+            if index:
+                boxes.append(keymath.Text(" yoki ", KEY_SANS, current * 0.7, REPORT_MUTED))
+            boxes.append(keymath.math_box(variant, current, (REPORT_FONT, REPORT_FONT_ITALIC), REPORT_BLUE,
+                                          plain=_latex_to_plain))
+        return keymath.Row(boxes)
+
+    return keymath.fit(build, size, max_width)
+
+
+class _KeyCanvas(_BrandCanvas):
+    """Kalit sahifasi: sarlavhani kalitning o'zi chizadi; pastda shior va "Kod · sana · 1 / 2"."""
+
+    footer_right = ""
+
+    def _draw_header(self) -> None:
+        pass
+
+    def _draw_footer(self, total: int) -> None:
+        self.saveState()
+        self.setFillColor(REPORT_MUTED)
+        self.setFont(KEY_SANS, 8)
+        self.drawString(KEY_MARGIN, 26, f"Chittak — {REPORT_SLOGAN}")
+        page = f" · {self._pageNumber} / {total}" if total > 1 else ""
+        self.drawRightString(A4[0] - KEY_MARGIN, 26, self.footer_right + page)
+        self.restoreState()
 
 
 def generate_answer_key_pdf(test: Test, key_override: dict | None = None, key_variant: str | None = None) -> bytes:
     """
-    O'qituvchi uchun javoblar kaliti: har qatorda "1 — B", ustun bo'ylab pastga (har 5 savoldan keyin
-    ingichka chiziq — qator adashmaydi). Yozma savolning javobi matn bo'lib yoziladi.
+    O'qituvchi uchun javoblar kaliti — "kartochkalar" dizayni: tepada to'q sarlavha (Chittak, o'qituvchi,
+    test turi va sana), ma'lumot qatori (test, fan, kod, savollar soni), yopiq savollar — har biri alohida
+    kartochkada (raqam va javob), yozma savollar — ikki ustunda, formulalar kitobdagidek (kasr, ildiz).
+    Sig'masa — keyingi sahifaga o'tadi. Rasm varianti shu PDF sahifalarining o'zi (test_answer_key_pngs).
     """
 
-    buffer = io.BytesIO()
-    kind = "Javoblar kaliti" + (f" — {key_variant} variant" if key_variant else "")
-    sheet = _brand_canvas(test.title, kind)(buffer, pagesize=A4)  # Chittak sarlavhasi, imzo va "1 / 2"
     width, height = A4
-    margin = 50
-    items = _answer_sheet_items(test, key_override)
-    per_page = KEY_ROWS * KEY_COLUMNS
-    pages = [items[start: start + per_page] for start in range(0, len(items), per_page)] or [[]]
-    for page_index, page_items in enumerate(pages):
-        if page_index:
-            sheet.showPage()
-        y = height - REPORT_HEADER_HEIGHT - 26
-        sheet.setFont(REPORT_FONT_BOLD, 15)
-        sheet.setFillColor(REPORT_BLUE)
-        title = "JAVOBLAR KALITI" + (f" — {key_variant} variant" if key_variant else "")
-        sheet.drawString(margin, y, title)
-        sheet.setFont(REPORT_FONT, 10)
-        sheet.setFillColor(REPORT_MUTED)
-        y -= 17
-        sheet.drawString(margin, y, f"{test.title[:70]}  ·  Kod {test.code}  ·  {test.subject}  ·  {len(items)} ta savol")
-        sheet.setFillColor(colors.black)
-        top_y = y - 28
+    left, right = KEY_MARGIN, width - KEY_MARGIN
+    data = _answer_key_data(test, key_override)
+    teacher = test.teacher.user.full_name if test.teacher and test.teacher.user else ""
+    date = _local_date(test.created_at or utcnow())
+    variant_text = f" — {key_variant} variant" if key_variant else ""
 
-        columns = [page_items[start: start + KEY_ROWS] for start in range(0, len(page_items), KEY_ROWS)]
-        column_width = (width - 2 * margin) / max(len(columns), 2)
-        for column_index, column in enumerate(columns):
-            x = margin + column_index * column_width
-            for row, (label, question_type, _, correct, _) in enumerate(column):
-                row_y = top_y - row * KEY_ROW
-                if row and row % 5 == 0:
-                    sheet.setStrokeColor(REPORT_GRID)
-                    sheet.line(x, row_y + KEY_ROW - 4, x + column_width - 16, row_y + KEY_ROW - 4)
-                sheet.setFont(REPORT_FONT, 11)
-                sheet.drawRightString(x + 28, row_y, f"{label}")
-                sheet.drawString(x + 34, row_y, "—")
-                if question_type == "text":
-                    answer = " / ".join(_latex_to_plain(variant) for variant in _split_accepted_variants(correct))
-                    sheet.setFont(REPORT_FONT, 10)
-                    sheet.drawString(x + 50, row_y, answer[: max(8, int((column_width - 66) / 5.5))])
+    buffer = io.BytesIO()
+    canvas_class = type("KeyCanvas", (_KeyCanvas,), {"footer_right": f"Kod {test.code} · {date}"})
+    sheet = canvas_class(buffer, pagesize=A4)
+    sheet.setTitle(f"{test.title} — javoblar kaliti{variant_text}")
+
+    def clip(text: str, font: str, size: float, max_width: float) -> str:
+        while stringWidth(text, font, size) > max_width and len(text) > 2:
+            text = text[:-2].rstrip() + "…"
+        return text
+
+    def banner() -> float:
+        top = height - 34
+        sheet.setFillColor(REPORT_BLUE)
+        sheet.roundRect(left, top - 56, right - left, 56, 10, stroke=0, fill=1)
+        try:
+            sheet.drawImage(str(FRONTEND_DIR / "img" / "chittak-icon.png"), left + 14, top - 45, 34, 34, mask="auto")
+        except Exception:
+            pass
+        sheet.setFillColor(colors.white)
+        sheet.setFont(KEY_SANS_BOLD, 15)
+        sheet.drawString(left + 58, top - 25, "Chittak")
+        sheet.setFillColor(KEY_LIGHT)
+        sheet.setFont(KEY_SANS, 8.5)
+        sheet.drawString(left + 58, top - 40, clip(teacher, KEY_SANS, 8.5, 190))
+        sheet.setFillColor(REPORT_GREEN)
+        sheet.setFont(KEY_SANS_BOLD, 17)
+        sheet.drawRightString(right - 16, top - 26, "JAVOBLAR KALITI")
+        sheet.setFillColor(KEY_LIGHT)
+        sheet.setFont(KEY_SANS, 8.5)
+        sheet.drawRightString(right - 16, top - 41, f"{_key_kind(test)}{variant_text} · {date}")
+        return top - 56
+
+    def chips(y: float) -> float:
+        values = [("TEST", test.title), ("FAN", test.subject), ("KOD", test.code + (f" · {key_variant}" if key_variant else "")),
+                  ("SAVOLLAR", f"{_question_count(test)} ta")]
+        chip_w = (right - left - 3 * 8) / 4
+        for index, (name, value) in enumerate(values):
+            x = left + index * (chip_w + 8)
+            sheet.setFillColor(KEY_TILE)
+            sheet.roundRect(x, y - 30, chip_w, 30, 6, stroke=0, fill=1)
+            sheet.setFillColor(REPORT_MUTED)
+            sheet.setFont(KEY_SANS, 7)
+            sheet.drawString(x + 9, y - 11, name)
+            sheet.setFillColor(REPORT_BLUE)
+            sheet.setFont(KEY_SANS_BOLD, 10.5)
+            sheet.drawString(x + 9, y - 23.5, clip(value or "—", KEY_SANS_BOLD, 10.5, chip_w - 16))
+        return y - 30
+
+    def heading(y: float, name: str, note: str) -> None:
+        sheet.setFillColor(REPORT_BLUE)
+        sheet.setFont(KEY_SANS_BOLD, 11)
+        sheet.drawString(left, y, name)
+        sheet.setFillColor(REPORT_MUTED)
+        sheet.setFont(KEY_SANS, 9)
+        offset = stringWidth(name, KEY_SANS_BOLD, 11) + 8
+        sheet.drawString(left + offset, y, clip(note, KEY_SANS, 9, right - left - offset))
+
+    def new_page() -> float:
+        sheet.showPage()
+        return banner() - 26
+
+    y = chips(banner() - 12) - 26
+
+    closed = data["closed"]
+    tile_w = (right - left - (KEY_TILE_ROW - 1) * KEY_TILE_GAP) / KEY_TILE_ROW
+    label_w = 22 if max([len(label) for label, _ in closed] or [1]) <= 2 else 28
+
+    def tile(x: float, tile_y: float, tile_h: float, label: str, answer: str) -> None:
+        sheet.setStrokeColor(KEY_GRID)
+        sheet.setLineWidth(0.8)
+        sheet.setFillColor(colors.white)
+        sheet.roundRect(x, tile_y, tile_w, tile_h, 6, stroke=1, fill=1)
+        sheet.setFillColor(KEY_TILE)
+        sheet.roundRect(x, tile_y, label_w, tile_h, 6, stroke=0, fill=1)
+        sheet.rect(x + label_w - 6, tile_y, 6, tile_h, stroke=0, fill=1)
+        sheet.setFillColor(REPORT_MUTED)
+        sheet.setFont(KEY_SANS_BOLD, 8.5 if len(label) <= 3 else 7)
+        sheet.drawCentredString(x + label_w / 2, tile_y + tile_h / 2 - 3, label)
+        size = 15 if tile_h >= KEY_TILE_H else 13.5
+        while size > 7 and stringWidth(answer, KEY_SANS_BOLD, size) > tile_w - label_w - 6:
+            size -= 0.5
+        sheet.setFillColor(REPORT_TABLE_HEAD)
+        sheet.setFont(KEY_SANS_BOLD, size)
+        sheet.drawCentredString(x + label_w + (tile_w - label_w) / 2, tile_y + tile_h / 2 - size * 0.35, answer)
+
+    dtm_columns = _dtm_key_columns(test, closed)
+    if dtm_columns:
+        # DTM: har fan o'z ustunida — majburiy fanlar 10 tadan, asosiy fanlar 15 tadan 2 ustun
+        heading(y, "Yopiq testlar", f"{closed[0][0]}–{closed[-1][0]}-savollar · har to'g'ri javob o'z fani bali bilan")
+        y -= 12
+        step_x = tile_w + KEY_TILE_GAP
+        for group, first, last in (("Majburiy fanlar", 0, 3), ("Asosiy fanlar", 3, len(dtm_columns))):
+            columns_before = sum(len(chunks) for _, chunks in dtm_columns[:first])
+            count = sum(len(chunks) for _, chunks in dtm_columns[first:last])
+            if not count:
+                continue
+            x0, x1 = left + columns_before * step_x, left + (columns_before + count) * step_x - KEY_TILE_GAP
+            sheet.setFillColor(REPORT_BLUE)
+            sheet.setFont(KEY_SANS_BOLD, 9)
+            sheet.drawCentredString((x0 + x1) / 2, y - 8, group.upper())
+            sheet.setStrokeColor(REPORT_GREEN)
+            sheet.setLineWidth(1.2)
+            sheet.line(x0, y - 13, x1, y - 13)
+        y -= 17
+        column, tile_h, step_y = 0, 30, 35
+        rows = max(len(chunk) for _, chunks in dtm_columns for chunk in chunks)
+        for name, chunks in dtm_columns:
+            x0 = left + column * step_x
+            span_w = len(chunks) * step_x - KEY_TILE_GAP
+            # Fan nomi ustun(lar) tepasida; sig'masa — ikki qatorga
+            sheet.setFillColor(REPORT_MUTED)
+            words, lines = name.split(), [""]
+            for word in words:
+                trial = f"{lines[-1]} {word}".strip()
+                if lines[-1] and stringWidth(trial, KEY_SANS_BOLD, 8) > span_w - 4 and len(lines) < 2:
+                    lines.append(word)
                 else:
-                    sheet.setFont(REPORT_FONT_BOLD, 12)
-                    sheet.drawString(x + 50, row_y, (correct or "").replace(",", ", "))
+                    lines[-1] = trial
+            for index, line in enumerate(lines):
+                font_size = 8
+                while font_size > 6 and stringWidth(line, KEY_SANS_BOLD, font_size) > span_w - 2:
+                    font_size -= 0.5
+                sheet.setFont(KEY_SANS_BOLD, font_size)
+                sheet.drawCentredString(x0 + span_w / 2, y - 9 - index * 9.5 + (4.75 if len(lines) > 1 else 0), line)
+            for chunk in chunks:
+                x = left + column * step_x
+                for row, (label, answer) in enumerate(chunk):
+                    tile(x, y - 22 - tile_h - row * step_y, tile_h, label, answer)
+                column += 1
+        y -= 22 + rows * step_y + 16
+    elif closed:
+        span = f"{closed[0][0]}–{closed[-1][0]}-savollar" if len(closed) > 1 else f"{closed[0][0]}-savol"
+        heading(y, "Yopiq testlar", " · ".join([span, *data["notes"]]))
+        y -= 10
+        step = KEY_TILE_H + KEY_TILE_GAP
+        remaining = closed
+        while remaining:
+            if y - KEY_TILE_H < KEY_BOTTOM:
+                y = new_page()
+                heading(y, "Yopiq testlar", "(davomi)")
+                y -= 10
+            # Shu sahifaga sig'adigan bo'lak; ichida tartib ustun bo'ylab pastga (1–5, 6–10 ...), namunadagidek
+            rows = min(int((y - KEY_BOTTOM + KEY_TILE_GAP) // step), -(-len(remaining) // KEY_TILE_ROW))
+            chunk, remaining = remaining[: rows * KEY_TILE_ROW], remaining[rows * KEY_TILE_ROW:]
+            rows = -(-len(chunk) // KEY_TILE_ROW)
+            for index, (label, answer) in enumerate(chunk):
+                col, row = divmod(index, rows)
+                tile(left + col * (tile_w + KEY_TILE_GAP), y - KEY_TILE_H - row * step, KEY_TILE_H, label, answer)
+            y -= rows * step
+        y -= 21
+
+    written, parts = data["written"], data["parts"]
+    if written:
+        if y - 50 < KEY_BOTTOM:
+            y = new_page()
+        span = f"{written[0][0]}–{written[-1][0]}-savollar" if len(written) > 1 else f"{written[0][0]}-savol"
+        heading(y, "Ochiq (yozma) testlar", span)
+        y -= 10
+        columns = 2 if parts <= 2 else 1  # uch qismli (Kimyo 41.1–41.3) — keng, bitta ustun
+        gap = 8
+        card_w = (right - left - (columns - 1) * gap) / columns
+        part_w = (card_w - 36) / parts
+        for start in range(0, len(written), columns):
+            row = written[start: start + columns]
+            boxes = [[_key_answer_box(answers, 11, part_w - 14 - (16 if len(answer_parts) > 1 else 0))
+                      for answers in answer_parts] for _, answer_parts in row]
+            row_h = max(34, *(box.asc + box.desc + 14 for card in boxes for box in card))
+            if y - row_h < KEY_BOTTOM:
+                y = new_page()
+                heading(y, "Ochiq (yozma) testlar", "(davomi)")
+                y -= 10
+            card_y = y - row_h
+            for col, ((number, answer_parts), card) in enumerate(zip(row, boxes)):
+                x = left + col * (card_w + gap)
+                sheet.setStrokeColor(KEY_GRID)
+                sheet.setLineWidth(0.8)
+                sheet.setFillColor(colors.white)
+                sheet.roundRect(x, card_y, card_w, row_h, 7, stroke=1, fill=1)
+                sheet.setFillColor(REPORT_BLUE)
+                sheet.circle(x + 17, card_y + row_h / 2, 11, stroke=0, fill=1)
+                sheet.setFillColor(colors.white)
+                sheet.setFont(KEY_SANS_BOLD, 9.5 if len(number) <= 2 else 7.5)
+                sheet.drawCentredString(x + 17, card_y + row_h / 2 - 3.4, number)
+                middle = card_y + row_h / 2
+                for part, box in enumerate(card):
+                    px = x + 34 + part * part_w
+                    label_w = 0
+                    if len(answer_parts) > 1:
+                        # "a)", "b)" — javob bilan bir qatorda, kartochkaning o'rtasida
+                        label_w = 16
+                        sheet.setFillColor(REPORT_MUTED)
+                        sheet.setFont(KEY_SANS_BOLD, 9)
+                        sheet.drawString(px + 6, middle - 3.2, f"{chr(97 + part)})")
+                    if part:
+                        sheet.setStrokeColor(KEY_GRID)
+                        sheet.line(px, card_y + 6, px, card_y + row_h - 6)
+                    inner = part_w - 6 - label_w
+                    box.draw(sheet, px + 6 + label_w + (inner - box.w) / 2, middle - 1 - (box.asc - box.desc) / 2)
+            y = card_y - 6
+
+    if not closed and not written:
+        sheet.setFillColor(REPORT_MUTED)
+        sheet.setFont(KEY_SANS, 11)
+        sheet.drawString(left, y, "Bu testda hali javoblar kaliti kiritilmagan.")
     sheet.save()
     return buffer.getvalue()
+
+
+def test_answer_key_pngs(test: Test, key_override: dict | None = None, key_variant: str | None = None) -> list[bytes]:
+    """Kalit rasmlari — kalit PDF'ining sahifalari (ko'rinishi PDF bilan aynan bir xil)."""
+    return pdf_pages_to_png(generate_answer_key_pdf(test, key_override, key_variant))
 
 
 def generate_student_id_list_pdf(test: Test, students: list[tuple]) -> bytes:
@@ -10175,6 +10462,40 @@ def send_answer_sheet_to_telegram(
         caption=caption,
     )
     return {"ok": True}
+
+
+def _answer_key_images(db: Session, test: Test, variant: str | None) -> list[bytes]:
+    options = _sheet_variant_options(db, test, True, variant)
+    return test_answer_key_pngs(test, options.get("key_override"), options.get("key_variant"))
+
+
+@app.get("/api/teacher/tests/{test_id}/answer-key/image")
+def download_answer_key_image(test_id: int, page: int = 1, variant: str | None = None,
+                              teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
+    """Kalit rasmining bitta sahifasi (PNG) — PDF kalitning o'zi. X-Page-Count — jami sahifalar."""
+
+    test = _get_own_test(db, teacher, test_id)
+    images = _answer_key_images(db, test, variant)
+    if not 1 <= page <= len(images):
+        raise HTTPException(status_code=404, detail="Bunday sahifa yo'q")
+    return StreamingResponse(io.BytesIO(images[page - 1]), media_type="image/png", headers={
+        "Content-Disposition": f'attachment; filename="{test.code}_kalit_{page}.png"',
+        "X-Page-Count": str(len(images)), "Access-Control-Expose-Headers": "X-Page-Count",
+    })
+
+
+@app.post("/api/teacher/tests/{test_id}/answer-key/image/send")
+def send_answer_key_image(test_id: int, variant: str | None = None, teacher: Teacher = Depends(get_current_teacher),
+                          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Kalit rasmlarini (har sahifa — alohida rasm) bot orqali o'qituvchining chatiga yuboradi."""
+
+    test = _get_own_test(db, teacher, test_id)
+    images = _answer_key_images(db, test, variant)
+    suffix = f" — {variant} variant" if variant else ""
+    _send_photo_album(user.tg_id, f"{test.code}_kalit", images,
+                      f"🔑 «{test.title}» ({test.code}) — javoblar kaliti{suffix}\n\n"
+                      "Diqqat: to'g'ri javoblar — o'quvchilarga tarqatmang!")
+    return {"ok": True, "pages": len(images)}
 
 
 # ========== 6) O'quvchi endpointlari ==========
