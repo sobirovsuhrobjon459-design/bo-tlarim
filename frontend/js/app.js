@@ -18821,7 +18821,7 @@ function renderReviewLogin() {
 /*
   Botdan kelgan 6 xonali kodni kiritish shakli — saytda ham, ilovada ham bir xil
   ishlaydi. "Tasdiqlash kutilmoqda" kabi fonda kuzatish yo'q: foydalanuvchi
-  botdan kodni ko'chirib, shu yerga qo'lda kiritgach, kirish shu zahoti bo'ladi.
+  botdan kodni ko'chirib, shu yerga qo'ygach, «Kirish» bosilganda kiradi.
 */
 function appLoginCodeFormHtml(idPrefix) {
   return `
@@ -18842,13 +18842,13 @@ function wireAppLoginCodeForm(idPrefix, token, expiresIn, onExpired) {
   const form = document.getElementById(`${idPrefix}-form`);
   const input = document.getElementById(`${idPrefix}-input`);
 
-  // Nusxalangan matndan 6 xonali kod olinadi va kirish o'zi boshlanadi
-  const fillAndSubmit = (text) => {
+  // Nusxalangan matndan 6 xonali kod olinadi va maydonga qo'yiladi. Kirish — faqat «Kirish» bosilganda
+  // (o'zi kirib ketmaydi: foydalanuvchi kodni ko'rib, o'zi tasdiqlasin)
+  const fillCode = (text) => {
     const code = String(text || "").match(/\d{6}/)?.[0] || String(text || "").replace(/\D/g, "");
     if (code.length !== 6) return false;
     input.value = code;
-    if (form.requestSubmit) form.requestSubmit();
-    else form.dispatchEvent(new Event("submit", { cancelable: true }));
+    form.querySelector('button[type="submit"]')?.focus();
     return true;
   };
 
@@ -18857,7 +18857,7 @@ function wireAppLoginCodeForm(idPrefix, token, expiresIn, onExpired) {
     const text = event.clipboardData?.getData("text") || "";
     if (/\d{6}/.test(text.replace(/\s/g, ""))) {
       event.preventDefault();
-      fillAndSubmit(text.replace(/\s/g, ""));
+      fillCode(text.replace(/\s/g, ""));
     }
   });
 
@@ -18868,7 +18868,10 @@ function wireAppLoginCodeForm(idPrefix, token, expiresIn, onExpired) {
     } catch (_) {
       /* Ba'zi ilova/brauzerlarda nusxa xotirasini o'qishga ruxsat yo'q — quyida qo'lda qo'yish yo'li */
     }
-    if (fillAndSubmit(text.replace(/\s/g, ""))) return;
+    if (fillCode(text.replace(/\s/g, ""))) {
+      showToast("📋 Kod qo'yildi — «Kirish»ni bosing");
+      return;
+    }
     input.focus();
     showToast(text ? "Nusxada 6 xonali kod topilmadi — botda «📋 Kodni nusxalash»ni bosing" : "Kod maydonini bosib turing va «Qo'yish»ni tanlang");
   });
@@ -19381,9 +19384,30 @@ function renderWebLogin(errorText = "") {
   document.getElementById("web-login-button").addEventListener("click", guarded(startWebLogin));
 }
 
+// Telefon/planshet: Telegram ilovasi shu oynadan ochiladi (yangi oyna ochilmaydi). Foydalanuvchi kodni olib
+// qaytganda — aynan kod kiritiladigan shu sahifaga qaytadi (ilgari bo'sh yangi oynaga tushib qolardi)
+const IS_TOUCH_DEVICE =
+  /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); // iPadOS o'zini Mac deb ko'rsatadi
+
+// https://t.me/bot?start=X → tg://resolve?domain=bot&start=X (sahifadan chiqmasdan Telegram ilovasini ochadi)
+function telegramAppLink(link) {
+  try {
+    const url = new URL(link);
+    if (!/^(www\.)?t\.me$/.test(url.hostname)) return link;
+    const domain = url.pathname.replace(/^\/+/, "").split("/")[0];
+    const params = new URLSearchParams({ domain });
+    url.searchParams.forEach((value, key) => params.set(key, value));
+    return `tg://resolve?${params.toString()}`;
+  } catch (_) {
+    return link;
+  }
+}
+
 async function startWebLogin() {
-  // Bot oynasi bosish paytining o'zida ochiladi (so'rovdan keyin ochilsa, brauzer uni to'sib qo'yadi)
-  const botWindow = window.open("", "_blank");
+  // Kompyuterda bot yangi oynada ochiladi — oyna bosish paytining o'zida ochiladi (so'rovdan keyin ochilsa,
+  // brauzer uni to'sib qo'yadi). Telefonda yangi oyna ochilmaydi: Telegram ilovasi shu sahifadan ochiladi.
+  const botWindow = IS_TOUCH_DEVICE ? null : window.open("", "_blank");
   let result;
   try {
     result = await api("/api/app-login", { method: "POST", body: {} });
@@ -19393,8 +19417,10 @@ async function startWebLogin() {
     return;
   }
   if (botWindow) botWindow.location.href = result.link;
+  else if (IS_TOUCH_DEVICE) window.location.href = telegramAppLink(result.link);
 
   const botName = result.link.split("/").pop().split("?")[0];
+  const botLink = IS_TOUCH_DEVICE ? telegramAppLink(result.link) : result.link;
   document.getElementById("web-login-card").innerHTML = `
     <h2>Botda tasdiqlang</h2>
     <div class="web-steps">
@@ -19403,7 +19429,13 @@ async function startWebLogin() {
       <p><b>3.</b> Shu kodni pastga kiriting.</p>
     </div>
     <p class="subtitle">👤 Telegram'da <b>hozir ochiq turgan akkaunt</b> bilan kirasiz.</p>
-    <a class="btn" href="${escapeHtml(result.link)}" target="_blank" rel="noopener" style="text-decoration:none">✈️ @${escapeHtml(botName)} ni ochish</a>
+    <a class="btn" href="${escapeHtml(botLink)}" ${IS_TOUCH_DEVICE ? "" : 'target="_blank" rel="noopener"'} style="text-decoration:none">✈️ @${escapeHtml(botName)} ni ochish</a>
+    ${
+      IS_TOUCH_DEVICE
+        ? `<p class="subtitle" style="margin:6px 0 0;text-align:center;font-size:12px">Telegram ochilmadimi?
+             <a href="${escapeHtml(result.link)}" target="_blank" rel="noopener">t.me orqali oching</a></p>`
+        : ""
+    }
     ${appLoginCodeFormHtml("web-login-code")}
     <button class="btn btn-ghost" id="web-login-cancel" type="button" style="margin-top:8px">← Orqaga</button>
   `;
