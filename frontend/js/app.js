@@ -4275,10 +4275,10 @@ async function wireLocationSelects({ allDistricts = false, onChange }) {
   notify();
 }
 
-// Admin tasdiqlagan (haqiqiy) muassasa belgisi
-const VERIFIED_BADGE = `<span class="verified-badge" title="Tasdiqlangan muassasa"
-  style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:4px;
-         border-radius:50%;background:#1d9bf0;color:#fff;font-size:11px;font-weight:700;vertical-align:middle">✓</span>`;
+// Admin tasdiqlagan (haqiqiy) muassasa belgisi — Telegram'dagidek ko'k to'lqinsimon nishon va oq galochka.
+// Animatsiya (style.css → .verified-badge): paydo bo'lganda "sakrab" chiqadi va galochka chiziladi,
+// so'ng nishon sekin aylanib turadi (galochka tik qoladi). "Kamroq harakat" sozlamasida — animatsiyasiz.
+const VERIFIED_BADGE = `<span class="verified-badge" role="img" aria-label="Tasdiqlangan muassasa" title="Tasdiqlangan muassasa"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="verified-badge-seal" d="M12.00 0.93 L12.57 1.06 L13.11 1.42 L13.60 1.93 L14.03 2.45 L14.45 2.87 L14.88 3.12 L15.39 3.18 L15.97 3.08 L16.63 2.91 L17.32 2.79 L17.96 2.82 L18.51 3.05 L18.89 3.49 L19.12 4.10 L19.21 4.79 L19.26 5.46 L19.34 6.05 L19.55 6.51 L19.92 6.85 L20.46 7.12 L21.09 7.37 L21.71 7.67 L22.22 8.08 L22.53 8.58 L22.58 9.17 L22.40 9.79 L22.07 10.40 L21.71 10.98 L21.44 11.51 L21.33 12.00 L21.44 12.49 L21.71 13.02 L22.07 13.60 L22.40 14.21 L22.58 14.83 L22.53 15.42 L22.22 15.92 L21.71 16.33 L21.09 16.63 L20.46 16.88 L19.92 17.15 L19.55 17.49 L19.34 17.95 L19.26 18.54 L19.21 19.21 L19.12 19.90 L18.89 20.51 L18.51 20.95 L17.96 21.18 L17.32 21.21 L16.63 21.09 L15.97 20.92 L15.39 20.82 L14.88 20.88 L14.45 21.13 L14.03 21.55 L13.60 22.07 L13.11 22.58 L12.57 22.94 L12.00 23.07 L11.43 22.94 L10.89 22.58 L10.40 22.07 L9.97 21.55 L9.55 21.13 L9.12 20.88 L8.61 20.82 L8.03 20.92 L7.37 21.09 L6.68 21.21 L6.04 21.18 L5.49 20.95 L5.11 20.51 L4.88 19.90 L4.79 19.21 L4.74 18.54 L4.66 17.95 L4.45 17.49 L4.08 17.15 L3.54 16.88 L2.91 16.63 L2.29 16.33 L1.78 15.92 L1.47 15.42 L1.42 14.83 L1.60 14.21 L1.93 13.60 L2.29 13.02 L2.56 12.49 L2.67 12.00 L2.56 11.51 L2.29 10.98 L1.93 10.40 L1.60 9.79 L1.42 9.17 L1.47 8.58 L1.78 8.08 L2.29 7.67 L2.91 7.37 L3.54 7.12 L4.08 6.85 L4.45 6.51 L4.66 6.05 L4.74 5.46 L4.79 4.79 L4.88 4.10 L5.11 3.49 L5.49 3.05 L6.04 2.82 L6.68 2.79 L7.37 2.91 L8.03 3.08 L8.61 3.18 L9.12 3.12 L9.55 2.87 L9.97 2.45 L10.40 1.93 L10.89 1.42 L11.43 1.06Z"/><path class="verified-badge-check" d="M7.6 12.3l3 3 5.9-6.2"/></svg></span>`;
 
 function schoolListHtml(schools, emptyText) {
   if (!schools.length) return `<p class="subtitle" style="margin:8px 0 0">${emptyText}</p>`;
