@@ -1198,6 +1198,10 @@ class StudentCertificate(Base):
     O'quvchining sertifikati — Milliy sertifikat (ball) yoki chet tili (CEFR: C1, B2, B1). DTM testlarida
     shu fan bloki ishlanmaydi: o'rniga sertifikat bo'yicha ball qo'yiladi (majburiy fanda — 10 dan 10,
     asosiy fanda — foiz ko'rsatkichi bo'yicha). Sinfdagi (asl) o'quvchiga bog'lanadi; muddati o'tgach qo'llanmaydi.
+
+    ESKIRGAN: o'quvchi profilidagi sertifikat bo'limi olib tashlandi — endi hech qayerda o'qilmaydi va yozilmaydi
+    (o'quvchi ishlashni xohlagan testda ham o'zi qo'llanib qolardi). Sertifikat faqat shu test uchun: titulda
+    yoki o'qituvchi natijaga kiritadi. Jadval eski zaxira nusxalar tiklanishi uchun qoldirilgan.
     """
 
     __tablename__ = "student_certificates"
@@ -1625,15 +1629,6 @@ class DtmBlockCertificateIn(BaseModel):
 
 class DtmCertificatesIn(BaseModel):
     blocks: list[DtmBlockCertificateIn] = Field(default_factory=list, max_length=20)
-
-
-class StudentCertificateIn(BaseModel):
-    """O'quvchi profiliga sertifikat: fan, turi, ball yoki daraja, amal qilish muddati (ixtiyoriy)."""
-
-    subject: str = Field(min_length=2, max_length=100)
-    kind: str = Field(pattern="^(ms|lang)$")
-    value: str = Field(min_length=1, max_length=20)
-    valid_until: date | None = None
 
 
 class EssayScoreIn(BaseModel):

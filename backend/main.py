@@ -174,8 +174,6 @@ from .database import (
     WorkloadIn,
     AutoTimetableIn,
     SchoolAnnouncement,
-    StudentCertificate,
-    StudentCertificateIn,
     StudentStatus,
     StudentStatusIn,
     AnnouncementIn,
@@ -1742,8 +1740,9 @@ def certificate_percent(ball: float | None) -> float | None:
 #   • majburiy fan (10 savol × 1,1) — har qanday sertifikat bilan 10 dan 10 (11 ball);
 #   • asosiy fan (30 savol × 3,1 / 2,1) — foiz ko'rsatkichi bo'yicha: Milliy sertifikat — ball / 65 × 100
 #     (ko'pi bilan 100 %), chet tili — C1 va B2 — 100 %, B1 — 75 %. Masalan, 57.90 ball → 89,08 % → 2-blokda 56,12.
-# Sertifikat o'quvchi profilida (keyingi DTM testlarida o'zi qo'llanadi) yoki shu test natijasida kiritiladi;
-# testdagisi profildagisidan ustun ("none" — profildagisi shu testda hisoblanmasin).
+# Sertifikat faqat shu test uchun: o'quvchi titulda belgilaydi yoki o'qituvchi natijada kiritadi.
+# Belgilanmagan fan — javoblar bo'yicha hisoblanadi (o'quvchi profilida sertifikat saqlanmaydi:
+# u o'quvchi ishlashni xohlagan testda ham o'zi qo'llanib qolardi).
 
 DTM_LANG_PERCENT = {"C1": 100.0, "B2": 100.0, "B1": 75.0}
 MS_BALL_MAX = 75.0
@@ -1804,87 +1803,50 @@ def _certificate_label(kind: str, value: str | None) -> str:
     return "Sertifikat"
 
 
-def _profile_certificates(db: Session, owner_ids: set[int]) -> dict[int, list[StudentCertificate]]:
-    if not owner_ids:
-        return {}
-    grouped: dict[int, list[StudentCertificate]] = {}
-    for certificate in db.scalars(
-        select(StudentCertificate).where(StudentCertificate.student_id.in_(owner_ids)).order_by(StudentCertificate.id)
-    ).all():
-        grouped.setdefault(certificate.student_id, []).append(certificate)
-    return grouped
-
-
-def _dtm_certificates_for(db: Session, attempts: list[Attempt], section_names: list[str], mandatory: list[bool],
-                          with_overrides: bool = True) -> dict[int, dict[int, dict]]:
+def _dtm_certificates_for(db: Session, attempts: list[Attempt], section_names: list[str],
+                          mandatory: list[bool]) -> dict[int, dict[int, dict]]:
     """
     Har urinish uchun amaldagi sertifikatlar: {urinish: {blok: {kind, value, percent, label, source}}}.
-    Avval o'quvchi profilidagisi (sinf o'quvchisi bo'lsa, muddati o'tmagan, fani blokka mos), keyin
-    shu test natijasiga o'qituvchi kiritgani (ustun).
+    Faqat shu testniki: titulda belgilangani yoki o'qituvchi natijaga kiritgani.
     """
-
-    class_ids = {attempt.class_student_id for attempt in attempts if attempt.class_student_id}
-    owners: dict[int, int] = {}
-    if class_ids:
-        for student in db.scalars(select(ClassStudent).where(ClassStudent.id.in_(class_ids))).all():
-            owners[student.id] = student.source_student_id or student.id
-    profiles = _profile_certificates(db, set(owners.values()))
 
     result: dict[int, dict[int, dict]] = {}
     for attempt in attempts:
-        day = (attempt.finished_at or utcnow()).date()
         blocks: dict[int, dict] = {}
-        profile_blocks = blocks  # titulda "Ha" — shu (profildagi) sertifikat qo'llanadi
-        for certificate in profiles.get(owners.get(attempt.class_student_id or -1, -1), []):
-            if certificate.valid_until and certificate.valid_until < day:
+        try:
+            overrides = json.loads(attempt.dtm_certificates or "{}")
+        except ValueError:
+            overrides = {}
+        for key, entry in overrides.items():
+            index = int(key) if str(key).isdigit() else -1
+            if not 0 <= index < len(section_names) or not isinstance(entry, dict):
                 continue
-            for index, name in enumerate(section_names):
-                if index in blocks or not _subject_matches(certificate.subject, name):
-                    continue
-                percent = _certificate_block_percent(certificate.kind, certificate.value, mandatory[index])
-                if percent is not None:
-                    blocks[index] = {"kind": certificate.kind, "value": certificate.value, "percent": percent,
-                                     "label": _certificate_label(certificate.kind, certificate.value),
-                                     "source": "profile", "subject": certificate.subject}
-        if with_overrides:
-            profile_blocks = dict(blocks)
-            try:
-                overrides = json.loads(attempt.dtm_certificates or "{}")
-            except ValueError:
-                overrides = {}
-            for key, entry in overrides.items():
-                index = int(key) if str(key).isdigit() else -1
-                if not 0 <= index < len(section_names) or not isinstance(entry, dict):
-                    continue
-                if entry.get("kind") == "none":
-                    blocks.pop(index, None)
-                    continue
-                if entry.get("kind") == "claimed":
-                    # Titulda belgilangan: majburiy fanda — 10 dan 10; asosiy fanda — profildagi sertifikat (ustun),
-                    # u bo'lmasa — titulda bo'yalgan ball / daraja; ikkalasi ham yo'q bo'lsa — bali noma'lum
-                    # (o'qituvchi kiritadi), blok javoblar bo'yicha qoladi
-                    sheet_kind, sheet_value = entry.get("sheet_kind"), entry.get("sheet_value")
-                    sheet_percent = (_certificate_block_percent(sheet_kind, sheet_value, False)
-                                     if sheet_kind in ("ms", "lang") and sheet_value else None)
-                    if mandatory[index]:
-                        blocks[index] = {"kind": "claimed", "value": None, "percent": 100.0,
-                                         "label": (f"Sertifikat (titulda: {_certificate_label(sheet_kind, sheet_value)})"
-                                                   if sheet_percent is not None else "Sertifikat (titulda «Ha»)"),
-                                         "source": "titul"}
-                    elif index in profile_blocks:
-                        blocks[index] = {**profile_blocks[index], "source": "titul"}
-                    elif sheet_percent is not None:
-                        blocks[index] = {"kind": sheet_kind, "value": sheet_value, "percent": sheet_percent,
-                                         "label": f"{_certificate_label(sheet_kind, sheet_value)} (titulda)",
-                                         "source": "titul"}
-                    else:
-                        blocks[index] = {"kind": "claimed", "value": None, "percent": None,
-                                         "label": "Titulda «Ha», lekin sertifikat bali kiritilmagan", "source": "titul"}
-                    continue
-                percent = _certificate_block_percent(entry.get("kind"), entry.get("value"), mandatory[index])
-                if percent is not None:
-                    blocks[index] = {"kind": entry.get("kind"), "value": entry.get("value"), "percent": percent,
-                                     "label": _certificate_label(entry.get("kind"), entry.get("value")), "source": "test"}
+            if entry.get("kind") == "none":
+                blocks.pop(index, None)
+                continue
+            if entry.get("kind") == "claimed":
+                # Titulda belgilangan: majburiy fanda — 10 dan 10; asosiy fanda — titulda bo'yalgan ball / daraja;
+                # bo'yalmagan bo'lsa — bali noma'lum (o'qituvchi kiritadi), blok javoblar bo'yicha qoladi
+                sheet_kind, sheet_value = entry.get("sheet_kind"), entry.get("sheet_value")
+                sheet_percent = (_certificate_block_percent(sheet_kind, sheet_value, False)
+                                 if sheet_kind in ("ms", "lang") and sheet_value else None)
+                if mandatory[index]:
+                    blocks[index] = {"kind": "claimed", "value": None, "percent": 100.0,
+                                     "label": (f"Sertifikat (titulda: {_certificate_label(sheet_kind, sheet_value)})"
+                                               if sheet_percent is not None else "Sertifikat (titulda «Ha»)"),
+                                     "source": "titul"}
+                elif sheet_percent is not None:
+                    blocks[index] = {"kind": sheet_kind, "value": sheet_value, "percent": sheet_percent,
+                                     "label": f"{_certificate_label(sheet_kind, sheet_value)} (titulda)",
+                                     "source": "titul"}
+                else:
+                    blocks[index] = {"kind": "claimed", "value": None, "percent": None,
+                                     "label": "Titulda «Ha», lekin sertifikat bali kiritilmagan", "source": "titul"}
+                continue
+            percent = _certificate_block_percent(entry.get("kind"), entry.get("value"), mandatory[index])
+            if percent is not None:
+                blocks[index] = {"kind": entry.get("kind"), "value": entry.get("value"), "percent": percent,
+                                 "label": _certificate_label(entry.get("kind"), entry.get("value")), "source": "test"}
         if blocks:
             result[attempt.id] = blocks
     return result
@@ -8285,8 +8247,7 @@ def _teacher_answer_sheet(db: Session, test: Test, attempt: Attempt) -> dict:
 
 def _dtm_attempt_view(db: Session, attempt: Attempt, row: dict) -> dict | None:
     """
-    DTM natijasining bloklari: ball, sertifikat (qayerdan — test yoki profil) va o'quvchi profilidagi
-    sertifikat (o'qituvchi "Profildan" ni tanlashi yoki shu testda bekor qilishi uchun).
+    DTM natijasining bloklari: ball va sertifikat (qayerdan — titul yoki o'qituvchi kiritgani).
     """
 
     scores = row.get("section_scores") or {}
@@ -8294,7 +8255,6 @@ def _dtm_attempt_view(db: Session, attempt: Attempt, row: dict) -> dict | None:
         return None
     names = list(scores)
     mandatory = [score["mandatory"] for score in scores.values()]
-    profile = _dtm_certificates_for(db, [attempt], names, mandatory, with_overrides=False).get(attempt.id, {})
     try:
         overrides = json.loads(attempt.dtm_certificates or "{}")
     except ValueError:
@@ -8305,7 +8265,7 @@ def _dtm_attempt_view(db: Session, attempt: Attempt, row: dict) -> dict | None:
         "blocks": [
             {"index": index, "name": name, "mandatory": score["mandatory"], "total": score["total"], "max": score["max"],
              "ball": score["ball"], "correct": score["correct"], "certificate": score.get("certificate"),
-             "missing": bool(score.get("missing")), "profile": profile.get(index), "override": overrides.get(str(index))}
+             "missing": bool(score.get("missing")), "override": overrides.get(str(index))}
             for index, (name, score) in enumerate(scores.items())
         ],
     }
@@ -8318,7 +8278,7 @@ def set_dtm_certificates(
 ):
     """
     DTM natijasiga sertifikatlar: majburiy fanda — "bor" (10 dan 10), asosiy fanda — Milliy sertifikat bali
-    yoki chet tili darajasi. "auto" — o'quvchi profilidagisi, "none" — shu testda sertifikat hisoblanmasin.
+    yoki chet tili darajasi. "auto" / "none" — sertifikat yo'q (blok javoblar bo'yicha hisoblanadi).
     """
 
     test = _get_own_test(db, teacher, test_id)
@@ -8339,15 +8299,13 @@ def set_dtm_certificates(
         if block.index >= len(blocks):
             raise HTTPException(status_code=422, detail="Bunday blok yo'q")
         key = str(block.index)
-        if block.kind == "auto":
+        if block.kind in ("auto", "none"):
             overrides.pop(key, None)
         elif block.kind == "claimed":
             # Titulda bo'yalgan ball / daraja saqlanib qoladi
             previous = overrides.get(key) if isinstance(overrides.get(key), dict) else {}
             overrides[key] = {**{name: previous[name] for name in ("sheet_kind", "sheet_value") if name in previous},
                               "kind": "claimed"}
-        elif block.kind == "none":
-            overrides[key] = {"kind": "none"}
         elif blocks[block.index]["mandatory"]:
             overrides[key] = {"kind": "cert"}  # majburiy fanda turi va bali ahamiyatsiz — 10 dan 10
         elif block.kind == "cert":
@@ -8367,7 +8325,7 @@ def set_dtm_certificates(
 def _store_sheet_certificates(attempt: Attempt, marks: dict[str, str | None]) -> None:
     """
     DTM titulidagi sertifikat bo'limi: majburiy fanda "Ha" — 10 dan 10; asosiy fanda bo'yalgan ball ("ms:61.11")
-    yoki daraja ("lang:B2") — sertifikat qo'llanadi (o'quvchi profilida sertifikat bo'lsa — profildagisi ustun).
+    yoki daraja ("lang:B2") — sertifikat qo'llanadi.
     "Yo'q", bo'yalmagan yoki aniq o'qilmagan — o'quvchining javoblari.
     """
 
@@ -13375,56 +13333,6 @@ def _status_history(db: Session, student_id: int) -> list[dict]:
     return result
 
 
-def _student_certificates_view(db: Session, owner_id: int) -> list[dict]:
-    today = date.today()
-    return [
-        {"id": item.id, "subject": item.subject, "kind": item.kind, "value": item.value,
-         "label": _certificate_label(item.kind, item.value),
-         "percent": _certificate_block_percent(item.kind, item.value, mandatory=False),
-         "valid_until": item.valid_until, "expired": bool(item.valid_until and item.valid_until < today)}
-        for item in _profile_certificates(db, {owner_id}).get(owner_id, [])
-    ]
-
-
-def _certificate_student(db: Session, user: User, class_id: int, student_id: int) -> ClassStudent:
-    """Sertifikat sinfdagi (asl) o'quvchiga yoziladi — fan guruhidagi yozuvdan ham. Maktabning har bir o'qituvchisi."""
-    school_class, _member = _school_class(db, user, class_id)
-    student = db.get(ClassStudent, student_id)
-    if not student or student.class_id != school_class.id or student.removed_at is not None:
-        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
-    return db.get(ClassStudent, student.source_student_id) if student.source_student_id else student
-
-
-@app.post("/api/classes/{class_id}/students/{student_id}/certificates")
-def add_student_certificate(class_id: int, student_id: int, body: StudentCertificateIn,
-                            user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """O'quvchi profiliga sertifikat: keyingi DTM testlarida shu fan bloki sertifikat bo'yicha hisoblanadi."""
-
-    owner = _certificate_student(db, user, class_id, student_id)
-    value = _clean_certificate_value(body.kind, body.value)
-    if value is None:
-        raise HTTPException(status_code=422, detail=(
-            f"Milliy sertifikat bali 0 dan {MS_BALL_MAX:g} gacha bo'lsin" if body.kind == "ms"
-            else "Chet tili darajasi: " + ", ".join(DTM_LANG_PERCENT)))
-    db.add(StudentCertificate(student_id=owner.id, subject=" ".join(body.subject.split()), kind=body.kind, value=value,
-                              valid_until=body.valid_until, added_by_user_id=user.id))
-    db.commit()
-    logging.getLogger("backend").info("Sertifikat qo'shildi: student=%s user=%s", owner.id, user.id)
-    return {"certificates": _student_certificates_view(db, owner.id)}
-
-
-@app.delete("/api/classes/{class_id}/students/{student_id}/certificates/{certificate_id}")
-def delete_student_certificate(class_id: int, student_id: int, certificate_id: int,
-                               user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    owner = _certificate_student(db, user, class_id, student_id)
-    certificate = db.get(StudentCertificate, certificate_id)
-    if not certificate or certificate.student_id != owner.id:
-        raise HTTPException(status_code=404, detail="Sertifikat topilmadi")
-    db.delete(certificate)
-    db.commit()
-    return {"certificates": _student_certificates_view(db, owner.id)}
-
-
 @app.get("/api/classes/{class_id}/students/{student_id}")
 def student_profile(class_id: int, student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """O'quvchi haqida: ma'lumotlari, davomat statistikasi va har darsdagi holati."""
@@ -13471,7 +13379,6 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
         # O'quvchi markazi: holat, sinf, yotoqxona, natijalar, to'lov
         "status": _status_view(db, _current_statuses(db, [owner.id]).get(owner.id)),
         "status_history": _status_history(db, owner.id),
-        "certificates": _student_certificates_view(db, owner.id),
         "can_set_status": _can_set_student_status(db, member, school_class, student),
         "can_manage": _can_manage_class(school_class, member),
         "can_edit_name": student.source_student_id is None,  # maktabning har bir o'qituvchisi (o'z sinfidagi yozuvda)
