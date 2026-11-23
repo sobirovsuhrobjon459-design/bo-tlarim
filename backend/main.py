@@ -7080,7 +7080,14 @@ def create_credit_purchase(
 
 @app.get("/api/teacher/credit-purchases")
 def list_own_credit_purchases(teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)):
-    """O'qituvchining o'zi yaratgan token sotib olish buyurtmalari tarixi."""
+    """
+    O'qituvchining o'zi yaratgan token sotib olish buyurtmalari tarixi.
+
+    Payme/Click buyurtmasi "To'lash" bosilgan zahoti yaratiladi — mijoz to'lov sahifasini ochib,
+    to'lamay chiqib ketsa, u "pending" (keyin muddati o'tib "cancelled") bo'lib qoladi va tarixda
+    "Tekshirilmoqda"/"Rad etildi" bo'lib turardi. Shuning uchun onlayn buyurtma faqat pul haqiqatan
+    o'tgan bo'lsa ko'rinadi. Karta orqali yuborilgan chek esa har doim ko'rinadi — uni admin tekshiradi.
+    """
 
     purchases = db.scalars(
         select(CreditPurchase).where(CreditPurchase.teacher_id == teacher.id).order_by(CreditPurchase.id.desc())
@@ -7089,6 +7096,7 @@ def list_own_credit_purchases(teacher: Teacher = Depends(get_current_teacher), d
         {"id": p.id, "kind": p.kind, "months": p.months, "credits": p.credits, "amount": p.amount,
          "status": p.status, "method": p.method}
         for p in purchases
+        if p.method == "card" or p.status == "paid" or p.performed_at is not None
     ]
 
 

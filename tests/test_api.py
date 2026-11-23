@@ -8742,6 +8742,10 @@ def test_payme_order_id_va_fiskal_chek():
     encoded = purchase["checkout_url"].rsplit("/", 1)[1]
     assert f"ac.order_id=c{purchase['id']}" in _b64.b64decode(encoded).decode(), _b64.b64decode(encoded)
 
+    # To'lov sahifasi ochildi, lekin to'lanmadi — tarixda "Tekshirilmoqda" bo'lib turmaydi
+    history = lambda: client.get("/api/teacher/credit-purchases", headers=as_user(555)).json()  # noqa: E731
+    assert history() == [], history()
+
     account = {"order_id": f"c{purchase['id']}"}
     amount = purchase["amount"] * 100
     checked = payme("CheckPerformTransaction", {"account": account, "amount": amount})["result"]
@@ -8755,6 +8759,7 @@ def test_payme_order_id_va_fiskal_chek():
     payme("CreateTransaction", {"id": "tx-order", "time": 1, "account": account, "amount": amount})
     payme("PerformTransaction", {"id": "tx-order"})
     assert credits_of() == before + 50
+    assert [(item["id"], item["status"]) for item in history()] == [(purchase["id"], "paid")], history()
     # Noto'g'ri order_id — buyurtma topilmadi
     wrong = payme("CheckPerformTransaction", {"account": {"order_id": "x1"}, "amount": amount})
     assert wrong["error"]["code"] == -31050, wrong

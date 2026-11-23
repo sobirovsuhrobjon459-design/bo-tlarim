@@ -17740,10 +17740,19 @@ async function renderResultsTab(selectedId) {
   const results = await api(`/api/teacher/tests/${testId}/results`);
   const summary = results.summary;
 
-  // Rash testda — Rasch darajalari (Milliy sertifikat), oddiy testda — faqat foiz
-  const usesRasch = Boolean(results.uses_rasch);
+  // DTM testda — DTM bali (sertifikat darajalari va Rasch izohi yo'q), Rash testda — Rasch darajalari
+  // (Milliy sertifikat), oddiy testda — faqat foiz
+  const dtmMax = summary.dtm_max || 0;
+  const usesRasch = Boolean(results.uses_rasch) && !dtmMax;
+  const dtmBucket = (from, to) => ({
+    label: `${Math.round(dtmMax * from)}–${Math.round(dtmMax * to)}`,
+    from: dtmMax * from,
+    to: to >= 1 ? Infinity : dtmMax * to,
+  });
   const buckets = (
-    usesRasch
+    dtmMax
+      ? [dtmBucket(0, 0.2), dtmBucket(0.2, 0.4), dtmBucket(0.4, 0.6), dtmBucket(0.6, 0.8), dtmBucket(0.8, 1)]
+      : usesRasch
       ? [
           { label: "NC", from: 0, to: 46 },
           { label: "C", from: 46, to: 50 },
@@ -17763,7 +17772,7 @@ async function renderResultsTab(selectedId) {
   ).map((bucket) => ({
     ...bucket,
     count: results.rows.filter((row) => {
-      const value = usesRasch ? row.ball : row.percent;
+      const value = dtmMax ? row.dtm_ball : usesRasch ? row.ball : row.percent;
       return value >= bucket.from && value < bucket.to;
     }).length,
   }));
@@ -17804,7 +17813,11 @@ async function renderResultsTab(selectedId) {
       <div class="stats-grid" style="margin:0 0 16px">
         <div class="stat-tile"><span class="stat-value">${summary.participants}</span>Ishtirokchi</div>
         ${
-          usesRasch
+          dtmMax
+            ? `<div class="stat-tile"><span class="stat-value">${dtmNumber(summary.avg_dtm_ball)}</span>O'rtacha DTM bali</div>
+               <div class="stat-tile"><span class="stat-value">${dtmNumber(summary.max_dtm_ball)}</span>Eng yuqori (${dtmMax} dan)</div>
+               <div class="stat-tile"><span class="stat-value">${summary.avg_percent}%</span>O'rtacha foiz</div>`
+            : usesRasch
             ? `<div class="stat-tile"><span class="stat-value">${ballText(summary.avg_ball)}</span>O'rtacha ball</div>
                <div class="stat-tile"><span class="stat-value">${ballText(summary.max_ball)}</span>Eng yuqori ball</div>
                <div class="stat-tile"><span class="stat-value">${summary.top_count} ta</span>A+ va A</div>`
@@ -17812,7 +17825,9 @@ async function renderResultsTab(selectedId) {
                <div class="stat-tile"><span class="stat-value">${summary.max_percent}%</span>Eng yuqori</div>`
         }
       </div>
-      <p class="section-label" style="margin:0 0 10px">${usesRasch ? "DARAJALAR (RASCH BALLI)" : "TO'G'RI JAVOBLAR FOIZI"}</p>
+      <p class="section-label" style="margin:0 0 10px">${
+        dtmMax ? `DTM BALLARI (${dtmMax} DAN)` : usesRasch ? "DARAJALAR (RASCH BALLI)" : "TO'G'RI JAVOBLAR FOIZI"
+      }</p>
       <div class="chart">${chart}</div>
       ${usesRasch ? `<p class="subtitle" style="margin:10px 0 0;font-size:13px">${RASCH_SCORE_NOTE}</p>` : ""}
     </div>
@@ -17840,7 +17855,7 @@ async function renderResultsTab(selectedId) {
 
     <div class="row-between" style="margin:18px 0 8px">
       <span class="section-label" style="margin:0">${results.rows.length > TOP_COUNT ? `TOP-${TOP_COUNT}` : "ISHTIROKCHILAR (O'RIN BO'YICHA)"}</span>
-      <span class="subtitle" style="margin:0;font-size:12px">${usesRasch ? "ball • daraja" : "foiz • to'g'ri"}</span>
+      <span class="subtitle" style="margin:0;font-size:12px">${dtmMax ? "DTM bali" : usesRasch ? "ball • daraja" : "foiz • to'g'ri"}</span>
     </div>
     <div class="result-cards">${rows}</div>
     <div class="contact-actions" style="margin-top:10px">
