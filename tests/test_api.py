@@ -9091,3 +9091,22 @@ def test_oferta_saytdagi_sozlamalarga_mos():
         assert "3 ish kuni ichida" not in text  # pul platformadan o'tmaydi — yechib olish ham yo'q
     finally:
         main.PAYME_MERCHANT_ID, main.CLICK_SERVICE_ID = original
+
+
+def test_admin_ai_holati(monkeypatch):
+    """Admin panelda AI holati: kalit yo'q — o'chiq; kalit bo'lsa — qaysi AI; kalit qiymati qaytmaydi."""
+    reset_database()
+    admin = as_user(4242)
+    for name in ("GEMINI_API_KEY", "ANTHROPIC_API_KEY", "AI_PROVIDER"):
+        monkeypatch.delenv(name, raising=False)
+
+    ai = client.get("/api/admin/stats", headers=admin).json()["ai"]
+    assert ai["enabled"] is False and ai["provider"] is None
+    assert ai["keys"] == {"gemini": False, "anthropic": False}
+    assert ai["essays_graded"]["today"] == 0 and ai["essays_waiting"] == 0
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-maxfiy")
+    response = client.get("/api/admin/stats", headers=admin)
+    ai = response.json()["ai"]
+    assert ai["enabled"] is True and ai["provider"] == "anthropic" and ai["keys"]["anthropic"] is True
+    assert "sk-ant-maxfiy" not in response.text

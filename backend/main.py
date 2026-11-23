@@ -17967,6 +17967,46 @@ def admin_overview(admin: User = Depends(get_current_admin), db: Session = Depen
         "revenue": credits_revenue + tests_commission,
         "teachers_owed": teachers_owed,
         "commission_percent": PLATFORM_COMMISSION_PERCENT,
+        "ai": _admin_ai_status(db, since),
+    }
+
+
+def _admin_ai_status(db: Session, since: dict) -> dict:
+    """
+    Admin uchun AI holati: ulanganmi, qaysi AI va model, oxirgi xato, esselar soni.
+    Kalit qiymatlari hech qachon qaytarilmaydi — faqat bor/yo'qligi.
+    """
+
+    from . import ai_reader
+
+    provider = ai_reader.ai_provider()
+    essay_done = (Attempt.status == "done", Attempt.essay_ai_score.is_not(None))
+    graded = {
+        key: db.scalar(
+            select(func.count()).select_from(Attempt).where(*essay_done, Attempt.finished_at >= moment)
+        ) or 0
+        for key, moment in since.items()
+    }
+    # AI tekshirishi kerak, lekin hali ball qo'yilmagan esselar (navbatda yoki xato bergan)
+    waiting = db.scalar(
+        select(func.count()).select_from(Attempt).join(Test, Test.id == Attempt.test_id).where(
+            Attempt.status == "done",
+            Test.essay_ai.is_(True),
+            Attempt.essay_text.is_not(None),
+            Attempt.essay_score.is_(None),
+            Attempt.essay_ai_score.is_(None),
+        )
+    ) or 0
+    return {
+        "enabled": provider is not None,
+        "provider": provider,
+        "model": (ai_reader.GEMINI_MODEL if provider == "gemini" else ai_reader.AI_MODEL) if provider else None,
+        "keys": {"gemini": bool(os.getenv("GEMINI_API_KEY")), "anthropic": bool(os.getenv("ANTHROPIC_API_KEY"))},
+        "essay_tests": db.scalar(select(func.count()).select_from(Test).where(Test.essay_ai.is_(True))) or 0,
+        "essays_graded": graded,
+        "essays_graded_total": db.scalar(select(func.count()).select_from(Attempt).where(*essay_done)) or 0,
+        "essays_waiting": waiting,
+        "last_error": ai_reader.last_error,
     }
 
 

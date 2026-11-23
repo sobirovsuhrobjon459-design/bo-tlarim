@@ -9529,6 +9529,43 @@ function adminPeriodTiles(stats) {
     </div>`;
 }
 
+// 🤖 AI holati: esse va yozma javoblarni kim tekshiryapti (Gemini / Claude), xato bormi
+function adminAiCard(ai) {
+  if (!ai) return "";
+  const names = { gemini: "Google Gemini", anthropic: "Claude" };
+  const keyLine = (name, on) => `<span>${on ? "✅" : "▫️"} ${name} kaliti</span>`;
+  const line = (label, value) =>
+    `<div class="row-between" style="margin-top:6px"><span>${label}</span><b>${value}</b></div>`;
+  const status = ai.enabled
+    ? `<p style="margin:4px 0 0">🟢 Ulangan: <b>${names[ai.provider] || ai.provider}</b>
+         <span class="subtitle">(${escapeHtml(ai.model || "")})</span></p>`
+    : `<p style="margin:4px 0 0">⚪ AI o'chiq — esse va yozma javoblarni o'qituvchi o'zi tekshiradi.</p>
+       ${adminHint("Yoqish: Render → Environment bo'limiga GEMINI_API_KEY (bepul, aistudio.google.com) yoki ANTHROPIC_API_KEY (Claude, pullik) qo'shing.")}`;
+  const error = ai.last_error
+    ? `<p class="subtitle" style="margin:10px 0 0;color:var(--color-danger, #d33)">
+         ⚠️ Oxirgi xato: ${escapeHtml(ai.last_error.message || "")}
+         ${ai.last_error.at ? `<br><span>${escapeHtml(new Date(ai.last_error.at).toLocaleString())}</span>` : ""}
+       </p>`
+    : "";
+  const graded = ai.essays_graded || {};
+  return `
+    <div class="card" style="cursor:default">
+      <div class="card-body" style="width:100%">
+        <h3>🤖 AI holati</h3>
+        ${status}
+        <div class="row-between" style="margin-top:8px;flex-wrap:wrap;gap:8px">
+          ${keyLine("Gemini", ai.keys?.gemini)}${keyLine("Claude", ai.keys?.anthropic)}
+        </div>
+        ${line("📝 AI tekshiradigan esseli testlar", formatNumber(ai.essay_tests || 0))}
+        ${line("✅ AI baholagan esselar — bugun", formatNumber(graded.today || 0))}
+        ${line("✅ — oxirgi 7 kun", formatNumber(graded.week || 0))}
+        ${line("✅ — jami", formatNumber(ai.essays_graded_total || 0))}
+        ${line("⏳ Baholanishini kutayotgan esselar", formatNumber(ai.essays_waiting || 0))}
+        ${error}
+      </div>
+    </div>`;
+}
+
 async function adminHomeView(stats) {
   const [topStudents, teachers] = await Promise.all([api("/api/admin/top-students"), api("/api/admin/teachers")]);
   const cardCount = stats.pending?.card_topups || 0;
@@ -9611,6 +9648,8 @@ async function adminHomeView(stats) {
           }
         </div>
       </div>
+
+      ${adminAiCard(stats.ai)}
 
       ${topTeachers ? `<h3>🧑‍🏫 Eng ko'p to'lov qilgan o'qituvchilar</h3>${adminHint("Ismni bossangiz — o'qituvchi kartochkasi ochiladi.")}${topTeachers}` : ""}
 
