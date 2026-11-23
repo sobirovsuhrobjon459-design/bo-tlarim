@@ -17120,7 +17120,39 @@ async function renderStudentDetail(testId, attemptId) {
   const span = (list) => (list.length ? `${list[0].label}–${list[list.length - 1].label}` : "");
   const sameSet = (a, b) => a.size === b.size && [...a].every((letter) => b.has(letter));
 
-  const statsHtml = () => `
+  // Rasch testida ikki ustun: chapda — javoblar (test, yozma, esse, foiz ko'rsatkichi), o'ngda — ballar
+  // (test, yozma, esse, umumiy). Rasch hisobi o'zgarmaydi: 1–44 savollar bo'yicha bitta Rasch bali faqat
+  // KO'RSATISH uchun to'g'ri javoblar ulushiga qarab test va yozma qismga bo'linadi (yig'indisi — o'sha ball).
+  const raschStatsHtml = () => {
+    const e = detail.edit;
+    const tile = (value, label) => `<div class="stat-tile"><span class="stat-value">${value}</span>${label}</div>`;
+    const ball = (value) => (value === null || value === undefined ? "—" : formatNumber(Math.round(value * 100) / 100));
+    const partBall = e.test_ball ?? e.ball; // 1–44 savollar bo'yicha Rasch bali (esseli testda — test qismi)
+    const solved = detail.closed_correct + (detail.written_correct || 0);
+    const closedPart = solved ? Math.round((partBall * detail.closed_correct) / solved * 100) / 100 : 0;
+    const writtenPart = solved ? Math.round((partBall - closedPart) * 100) / 100 : 0;
+    const grade = e.grade ? ` · ${escapeHtml(e.grade)}` : "";
+    const left = [
+      tile(`${detail.closed_correct}/${detail.closed_total}`, "Test savollari"),
+      detail.written_total ? tile(`${detail.written_correct}/${detail.written_total}`, "Yozma javoblar") : null,
+      detail.essay ? tile(`${detail.essay.score ?? "—"}/${detail.essay.max}`, "Esse") : null,
+      tile(e.cert_percent != null ? certPercentText(e.cert_percent) : `${detail.percent}%`,
+           e.cert_percent != null ? "Foiz ko'rsatkichi" : "Foiz"),
+    ].filter(Boolean);
+    const right = [
+      tile(ball(closedPart), "Test bali"),
+      detail.written_total ? tile(ball(writtenPart), "Yozma bali") : null,
+      detail.essay ? tile(e.essay_pending ? "—" : ball(e.essay_ball), e.essay_pending ? "Esse bali · kutilmoqda" : "Esse bali") : null,
+      tile(ball(e.ball), (detail.essay && e.essay_pending ? "Umumiy ball · esse kutilmoqda" : "Umumiy ball") + grade),
+    ].filter(Boolean);
+    // stats-grid ikki ustunli: qatorlab chap / o'ng navbatma-navbat joylanadi
+    return left.map((item, index) => item + (right[index] || "")).join("");
+  };
+
+  const statsHtml = () =>
+    detail.edit.uses_rasch && !detail.edit.dtm && detail.edit.ball !== null && detail.edit.ball !== undefined
+      ? raschStatsHtml()
+      : `
     <div class="stat-tile"><span class="stat-value">${detail.closed_correct}/${detail.closed_total}</span>Test savollari</div>
     ${detail.written_total ? `<div class="stat-tile"><span class="stat-value">${detail.written_correct}/${detail.written_total}</span>Yozma javoblar</div>` : ""}
     <div class="stat-tile"><span class="stat-value">${detail.percent}%</span>Foiz</div>
