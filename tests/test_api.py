@@ -7205,7 +7205,6 @@ def test_dtm_sertifikatli_oquvchi_bali_rasmiy_natijadagidek():
     assert "(sertifikat)" in report
 
 
-
 def test_imtihonga_qoshilgan_oquvchi_oxirgi_iddan_keyingisini_oladi():
     """
     Imtihonga sinf biriktirilgan (1001–1002) bo'lsa, test sahifasidan qo'shilgan o'quvchi 1 emas, ro'yxatdagi oxirgi
@@ -8232,72 +8231,6 @@ def test_biriktirilmaganlar_savati():
     assert client.get("/api/schools/unassigned", headers=owner).json()["students"] == []
 
 
-def test_video_darslar_rahbariyat_qoshadi_hamma_korad():
-    """Video dars: muassasa rahbariyati YouTube havolasi bilan qo'shadi, ilovadagi hamma ko'radi, admin o'chira oladi."""
-    from backend.database import youtube_video_id
-
-    assert youtube_video_id("https://youtu.be/dQw4w9WgXcQ?si=abc") == "dQw4w9WgXcQ"
-    assert youtube_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10s") == "dQw4w9WgXcQ"
-    assert youtube_video_id("https://m.youtube.com/watch?feature=share&v=dQw4w9WgXcQ") == "dQw4w9WgXcQ"
-    assert youtube_video_id("https://youtube.com/shorts/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
-    assert youtube_video_id("https://example.com/video") is None
-
-    reset_database()
-    _set_name(701, "Aziza", "Karimova")
-    _set_name(801, "Oddiy", "Oquvchi")
-    school = client.post("/api/schools", json={"subjects": ["Matematika"], "region": "Toshkent shahri",
-                                               "district": "Chilonzor tumani", "name": "Ilm maktabi"}, headers=as_user(701))
-    assert school.status_code == 200, school.text
-
-    body = {"url": "https://youtu.be/dQw4w9WgXcQ", "title": "Kasrlar", "subject": "Matematika", "grade": 5,
-            "description": "Kasrlarni qo'shish"}
-    # Maktabga a'zo bo'lmagan foydalanuvchi qo'sha olmaydi; noto'g'ri havola — 422
-    assert client.post("/api/videos", json=body, headers=as_user(801)).status_code == 403
-    assert client.post("/api/videos", json={**body, "url": "https://example.com/x"}, headers=as_user(701)).status_code == 422
-
-    created = client.post("/api/videos", json=body, headers=as_user(701))
-    assert created.status_code == 200, created.text
-    video = created.json()
-    assert video["youtube_id"] == "dQw4w9WgXcQ" and video["school_name"] == "Ilm maktabi"
-    assert client.post("/api/videos", json=body, headers=as_user(701)).status_code == 409  # ikki marta emas
-    client.post("/api/videos", json={**body, "url": "https://youtu.be/aaaaaaaaaaa", "title": "Tarix 1",
-                                     "subject": "Tarix", "grade": None, "description": ""}, headers=as_user(701))
-
-    # Hozircha faqat maktab o'quvchilari ko'radi (login-parol bilan, /api/pupil/videos) — oddiy foydalanuvchi emas
-    assert client.get("/api/videos", headers=as_user(801)).status_code == 403
-    cid = client.post("/api/classes", json={"name": "5-A"}, headers=as_user(701)).json()["id"]
-    client.post(f"/api/classes/{cid}/students", json={"full_name": "Aliyev Vali"}, headers=as_user(701))
-    access = client.get(f"/api/classes/{cid}/pupil-logins", headers=as_user(701)).json()["students"][0]
-    main._pupil_ip_failures.clear()
-    token = client.post("/api/pupil/login", json={"school_id": school.json()["school"]["id"], "login": access["login"],
-                                                  "password": access["password"]}).json()["token"]
-    pupil = {"X-Pupil-Session": token}
-    assert client.get("/api/pupil/videos").status_code == 401
-
-    # Fan va sinf bo'yicha saralanadi (sinfsiz video — hamma sinflarga)
-    seen = client.get("/api/pupil/videos", headers=pupil).json()
-    assert {item["name"] for item in seen["subjects"]} == {"Matematika", "Tarix"}
-    assert len(seen["videos"]) == 2 and not seen["can_add"] and not seen["videos"][0]["can_manage"]
-    assert [item["title"] for item in client.get("/api/pupil/videos?subject=Matematika", headers=pupil).json()["videos"]] == ["Kasrlar"]
-    assert len(client.get("/api/pupil/videos?grade=7", headers=pupil).json()["videos"]) == 1  # faqat sinfsiz "Tarix 1"
-    assert [item["title"] for item in client.get("/api/pupil/videos?q=qo'shish", headers=pupil).json()["videos"]] == ["Kasrlar"]
-    assert client.post(f"/api/videos/{video['id']}/view").status_code == 200  # kimligi noma'lum — sanalmaydi
-    assert client.post(f"/api/videos/{video['id']}/view", json={"pupil_session": token}).status_code == 200
-    assert client.post(f"/api/videos/{video['id']}/view", json={"pupil_session": token}).status_code == 200  # takror
-    assert client.post(f"/api/videos/{video['id']}/view", headers=as_user(801)).status_code == 200
-    viewed = {item["title"]: item["views"] for item in client.get("/api/videos", headers=as_user(701)).json()["videos"]}
-    assert viewed["Kasrlar"] == 2, viewed  # o'quvchi bir marta + o'qituvchi bir marta; noma'lum va takror sanalmadi
-
-    # Boshqa odam o'zgartira olmaydi; rahbariyat tahrirlaydi; platforma admini o'chira oladi
-    assert client.delete(f"/api/videos/{video['id']}", headers=as_user(801)).status_code == 403
-    edited = client.put(f"/api/videos/{video['id']}", json={**body, "title": "Kasrlar (1-dars)"}, headers=as_user(701))
-    assert edited.status_code == 200 and edited.json()["title"] == "Kasrlar (1-dars)"
-    assert client.delete(f"/api/videos/{video['id']}", headers=as_user(4242)).status_code == 200
-    left = client.get("/api/videos", headers=as_user(701)).json()
-    assert [item["title"] for item in left["videos"]] == ["Tarix 1"] and left["can_add"]
-    assert left["videos"][0]["views"] == 0 and client.get("/api/videos", headers=as_user(4242)).status_code == 200
-
-
 def test_maktab_oquvchisi_login_parol_bilan_oz_kabinetiga_kiradi():
     """O'quvchi maktabini topadi, maktab bergan login-parol bilan kiradi, o'z parolini o'rnatadi va faqat o'zinikini ko'radi."""
     reset_database()
@@ -8421,53 +8354,6 @@ def test_tolov_kalitlari_admin_panelidan_kiritiladi():
     # Begona odam na ko'ra oladi, na o'zgartira oladi
     assert client.get("/api/admin/payment-settings", headers=as_user(1111)).status_code == 403
     assert client.post("/api/admin/payment-settings", headers=as_user(1111), json={}).status_code == 403
-
-
-def test_video_davomiyligi_va_bosh_sahifadagi_karta():
-    """
-    Dars davomiyligi: pleyer bir marta xabar beradi, keyin hammaga ko'rinadi va
-    qayta yozilmaydi. Bosh sahifadagi "Video darslar" kartasi esa faqat
-    muassasaga a'zo bo'lganlarga (darslar soni bilan) qaytariladi.
-    """
-    reset_database()
-    _set_name(701, "Aziza", "Karimova")
-    _set_name(801, "Oddiy", "Oquvchi")
-    client.post("/api/schools", json={"subjects": ["Matematika"], "region": "Toshkent shahri",
-                                      "district": "Chilonzor tumani", "name": "Ilm maktabi"}, headers=as_user(701))
-    video = client.post("/api/videos", json={"url": "https://youtu.be/dQw4w9WgXcQ", "title": "Kasrlar",
-                                             "subject": "Matematika", "grade": 5, "description": ""},
-                        headers=as_user(701)).json()
-    assert video["duration"] is None
-
-    # Pleyer davomiylikni yuboradi (kirish talab qilinmaydi — Telegram'siz o'quvchi ham ko'radi)
-    assert client.post(f"/api/videos/{video['id']}/duration?seconds=760").status_code == 200
-    # Ikkinchi marta yozilmaydi — birinchi o'lchov qoladi
-    client.post(f"/api/videos/{video['id']}/duration?seconds=99")
-    listed = client.get("/api/videos", headers=as_user(701)).json()["videos"][0]
-    assert listed["duration"] == 760
-
-    # Aqlga sig'maydigan qiymat rad etiladi
-    assert client.post(f"/api/videos/{video['id']}/duration?seconds=0").status_code == 400
-    assert client.post(f"/api/videos/{video['id']}/duration?seconds=999999").status_code == 400
-
-    # Bosh sahifa: maktab a'zosiga darslar soni, begonaga — nol
-    assert client.get("/api/home", headers=as_user(701)).json()["videos"] == 1
-    assert client.get("/api/home", headers=as_user(801)).json()["videos"] == 0
-
-    # Mustahkamlash testining kodi: kichik harf va bo'shliq tozalanadi, noto'g'risi rad etiladi
-    body = {"url": "https://youtu.be/dQw4w9WgXcQ", "title": "Kasrlar", "subject": "Matematika",
-            "grade": 5, "description": "", "test_code": " gy68 "}
-    edited = client.put(f"/api/videos/{video['id']}", json=body, headers=as_user(701))
-    assert edited.status_code == 200, edited.text
-    assert edited.json()["test_code"] == "GY68"
-    assert client.put(f"/api/videos/{video['id']}", json={**body, "test_code": "a!"},
-                      headers=as_user(701)).status_code == 422
-    # Kod bo'sh qoldirilsa — karta ko'rsatilmaydi
-    assert client.put(f"/api/videos/{video['id']}", json={**body, "test_code": ""},
-                      headers=as_user(701)).json()["test_code"] == ""
-
-
-# ========== Oylik obuna (token o'rniga cheksiz tekshiruv) ==========
 
 
 def _set_subscription_prices(prices: dict) -> dict:
@@ -9175,3 +9061,16 @@ def test_admin_maktabni_tasdiqlaydi_va_u_tepada_turadi():
     assert client.post(url, json={"verified": False}, headers=as_user(4242)).json()["verified"] is False
     assert [s["name"] for s in listing()] == ["A maktab", "Z maktab"]
     assert client.post("/api/admin/schools/99999/verify", json={"verified": True}, headers=as_user(4242)).status_code == 404
+
+
+def test_video_darslar_bolimi_olib_tashlangan():
+    """«Video darslar» bo'limi butunlay olib tashlangan: endpointlar yo'q, bosh sahifada video kartasi yo'q."""
+    reset_database()
+    _school_with_class(701)
+    for method, url in (("get", "/api/videos"), ("post", "/api/videos"), ("get", "/api/pupil/videos"),
+                        ("put", "/api/videos/1"), ("delete", "/api/videos/1"), ("post", "/api/videos/1/view"),
+                        ("post", "/api/videos/1/duration?seconds=60")):
+        status = getattr(client, method)(url, headers=as_user(701)).status_code
+        assert status in (404, 405), (method, url, status)
+    home = client.get("/api/home", headers=as_user(701)).json()
+    assert "videos" not in home and home["places"], home

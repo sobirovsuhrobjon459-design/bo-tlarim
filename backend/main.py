@@ -213,8 +213,6 @@ from .database import (
     PupilLoginIn,
     PupilPasswordIn,
     PupilSession,
-    VideoLesson,
-    VideoLessonIn,
     WrittenAnswer,
     WrittenRestIn,
     WrittenVerdictIn,
@@ -223,7 +221,6 @@ from .database import (
     engine,
     utcnow,
     withdraw_balance,
-    youtube_video_id,
 )
 from bot.bot import SUPPORT_CONTACTS, run_bot
 from bot.config import WEBAPP_URL
@@ -6664,15 +6661,10 @@ def home_summary(user: User = Depends(get_current_user), db: Session = Depends(g
             "role": member.role, "position": member.position, "classes": len(classes),
             "curated": [item.name for item in classes if item.curator_user_id == user.id],
         })
-    # Muassasaga a'zo bo'lganlar uchun — bosh sahifadagi "Video darslar" kartasi
-    videos = 0
-    if places:
-        videos = db.scalar(select(func.count()).select_from(VideoLesson).where(VideoLesson.deleted_at.is_(None))) or 0
     return {
         "today": local_now.date(),
         "weekday_label": WEEKDAYS[local_now.weekday()],
         "places": places,
-        "videos": videos,
     }
 
 
@@ -16011,243 +16003,6 @@ def pupil_home(pupil=Depends(get_current_pupil), db: Session = Depends(get_db)):
     }
 
 
-# ---------- Video darslar ----------
-# Muassasa rahbariyati (admin, direktor, zam direktor) YouTube havolasi bilan qo'shadi; ilovadagi hamma
-# o'quvchilar bepul ko'radi. Platforma admini istalgan videoni o'chira oladi (nomaqbul bo'lsa).
-
-VIDEO_LIST_LIMIT = 300
-
-
-def _video_view(item: VideoLesson, school_name: str, can_manage: bool) -> dict:
-    return {
-        "id": item.id,
-        "title": item.title,
-        "subject": item.subject,
-        "grade": item.grade,
-        "description": item.description,
-        "youtube_id": item.youtube_id,
-        "school_name": school_name,
-        "views": item.views,
-        "duration": item.duration_seconds,
-        "test_code": item.test_code or "",
-        "created_at": item.created_at,
-        "can_manage": can_manage,
-    }
-
-
-def _video_leader_school(db: Session, user: User) -> int | None:
-    """Foydalanuvchi rahbar bo'lgan muassasa (video qo'sha oladi) — bo'lmasa None."""
-    member = _active_membership(db, user)
-    return member.school_id if member and _is_director(member) else None
-
-
-def _can_manage_video(db: Session, user: User, item: VideoLesson) -> bool:
-    if is_admin_tg(user.tg_id):
-        return True
-    member = db.scalar(
-        select(SchoolMember).where(SchoolMember.user_id == user.id, SchoolMember.school_id == item.school_id,
-                                   SchoolMember.left_at.is_(None))
-    )
-    return bool(member and _is_director(member))
-
-
-@app.get("/api/videos")
-def list_videos(subject: str = "", grade: int | None = None, q: str = "", mine: bool = False,
-                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Video darslar: fanlar (soni bilan) va tanlangan fan/sinf/qidiruv bo'yicha videolar (yangisi birinchi).
-    mine=true — muassasa rahbariyati uchun: faqat o'z muassasasi videolari (boshqarish sahifasi)."""
-
-    leader_school = _video_leader_school(db, user)
-    if mine and leader_school is None:
-        raise HTTPException(status_code=403, detail="Video darslarni muassasa rahbariyati qo'shadi")
-    # Hozircha video darslar faqat maktab o'quvchilari uchun (ular /api/pupil/videos orqali ko'radi);
-    # bu yerda — muassasa xodimlari (ko'rib chiqish uchun) va platforma admini
-    if not is_admin_tg(user.tg_id) and _active_membership(db, user) is None:
-        raise HTTPException(status_code=403, detail="Video darslar maktab o'quvchilari uchun — «Maktabim» orqali kiring")
-    return _videos_payload(db, subject, grade, q, only_school=leader_school if mine else None,
-                           admin=is_admin_tg(user.tg_id), leader_school=leader_school)
-
-
-@app.get("/api/pupil/videos")
-def pupil_videos(subject: str = "", grade: int | None = None, q: str = "", pupil=Depends(get_current_pupil),
-                 db: Session = Depends(get_db)):
-    """Maktab o'quvchisi (Telegram'siz, login-parol bilan kirgan) uchun ham o'sha video kutubxona."""
-    return _videos_payload(db, subject, grade, q)
-
-
-def _videos_payload(db: Session, subject: str, grade: int | None, q: str, only_school: int | None = None,
-                    admin: bool = False, leader_school: int | None = None) -> dict:
-    base = select(VideoLesson).where(VideoLesson.deleted_at.is_(None))
-    if only_school is not None:
-        base = base.where(VideoLesson.school_id == only_school)
-    subjects = db.execute(
-        select(VideoLesson.subject, func.count()).where(VideoLesson.id.in_(base.with_only_columns(VideoLesson.id)))
-        .group_by(VideoLesson.subject).order_by(func.count().desc(), VideoLesson.subject)
-    ).all()
-    query = base
-    if subject:
-        query = query.where(VideoLesson.subject == subject)
-    if grade:
-        # Sinfi ko'rsatilmagan video — hamma sinflar uchun
-        query = query.where(or_(VideoLesson.grade == grade, VideoLesson.grade.is_(None)))
-    words = [word for word in q.lower().split() if word][:5]
-    for word in words:
-        like = f"%{word}%"
-        query = query.where(or_(func.lower(VideoLesson.title).like(like), func.lower(VideoLesson.description).like(like)))
-    items = db.scalars(query.order_by(VideoLesson.id.desc()).limit(VIDEO_LIST_LIMIT)).all()
-    schools = dict(db.execute(
-        select(PrivateSchool.id, PrivateSchool.name).where(PrivateSchool.id.in_({item.school_id for item in items} or {-1}))
-    ).all())
-    return {
-        "subjects": [{"name": name, "count": count} for name, count in subjects],
-        "videos": [
-            _video_view(item, schools.get(item.school_id, ""), admin or item.school_id == leader_school)
-            for item in items
-        ],
-        "can_add": leader_school is not None,
-    }
-
-
-@app.post("/api/videos")
-def add_video(body: VideoLessonIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    school_id = _video_leader_school(db, user)
-    if school_id is None:
-        raise HTTPException(status_code=403, detail="Video darslarni muassasa rahbariyati (admin, direktor) qo'shadi")
-    youtube_id = youtube_video_id(body.url)
-    if db.scalar(select(VideoLesson.id).where(VideoLesson.school_id == school_id, VideoLesson.youtube_id == youtube_id,
-                                              VideoLesson.deleted_at.is_(None))):
-        raise HTTPException(status_code=409, detail="Bu video allaqachon qo'shilgan")
-    item = VideoLesson(school_id=school_id, added_by=user.id, title=body.title, subject=body.subject, grade=body.grade,
-                       description=body.description, youtube_id=youtube_id, test_code=body.test_code)
-    db.add(item)
-    db.commit()
-    school = db.get(PrivateSchool, school_id)
-    return _video_view(item, school.name if school else "", True)
-
-
-def _own_video(db: Session, user: User, video_id: int) -> VideoLesson:
-    item = db.get(VideoLesson, video_id)
-    if not item or item.deleted_at is not None:
-        raise HTTPException(status_code=404, detail="Video topilmadi")
-    if not _can_manage_video(db, user, item):
-        raise HTTPException(status_code=403, detail="Videoni uni qo'shgan muassasa rahbariyati o'zgartiradi")
-    return item
-
-
-@app.put("/api/videos/{video_id}")
-def edit_video(video_id: int, body: VideoLessonIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    item = _own_video(db, user, video_id)
-    item.title, item.subject, item.grade, item.description = body.title, body.subject, body.grade, body.description
-    item.test_code = body.test_code
-    item.youtube_id = youtube_video_id(body.url)
-    item.updated_at = utcnow()
-    db.commit()
-    school = db.get(PrivateSchool, item.school_id)
-    return _video_view(item, school.name if school else "", True)
-
-
-@app.delete("/api/videos/{video_id}")
-def delete_video(video_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    item = _own_video(db, user, video_id)
-    item.deleted_at = utcnow()
-    db.commit()
-    logging.getLogger("backend").info("Video o'chirildi: id=%s school=%s user=%s", item.id, item.school_id, user.id)
-    return {"ok": True}
-
-
-@app.post("/api/videos/{video_id}/duration")
-def set_video_duration(video_id: int, seconds: int, db: Session = Depends(get_db)):
-    """
-    Dars davomiyligi — pleyer videoni ochganda bir marta xabar beradi.
-
-    YouTube davomiylikni faqat o'z pleyeri orqali beradi, shuning uchun uni
-    serverda emas, ilovada o'lchab yuboramiz. Bir marta yozilgach qayta
-    o'zgartirilmaydi; "ko'rilgan ulush" esa serverga umuman yuborilmaydi —
-    u foydalanuvchining qurilmasida qoladi.
-    """
-
-    if not 1 <= seconds <= 24 * 60 * 60:
-        raise HTTPException(status_code=400, detail="Davomiylik noto'g'ri")
-    db.execute(
-        update(VideoLesson)
-        .where(VideoLesson.id == video_id, VideoLesson.deleted_at.is_(None), VideoLesson.duration_seconds.is_(None))
-        .values(duration_seconds=seconds)
-    )
-    db.commit()
-    return {"ok": True}
-
-
-class VideoViewIn(BaseModel):
-    pupil_session: str = Field(default="", max_length=200)  # Telegram'siz kirgan maktab o'quvchisi
-
-
-VIDEO_VIEW_REPEAT_SECONDS = 6 * 60 * 60  # bitta odam bitta videoni shuncha vaqtda bir marta sanaladi
-_video_views_seen: dict[tuple[str, int], float] = {}
-_video_views_lock = threading.Lock()
-
-
-def _video_viewer(db: Session, init_data: str, app_session: str, dev_user: str, pupil_session: str) -> str | None:
-    """Videoni kim ko'ryapti (faqat sanash uchun): Telegram, ilova/sayt seansi yoki maktab o'quvchisi seansi."""
-
-    if init_data:
-        try:
-            return f"tg:{validate_init_data(init_data)['id']}"
-        except InitDataError:
-            return None
-    if app_session:
-        user_id = db.scalar(select(AppSession.user_id).where(
-            AppSession.token_hash == app_session_hash(app_session), AppSession.revoked_at.is_(None)))
-        if user_id:
-            return f"user:{user_id}"
-    if pupil_session:
-        account_id = db.scalar(select(PupilSession.account_id).where(
-            PupilSession.token_hash == _pupil_token_hash(pupil_session), PupilSession.revoked_at.is_(None)))
-        if account_id:
-            return f"pupil:{account_id}"
-    if DEV_MODE and dev_user.isdigit():
-        return f"tg:{dev_user}"
-    return None
-
-
-def _count_this_view(viewer: str, video_id: int) -> bool:
-    """Shu odam bu videoni yaqinda (VIDEO_VIEW_REPEAT_SECONDS ichida) ko'rmagan bo'lsa — True."""
-
-    now = time.monotonic()
-    key = (viewer, video_id)
-    with _video_views_lock:
-        last = _video_views_seen.get(key)
-        if last is not None and now - last < VIDEO_VIEW_REPEAT_SECONDS:
-            return False
-        if len(_video_views_seen) > 50_000:  # xotira cheksiz o'smasin — eskilari tozalanadi
-            cutoff = now - VIDEO_VIEW_REPEAT_SECONDS
-            for old_key in [item for item, seen_at in _video_views_seen.items() if seen_at < cutoff]:
-                del _video_views_seen[old_key]
-        _video_views_seen[key] = now
-    return True
-
-
-@app.post("/api/videos/{video_id}/view")
-def count_video_view(
-    video_id: int,
-    body: VideoViewIn | None = None,
-    x_init_data: str = Header(default=""),
-    x_app_session: str = Header(default=""),
-    x_dev_user: str = Header(default=""),
-    db: Session = Depends(get_db),
-):
-    """Ko'rishlar soni — video ochilganda (bir martalik so'rov, javobni kutish shart emas).
-    Telegram'siz kirgan maktab o'quvchisi ham sanaladi (seansi so'rov tanasida keladi). Kimligi
-    aniqlanmagan so'rov sanalmaydi, bitta odam esa bir videoni 6 soatda bir marta sanaladi —
-    aks holda istalgan odam ko'rishlar sonini sun'iy oshira olardi."""
-    viewer = _video_viewer(db, x_init_data, x_app_session, x_dev_user, body.pupil_session if body else "")
-    if not viewer or not _count_this_view(viewer, video_id):
-        return {"ok": True}
-    db.execute(update(VideoLesson).where(VideoLesson.id == video_id, VideoLesson.deleted_at.is_(None))
-               .values(views=VideoLesson.views + 1))
-    db.commit()
-    return {"ok": True}
-
-
 # ---------- Yotoqxona: xonalar, joylashtirish, kechki yo'qlama ----------
 # Maktab va o'quv markazida (to'garakda yo'q). Rahbariyat (admin, direktor) va komendant — hamma xona: ochadi,
 # o'quvchilarni joylashtiradi, tarbiyachi tayinlaydi. Tarbiyachi — faqat o'z xonalari: ko'radi va yo'qlama oladi.
@@ -18985,7 +18740,7 @@ xodimlari, o'quvchi yoki uning ota-onasi.</p>"""))
     avtomatik tekshirish (shu jumladan titulni telefon kamerasi bilan skanerlash), Rasch modeli bo'yicha ball, hisobot (PDF)
     va sertifikatlar.</li>
   <li><b>Ta'lim muassasasi uchun (maktab CRM):</b> sinf va guruhlar, o'quvchilar ro'yxati, davomat, dars jadvali, o'qish
-    to'lovlari hisobi, e'lonlar, yotoqxona va video darslar. Bu bo'lim hozirda bepul; pullik bo'lsa, narxi ushbu ofertaga
+    to'lovlari hisobi, e'lonlar va yotoqxona. Bu bo'lim hozirda bepul; pullik bo'lsa, narxi ushbu ofertaga
     oldindan kiritiladi.</li>
   <li><b>O'quvchi uchun:</b> test ishlash, natija va savollar tahlilini ko'rish, maktab o'quvchisi kabineti.</li>
   <li>Xizmat internet mavjud bo'lganda Telegram Mini App, Android ilova va chittak.uz sayti orqali ko'rsatiladi.</li>
