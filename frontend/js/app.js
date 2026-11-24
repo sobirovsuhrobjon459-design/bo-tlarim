@@ -252,6 +252,8 @@ let quizTimerId = null;
 
 // O'qituvchi dashboard'idagi testlar ro'yxati qaysi bo'limda turibdi: "active" | "closed"
 let teacherTestsTab = "active";
+// O'quvchi profilidagi tab: ma'lumotlar / natijalar / davomat (qayta chizilganda saqlanadi)
+let studentProfileTab = { id: null, tab: "info" };
 
 /* ---------- 1) Yordamchi funksiyalar ---------- */
 
@@ -3083,7 +3085,6 @@ async function renderStudentProfile(schoolClass, studentId) {
 
   const resultsHtml = student.results.length
     ? student.results
-        .slice(0, 10)
         .map(
           (item) => `
             <div class="att-row" style="cursor:default">
@@ -3115,22 +3116,40 @@ async function renderStudentProfile(schoolClass, studentId) {
         .join("")
     : "";
 
-  showPage(`
-    ${schoolPageHeader(student.full_name, "back-students")}
-    <div class="card student-hero" style="cursor:default">
-      <span class="student-avatar" style="width:56px;height:56px;font-size:20px">${initials(student.full_name)}</span>
-      <div class="card-body" style="width:100%">
-        <h3 style="margin:0">${escapeHtml(student.full_name)}</h3>
-        <p style="margin:4px 0 0">📚 ${escapeHtml(student.class_name)}${student.code ? ` · 🆔 ID: <b>${student.code}</b>` : ""}</p>
-        ${student.added_by ? `<p class="subtitle" style="margin:4px 0 0">➕ Qo'shgan: <b>${escapeHtml(student.added_by)}</b> · ${formatDate(student.created_at)}</p>` : ""}
-        <div style="margin-top:6px">${studentStatusChip(student.status)}</div>
-        ${student.status.note ? `<p class="subtitle" style="margin:4px 0 0">💬 ${escapeHtml(student.status.note)}</p>` : ""}
-      </div>
-      ${rateBadge(stats)}
-    </div>
-    ${student.can_set_status ? `<button class="btn" id="student-status-button" style="margin-top:10px">🔄 Holatni o'zgartirish</button>` : ""}
+  if (studentProfileTab.id !== student.id) studentProfileTab = { id: student.id, tab: "info" };
 
-    <div class="student-hub">
+  const contactValue = (value, empty) => (value ? `<b>${value}</b>` : `<b class="subtitle" style="margin:0;font-weight:600">${empty}</b>`);
+  const infoHtml = `
+    <div class="student-hub" style="margin-top:0">
+      <div class="hub-card" style="cursor:default">
+        <span class="hub-icon">📍</span>
+        <span class="hub-text"><small class="hub-kicker">YASHASH MANZILI</small>${contactValue(student.address ? escapeHtml(student.address) : "", "Kiritilmagan")}</span>
+      </div>
+      ${
+        student.phone
+          ? `<a class="hub-card" href="tel:${escapeHtml(student.phone)}" style="text-decoration:none">
+               <span class="hub-icon">📞</span>
+               <span class="hub-text"><small class="hub-kicker">TELEFON RAQAMI</small><b>${escapeHtml(formatPhone(student.phone))}</b>
+                 <small>Qo'ng'iroq qilish uchun bosing</small></span>
+               <span class="hub-go">›</span>
+             </a>`
+          : `<div class="hub-card" style="cursor:default">
+               <span class="hub-icon">📞</span>
+               <span class="hub-text"><small class="hub-kicker">TELEFON RAQAMI</small>${contactValue("", "Kiritilmagan")}</span>
+             </div>`
+      }
+      ${
+        student.birth_date
+          ? `<div class="hub-card" style="cursor:default">
+               <span class="hub-icon">🎂</span>
+               <span class="hub-text"><small class="hub-kicker">TUG'ILGAN SANA</small><b>${plainDate(student.birth_date)}</b></span>
+             </div>`
+          : ""
+      }
+    </div>
+    ${student.can_edit_contact ? `<button class="btn btn-ghost" id="edit-contact-button" style="margin-top:10px">✏️ Manzil va telefonni ${student.address || student.phone ? "tahrirlash" : "kiritish"}</button>` : ""}
+
+    <div class="student-hub" id="student-hub-links">
       <button type="button" class="hub-card" data-hub="class">
         <span class="hub-icon">📚</span>
         <span class="hub-text"><small class="hub-kicker">SINF</small><b>${escapeHtml(student.class_name)}</b>
@@ -3153,18 +3172,7 @@ async function renderStudentProfile(schoolClass, studentId) {
       }
     </div>
 
-    <p class="section-label" style="margin-top:18px">NATIJALAR (${student.results.length})</p>
-    <div class="panel" style="padding:4px 0">${resultsHtml}</div>
-
-    <p class="section-label" style="margin-top:18px">DAVOMAT</p>
-    <div class="stats-grid">
-      <div class="stat-tile"><span class="stat-value" style="color:#1e9e4a">${stats.present}</span>Bor</div>
-      <div class="stat-tile"><span class="stat-value" style="color:#d93636">${stats.absent}</span>Yo'q</div>
-      <div class="stat-tile"><span class="stat-value" style="color:#e0a800">${stats.excused}</span>Sababli</div>
-      <div class="stat-tile"><span class="stat-value" style="color:#2e75b6">${stats.late}</span>Kechikdi</div>
-    </div>
-    <p class="section-label" style="margin-top:14px">DARSLAR TARIXI (${stats.total})</p>
-    <div class="panel" style="padding:4px 0">${historyHtml}</div>
+    ${student.added_by ? `<p class="subtitle" style="margin:12px 2px 0">➕ Qo'shgan: <b>${escapeHtml(student.added_by)}</b> · ${formatDate(student.created_at)}</p>` : ""}
 
     ${statusHistoryHtml ? `<p class="section-label" style="margin-top:18px">HOLAT TARIXI</p><div class="panel" style="padding:4px 0">${statusHistoryHtml}</div>` : ""}
 
@@ -3179,14 +3187,64 @@ async function renderStudentProfile(schoolClass, studentId) {
              }
            </div>`
         : ""
-    }
+    }`;
+
+  const resultsPanelHtml = `
+    <p class="section-label" style="margin-top:0">NATIJALAR (${student.results.length})</p>
+    <div class="panel" style="padding:4px 0">${resultsHtml}</div>`;
+
+  const attendancePanelHtml = `
+    <div class="stats-grid">
+      <div class="stat-tile"><span class="stat-value" style="color:#1e9e4a">${stats.present}</span>Bor</div>
+      <div class="stat-tile"><span class="stat-value" style="color:#d93636">${stats.absent}</span>Yo'q</div>
+      <div class="stat-tile"><span class="stat-value" style="color:#e0a800">${stats.excused}</span>Sababli</div>
+      <div class="stat-tile"><span class="stat-value" style="color:#2e75b6">${stats.late}</span>Kechikdi</div>
+    </div>
+    <p class="section-label" style="margin-top:14px">DARSLAR TARIXI (${stats.total})</p>
+    <div class="panel" style="padding:4px 0">${historyHtml}</div>`;
+
+  const activeTab = studentProfileTab.tab;
+  showPage(`
+    ${schoolPageHeader(student.full_name, "back-students")}
+    <div class="card student-hero" style="cursor:default">
+      <span class="student-avatar" style="width:56px;height:56px;font-size:20px">${initials(student.full_name)}</span>
+      <div class="card-body" style="width:100%">
+        <h3 style="margin:0">${escapeHtml(student.full_name)}</h3>
+        <p style="margin:4px 0 0">📚 ${escapeHtml(student.class_name)}${student.code ? ` · 🆔 ID: <b>${student.code}</b>` : ""}</p>
+        <div style="margin-top:6px">${studentStatusChip(student.status)}</div>
+        ${student.status.note ? `<p class="subtitle" style="margin:4px 0 0">💬 ${escapeHtml(student.status.note)}</p>` : ""}
+      </div>
+      ${rateBadge(stats)}
+    </div>
+    ${student.can_set_status ? `<button class="btn" id="student-status-button" style="margin-top:10px">🔄 Holatni o'zgartirish</button>` : ""}
+
+    <div class="tabs student-tabs" style="margin-top:14px">
+      <button class="tab ${activeTab === "info" ? "active" : ""}" data-student-tab="info">Ma'lumotlar</button>
+      <button class="tab ${activeTab === "results" ? "active" : ""}" data-student-tab="results">Natijalar</button>
+      <button class="tab ${activeTab === "attendance" ? "active" : ""}" data-student-tab="attendance">Davomat</button>
+    </div>
+    <div data-student-panel="info" ${activeTab === "info" ? "" : "hidden"}>${infoHtml}</div>
+    <div data-student-panel="results" ${activeTab === "results" ? "" : "hidden"}>${resultsPanelHtml}</div>
+    <div data-student-panel="attendance" ${activeTab === "attendance" ? "" : "hidden"}>${attendancePanelHtml}</div>
   `);
+
+  // Tab almashganda faqat panel ko'rinishi o'zgaradi — ma'lumotlar allaqachon yuklangan
+  document.querySelectorAll("[data-student-tab]").forEach((tab) =>
+    tab.addEventListener("click", () => {
+      const picked = tab.dataset.studentTab;
+      if (studentProfileTab.tab === picked) return;
+      studentProfileTab.tab = picked;
+      document.querySelectorAll("[data-student-tab]").forEach((item) => item.classList.toggle("active", item === tab));
+      document.querySelectorAll("[data-student-panel]").forEach((panel) => (panel.hidden = panel.dataset.studentPanel !== picked));
+    })
+  );
 
   const reload = () => renderStudentProfile(schoolClass, student.id);
   document.querySelector('[data-action="back-students"]').addEventListener("click", guarded(() => renderClass(schoolClass.id, "students")));
   document.getElementById("student-status-button")?.addEventListener("click", () => openStudentStatusSheet(schoolClass, student, reload));
+  document.getElementById("edit-contact-button")?.addEventListener("click", () => openStudentContactSheet(schoolClass, student, reload));
 
-  document.querySelector(".student-hub").addEventListener(
+  document.getElementById("student-hub-links").addEventListener(
     "click",
     guarded(async (event) => {
       const card = event.target.closest("[data-hub]");
@@ -3210,6 +3268,36 @@ async function renderStudentProfile(schoolClass, studentId) {
       myClassesCache = null;
       showToast("O'quvchi guruhdan chiqarildi");
       await renderClass(schoolClass.id, "students");
+    })
+  );
+}
+
+// O'quvchining yashash manzili va telefon raqami — rahbariyat yoki sinf kuratori kiritadi
+function openStudentContactSheet(schoolClass, student, onSaved) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 10px">📍 ${escapeHtml(student.full_name)} — ma'lumotlar</h3>
+    <label class="field-label" for="contact-address">Yashash manzili</label>
+    <textarea class="input" id="contact-address" rows="2" maxlength="300"
+              placeholder="Masalan: Toshkent sh., Chilonzor tumani, 9-kvartal, 12-uy">${escapeHtml(student.address || "")}</textarea>
+    <label class="field-label" for="contact-phone">Telefon raqami</label>
+    <input class="input" id="contact-phone" type="tel" inputmode="tel" maxlength="30" placeholder="+998 90 123 45 67"
+           value="${escapeHtml(student.phone ? formatPhone(student.phone) : "")}" />
+    <button class="btn" id="contact-save" style="margin-top:14px">💾 Saqlash</button>
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+  sheet.querySelector("#contact-save").addEventListener(
+    "click",
+    guarded(async () => {
+      await api(`/api/classes/${schoolClass.id}/students/${student.id}/contact`, {
+        method: "PUT",
+        body: {
+          address: sheet.querySelector("#contact-address").value.trim() || null,
+          phone: sheet.querySelector("#contact-phone").value.trim() || null,
+        },
+      });
+      close();
+      showToast("✅ Saqlandi");
+      await onSaved();
     })
   );
 }
