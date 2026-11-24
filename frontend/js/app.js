@@ -9117,7 +9117,7 @@ async function adminHomeView(stats) {
             <b>${formatNumber(stats.credits_revenue)} so'm</b>
           </div>
           <div class="row-between" style="margin-top:6px">
-            <span>📝 Pullik testlardan ulush <span class="subtitle">(${stats.commission_percent}%)</span></span>
+            <span>📝 Pullik testlardan ulush <span class="subtitle">(umumiy ${stats.commission_percent}%)</span></span>
             <b>${formatNumber(stats.tests_commission)} so'm</b>
           </div>
           <div class="row-between" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-border)">
@@ -9804,7 +9804,7 @@ async function adminSystemView() {
           <p style="margin:6px 0"><b>👥 Odamlar</b> — istalgan foydalanuvchini topish; o'qituvchiga token berish yoki ayirish; bot orqali xabar yozish.</p>
           <p style="margin:6px 0"><b>🏫 Muassasalar</b> — barcha maktab, o'quv markazi va to'garaklar: qayerda, kimniki, nechta o'quvchi.</p>
           <p style="margin:6px 0"><b>📢 E'lon</b> — o'qituvchilar, xodimlar yoki hammaga bot orqali xabar. Avval o'zingizga sinab ko'ring.</p>
-          <p style="margin:6px 0"><b>💰 Narxlar</b> — o'qituvchilar uchun oylik obuna narxlari, test e'loni narxi va muassasalar uchun ✓ tasdiq belgisi narxi.</p>
+          <p style="margin:6px 0"><b>💰 Narxlar</b> — pullik testlarda muallif va platforma foizi (umumiy va har muallifga alohida), o'qituvchilar uchun oylik obuna narxlari, test e'loni narxi va muassasalar uchun ✓ tasdiq belgisi narxi.</p>
           <p style="margin:6px 0"><b>🎁 Promo</b> — o'qituvchilarga bepul token beruvchi kodlar.</p>
           <p style="margin:6px 0"><b>⚙️ Tizim</b> — Payme/Click kalitlari (onlayn to'lovni yoqadi) va bazaning zaxira nusxasi.</p>
         </div>
@@ -9970,11 +9970,184 @@ async function adminBroadcastView() {
 /* ---------- 💰 Narxlar ---------- */
 // Oylik obuna narxlari, test e'loni narxi (Payme, 0 — bepul) va ✓ tasdiq belgisi narxi.
 
+/*
+  💼 Pullik test foizlari: o'quvchi Click/Payme orqali to'lagan puldan platforma qancha
+  ushlab qoladi, muallifga (test egasiga) qancha tushadi. Umumiy foiz + ayrim mualliflarga alohida foiz.
+  Foiz faqat YANGI to'lovlarga ta'sir qiladi — o'tgan to'lovlarning ulushi bazada saqlangan.
+*/
+const COMMISSION_EXAMPLE_PRICE = 20000;
+
+function commissionSplitText(platformPercent, price = COMMISSION_EXAMPLE_PRICE) {
+  const author = Math.round((price * (100 - platformPercent)) / 100);
+  return `${formatNumber(price)} so'mlik testda: muallifga <b>${formatNumber(author)} so'm</b>, platformaga <b>${formatNumber(price - author)} so'm</b>`;
+}
+
+function commissionAuthorRow(item, globalPercent) {
+  const custom = item.custom_percent != null;
+  return `
+    <div class="card" style="cursor:default">
+      <div class="card-body" style="width:100%">
+        <div class="row-between">
+          <span><b data-admin-user="${item.user_id}" style="cursor:pointer">${escapeHtml(item.name)}</b>${
+            item.username ? ` <span class="subtitle">@${escapeHtml(item.username)}</span>` : ""
+          }</span>
+          <span class="badge ${custom ? "badge-blue" : "badge-gray"}">${custom ? "alohida" : "umumiy"}</span>
+        </div>
+        <p class="subtitle" style="margin:6px 0">
+          Muallif <b>${item.author_percent}%</b> · Platforma <b>${item.platform_percent}%</b>
+          · To'lovlar: <b>${formatNumber(item.paid_count)}</b> ta (${formatNumber(item.turnover)} so'm)
+          <br />Muallifga: <b>${formatNumber(item.author_income)}</b> · Platformaga: <b>${formatNumber(item.platform_income)}</b>
+          · Balansida: <b>${formatNumber(item.balance)}</b> so'm
+        </p>
+        <button class="btn btn-ghost" data-commission-edit="${item.teacher_id}" style="margin-top:4px">✏️ Foizni o'zgartirish</button>
+      </div>
+    </div>`;
+}
+
+function commissionCardHtml(info) {
+  const authors =
+    info.authors.map((item) => commissionAuthorRow(item, info.percent)).join("") ||
+    adminHint("Hali pullik testdan pul tushmagan va alohida foiz qo'yilgan muallif yo'q.");
+  const found = adminState.commissionQuery
+    ? info.found.map((item) => commissionAuthorRow(item, info.percent)).join("") || adminHint("Bunday muallif topilmadi.")
+    : "";
+
+  return `
+    <div class="card" style="cursor:default">
+      <div class="card-body" style="width:100%">
+        <h3>💼 Pullik test: muallif va platforma foizi</h3>
+        <p>
+          O'quvchi pullik testga <b>Click/Payme</b> orqali to'laganda pul platforma hisobiga tushadi. Platforma
+          o'z foizini ushlab qoladi, qolgani muallif (test egasi) balansiga yoziladi — muallif uni <b>/pul</b>
+          orqali kartasiga yechib oladi. Yangi foiz faqat <b>keyingi</b> to'lovlarga ta'sir qiladi.
+        </p>
+        <label class="field-label" for="commission-input">Platforma foizi (umumiy), %</label>
+        <input class="input" id="commission-input" inputmode="numeric" autocomplete="off" maxlength="3"
+               value="${info.percent}" />
+        <p class="subtitle" id="commission-preview" style="margin:8px 0 0">
+          Muallif <b>${info.author_percent}%</b> · Platforma <b>${info.percent}%</b><br />${commissionSplitText(info.percent)}
+        </p>
+        <button class="btn" id="commission-save" style="margin-top:12px">💾 Foizni saqlash</button>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-tile">💵<span class="stat-value">${formatNumber(info.turnover)}</span>Jami tushum (so'm)</div>
+      <div class="stat-tile">🏦<span class="stat-value">${formatNumber(info.platform_income)}</span>Platforma ulushi</div>
+      <div class="stat-tile">👩‍🏫<span class="stat-value">${formatNumber(info.author_income)}</span>Mualliflar ulushi</div>
+      <div class="stat-tile">⏳<span class="stat-value">${formatNumber(info.teachers_owed)}</span>Yechilmagan balans</div>
+    </div>
+
+    <h3>👩‍🏫 Mualliflar</h3>
+    <div class="row-between" style="gap:8px;margin-bottom:8px">
+      <input class="input" id="commission-search" autocomplete="off" placeholder="Muallifni ism yoki @username bo'yicha qidirish"
+             value="${escapeHtml(adminState.commissionQuery || "")}" style="margin:0" />
+      <button class="btn btn-ghost" id="commission-search-btn" style="width:auto;margin:0">🔍</button>
+    </div>
+    ${found ? `<p class="section-label">QIDIRUV NATIJASI</p>${found}<p class="section-label" style="margin-top:12px">FOIZI BOR / DAROMAD QILGANLAR</p>` : ""}
+    ${authors}
+  `;
+}
+
+function openTeacherCommissionSheet(item, globalPercent) {
+  const { sheet, close } = openSheet(`
+    <h3 style="margin:0 0 6px">✏️ ${escapeHtml(item.name)}</h3>
+    <p class="subtitle" style="margin:0 0 10px">
+      Shu muallifning pullik testlaridan platforma oladigan foiz. Bo'sh qoldirilsa — umumiy foiz (${globalPercent}%).
+      Muallifga botda xabar boradi.
+    </p>
+    <label class="field-label" for="teacher-commission-input">Platforma foizi, %</label>
+    <input class="input" id="teacher-commission-input" inputmode="numeric" autocomplete="off" maxlength="3"
+           placeholder="umumiy: ${globalPercent}" value="${item.custom_percent ?? ""}" />
+    <p class="subtitle" id="teacher-commission-preview" style="margin:8px 0 0"></p>
+    <button class="btn" id="teacher-commission-save" style="margin-top:12px">💾 Saqlash</button>
+    ${item.custom_percent != null ? `<button class="btn btn-ghost" id="teacher-commission-reset" style="margin-top:8px">↩️ Umumiy foizga qaytarish</button>` : ""}
+    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
+  `);
+  const input = sheet.querySelector("#teacher-commission-input");
+  const preview = sheet.querySelector("#teacher-commission-preview");
+  const refresh = () => {
+    const digits = input.value.trim();
+    const percent = digits === "" ? globalPercent : Number(digits);
+    preview.innerHTML =
+      /^\d*$/.test(digits) && percent >= 0 && percent <= 100
+        ? `Muallif <b>${100 - percent}%</b> · Platforma <b>${percent}%</b><br />${commissionSplitText(percent)}`
+        : "0 dan 100 gacha butun son yozing";
+  };
+  input.addEventListener("input", refresh);
+  refresh();
+
+  const save = async (percent) => {
+    await api("/api/admin/commission/teacher", { method: "POST", body: { teacher_id: item.teacher_id, percent } });
+    close();
+    showToast(percent == null ? "✅ Umumiy foizga qaytarildi" : `✅ ${escapeHtml(item.name)}: muallif ${100 - percent}%, platforma ${percent}%`);
+    await renderAdminDashboard("adprice");
+  };
+  sheet.querySelector("#teacher-commission-save").addEventListener(
+    "click",
+    guarded(async () => {
+      const digits = input.value.trim();
+      if (digits === "") return save(null);
+      if (!/^\d+$/.test(digits) || Number(digits) > 100) throw new Error("Foiz 0 dan 100 gacha butun son bo'lishi kerak");
+      await save(Number(digits));
+    })
+  );
+  sheet.querySelector("#teacher-commission-reset")?.addEventListener("click", guarded(() => save(null)));
+}
+
+function wireCommissionCard(info) {
+  const input = document.getElementById("commission-input");
+  const preview = document.getElementById("commission-preview");
+  input.addEventListener("input", () => {
+    const digits = input.value.trim();
+    const percent = Number(digits);
+    preview.innerHTML =
+      /^\d+$/.test(digits) && percent <= 100
+        ? `Muallif <b>${100 - percent}%</b> · Platforma <b>${percent}%</b><br />${commissionSplitText(percent)}`
+        : "0 dan 100 gacha butun son yozing";
+  });
+
+  document.getElementById("commission-save").addEventListener(
+    "click",
+    guarded(async () => {
+      const digits = input.value.trim();
+      if (!/^\d+$/.test(digits) || Number(digits) > 100) throw new Error("Foiz 0 dan 100 gacha butun son bo'lishi kerak");
+      const percent = Number(digits);
+      if (percent !== info.percent) {
+        const question =
+          `Platforma foizi ${info.percent}% → ${percent}% bo'lsinmi?\n\n` +
+          `Endi har to'lovning ${100 - percent}% muallifga tushadi (alohida foiz qo'yilgan mualliflardan tashqari). ` +
+          "O'tgan to'lovlar o'zgarmaydi.";
+        if (!(await askConfirm(question))) return;
+      }
+      await api("/api/admin/commission", { method: "POST", body: { percent } });
+      showToast(`✅ Muallif ${100 - percent}%, platforma ${percent}%`);
+      await renderAdminDashboard("adprice");
+    })
+  );
+
+  const search = guarded(async () => {
+    adminState.commissionQuery = document.getElementById("commission-search").value.trim();
+    await renderAdminDashboard("adprice");
+  });
+  document.getElementById("commission-search-btn").addEventListener("click", search);
+  document.getElementById("commission-search").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") search();
+  });
+
+  const byId = new Map([...info.authors, ...info.found].map((item) => [String(item.teacher_id), item]));
+  document.querySelectorAll("[data-commission-edit]").forEach((button) =>
+    button.addEventListener("click", () => openTeacherCommissionSheet(byId.get(button.dataset.commissionEdit), info.percent))
+  );
+}
+
 async function adminBroadcastPriceView() {
-  const [info, verify, subscription] = await Promise.all([
+  const query = adminState.commissionQuery ? `?q=${encodeURIComponent(adminState.commissionQuery)}` : "";
+  const [info, verify, subscription, commission] = await Promise.all([
     api("/api/admin/broadcast-price"),
     api("/api/admin/verify-price"),
     api("/api/admin/subscription-settings"),
+    api(`/api/admin/commission${query}`),
   ]);
   const recent =
     info.recent
@@ -9990,6 +10163,7 @@ async function adminBroadcastPriceView() {
 
   return {
     html: `
+      ${commissionCardHtml(commission)}
       <div class="card" style="cursor:default">
         <div class="card-body" style="width:100%">
           <h3>⭐ Oylik obuna narxlari</h3>
@@ -10065,6 +10239,7 @@ async function adminBroadcastPriceView() {
       ${recent}
     `,
     wire() {
+      wireCommissionCard(commission);
       document.getElementById("sub-save").addEventListener(
         "click",
         guarded(async () => {
@@ -12463,7 +12638,9 @@ const TEST_TYPES = {
 // Click/Payme ulangan bo'lsa pul platformaga (balansga) tushadi, aks holda — o'qituvchi kartasiga
 function paidTestHint() {
   return homeSnapshot?.payment_providers?.length
-    ? "O'quvchilar Click/Payme orqali to'laydi — pul balansingizga tushadi, botda /pul bilan yechasiz"
+    ? `O'quvchilar Click/Payme orqali to'laydi — ${
+        homeSnapshot.author_percent != null ? `har to'lovning ${homeSnapshot.author_percent}% ` : "pul "
+      }balansingizga tushadi, botda /pul bilan yechasiz`
     : "O'quvchilar to'lab ishlaydi — pul to'g'ridan-to'g'ri kartangizga tushadi";
 }
 

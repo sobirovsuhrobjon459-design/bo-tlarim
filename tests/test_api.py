@@ -9122,3 +9122,65 @@ def test_video_jadvali_bazadan_ochiriladi():
     main._drop_removed_tables()
     assert "video_lessons" not in main.inspect(main.engine).get_table_names()
     main._drop_removed_tables()  # ikkinchi marta — xatosiz
+
+
+def test_pullik_test_foizini_admin_boshqaradi_umumiy_va_muallifga_alohida():
+    """
+    «💰 Narxlar» bo'limidagi foizlar paneli: umumiy foiz .env dagidan ustun, muallifga alohida foiz
+    umumiydan ustun; foiz o'zgarsa o'tgan to'lov bekor qilinganda aynan yozilgan ulush qaytariladi.
+    """
+    reset_database()
+    register_teacher()
+    admin = as_user(4242)
+    created = create_test(price=10_000)
+    notices = []
+    original_notice = main._send_result_notice
+    main._send_result_notice = notices.append
+    try:
+        info = client.get("/api/admin/commission", headers=admin).json()
+        assert info["percent"] == 30 and info["author_percent"] == 70 and info["env_percent"] == 30, info
+        assert client.get("/api/me", headers=as_user(555)).json()["author_percent"] == 70
+        assert client.post("/api/admin/commission", json={"percent": 10}, headers=as_user(555)).status_code == 403
+        assert client.post("/api/admin/commission", json={"percent": 101}, headers=admin).status_code == 422
+
+        # Umumiy foiz 10% — 10 000 dan muallifga 9 000
+        assert client.post("/api/admin/commission", json={"percent": 10}, headers=admin).json()["percent"] == 10
+        payment = client.post(f"/api/tests/{created['code']}/pay", json={}, headers=as_user(901)).json()
+        payme("CreateTransaction", {"id": "tx-c1", "time": 1, "account": {"payment_id": str(payment["payment_id"])},
+                                    "amount": payment["amount"] * 100})
+        payme("PerformTransaction", {"id": "tx-c1"})
+        assert balance_of() == 9000 and "platforma ulushi 10%" in notices[-1][1], notices
+
+        # Muallifga alohida 25% — keyingi to'lovdan 7 500
+        teacher_id = info["found"][0]["teacher_id"] if info["found"] else None
+        with SessionLocal() as session:
+            teacher_id = session.scalar(main.select(Teacher.id))
+        saved = client.post("/api/admin/commission/teacher", json={"teacher_id": teacher_id, "percent": 25}, headers=admin).json()
+        row = saved["authors"][0]
+        assert row["custom_percent"] == 25 and row["author_percent"] == 75 and row["turnover"] == 10_000, row
+        assert row["platform_income"] == 1000 and row["author_income"] == 9000, row
+        assert "75%" in notices[-1][1] and notices[-1][0] == 555, notices
+        assert client.get("/api/me", headers=as_user(555)).json()["author_percent"] == 75
+
+        payment = client.post(f"/api/tests/{created['code']}/pay", json={}, headers=as_user(902)).json()
+        payme("CreateTransaction", {"id": "tx-c2", "time": 2, "account": {"payment_id": str(payment["payment_id"])},
+                                    "amount": payment["amount"] * 100})
+        payme("PerformTransaction", {"id": "tx-c2"})
+        assert balance_of() == 9000 + 7500
+
+        # Birinchi to'lov bekor — o'sha paytdagi 9 000 qaytariladi (hozirgi 75% emas)
+        payme("CancelTransaction", {"id": "tx-c1", "reason": 5})
+        assert balance_of() == 7500
+        info = client.get("/api/admin/commission", headers=admin).json()
+        assert info["turnover"] == 10_000 and info["platform_income"] == 2500 and info["author_income"] == 7500, info
+        stats = client.get("/api/admin/stats", headers=admin).json()
+        assert stats["tests_commission"] == 2500 and stats["commission_percent"] == 10, stats
+
+        # Qidiruv va umumiy foizga qaytarish
+        found = client.get("/api/admin/commission?q=" + urllib.parse.quote(row["name"][:3]), headers=admin).json()["found"]
+        assert found and found[0]["teacher_id"] == teacher_id, found
+        reset = client.post("/api/admin/commission/teacher", json={"teacher_id": teacher_id, "percent": None}, headers=admin).json()
+        assert reset["authors"][0]["custom_percent"] is None and reset["authors"][0]["platform_percent"] == 10
+        assert client.post("/api/admin/commission/teacher", json={"teacher_id": 99999, "percent": 5}, headers=admin).status_code == 404
+    finally:
+        main._send_result_notice = original_notice
