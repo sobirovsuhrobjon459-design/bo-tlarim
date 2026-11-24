@@ -9707,10 +9707,7 @@ function paymentStateBadge(enabled) {
 const PAYMENT_SOURCE_NOTE = { db: "admin panelidan", env: "server sozlamasidan", none: "—" };
 
 async function adminSystemView() {
-  const [pay, subscription] = await Promise.all([
-    api("/api/admin/payment-settings"),
-    api("/api/admin/subscription-settings"),
-  ]);
+  const pay = await api("/api/admin/payment-settings");
 
   return {
     html: `
@@ -9778,26 +9775,6 @@ async function adminSystemView() {
 
       <div class="card" style="cursor:default">
         <div class="card-body">
-          <h3>⭐ Oylik obuna narxlari</h3>
-          <p>
-            O'qituvchi token o'rniga obuna sotib olsa, muddat davomida tekshiruvlar cheksiz — token yechilmaydi.
-            Narxi <b>0</b> bo'lgan muddat o'qituvchilarga ko'rsatilmaydi. Yangi narx allaqachon sotilgan obunalarga ta'sir qilmaydi.
-          </p>
-          <p class="subtitle" style="margin:0 0 4px">Hozir obunasi faol: <b>${formatNumber(subscription.active)} ta o'qituvchi</b></p>
-          ${subscription.plans
-            .map(
-              (plan) => `
-                <label class="field-label" for="sub-price-${plan.months}">${plan.months === 12 ? "1 yillik" : `${plan.months} oylik`} obuna (${plan.days} kun), so'm</label>
-                <input class="input" id="sub-price-${plan.months}" data-sub-months="${plan.months}" inputmode="numeric"
-                       autocomplete="off" placeholder="0 — sotilmaydi" value="${plan.price || ""}" />`
-            )
-            .join("")}
-          <button class="btn" id="sub-save" style="margin-top:14px">💾 Narxlarni saqlash</button>
-        </div>
-      </div>
-
-      <div class="card" style="cursor:default">
-        <div class="card-body">
           <h3>🔗 Kabinetga kiritiladigan manzillar</h3>
           <p>Payme va Click kabinetida shu manzillarni ko'rsating — to'lov o'tgani haqidagi xabar shu yerga keladi. Bosilsa nusxalanadi.</p>
           <p class="subtitle" style="margin:8px 0 2px">Payme — Endpoint URL</p>
@@ -9827,7 +9804,7 @@ async function adminSystemView() {
           <p style="margin:6px 0"><b>👥 Odamlar</b> — istalgan foydalanuvchini topish; o'qituvchiga token berish yoki ayirish; bot orqali xabar yozish.</p>
           <p style="margin:6px 0"><b>🏫 Muassasalar</b> — barcha maktab, o'quv markazi va to'garaklar: qayerda, kimniki, nechta o'quvchi.</p>
           <p style="margin:6px 0"><b>📢 E'lon</b> — o'qituvchilar, xodimlar yoki hammaga bot orqali xabar. Avval o'zingizga sinab ko'ring.</p>
-          <p style="margin:6px 0"><b>💰 Narxlar</b> — test e'loni narxi va muassasalar uchun ✓ tasdiq belgisi narxi (ikkalasi ham Payme orqali).</p>
+          <p style="margin:6px 0"><b>💰 Narxlar</b> — o'qituvchilar uchun oylik obuna narxlari, test e'loni narxi va muassasalar uchun ✓ tasdiq belgisi narxi.</p>
           <p style="margin:6px 0"><b>🎁 Promo</b> — o'qituvchilarga bepul token beruvchi kodlar.</p>
           <p style="margin:6px 0"><b>⚙️ Tizim</b> — Payme/Click kalitlari (onlayn to'lovni yoqadi) va bazaning zaxira nusxasi.</p>
         </div>
@@ -9847,21 +9824,6 @@ async function adminSystemView() {
       );
 
       const field = (id) => document.getElementById(id).value.trim();
-
-      document.getElementById("sub-save").addEventListener(
-        "click",
-        guarded(async () => {
-          const prices = {};
-          document.querySelectorAll("[data-sub-months]").forEach((input) => {
-            const digits = input.value.replace(/\s/g, "");
-            if (digits && !/^\d+$/.test(digits)) throw new Error("Narxni faqat raqam bilan yozing");
-            prices[input.dataset.subMonths] = Number(digits) || 0;
-          });
-          await api("/api/admin/subscription-settings", { method: "POST", body: { prices } });
-          showToast("✅ Obuna narxlari saqlandi");
-          await renderAdminDashboard("system");
-        })
-      );
 
       document.getElementById("pay-save").addEventListener(
         "click",
@@ -10005,11 +9967,15 @@ async function adminBroadcastView() {
   };
 }
 
-/* ---------- 💰 E'lon narxi ---------- */
-// O'qituvchi testini bot foydalanuvchilariga e'lon qilishi uchun to'lov (Payme). 0 — bepul.
+/* ---------- 💰 Narxlar ---------- */
+// Oylik obuna narxlari, test e'loni narxi (Payme, 0 — bepul) va ✓ tasdiq belgisi narxi.
 
 async function adminBroadcastPriceView() {
-  const [info, verify] = await Promise.all([api("/api/admin/broadcast-price"), api("/api/admin/verify-price")]);
+  const [info, verify, subscription] = await Promise.all([
+    api("/api/admin/broadcast-price"),
+    api("/api/admin/verify-price"),
+    api("/api/admin/subscription-settings"),
+  ]);
   const recent =
     info.recent
       .map(
@@ -10024,6 +9990,26 @@ async function adminBroadcastPriceView() {
 
   return {
     html: `
+      <div class="card" style="cursor:default">
+        <div class="card-body" style="width:100%">
+          <h3>⭐ Oylik obuna narxlari</h3>
+          <p>
+            O'qituvchi token o'rniga obuna sotib olsa, muddat davomida tekshiruvlar cheksiz — token yechilmaydi.
+            Narxi <b>0</b> bo'lgan muddat o'qituvchilarga ko'rsatilmaydi. Yangi narx allaqachon sotilgan obunalarga ta'sir qilmaydi.
+          </p>
+          <p class="subtitle" style="margin:0 0 4px">Hozir obunasi faol: <b>${formatNumber(subscription.active)} ta o'qituvchi</b></p>
+          ${subscription.plans
+            .map(
+              (plan) => `
+                <label class="field-label" for="sub-price-${plan.months}">${plan.months === 12 ? "1 yillik" : `${plan.months} oylik`} obuna (${plan.days} kun), so'm</label>
+                <input class="input" id="sub-price-${plan.months}" data-sub-months="${plan.months}" inputmode="numeric"
+                       autocomplete="off" placeholder="0 — sotilmaydi" value="${plan.price || ""}" />`
+            )
+            .join("")}
+          <button class="btn" id="sub-save" style="margin-top:14px">💾 Narxlarni saqlash</button>
+        </div>
+      </div>
+
       <div class="card" style="cursor:default">
         <div class="card-body" style="width:100%">
           <h3>💰 Test e'loni narxi</h3>
@@ -10079,6 +10065,21 @@ async function adminBroadcastPriceView() {
       ${recent}
     `,
     wire() {
+      document.getElementById("sub-save").addEventListener(
+        "click",
+        guarded(async () => {
+          const prices = {};
+          document.querySelectorAll("[data-sub-months]").forEach((input) => {
+            const digits = input.value.replace(/\s/g, "");
+            if (digits && !/^\d+$/.test(digits)) throw new Error("Narxni faqat raqam bilan yozing");
+            prices[input.dataset.subMonths] = Number(digits) || 0;
+          });
+          await api("/api/admin/subscription-settings", { method: "POST", body: { prices } });
+          showToast("✅ Obuna narxlari saqlandi");
+          await renderAdminDashboard("adprice");
+        })
+      );
+
       document.getElementById("adprice-save").addEventListener(
         "click",
         guarded(async () => {
