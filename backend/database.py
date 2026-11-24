@@ -188,6 +188,10 @@ class Teacher(Base):
     # Amal qilish muddati "MM/YY" — faqat o'qituvchiga ko'rinadi, o'quvchiga emas
     card_expiry: Mapped[str | None] = mapped_column(String(5), default=None)
 
+    # Pullik testlardan platforma ushlab qoladigan foiz — shu muallif uchun alohida (admin belgilaydi).
+    # Bo'sh — admin panelidagi umumiy foiz ishlatiladi.
+    commission_percent: Mapped[int | None] = mapped_column(default=None)
+
     user: Mapped["User"] = relationship()
     tests: Mapped[list["Test"]] = relationship(back_populates="teacher")
 
@@ -586,6 +590,9 @@ class Payment(Base):
     payme_time: Mapped[int | None] = mapped_column(BigInteger, default=None)
     payme_cancel_reason: Mapped[int | None] = mapped_column(default=None)
     click_trans_id: Mapped[str | None] = mapped_column(String(50), default=None, index=True)
+    # To'lov o'tgan paytda muallif balansiga yozilgan ulush (so'm). Foiz keyin o'zgarsa ham
+    # bekor qilishda aynan shu summa qaytarib olinadi. Bo'sh — eski to'lov (foiz saqlanmagan).
+    teacher_share: Mapped[int | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     performed_at: Mapped[datetime | None] = mapped_column(default=None)
     cancelled_at: Mapped[datetime | None] = mapped_column(default=None)

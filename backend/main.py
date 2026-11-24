@@ -289,7 +289,7 @@ def _add_missing_columns() -> None:
         "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)", "deleted_at": "TIMESTAMP",
                   "deleted_tg_hash": "VARCHAR(64)"},
         "teachers": {"card_number": "VARCHAR(30)", "card_holder": "VARCHAR(100)", "card_expiry": "VARCHAR(5)",
-                     "subscription_until": "TIMESTAMP"},
+                     "subscription_until": "TIMESTAMP", "commission_percent": "INTEGER"},
         "school_classes": {
             "curator_user_id": "INTEGER", "code_start": "INTEGER", "code_end": "INTEGER", "shift_id": "INTEGER",
             "monthly_fee": "INTEGER", "subject": "VARCHAR(100)", "assistant_user_id": "INTEGER",
@@ -329,6 +329,7 @@ def _add_missing_columns() -> None:
             "receipt_message_id": "BIGINT",
             "reminded_at": "TIMESTAMP",
             "reminder_count": "INTEGER DEFAULT 0",
+            "teacher_share": "INTEGER",
         },
         "credit_purchases": {
             "kind": "VARCHAR(15) DEFAULT 'tokens'",
@@ -5438,9 +5439,61 @@ CREDIT_PRICE_TIERS_DISPLAY = [
 ]
 
 
-def _teacher_share(amount: int) -> int:
-    """O'quvchi to'lagan summadan o'qituvchiga tegadigan qismi (qolgani platformada qoladi)."""
-    return round(amount * (100 - PLATFORM_COMMISSION_PERCENT) / 100)
+# ---------- Pullik test: platforma va muallif ulushi ----------
+# Umumiy foizni admin «💰 Narxlar» bo'limida belgilaydi (AppSetting "test_commission_percent");
+# belgilanmagan bo'lsa — .env'dagi PLATFORM_COMMISSION_PERCENT. Muayyan muallifga alohida foiz
+# ham qo'yish mumkin (Teacher.commission_percent) — u umumiy foizdan ustun turadi.
+
+COMMISSION_PERCENT_KEY = "test_commission_percent"
+
+
+def _clamp_percent(value) -> int:
+    return max(0, min(100, int(value)))
+
+
+def _global_commission_percent(db: Session) -> int:
+    """Platformaning umumiy foizi (pullik testlardan)."""
+    row = db.get(AppSetting, COMMISSION_PERCENT_KEY)
+    try:
+        if row and str(row.value).strip() != "":
+            return _clamp_percent(row.value)
+    except ValueError:
+        pass  # buzilgan qiymat — .env'dagi foiz
+    return _clamp_percent(PLATFORM_COMMISSION_PERCENT)
+
+
+def _commission_percent(db: Session, teacher: Teacher | None) -> int:
+    """Shu muallifning testlaridan platforma oladigan foiz: alohida belgilangan bo'lsa — o'shasi."""
+    if teacher is not None and teacher.commission_percent is not None:
+        return _clamp_percent(teacher.commission_percent)
+    return _global_commission_percent(db)
+
+
+def _teacher_share(amount: int, percent: int | None = None) -> int:
+    """O'quvchi to'lagan summadan muallifga tegadigan qismi (qolgani — platforma foizi; None — .env foizi)."""
+    if percent is None:
+        percent = _clamp_percent(PLATFORM_COMMISSION_PERCENT)
+    return round(amount * (100 - percent) / 100)
+
+
+def _payment_teacher_share(payment: "Payment") -> int:
+    """
+    To'langan to'lovdan muallifga yozilgan ulush. Saqlangan bo'lsa — aynan o'shasi; bu o'zgarishdan
+    oldingi to'lovlarda saqlanmagan — ular .env'dagi foiz bilan yozilgan edi, shuning uchun o'sha bilan.
+    """
+    if payment.teacher_share is not None:
+        return payment.teacher_share
+    return _teacher_share(payment.amount, _clamp_percent(PLATFORM_COMMISSION_PERCENT))
+
+
+def _tests_commission_total(db: Session, *where) -> int:
+    """Pullik testlardan platformada qolgan jami summa (to'langan to'lovlar bo'yicha)."""
+    paid = (Payment.status == "paid", Payment.provider != "card", *where)
+    stored = db.scalar(
+        select(func.sum(Payment.amount - Payment.teacher_share)).where(*paid, Payment.teacher_share.is_not(None))
+    ) or 0
+    legacy = db.scalar(select(func.sum(Payment.amount)).where(*paid, Payment.teacher_share.is_(None))) or 0
+    return stored + legacy - _teacher_share(legacy, _clamp_percent(PLATFORM_COMMISSION_PERCENT))
 
 
 def _calculate_credit_price(credit_count: int) -> int:
@@ -6638,6 +6691,9 @@ def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)
         "default_channels": DEFAULT_REQUIRED_CHANNELS,
         # Pullik test va onlayn to'lov uchun ulangan tizimlar (bo'sh — pullik test yaratib bo'lmaydi)
         "payment_providers": _enabled_providers(),
+        # Pullik testda (Click/Payme orqali) har to'lovning necha foizi muallifga tushadi
+        "author_percent": 100 - _commission_percent(db, db.scalar(select(Teacher).where(Teacher.user_id == user.id)))
+        if is_teacher else None,
     }
 
 
@@ -17425,14 +17481,18 @@ def _payme_apply_paid(order) -> None:
         _grant_purchase(order)
         return
 
-    share = _teacher_share(order.amount)
+    db = object_session(order)
+    percent = _commission_percent(db, order.test.teacher)
+    share = _teacher_share(order.amount, percent)
+    # Ulush shu paytdagi foiz bilan saqlanadi — admin foizni keyin o'zgartirsa ham bu to'lov o'zgarmaydi
+    order.teacher_share = share
     add_balance(order.test.teacher, share)
     # O'qituvchiga botda: pul balansga tushdi — /pul bilan yechib oladi
     teacher_user = order.test.teacher.user if order.test.teacher else None
     if teacher_user:
         _send_result_notice((teacher_user.tg_id, (
             f"💰 To'lov tushdi: «{order.test.title}» — {_format_sum(order.amount)} so'm\n"
-            f"Balansingizga: +{_format_sum(share)} so'm (platforma ulushi {PLATFORM_COMMISSION_PERCENT}%)\n"
+            f"Balansingizga: +{_format_sum(share)} so'm (platforma ulushi {percent}%)\n"
             "Pulni yechib olish: /pul"
         )))
 
@@ -17444,7 +17504,7 @@ def _payme_revert_paid(order) -> None:
         _revoke_purchase(order)
         return
 
-    add_balance(order.test.teacher, -_teacher_share(order.amount))
+    add_balance(order.test.teacher, -_payment_teacher_share(order))
 
 
 def _payme_receipt_detail(order) -> dict:
@@ -17682,7 +17742,7 @@ def admin_overview(admin: User = Depends(get_current_admin), db: Session = Depen
     1) Token sotuvi — o'qituvchilar token sotib oladi. Bu pul to'liq
        platformaga tegishli (100%).
     2) Pullik testlar — o'quvchi to'laydi, uning faqat komissiya qismi
-       ({PLATFORM_COMMISSION_PERCENT}%) platformada qoladi, qolgani o'qituvchiniki.
+       (admin «💰 Narxlar» bo'limida belgilaydi) platformada qoladi, qolgani o'qituvchiniki.
 
     Ilgari bu yerda faqat testga to'lovlarning TO'LIQ summasi ko'rsatilardi:
     ya'ni asosiy daromad (token sotuvi) umuman hisoblanmas, test to'lovi esa
@@ -17692,8 +17752,11 @@ def admin_overview(admin: User = Depends(get_current_admin), db: Session = Depen
     credits_revenue = (
         db.scalar(select(func.sum(CreditPurchase.amount)).where(CreditPurchase.status == "paid")) or 0
     )
-    tests_turnover = db.scalar(select(func.sum(Payment.amount)).where(Payment.status == "paid")) or 0
-    tests_commission = tests_turnover - _teacher_share(tests_turnover)
+    # Kartaga to'g'ridan-to'g'ri to'lovlar (provider="card") platforma orqali o'tmaydi — hisobga kirmaydi
+    tests_turnover = db.scalar(
+        select(func.sum(Payment.amount)).where(Payment.status == "paid", Payment.provider != "card")
+    ) or 0
+    tests_commission = _tests_commission_total(db)
 
     # O'qituvchilar balansidagi pul — bu platformaning QARZI: ular istalgan
     # paytda yechib olishni so'rashi mumkin, shuning uchun "sof" daromad emas.
@@ -17760,7 +17823,7 @@ def admin_overview(admin: User = Depends(get_current_admin), db: Session = Depen
         "tests_commission": tests_commission,
         "revenue": credits_revenue + tests_commission,
         "teachers_owed": teachers_owed,
-        "commission_percent": PLATFORM_COMMISSION_PERCENT,
+        "commission_percent": _global_commission_percent(db),
         "ai": _admin_ai_status(db, since),
     }
 
@@ -18125,6 +18188,135 @@ def admin_save_verify_price(body: VerifyPriceIn, admin: User = Depends(get_curre
     db.commit()
     logging.getLogger("backend").info("Tasdiq belgisi narxi yangilandi: %s so'm (admin=%s)", body.price, admin.id)
     return _verify_settings_view(db)
+
+
+# ---------- Pullik test foizlari (platforma / muallif) ----------
+
+
+class CommissionIn(BaseModel):
+    """Admin panelidan: pullik testlardan platformaning umumiy foizi (qolgani — muallifga)."""
+
+    percent: int = Field(ge=0, le=100)
+
+
+class TeacherCommissionIn(BaseModel):
+    """Muayyan muallif uchun alohida platforma foizi; None — umumiy foizga qaytaradi."""
+
+    teacher_id: int
+    percent: int | None = Field(default=None, ge=0, le=100)
+
+
+def _commission_settings_view(db: Session, query: str = "") -> dict:
+    """Umumiy foiz, alohida foizli mualliflar, pullik testdan daromad qilgan mualliflar va qidiruv natijasi."""
+
+    paid = (Payment.status == "paid", Payment.provider != "card")
+    turnover_rows = db.execute(
+        select(Test.teacher_id, func.sum(Payment.amount), func.count(Payment.id))
+        .join(Test, Test.id == Payment.test_id).where(*paid).group_by(Test.teacher_id)
+    ).all()
+    turnover = {teacher_id: (int(total or 0), int(count or 0)) for teacher_id, total, count in turnover_rows}
+    commission = {
+        teacher_id: _tests_commission_total(db, Payment.test_id.in_(select(Test.id).where(Test.teacher_id == teacher_id)))
+        for teacher_id in turnover
+    }
+
+    shown_ids = set(turnover) | set(
+        db.scalars(select(Teacher.id).where(Teacher.commission_percent.is_not(None))).all()
+    )
+    found: list[int] = []
+    query = (query or "").strip()
+    if len(query) >= 2:
+        like = f"%{query.lower()}%"
+        found = db.scalars(
+            select(Teacher.id).join(User, User.id == Teacher.user_id)
+            .where(User.deleted_at.is_(None),
+                   or_(func.lower(User.full_name).like(like), func.lower(func.coalesce(User.username, "")).like(like)))
+            .limit(20)
+        ).all()
+        shown_ids |= set(found)
+
+    teachers = db.scalars(
+        select(Teacher).where(Teacher.id.in_(shown_ids)).options(selectinload(Teacher.user))
+    ).all() if shown_ids else []
+    global_percent = _global_commission_percent(db)
+
+    def row(teacher: Teacher) -> dict:
+        total, count = turnover.get(teacher.id, (0, 0))
+        percent = _commission_percent(db, teacher)
+        return {
+            "teacher_id": teacher.id,
+            "user_id": teacher.user_id,
+            "name": (teacher.user.full_name if teacher.user else "") or f"#{teacher.id}",
+            "username": teacher.user.username if teacher.user else None,
+            "custom_percent": teacher.commission_percent,
+            "platform_percent": percent,
+            "author_percent": 100 - percent,
+            "paid_count": count,
+            "turnover": total,
+            "platform_income": commission.get(teacher.id, 0),
+            "author_income": total - commission.get(teacher.id, 0),
+            "balance": teacher.balance,
+        }
+
+    rows = sorted((row(t) for t in teachers), key=lambda r: (-r["turnover"], r["name"].lower()))
+    total_turnover = sum(total for total, _ in turnover.values())
+    total_commission = sum(commission.values())
+    return {
+        "percent": global_percent,
+        "author_percent": 100 - global_percent,
+        "env_percent": _clamp_percent(PLATFORM_COMMISSION_PERCENT),
+        "turnover": total_turnover,
+        "platform_income": total_commission,
+        "author_income": total_turnover - total_commission,
+        "teachers_owed": db.scalar(select(func.sum(Teacher.balance))) or 0,
+        "authors": [r for r in rows if r["turnover"] or r["custom_percent"] is not None],
+        "found": [r for r in rows if r["teacher_id"] in set(found)],
+    }
+
+
+@app.get("/api/admin/commission")
+def admin_commission(q: str = "", admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Pullik testlar: platforma va muallif foizlari, kim qancha ishlagan; q — muallifni ism bo'yicha qidirish."""
+
+    return _commission_settings_view(db, q)
+
+
+@app.post("/api/admin/commission")
+def admin_save_commission(body: CommissionIn, admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Umumiy foizni saqlaydi — faqat YANGI to'lovlarga ta'sir qiladi (o'tganlarining ulushi saqlangan)."""
+
+    row = db.get(AppSetting, COMMISSION_PERCENT_KEY)
+    if row:
+        row.value, row.updated_at, row.updated_by = str(body.percent), utcnow(), admin.id
+    else:
+        db.add(AppSetting(key=COMMISSION_PERCENT_KEY, value=str(body.percent), updated_by=admin.id))
+    db.commit()
+    logging.getLogger("backend").info("Pullik test foizi: platforma %s%% (admin=%s)", body.percent, admin.id)
+    return _commission_settings_view(db)
+
+
+@app.post("/api/admin/commission/teacher")
+def admin_save_teacher_commission(body: TeacherCommissionIn, admin: User = Depends(get_current_admin),
+                                  db: Session = Depends(get_db)):
+    """Muallifga alohida foiz qo'yadi yoki olib tashlaydi (percent = null — umumiy foiz). Muallifga botda xabar boradi."""
+
+    teacher = db.get(Teacher, body.teacher_id)
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Muallif topilmadi")
+    before = _commission_percent(db, teacher)
+    teacher.commission_percent = body.percent
+    db.commit()
+    after = _commission_percent(db, teacher)
+    logging.getLogger("backend").info(
+        "Muallif foizi: teacher=%s platforma %s%% -> %s%% (alohida=%s, admin=%s)",
+        teacher.id, before, after, body.percent, admin.id,
+    )
+    if after != before and teacher.user:
+        _send_result_notice((teacher.user.tg_id, (
+            f"💼 Pullik testlaringiz bo'yicha ulushingiz o'zgardi: endi har to'lovning {100 - after}% sizga, "
+            f"{after}% platformaga.\nBu faqat yangi to'lovlarga taalluqli."
+        )))
+    return _commission_settings_view(db)
 
 
 @app.get("/api/admin/broadcast-price")
@@ -18834,7 +19026,8 @@ def _oferta_html(db: Session) -> str:
         f"<tr><td>{low}{'–' + str(high) if high else '+'} ta</td><td>{_format_sum(price)} so'm</td></tr>"
         for low, high, price in CREDIT_PRICE_TIERS
     )
-    share = 100 - PLATFORM_COMMISSION_PERCENT
+    commission = _global_commission_percent(db)
+    share = 100 - commission
     service = html_escape(LEGAL_BOT) if LEGAL_BOT else "Telegram bot"
     providers = [{"payme": "Payme", "click": "Click"}[name] for name in _enabled_providers()]
     providers_text = " yoki ".join(providers)
@@ -18887,7 +19080,9 @@ qaytarilmaydi.</p>"""))
 <p>O'qituvchi o'z testiga {_format_sum(TEST_PRICE_MIN)} — {_format_sum(TEST_PRICE_MAX)} so'm oralig'ida narx belgilashi mumkin.
 O'quvchi testga {providers_text} orqali to'laydi; to'lov tasdiqlangach test unga avtomatik ochiladi.</p>
 <ul>
-  <li>To'lov summasining {share}% o'qituvchi balansiga yoziladi, {PLATFORM_COMMISSION_PERCENT}% — platforma xizmat haqi.</li>
+  <li>To'lov summasining {share}% o'qituvchi balansiga yoziladi, {commission}% — platforma xizmat haqi
+    (ayrim mualliflar bilan alohida kelishilgan foiz bo'lsa, o'shasi qo'llanadi va bu haqda muallifga
+    oldindan xabar beriladi).</li>
   <li>O'qituvchi balansdagi mablag'ni yechib olish uchun botda /pul buyrug'i orqali so'rov yuboradi. Ijrochi so'rovni
     {WITHDRAWAL_DAYS} ish kuni ichida bajarib, pulni o'qituvchi ko'rsatgan kartaga o'tkazadi.</li>
   <li>O'quvchiga pul qaytarilsa (masalan, to'lov tizimi orqali bekor qilinsa), o'qituvchiga yozilgan ulush balansdan qaytarib olinadi.</li>
