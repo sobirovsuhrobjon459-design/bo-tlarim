@@ -632,11 +632,19 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
         aligned.append((x0, y0, row_shift[ref]))
 
     written = []
+    page_images = []
     for bubble in page_bubbles:
         if bubble["kind"] in ("mark", "anchor"):
             continue
         # PDF koordinatasi pastdan, rasm esa tepadan sanaladi
         x, y = placed(bubble)
+        if bubble["kind"] == "page_image":
+            # Betning katta qismi (Ona tili essesi, Kimyo/Biologiya yechimi) — butunligicha rasm
+            image = crop_written_box(warped, x, y, bubble["w"], bubble["h"], scale=PAGE_IMAGE_SCALE, quality=80)
+            if image:
+                page_images.append({"ref": bubble["ref"], "label": bubble["label"], "page": int(bubble["letter"]),
+                                    "image": image})
+            continue
         if bubble["kind"] == "write":
             # Yozma javob katagi — o'qilmaydi, rasm qilib qirqiladi (o'qituvchi rasmga qarab baholaydi)
             image = crop_written_box(warped, x, y, bubble["w"], bubble["h"])
@@ -728,7 +736,7 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
 
     return {"answers": answers, "questions": result, "name_image": name_image, "certificates": certificates,
             "sheet_number": sheet_number, "sheet_number_status": number_status, "variant": variant,
-            "sheet_code": sheet_code, "written": written}
+            "sheet_code": sheet_code, "written": written, "page_images": page_images}
 
 
 CERT_BALL_MAX = 75.0  # Milliy sertifikatning eng katta bali
@@ -773,9 +781,11 @@ def read_certificates(cert_rows: dict, cert_balls: dict, cert_levels: dict) -> l
 
 WRITTEN_MARGIN = 3.0  # yozma katak atrofidan qo'shib olinadigan joy (pt): chetga chiqqan yozuv ham kirsin
 WRITTEN_SCALE = 2.0  # qirqilgan rasm: 1 pt = 2 piksel (o'qishga yetarli, hajmi kichik)
+PAGE_IMAGE_SCALE = 2.4  # esse / yechim beti: 1 pt = 2,4 piksel (~170 dpi) — qo'lyozmani o'qituvchi va AI o'qiy oladi
 
 
-def crop_written_box(warped: np.ndarray, x: float, y: float, width: float, height: float) -> str | None:
+def crop_written_box(warped: np.ndarray, x: float, y: float, width: float, height: float,
+                     scale: float = WRITTEN_SCALE, quality: int = 75) -> str | None:
     """Tekislangan varaqdan yozma javob katagi (markazi x, y; punktlarda) — JPEG data URL."""
 
     half_w, half_h = width / 2 + WRITTEN_MARGIN, height / 2 + WRITTEN_MARGIN
@@ -785,9 +795,9 @@ def crop_written_box(warped: np.ndarray, x: float, y: float, width: float, heigh
     if crop.size == 0:
         return None
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    size = (max(1, round(gray.shape[1] * WRITTEN_SCALE / SCALE)), max(1, round(gray.shape[0] * WRITTEN_SCALE / SCALE)))
+    size = (max(1, round(gray.shape[1] * scale / SCALE)), max(1, round(gray.shape[0] * scale / SCALE)))
     gray = cv2.resize(gray, size, interpolation=cv2.INTER_AREA)
-    ok, jpeg = cv2.imencode(".jpg", gray, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    ok, jpeg = cv2.imencode(".jpg", gray, [cv2.IMWRITE_JPEG_QUALITY, quality])
     return "data:image/jpeg;base64," + base64.b64encode(jpeg.tobytes()).decode() if ok else None
 
 

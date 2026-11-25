@@ -14040,6 +14040,9 @@ function mergeScan(scan, collected) {
   // Yozma javob kataklari rasmi (titulda bo'lsa): {savol: {label, image}}
   merged.written = { ...(merged.written || {}) };
   for (const item of scan.written || []) merged.written[String(item.ref)] = { label: item.label, image: item.image };
+  // Butun bet rasmlari (Ona tili essesi, Kimyo/Biologiya yechimi): {"essay:1": {ref, page, label, image}}
+  merged.pageImages = { ...(merged.pageImages || {}) };
+  for (const item of scan.page_images || []) merged.pageImages[`${item.ref}:${item.page}`] = item;
   if (scan.name_image) merged.nameImage = scan.name_image;
   if (scan.page === 1) {
     merged.certificates = scan.certificates?.length ? scan.certificates : null;
@@ -14805,7 +14808,7 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
   // Har savol qatori chop etilgan halqalari ustiga moslanadi (ustun bo'yicha tepadan pastga)
   const rows = new Map();
   for (const bubble of pageBubbles) {
-    if (bubble.kind === "mark" || bubble.kind === "code" || bubble.kind === "anchor" || bubble.kind === "write") continue;
+    if (["mark", "code", "anchor", "write", "page_image"].includes(bubble.kind)) continue;
     if (!rows.has(bubble.ref)) rows.set(bubble.ref, []);
     rows.get(bubble.ref).push(bubble);
   }
@@ -14851,9 +14854,14 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
   const certBalls = new Map(); // 14-versiya: asosiy fan — Milliy sertifikat bali (4 ustun × 0–9)
   const certLevels = new Map(); // 14-versiya: chet tili — CEFR darajasi
   const written = []; // yozma javob kataklari: varaqdagi joyi (punktlarda) — rasm qilib qirqiladi
+  const pageImages = []; // Milliy sertifikat tituli: esse / yechim beti — butunligicha rasm
   for (const bubble of pageBubbles) {
     if (bubble.kind === "mark" || bubble.kind === "anchor") continue;
     const [x, y] = placed(bubble);
+    if (bubble.kind === "page_image") {
+      pageImages.push({ ref: bubble.ref, label: bubble.label, page: Number(bubble.letter), x, y, w: bubble.w, h: bubble.h });
+      continue;
+    }
     if (bubble.kind === "write") {
       written.push({ ref: bubble.ref, label: bubble.label, x, y, w: bubble.w, h: bubble.h });
       continue;
@@ -14966,6 +14974,7 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
     positions,
     highlights,
     written,
+    page_images: pageImages,
   };
 }
 
@@ -15245,7 +15254,12 @@ function sheetWrittenImages(sheet, boxes) {
       const right = Math.min(sheet.W, Math.round((box.x + box.w / 2 + WRITTEN_MARGIN) * READ_SCALE));
       const bottom = Math.min(sheet.H, Math.round((box.y + box.h / 2 + WRITTEN_MARGIN) * READ_SCALE));
       if (right - left < 4 || bottom - top < 4) return null;
-      return { ref: box.ref, label: box.label, image: sheetCropImage(sheet, left, top, right - left, bottom - top, "image/jpeg") };
+      return {
+        ref: box.ref,
+        label: box.label,
+        page: box.page, // butun bet rasmida (esse / yechim) — uning tartib raqami
+        image: sheetCropImage(sheet, left, top, right - left, bottom - top, "image/jpeg"),
+      };
     })
     .filter(Boolean);
 }
@@ -15434,6 +15448,7 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
       positions: undefined,
       highlights: undefined,
       written: sheetWrittenImages(sheet, result.written),
+      page_images: sheetWrittenImages(sheet, result.page_images),
       name_image: page === 1 && SHEET_PAGE.nameBox ? sheetNameImage(sheet) : null,
       match: page === 1 ? localSheetMatch(layout, result.sheet_number) : null,
       variants: layout.variants || [],
@@ -15650,6 +15665,7 @@ function renderScanReview(testId, test, scan) {
   const views = layout?.keys && scan.sheetViews ? Object.entries(scan.sheetViews) : [];
   const currentKey = () => layout.keys[scan.variant || "A"] || layout.keys.A || {};
   const writtenItems = Object.entries(scan.written || {});
+  const pageItems = Object.values(scan.pageImages || {}).sort((a, b) => a.ref.localeCompare(b.ref) || a.page - b.page);
 
   showPage(`
     <div class="page-header">
@@ -15731,12 +15747,32 @@ function renderScanReview(testId, test, scan) {
              «📝 Yozma javoblar» bo'limida ✓ yoki ✗ qo'yasiz.</p>`
         : `<p class="subtitle" style="margin:8px 4px 0">Yozma savollar javobini saqlagandan keyin o'quvchilar ro'yxatidan (✏️) kiriting.</p>`
     }
+    ${
+      pageItems.length
+        ? `<button type="button" class="btn btn-ghost" id="scan-toggle-pages" style="margin-top:10px">
+             📄 Esse / yechim betlari (${pageItems.length}) — ko'rish
+           </button>
+           <div class="panel" id="scan-pages" hidden>
+             ${pageItems
+               .map(
+                 (item) => `<figure class="written-scan-item"><figcaption>${escapeHtml(item.label)}</figcaption>
+                   <img src="${item.image}" alt="${escapeHtml(item.label)}" style="width:100%" /></figure>`
+               )
+               .join("")}
+           </div>`
+        : ""
+    }
   `);
   markUnsaved();
   document.getElementById("scan-toggle-written")?.addEventListener("click", (event) => {
     const list = document.getElementById("scan-written");
     list.hidden = !list.hidden;
     event.currentTarget.textContent = list.hidden ? `📝 Yozma javoblar (${writtenItems.length}) — ko'rish` : "📝 Yozma javoblarni yopish";
+  });
+  document.getElementById("scan-toggle-pages")?.addEventListener("click", (event) => {
+    const list = document.getElementById("scan-pages");
+    list.hidden = !list.hidden;
+    event.currentTarget.textContent = list.hidden ? `📄 Esse / yechim betlari (${pageItems.length}) — ko'rish` : "📄 Betlarni yopish";
   });
 
   // Rangli varaq va hisob — javob yoki variant tuzatilganda qayta chiziladi
@@ -15846,6 +15882,7 @@ function renderScanReview(testId, test, scan) {
       sheet_number: scan.sheetNumber || null,
       variant: scan.variants?.length ? scan.variant || "A" : null,
       written: Object.fromEntries(writtenItems.map(([ref, item]) => [ref, item.image])),
+      page_images: pageItems.map(({ ref, page, image }) => ({ ref, page, image })),
       certificates: sheetCertificateMarks(scan.certificates),
     };
     const result = scan.local

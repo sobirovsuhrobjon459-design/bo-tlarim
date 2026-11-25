@@ -1853,6 +1853,9 @@ class SheetScanSaveIn(BaseModel):
     # "unclear" | None}. "yes", ball yoki daraja — sertifikat qo'llanadi (profilda bo'lsa — profildagisi ustun);
     # qolgani — o'quvchining javoblari
     certificates: dict[str, str | None] | None = None
+    # Milliy sertifikat titulidagi butun bet rasmlari (15-versiya): Ona tili essesi ("essay") va
+    # Kimyo/Biologiya yozma ish yechimi ("solution") — [{"ref", "page", "image"}]
+    page_images: list[dict] = Field(default_factory=list, max_length=8)
 
 
 class WrittenVerdictIn(BaseModel):

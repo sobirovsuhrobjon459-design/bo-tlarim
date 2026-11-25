@@ -189,6 +189,59 @@ def test_tarix_tituli_katakchali():
     assert all(b["w"] < 300 for b in bubbles if b["kind"] == "write")
 
 
+def test_ona_tili_tituli_esse_bilan():
+    """Ona tili: 2-betda 36–39 (bitta qator) va 40–44 (a, b) katakchalari; 3–4-bet — esse, rasmi saqlanadi."""
+
+    import fitz
+
+    from backend.database import EssayImage
+    from backend.omr import written_is_blank
+    from test_api import _subject_key
+
+    reset_database()
+    register_teacher()
+    test_id = _ms_test(subject="Ona tili va adabiyot", key_questions=_subject_key("Ona tili va adabiyot"), essay=True,
+                       essay_topic="Kitob — bilim manbai")
+    pdf, bubbles = _sheet(test_id)
+    pages = fitz.open(stream=pdf, filetype="pdf")
+    assert len(pages) == 4
+    assert "bosh harflar bilan" in pages[1].get_text() and "YOZILMASIN" in pages[1].get_text()
+    assert "ESSE" in pages[2].get_text() and "Familiya, ismi" in pages[3].get_text()
+    written = [b for b in bubbles if b["kind"] == "write"]
+    assert [b["label"] for b in written] == main.MS15_NATIVE_WRITTEN and all(b["page"] == 2 for b in written)
+    essay = [b for b in bubbles if b["kind"] == "page_image"]
+    assert [(b["page"], b["ref"], b["letter"]) for b in essay] == [(3, "essay", "1"), (4, "essay", "2")]
+    for page in (2, 3, 4):  # har betda skaner belgilari bor
+        assert sum(b["kind"] == "mark" and b["page"] == page for b in bubbles) == 20
+
+    base = f"/api/teacher/tests/{test_id}"
+    photo = _photo(pdf, bubbles, 2, _id_marks(55), writing={"36": "OLMOS", "40b": "KITOB"})
+    body = client.post(f"{base}/scan", json={"image_base64": photo, "page": 2}, headers=as_user(555)).json()
+    images = {item["label"]: item["image"] for item in body["written"]}
+    assert body["sheet_number"] == 55 and len(images) == 14
+    assert not written_is_blank(images["36"]) and not written_is_blank(images["40b"]) and written_is_blank(images["37"])
+
+    photo = _photo(pdf, bubbles, 3, {})
+    body = client.post(f"{base}/scan", json={"image_base64": photo, "page": 3}, headers=as_user(555)).json()
+    assert body["written"] == [] and [(item["ref"], item["page"]) for item in body["page_images"]] == [("essay", 1)]
+    essay_image = body["page_images"][0]["image"]
+    assert essay_image.startswith("data:image/jpeg") and len(essay_image) < main.PAGE_IMAGE_LIMIT
+
+    saved = client.post(f"{base}/scan/save", headers=as_user(555), json={
+        "name": "Aliyev Vali", "answers": {"1": "A"},
+        "page_images": [{"ref": "essay", "page": 1, "image": essay_image}, {"ref": "bad", "page": 2, "image": "x"}],
+    })
+    assert saved.status_code == 200, saved.text
+    with SessionLocal() as session:
+        stored = session.query(EssayImage).all()
+        assert [(row.page, row.image == essay_image) for row in stored] == [(1, True)]
+
+    # Essesiz Ona tili testi — 2 bet
+    plain = _ms_test(subject="Ona tili va adabiyot", key_questions=_subject_key("Ona tili va adabiyot"))
+    _, bubbles = _sheet(plain)
+    assert max(b["page"] for b in bubbles) == 2
+
+
 def test_mos_kelmaydigan_test_eski_titulda():
     """Tuzilishi boshqa (yoki onlayn) test 15-versiyada ham avvalgi bitta betlik titulda chiqadi."""
 

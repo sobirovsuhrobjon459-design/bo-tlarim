@@ -4934,7 +4934,18 @@ MS15_ID_BLOCK = (120.0, 186.0)  # ID bloki (eni, bo'yi) — 2-betda shu blok yot
 MS15_SUBJECTS = ("Matematika", "Fizika", "Kimyo", "Biologiya", "Tarix", "Geografiya")
 MS15_WRITTEN = [f"{number}{part}" for number in range(36, 46) for part in "ab"]
 # Titul tayyor (imtihondagi 2-beti tasdiqlangan) fanlar; qolganlari — o'z namunasi kelguncha eski titulda
-MS15_READY_SUBJECTS = {"matematika", "fizika", "tarix"}
+MS15_NATIVE_SUBJECT = "ona tili va adabiyot"
+MS15_READY_SUBJECTS = {"matematika", "fizika", "tarix", MS15_NATIVE_SUBJECT}
+# Ona tili: 36–39 — bitta javob, 40–44 — a va b; 45 — esse (3–4-bet)
+MS15_NATIVE_WRITTEN = ["36", "37", "38", "39"] + [f"{number}{part}" for number in range(40, 45) for part in "ab"]
+MS15_NATIVE_NOTE = ("36–44-savollar javobini quyidagi namuna asosida bosh harflar bilan yozing. Sh, Ch, Ng "
+                    "tovushlaridagi har bir belgi alohida katakchada, O‘, G‘ tovushlari esa bitta katakchada yoziladi.")
+MS15_NATIVE_SAMPLE = [["A", "B", "", "C", "h", "A", "N", "g", "", "E", "’", "L", "O", "N"],
+                      ["–", "-", "«", "»", ":", ";", "?", ".", ",", "", "S", "h", "O‘", "G‘"]]
+MS15_NATIVE_CELLS = 14       # 36–44: har qatorda katakchalar soni (imtihondagidek)
+MS15_ESSAY_LINES = 32        # esse betidagi chiziqlar
+MS15_ESSAY_RED = colors.HexColor("#F08A8A")   # har 10 qator — rangli (qatorlarni sanash oson)
+MS15_ESSAY_LINE = colors.HexColor("#B9B9B9")
 MS15_CELL_SUBJECTS = {"tarix"}  # 2-betda javob katakchalarga harfma-harf yoziladigan fanlar
 MS15_CELL_DIVIDER = colors.HexColor("#F2AE80")  # katakchalar orasidagi chiziq: ko'rinadi, skaner uchun "qog'oz"
 MS15_CELL_NOTE = ("Eslatma: Sh, Ch, Ng tovushlaridagi har bir belgi alohida katakchada, O‘, G‘ tovushlari esa bitta "
@@ -4979,14 +4990,18 @@ def _ms15_plan(test: Test, all_items: list, variants: list[str] | None) -> dict 
     expected = [(str(number), 6 if number >= 33 else 4) for number in range(1, 36)]
     if [(item[0], item[2]) for item in closed] != expected or any(item[1] != "single" for item in closed):
         return None
-    if [item[0] for item in written] != MS15_WRITTEN:
+    native = subject == MS15_NATIVE_SUBJECT
+    if [item[0] for item in written] != (MS15_NATIVE_WRITTEN if native else MS15_WRITTEN):
         return None
     layout = _ms15_layout()
+    pages = [closed, written]
+    if native and getattr(test, "essay_max", None):
+        pages += [["essay"], ["essay"]]  # 3–4-bet: esse (skaner betni butunligicha rasm qiladi)
     return {"ms15": True, "width": layout["width"], "height": layout["height"], "edge_marks": SHEET_EDGE_MARKS,
-            "pages": [closed, written], "column_width": 0.0, "reserved": 0, "layout": layout,
+            "pages": pages, "column_width": 0.0, "reserved": 0, "layout": layout,
             "style": {"name_area": layout["name_area"]},
-            # Tarix: javob harfma-harf katakchalarga yoziladi (imtihondagidek); boshqalarida — erkin katak
-            "cells": subject in MS15_CELL_SUBJECTS}
+            # 2-bet ko'rinishi: Ona tili — 36–44 katakchalari; Tarix — harfma-harf qatorlar; qolganlari — erkin katak
+            "native": native, "cells": subject in MS15_CELL_SUBJECTS}
 
 
 def _draw_ms15_card(sheet, test: Test, plan: dict, page: int, with_answers: bool, student: tuple | None,
@@ -5082,7 +5097,9 @@ def _draw_ms15_card(sheet, test: Test, plan: dict, page: int, with_answers: bool
     frame(left, header, right - left, 40)
     text(left + 12, header + 11, str(page), 22, REPORT_FONT_BOLD, align="left")
     text(width / 2, header + 22, "JAVOBLAR VARAQASI", 14, REPORT_FONT_BOLD)
-    text(width / 2, header + 9, "MILLIY SERTIFIKAT" if page == 1 else "36–45: YOZMA JAVOBLAR", 7.2)
+    subtitles = {1: "MILLIY SERTIFIKAT", 2: "36–44: YOZMA JAVOBLAR" if plan.get("native") else "36–45: YOZMA JAVOBLAR",
+                 3: "45: ESSE", 4: "45: ESSE (DAVOMI)"}
+    text(width / 2, header + 9, subtitles.get(page, ""), 7.2)
     try:
         logo_height = 22.0
         sheet.drawImage(str(SHEET_LOGO), right - 8 - logo_height * SHEET_LOGO_RATIO, header + 9,
@@ -5195,6 +5212,10 @@ def _draw_ms15_card(sheet, test: Test, plan: dict, page: int, with_answers: bool
             text(width / 2, y - 9, caption, 6.8, SHEET_SANS)
         return
 
+    if page >= 3:  # Ona tili: esse (3-bet) va uning davomi (4-bet)
+        _draw_ms15_essay(sheet, layout, page, student, text, frame, rule, note)
+        return
+
     # ===== 2-bet =====
     # 1) Yotqizilgan ID bloki (chapda) | F.I.O.
     id_band = layout["id_band"]
@@ -5207,6 +5228,9 @@ def _draw_ms15_card(sheet, test: Test, plan: dict, page: int, with_answers: bool
     text(middle, header - 30, "(ID raqami 1-betdagi bilan bir xil bo‘lsin)", 6.8, SHEET_SANS)
     name_lines(split, right, header - 66, 40, ["(Familiya)", "(Ismi)"])
 
+    if plan.get("native"):
+        _draw_ms15_native(sheet, plan, layout, text, frame, rule, note)
+        return
     if plan.get("cells"):
         _draw_ms15_cells(sheet, plan, layout, text, frame, rule, note)
         return
@@ -5334,6 +5358,135 @@ def _draw_ms15_cells(sheet, plan: dict, layout: dict, text, frame, rule, note) -
         note({"ref": ref, "label": label, "kind": "write", "letter": "",
               "x": (cells_left + cells_right) / 2, "y": strip_bottom + strip_height / 2,
               "w": cells_right - cells_left, "h": strip_height, "r": 0})
+
+
+def _draw_ms15_native(sheet, plan: dict, layout: dict, text, frame, rule, note) -> None:
+    """
+    Ona tili 2-beti (ID bandidan pastda): eslatma va namuna katakchalari; 36–39 — bitta qator, 40–44 — a) va b)
+    qatorlari, har qatorda 14 ta alohida katakcha; o'ngda "Diqqat! Yozilmasin" ustuni (imtihondagidek).
+    Katakchalar chizig'i och — bo'sh qator skanerda "bo'sh" deb o'qiladi.
+    """
+
+    left, right, bottom = layout["left"], layout["right"], layout["bottom"]
+    side_left, side_right = right - 72, right - 4
+    dark = colors.HexColor("#333333")
+
+    # 1) Eslatma, namuna va "Diqqat! Yozilmasin" belgisi
+    note_top = layout["id_band"] - 8
+    note_bottom = note_top - 70
+    frame(left, note_bottom, right - left, note_top - note_bottom)
+    words, lines, current = MS15_NATIVE_NOTE.split(), [], ""
+    for word in words:
+        trial = f"{current} {word}".strip()
+        if current and stringWidth(trial, SHEET_SANS, 7.6) > right - left - 16:
+            lines.append(current)
+            current = word
+        else:
+            current = trial
+    lines.append(current)
+    for index, line in enumerate(lines[:2]):
+        text(left + 8, note_top - 12 - index * 10, line, 7.6, SHEET_SANS, "left", dark)
+    cell = 15.0
+    for row, letters in enumerate(MS15_NATIVE_SAMPLE):
+        y = note_top - 44 - row * 19
+        for index, letter in enumerate(letters):
+            x = left + 70 + index * (cell + 3)
+            if letter:
+                frame(x, y, cell, cell, line=0.6)
+                text(x + cell / 2, y + 4.5, letter, 8, REPORT_FONT, color=colors.black)
+    sheet.setFillColor(MS15_INK)
+    sheet.roundRect(side_left, note_bottom + 14, side_right - side_left, 30, 3, stroke=0, fill=1)
+    text((side_left + side_right) / 2, note_bottom + 32, "DIQQAT!", 7.4, color=colors.white)
+    text((side_left + side_right) / 2, note_bottom + 21, "YOZILMASIN", 6.8, SHEET_SANS, color=colors.white)
+
+    # 2) 36–44
+    items = plan["pages"][1]
+    groups: list[list] = []
+    for item in items:
+        number = item[0].rstrip("ab")
+        if groups and groups[-1][0][0].rstrip("ab") == number:
+            groups[-1].append(item)
+        else:
+            groups.append([item])
+    written_top = note_bottom - 8
+    strip, inner = 21.0, 4.0
+    used = len(items) * strip + sum(len(group) - 1 for group in groups) * inner + 16
+    gap = (written_top - bottom - used) / max(1, len(groups) - 1)
+    # "Yozilmasin" ustuni — och sariq fon (tekshiruvchi uchun)
+    sheet.setFillColor(colors.HexColor("#FFF3D6"))
+    sheet.rect(side_left, bottom, side_right - side_left, written_top - bottom, stroke=0, fill=1)
+    frame(side_left, bottom, side_right - side_left, written_top - bottom)
+    cells_left = left + 56
+    pitch = cell_size = strip
+    pitch += 4
+    cells_right = cells_left + MS15_NATIVE_CELLS * pitch - 4
+    y = written_top - 8
+    for group in groups:
+        for index, (label, _, _, _, ref) in enumerate(group):
+            strip_bottom = y - strip
+            number, part = label.rstrip("ab"), label[len(label.rstrip("ab")):]
+            caption = (f"{number}." + (f" {part})" if part else "")) if index == 0 else f"{part})"
+            text(cells_left - 8, strip_bottom + 6.5, caption, 9.5, REPORT_FONT_BOLD, "right", colors.black)
+            sheet.setStrokeColor(MS15_CELL_DIVIDER)
+            sheet.setLineWidth(1.3)
+            sheet.setFillColor(colors.white)
+            for cell_index in range(MS15_NATIVE_CELLS):
+                sheet.rect(cells_left + cell_index * pitch, strip_bottom, cell_size, cell_size, stroke=1, fill=0)
+            # Tekshiruvchi chiziqchasi
+            sheet.saveState()
+            sheet.setDash(2, 1.5)
+            sheet.setStrokeColor(colors.HexColor("#9A9A9A"))
+            sheet.setLineWidth(0.6)
+            sheet.line(side_left + 12, strip_bottom + 4, side_right - 12, strip_bottom + 4)
+            sheet.restoreState()
+            note({"ref": ref, "label": label, "kind": "write", "letter": "",
+                  "x": (cells_left + cells_right) / 2, "y": strip_bottom + strip / 2,
+                  "w": cells_right - cells_left, "h": strip, "r": 0})
+            y = strip_bottom - inner
+        y += inner - gap
+
+
+def _draw_ms15_essay(sheet, layout: dict, page: int, student: tuple | None, text, frame, rule, note) -> None:
+    """
+    Ona tili essesi: 3-bet ("ESSE") va 4-bet (davomi) — chiziqli. Har 10 qator rangli (sanash oson).
+    Skaner chiziqli qismni butunligicha rasm qiladi: u o'quvchining qo'lda yozgan essesi bo'lib saqlanadi.
+    """
+
+    left, right, bottom, header = layout["left"], layout["right"], layout["bottom"], layout["header"]
+    # Kimniki — tepada ism (bet aralashsa ham o'qituvchi ko'radi)
+    name_bottom = header - 8 - 26
+    frame(left, name_bottom, right - left, 26)
+    text(left + 10, name_bottom + 9, "Familiya, ismi:", 8, align="left")
+    rule(left + 92, name_bottom + 7, right - 12, name_bottom + 7)
+    if student:
+        text(left + 100, name_bottom + 10, student[1][:60], 11, REPORT_FONT_BOLD, "left", colors.black)
+
+    essay_top = name_bottom - 8
+    frame(left, bottom, right - left, essay_top - bottom)
+    first = essay_top - 14
+    if page == 3:
+        sheet.setFillColor(colors.HexColor("#FCE3D0"))
+        sheet.rect(left + 6, essay_top - 20, right - left - 12, 14, stroke=0, fill=1)
+        text((left + right) / 2, essay_top - 16, "ESSE", 9, REPORT_FONT_BOLD)
+        first = essay_top - 34
+    else:
+        path = sheet.beginPath()  # ▶ — davomi
+        path.moveTo(left + 10, essay_top - 6)
+        path.lineTo(left + 10, essay_top - 16)
+        path.lineTo(left + 19, essay_top - 11)
+        path.close()
+        sheet.setFillColor(colors.HexColor("#3D5DB8"))
+        sheet.drawPath(path, stroke=0, fill=1)
+        first = essay_top - 20
+    step = (first - bottom - 10) / (MS15_ESSAY_LINES - 1)
+    for index in range(MS15_ESSAY_LINES):
+        y = first - index * step
+        number = (page - 3) * MS15_ESSAY_LINES + index  # ikkala bet bo'ylab qator raqami
+        sheet.setStrokeColor(MS15_ESSAY_RED if (number // 10) % 2 else MS15_ESSAY_LINE)
+        sheet.setLineWidth(0.6)
+        sheet.line(left + 10, y, right - 10, y)
+    note({"ref": "essay", "label": f"Esse — {page - 2}-bet", "kind": "page_image", "letter": str(page - 2),
+          "x": (left + right) / 2, "y": (essay_top + bottom) / 2, "w": right - left, "h": essay_top - bottom, "r": 0})
 
 
 def _draw_compact_sheets(sheet, test: Test, with_answers: bool, bubbles: list | None, students: list | None,
@@ -9778,6 +9931,7 @@ def save_scanned_sheet(
         attempt.variant = body.variant
         db.flush()
     _store_written_images(db, test, attempt, body.written)
+    _store_page_images(db, test, attempt, body.page_images)
     if body.certificates is not None:
         _store_sheet_certificates(attempt, body.certificates)
         db.flush()  # saqlashda yozuv bazadan qayta o'qiladi — tanlov yo'qolmasin
@@ -9913,6 +10067,31 @@ def _ai_read_attempt(attempt_id: int) -> None:
     finally:
         with _ai_lock:
             _ai_running.discard(attempt_id)
+
+
+PAGE_IMAGE_LIMIT = 2_500_000  # titulning bitta beti rasmi (base64 matni) — ko'pi bilan
+
+
+def _store_page_images(db: Session, test: Test, attempt: Attempt, images: list[dict]) -> None:
+    """
+    Milliy sertifikat titulidagi butun bet rasmlari (skanerlangan): Ona tili essesi — o'quvchining "qo'lda yozilgan
+    esse" rasmi (o'qituvchi ko'rib baholaydi); Kimyo/Biologiya yozma ish yechimi — titul beti rasmi. Qayta
+    skanerlansa — shu bet yangisi bilan almashadi.
+    """
+
+    for item in images or []:
+        image, page = item.get("image"), item.get("page")
+        if not isinstance(image, str) or not image.startswith("data:image/") or len(image) > PAGE_IMAGE_LIMIT:
+            continue
+        if not isinstance(page, int) or not 1 <= page <= 10:
+            continue
+        if item.get("ref") == "essay" and test.essay_max:
+            db.execute(delete(EssayImage).where(EssayImage.attempt_id == attempt.id, EssayImage.page == page))
+            db.add(EssayImage(attempt_id=attempt.id, page=page, image=image))
+        elif item.get("ref") == "solution":
+            db.execute(delete(SheetImage).where(SheetImage.attempt_id == attempt.id, SheetImage.page == page))
+            db.add(SheetImage(attempt_id=attempt.id, page=page, image=image))
+    db.flush()
 
 
 def _store_written_images(db: Session, test: Test, attempt: Attempt, images: dict[str, str]) -> None:
