@@ -47,6 +47,8 @@ For every box, return exactly what the student wrote. Do not solve the task, cor
 the intended answer — a teacher compares your transcription with the answer key.
 - Math: write plain text such as 2√3, -1/2, 3,5, x=7, π/4, (2;5], a^2. Keep a decimal comma or point as written.
 - Ignore the printed box border and stray dots. If something is crossed out, transcribe only what remains.
+- Some boxes are a row of printed cells with one character per cell (O‘ and G‘ take one cell; Sh, Ch, Ng take two). \
+Join the characters into words; an empty cell between characters is a space (for example "Nuh II", "1929-yil").
 - Empty box: text "".
 - Set sure to false when any character is ambiguous (for example 1 or 7, 0 or 6, 5 or S) or part of the \
 writing is illegible; set it to true only when you would bet on every character.

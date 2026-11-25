@@ -158,6 +158,37 @@ def test_milliy_sertifikat_tituli_skanerlanadi():
     assert written_is_blank(images["36b"]) and written_is_blank(images["45a"])
 
 
+def test_tarix_tituli_katakchali():
+    """Tarix: 2-betda javob harfma-harf katakchalarga (a va b ostma-ost); bo'sh qator — bo'sh, yozilgani — yo'q."""
+
+    import fitz
+
+    from backend.omr import written_is_blank
+
+    reset_database()
+    register_teacher()
+    test_id = _ms_test(subject="Tarix")
+    pdf, bubbles = _sheet(test_id)
+    second = fitz.open(stream=pdf, filetype="pdf")[1].get_text()
+    assert "Eslatma" in second and "Bo‘shang" in second and "YOZILMASIN" not in second
+    written = [b for b in bubbles if b["kind"] == "write"]
+    assert len(written) == 20 and all(b["page"] == 2 and b["w"] > 400 for b in written)
+    a, b = (next(item for item in written if item["label"] == label) for label in ("36a", "36b"))
+    assert a["x"] == b["x"] and a["y"] > b["y"]  # b) — a) ning ostida
+
+    photo = _photo(pdf, bubbles, 2, _id_marks(77), writing={"36a": "AMIR TEMUR", "40b": "1 9 2 9"})
+    body = client.post(f"/api/teacher/tests/{test_id}/scan", json={"image_base64": photo, "page": 2},
+                       headers=as_user(555)).json()
+    assert body["sheet_number"] == 77
+    images = {item["label"]: item["image"] for item in body["written"]}
+    assert not written_is_blank(images["36a"]) and not written_is_blank(images["40b"])
+    assert written_is_blank(images["36b"]) and written_is_blank(images["45b"])
+
+    # Matematika — katakchasiz (erkin katak)
+    _, bubbles = _sheet(_ms_test())
+    assert all(b["w"] < 300 for b in bubbles if b["kind"] == "write")
+
+
 def test_mos_kelmaydigan_test_eski_titulda():
     """Tuzilishi boshqa (yoki onlayn) test 15-versiyada ham avvalgi bitta betlik titulda chiqadi."""
 

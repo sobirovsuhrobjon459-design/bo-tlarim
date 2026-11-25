@@ -4933,6 +4933,12 @@ MS15_ID_STEP = 13.6         # ID raqamlari (1 … 9, 0) oralig'i
 MS15_ID_BLOCK = (120.0, 186.0)  # ID bloki (eni, bo'yi) — 2-betda shu blok yotqizilgan
 MS15_SUBJECTS = ("Matematika", "Fizika", "Kimyo", "Biologiya", "Tarix", "Geografiya")
 MS15_WRITTEN = [f"{number}{part}" for number in range(36, 46) for part in "ab"]
+MS15_CELL_SUBJECTS = {"tarix"}  # 2-betda javob katakchalarga harfma-harf yoziladigan fanlar
+MS15_CELL_DIVIDER = colors.HexColor("#F2AE80")  # katakchalar orasidagi chiziq: ko'rinadi, skaner uchun "qog'oz"
+MS15_CELL_NOTE = ("Eslatma: Sh, Ch, Ng tovushlaridagi har bir belgi alohida katakchada, O‘, G‘ tovushlari esa bitta "
+                  "katakchada yoziladi. Javoblar varaqasini to‘ldirish uchun namuna: Bo‘shang, Nuh II, Tamg‘a, 1929-yil")
+MS15_CELL_SAMPLE = ["B", "O‘", "S", "H", "A", "N", "G", "", "N", "U", "H", "", "II", "", "T", "A", "M", "G‘", "A", "",
+                    "1", "9", "2", "9", "-", "Y", "I", "L"]
 
 
 def _ms15_layout() -> dict:
@@ -4971,9 +4977,12 @@ def _ms15_plan(test: Test, all_items: list, variants: list[str] | None) -> dict 
     if [item[0] for item in written] != MS15_WRITTEN:
         return None
     layout = _ms15_layout()
+    subject = " ".join((test.subject or "").split()).lower()
     return {"ms15": True, "width": layout["width"], "height": layout["height"], "edge_marks": SHEET_EDGE_MARKS,
             "pages": [closed, written], "column_width": 0.0, "reserved": 0, "layout": layout,
-            "style": {"name_area": layout["name_area"]}}
+            "style": {"name_area": layout["name_area"]},
+            # Tarix: javob harfma-harf katakchalarga yoziladi (imtihondagidek); boshqalarida — erkin katak
+            "cells": subject in MS15_CELL_SUBJECTS}
 
 
 def _draw_ms15_card(sheet, test: Test, plan: dict, page: int, with_answers: bool, student: tuple | None,
@@ -5194,6 +5203,10 @@ def _draw_ms15_card(sheet, test: Test, plan: dict, page: int, with_answers: bool
     text(middle, header - 30, "(ID raqami 1-betdagi bilan bir xil bo‘lsin)", 6.8, SHEET_SANS)
     name_lines(split, right, header - 66, 40, ["(Familiya)", "(Ismi)"])
 
+    if plan.get("cells"):
+        _draw_ms15_cells(sheet, plan, layout, text, frame, rule, note)
+        return
+
     # 2) "Talabgor diqqatiga" | "Diqqat, yozilmasin" (imtihondagidek — tekshiruvchi ustuni)
     warn, side = layout["warn"], 66
     frame(left, warn, right - left, 40)
@@ -5248,6 +5261,75 @@ def _draw_ms15_card(sheet, test: Test, plan: dict, page: int, with_answers: bool
         note({"ref": ref, "label": label, "kind": "write", "letter": "",
               "x": box_left + box_width / 2, "y": box_bottom + box_height / 2, "w": box_width, "h": box_height,
               "r": 0})
+
+
+def _draw_ms15_cells(sheet, plan: dict, layout: dict, text, frame, rule, note) -> None:
+    """
+    Tarix 2-beti (ID bandidan pastda): eslatma va to'ldirish namunasi, so'ng 36–45 — har savolda a) va b)
+    ostma-ost, har biri bir qator katakchalar (bitta katakka bitta belgi). Skaner har qatorni rasm qilib qirqadi.
+    Katakchalar orasidagi chiziq och — bo'sh qator "bo'sh" deb o'qiladi; qator ramkasi to'q (skaner uchun chegara).
+    """
+
+    left, right, bottom = layout["left"], layout["right"], layout["bottom"]
+
+    # 1) Eslatma va namuna
+    note_top = layout["id_band"] - 8
+    note_bottom = note_top - 58
+    frame(left, note_bottom, right - left, note_top - note_bottom)
+    words, lines, current = MS15_CELL_NOTE.split(), [], ""
+    for word in words:  # ikki qatorga bo'linadi (ramka eniga qarab)
+        trial = f"{current} {word}".strip()
+        if current and stringWidth(trial, SHEET_SANS, 7.6) > right - left - 16:
+            lines.append(current)
+            current = word
+        else:
+            current = trial
+    lines.append(current)
+    for index, line in enumerate(lines[:2]):
+        text(left + 8, note_top - 12 - index * 10, line, 7.6, SHEET_SANS, "left", colors.HexColor("#333333"))
+    cell = 14.0
+    sample_left = (left + right - len(MS15_CELL_SAMPLE) * cell) / 2
+    sample_bottom = note_bottom + 7
+    for index, letter in enumerate(MS15_CELL_SAMPLE):
+        x = sample_left + index * cell
+        if letter:
+            frame(x, sample_bottom, cell, 17, line=0.6)
+            text(x + cell / 2, sample_bottom + 5, letter, 8, REPORT_FONT, color=colors.black)
+
+    # 2) 36–45: chapda savol raqami, o'ngda a) va b) qatorlari
+    written_top = note_bottom - 8
+    frame(left, bottom, right - left, written_top - bottom)
+    number_width = 28
+    rule(left + number_width, bottom, left + number_width, written_top)
+    block = (written_top - bottom) / 10
+    strip_height = (block - 12) / 2
+    label_width = 18
+    strip_left = left + number_width + 6
+    cells_left = strip_left + label_width
+    cells_right = right - 6
+    count = max(1, round((cells_right - cells_left) / 15.5))
+    size = (cells_right - cells_left) / count
+    for index, (label, _, _, _, ref) in enumerate(plan["pages"][1]):
+        line, part = divmod(index, 2)
+        block_top = written_top - line * block
+        if part == 0:
+            if line:
+                rule(left, block_top, right, block_top)
+            text(left + number_width / 2, block_top - block / 2 - 3.5, label[:-1], 10, REPORT_FONT_BOLD)
+        strip_bottom = block_top - 4 - (part + 1) * strip_height - part * 4
+        # Katakchalar orasidagi chiziqlar (och), keyin ramkalar (to'q)
+        sheet.setStrokeColor(MS15_CELL_DIVIDER)
+        sheet.setLineWidth(0.6)
+        for step in range(1, count):
+            x = cells_left + step * size
+            sheet.line(x, strip_bottom, x, strip_bottom + strip_height)
+        frame(strip_left, strip_bottom, label_width, strip_height, line=0.7)
+        frame(cells_left, strip_bottom, cells_right - cells_left, strip_height, line=0.7)
+        text(strip_left + label_width / 2, strip_bottom + strip_height / 2 - 3, f"{label[-1]})", 8, REPORT_FONT,
+             color=colors.HexColor("#333333"))
+        note({"ref": ref, "label": label, "kind": "write", "letter": "",
+              "x": (cells_left + cells_right) / 2, "y": strip_bottom + strip_height / 2,
+              "w": cells_right - cells_left, "h": strip_height, "r": 0})
 
 
 def _draw_compact_sheets(sheet, test: Test, with_answers: bool, bubbles: list | None, students: list | None,
