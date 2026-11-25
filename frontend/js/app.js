@@ -2727,6 +2727,12 @@ function renderClassStudentsTab(schoolClass) {
           : "";
       })()}
       ${
+        // O'quvchilarning umumiy ma'lumotlari (tug'ilgan kun, manzil, sinf, telefon) — Excel ro'yxat
+        schoolClass.can_manage && schoolClass.students.length
+          ? `<button type="button" class="btn btn-ghost" id="students-excel-button" style="margin:0 0 12px;padding:12px 8px;font-size:14px">📥 O'quvchilar ma'lumotlari (Excel)</button>`
+          : ""
+      }
+      ${
         hasRating
           ? `<div class="choice-toggle" id="students-order" style="margin:0 0 12px">
                <button type="button" class="${byRating ? "" : "active"}" data-order="code">📋 Ro'yxat</button>
@@ -2756,6 +2762,16 @@ function renderClassStudentsTab(schoolClass) {
   );
   document.getElementById("code-range-button")?.addEventListener("click", () => openCodeRangeSheet(schoolClass));
   document.getElementById("pupil-logins-button")?.addEventListener("click", guarded(() => renderPupilLogins(schoolClass)));
+  document.getElementById("students-excel-button")?.addEventListener(
+    "click",
+    guarded(() =>
+      deliverPdf(
+        `/api/classes/${schoolClass.id}/students/file`,
+        `${schoolClass.name} (umumiy ma'lumotlar).xlsx`,
+        "📥 O'quvchilar ma'lumotlari (Excel) Telegramga yuborildi"
+      )
+    )
+  );
   document.querySelectorAll("[data-student-id]").forEach((card) => {
     card.addEventListener(
       "click",
@@ -3122,6 +3138,14 @@ async function renderStudentProfile(schoolClass, studentId) {
              </div>`
           : ""
       }
+      ${
+        student.grade
+          ? `<div class="hub-card" style="cursor:default">
+               <span class="hub-icon">🎓</span>
+               <span class="hub-text"><small class="hub-kicker">O'QIYDIGAN SINFI</small><b>${student.grade}-sinf</b></span>
+             </div>`
+          : ""
+      }
     </div>
     ${canEditInfo ? `<button class="btn btn-ghost" id="edit-info-button" style="margin-top:10px">✏️ Ma'lumotlarni tahrirlash</button>` : ""}
 
@@ -3260,7 +3284,14 @@ async function openStudentInfoSheet(schoolClass, student, onSaved) {
     }
     ${
       canContact
-        ? `<p class="section-label" style="margin:14px 0 4px">YASHASH MANZILI</p>
+        ? `<label class="field-label" for="info-birth">Tug'ilgan sana</label>
+           <input class="input" id="info-birth" type="date" min="1930-01-01" max="${new Date().toISOString().slice(0, 10)}"
+                  value="${escapeHtml(student.birth_date ? String(student.birth_date).slice(0, 10) : "")}" />
+           <label class="field-label" for="info-grade">Nechanchi sinfda o'qiydi</label>
+           <select id="info-grade"><option value="">— Ko'rsatilmagan —</option>${Array.from({ length: 11 }, (_, i) => i + 1)
+             .map((grade) => `<option value="${grade}" ${student.grade === grade ? "selected" : ""}>${grade}-sinf</option>`)
+             .join("")}</select>
+           <p class="section-label" style="margin:14px 0 4px">YASHASH MANZILI</p>
            <label class="field-label" for="info-region">Viloyat</label>
            <select id="info-region"><option value="">Viloyatni tanlang</option>${regions
              .map((region) => `<option value="${escapeHtml(region.name)}">${escapeHtml(region.name)}</option>`)
@@ -3321,14 +3352,18 @@ async function openStudentInfoSheet(schoolClass, student, onSaved) {
             mahalla: value("#info-mahalla") || null,
             address: value("#info-address") || null,
             phone: value("#info-phone") || null,
+            grade: value("#info-grade") ? Number(value("#info-grade")) : null,
           },
         });
       }
-      if (canName && fullName !== student.full_name) {
+      // Tug'ilgan sana faqat rahbariyat/kurator ko'radigan maydonda — boshqalarda avvalgisi saqlanib qoladi
+      const oldBirth = student.birth_date ? String(student.birth_date).slice(0, 10) : null;
+      const birthDate = canContact ? value("#info-birth") || null : oldBirth;
+      const newName = canName ? fullName : student.full_name;
+      if (newName !== student.full_name || birthDate !== oldBirth) {
         await api(`/api/classes/${schoolClass.id}/students/${student.id}`, {
           method: "PUT",
-          // Tug'ilgan sana bu oynada so'ralmaydi — avval kiritilgan bo'lsa, o'chirib yubormaymiz
-          body: { full_name: fullName, birth_date: student.birth_date || null },
+          body: { full_name: newName, birth_date: birthDate },
         });
         myClassesCache = null;
       }

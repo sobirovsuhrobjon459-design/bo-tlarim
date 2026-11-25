@@ -2059,24 +2059,36 @@ def test_davomat_olish_tahrirlash_va_vaqtlar():
     contact_url = f"/api/classes/{cid}/students/{ids['Ali Valiyev']}/contact"
     saved = client.put(contact_url, json={
         "region": "Toshkent shahri", "district": "Chilonzor tumani", "mahalla": "  Qatortol   MFY ",
-        "address": " 9-kvartal, 12-uy ", "phone": "90 123 45 67",
+        "address": " 9-kvartal, 12-uy ", "phone": "90 123 45 67", "grade": 10,
     }, headers=as_user(701))
     assert saved.status_code == 200, saved.text
     assert saved.json() == {"region": "Toshkent shahri", "district": "Chilonzor tumani", "mahalla": "Qatortol MFY",
-                            "address": "9-kvartal, 12-uy", "phone": "+998901234567"}
+                            "address": "9-kvartal, 12-uy", "phone": "+998901234567", "grade": 10}
     profile = client.get(f"/api/classes/{cid}/students/{ids['Ali Valiyev']}", headers=as_user(701)).json()
     assert profile["district"] == "Chilonzor tumani" and profile["mahalla"] == "Qatortol MFY"
-    assert profile["phone"] == "+998901234567"
+    assert profile["phone"] == "+998901234567" and profile["grade"] == 10
+    # Sinf o'quvchilarining umumiy ma'lumotlari — Excel (kurator/rahbariyat yuklab oladi)
+    import io
+    from openpyxl import load_workbook
+    excel = client.get(f"/api/classes/{cid}/students/file", headers=as_user(701))
+    assert excel.status_code == 200, excel.text
+    rows = list(load_workbook(io.BytesIO(excel.content)).active.iter_rows(values_only=True))
+    assert rows[0][2:] == ("Tug'ilgan kun", "Viloyat", "Tuman", "MFY", "Ko'cha, Uy", "Sinf", "Tel. raqam"), rows[0]
+    ali = next(row for row in rows[1:] if row[1] == "Ali Valiyev")
+    assert ali[3:] == ("Toshkent shahri", "Chilonzor", "Qatortol MFY", "9-kvartal, 12-uy", 10, "901234567"), ali
+    assert [row[0] for row in rows[1:]] == list(range(1, len(rows)))
+    assert client.put(contact_url, json={"grade": 12}, headers=as_user(701)).status_code == 422
     # Noto'g'ri telefon, ro'yxatda yo'q viloyat, boshqa viloyatning tumani — qabul qilinmaydi
     assert client.put(contact_url, json={"phone": "12345"}, headers=as_user(701)).status_code == 422
     assert client.put(contact_url, json={"region": "Mars"}, headers=as_user(701)).status_code == 422
     assert client.put(contact_url, json={"region": "Andijon viloyati", "district": "Chilonzor tumani"},
                       headers=as_user(701)).status_code == 422
     cleared = client.put(contact_url, json={"address": "", "phone": ""}, headers=as_user(701)).json()
-    assert cleared == {"region": None, "district": None, "mahalla": None, "address": None, "phone": None}
+    assert cleared == {"region": None, "district": None, "mahalla": None, "address": None, "phone": None, "grade": None}
 
     # Begona o'qituvchi ko'ra olmaydi
     _set_name(709, "Begona", "Odam")
+    assert client.get(f"/api/classes/{cid}/students/file", headers=as_user(709)).status_code in (403, 404)
     assert client.get(f"/api/attendance/{attendance['id']}", headers=as_user(709)).status_code in (403, 404)
 
 

@@ -301,7 +301,8 @@ def _add_missing_columns() -> None:
                            "source_student_id": "INTEGER", "removed_reason": "TEXT", "removed_by_user_id": "INTEGER",
                            "basket_closed_at": "TIMESTAMP", "reassigned_to_id": "INTEGER",
                            "address": "VARCHAR(300)", "phone": "VARCHAR(20)",
-                           "region": "VARCHAR(100)", "district": "VARCHAR(100)", "mahalla": "VARCHAR(150)"},
+                           "region": "VARCHAR(100)", "district": "VARCHAR(100)", "mahalla": "VARCHAR(150)",
+                           "grade": "INTEGER"},
         "class_tests": {"source_test_id": "INTEGER"},
         "promo_codes": {"per_teacher_limit": "INTEGER DEFAULT 3"},
         "school_members": {
@@ -13279,9 +13280,120 @@ def edit_student_contact(
         raise HTTPException(status_code=403, detail="Manzil va telefonni rahbariyat yoki sinf kuratori kiritadi")
     student.region, student.district, student.mahalla = body.region, body.district, body.mahalla
     student.address, student.phone = body.address, body.phone
+    student.grade = body.grade
     db.commit()
     return {"region": student.region, "district": student.district, "mahalla": student.mahalla,
-            "address": student.address, "phone": student.phone}
+            "address": student.address, "phone": student.phone, "grade": student.grade}
+
+
+def _short_place(name: str | None, suffix: str) -> str:
+    """"Farg'ona viloyati" → "Farg'ona", "Uchko'prik tumani" → "Uchko'prik" (shaharlar o'z nomida qoladi)."""
+
+    name = (name or "").strip()
+    return name[: -len(suffix)].strip() if name.endswith(suffix) else name
+
+
+def _local_phone(phone: str | None) -> str:
+    """"+998901234567" → "901234567" (ro'yxatlarda odatdagidek 9 xonali)."""
+
+    digits = re.sub(r"\D", "", phone or "")
+    return digits[3:] if len(digits) == 12 and digits.startswith("998") else digits
+
+
+def generate_class_students_xlsx(db: Session, school_class: SchoolClass) -> bytes:
+    """
+    Sinf o'quvchilarining umumiy ma'lumotlari (Excel): №, F.I.Sh., tug'ilgan kun, viloyat, tuman, MFY,
+    ko'cha/uy, sinf, telefon — maktablarda topshiriladigan ro'yxat ko'rinishida (alifbo tartibida).
+    Fan guruhida ma'lumotlar o'quvchining asl (sinfdagi) yozuvidan olinadi.
+    """
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    students = _active_students(school_class)
+    source_ids = [student.source_student_id for student in students if student.source_student_id]
+    sources = {row.id: row for row in db.scalars(select(ClassStudent).where(ClassStudent.id.in_(source_ids))).all()} if source_ids else {}
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = (re.sub(r"[\\/*?:\[\]]", "-", school_class.name).strip() or "Sinf")[:31]
+
+    font = Font(name="Times New Roman", size=11)
+    head_font = Font(name="Times New Roman", size=11, bold=True)
+    head_fill = PatternFill("solid", fgColor="C6E0B4")
+    thin = Side(style="thin", color="000000")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+    header = ["№", school_class.name, "Tug'ilgan kun", "Viloyat", "Tuman", "MFY", "Ko'cha, Uy", "Sinf", "Tel. raqam"]
+    sheet.append(header)
+    for column, _ in enumerate(header, start=1):
+        cell = sheet.cell(row=1, column=column)
+        cell.font, cell.fill, cell.border = head_font, head_fill, border
+        cell.alignment = left if column == 2 else center
+
+    for index, student in enumerate(students, start=1):
+        info = sources.get(student.source_student_id) or student
+        birth = info.birth_date or student.birth_date
+        sheet.append([
+            index,
+            student.full_name,
+            birth.strftime("%d.%m.%Y") if birth else "",
+            _short_place(info.region, "viloyati"),
+            _short_place(info.district, "tumani"),
+            info.mahalla or "",
+            info.address or "",
+            info.grade if info.grade else "",
+            _local_phone(info.phone),
+        ])
+        row = index + 1
+        for column in range(1, len(header) + 1):
+            cell = sheet.cell(row=row, column=column)
+            cell.font, cell.border = font, border
+            cell.alignment = left if column == 2 else center
+            if column == 9:
+                cell.number_format = "@"  # telefon — matn (Excel boshidagi nolni yoki ko'rinishini buzmasin)
+
+    for column, width in zip("ABCDEFGHI", (5, 32, 13, 12, 14, 22, 24, 7, 13)):
+        sheet.column_dimensions[column].width = width
+    sheet.freeze_panes = "C2"
+    sheet.print_options.gridLines = False
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def _class_students_file(db: Session, user: User, class_id: int) -> tuple[str, bytes]:
+    school_class, member = _school_class(db, user, class_id)
+    if not _can_manage_class(school_class, member):
+        raise HTTPException(status_code=403, detail="O'quvchilar ma'lumotlarini rahbariyat yoki sinf kuratori yuklab oladi")
+    file_name = re.sub(r"[\\/:*?\"<>|]", "-", f"{school_class.name} (umumiy ma'lumotlar)").strip()
+    return file_name, generate_class_students_xlsx(db, school_class)
+
+
+@app.get("/api/classes/{class_id}/students/file")
+def class_students_file(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Sinf o'quvchilarining umumiy ma'lumotlari — Excel (brauzerda yuklab olinadi)."""
+    file_name, data = _class_students_file(db, user, class_id)
+    ascii_name = file_name.encode("ascii", "ignore").decode().replace("'", "") or "oquvchilar"
+    return StreamingResponse(
+        io.BytesIO(data), media_type=XLSX_MIME,
+        headers={"Content-Disposition": f'attachment; filename="{ascii_name}.xlsx"'},
+    )
+
+
+@app.post("/api/classes/{class_id}/students/file/send")
+def send_class_students_file(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Sinf o'quvchilari ro'yxati (Excel) — bot orqali foydalanuvchining o'z chatiga."""
+    file_name, data = _class_students_file(db, user, class_id)
+    _send_pdf_to_telegram(user.tg_id, f"{file_name}.xlsx", data, caption="📋 O'quvchilarning umumiy ma'lumotlari", mime=XLSX_MIME)
+    return {"ok": True}
 
 
 # O'quvchi holati: maktabda / uyda / ruxsat berilgan (javob) / kasal
@@ -13497,6 +13609,7 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
         "mahalla": owner.mahalla,
         "address": owner.address,
         "phone": owner.phone,
+        "grade": owner.grade,
         "can_edit_contact": student.source_student_id is None and _can_manage_class(school_class, member),
         "created_at": student.created_at,
         "added_by": added_by.full_name if added_by else None,
