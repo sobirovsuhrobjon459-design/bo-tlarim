@@ -26,7 +26,7 @@
   <meta property="og:image:height" content="630" />
   <meta name="twitter:card" content="summary_large_image" />
 
-  <!-- Ochilish ekrani: har kirishda kamida 3 soniya ko'rinadi, keyin ilova tayyor bo'lgach so'nib yo'qoladi -->
+  <!-- Ochilish ekrani: har kirishda kamida 4 soniya ko'rinadi, keyin ilova tayyor bo'lgach so'nib yo'qoladi -->
   <style>
     /* Brend ochilish ekrani ("Zinapoya"): to'q yashil fon, to'rtta o'sib chiquvchi pog'ona, qush ulardan
        sakrab yuqoriga chiqadi (qo'ngan pog'ona yashil yonadi), keyin "Chittak" va shior ko'tariladi.
@@ -136,11 +136,11 @@
     </div>
   </div>
   <script>
-    // Kamida 3 soniya (sahifa ochila boshlagandan) va ilova birinchi sahifani chizgach yopiladi.
+    // Kamida 4 soniya (sahifa ochila boshlagandan) va ilova birinchi sahifani chizgach yopiladi.
     // Ilova biror sababdan ochilmasa ham ekran osilib qolmaydi — 12 soniyadan keyin baribir yopiladi.
     (function () {
       var splash = document.getElementById("boot-splash");
-      var MIN_MS = 3000, MAX_MS = 12000;
+      var MIN_MS = 4000, MAX_MS = 12000;
       var timer = setInterval(function () {
         var elapsed = performance.now();
         var ready = document.querySelector("#app .page");

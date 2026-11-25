@@ -57,7 +57,7 @@ class _WebShellState extends State<WebShell> {
   bool _offline = false;
   // Sayt birinchi marta ko'ringuncha brend ochilish ekrani turadi (oq ekran miltillamaydi)
   bool _firstPaint = false;
-  // Ochilish ekrani har kirishda kamida 3 soniya ko'rinadi
+  // Ochilish ekrani har kirishda kamida 4 soniya ko'rinadi
   bool _splashTimeUp = false;
   Timer? _splashTimer;
 
@@ -66,7 +66,7 @@ class _WebShellState extends State<WebShell> {
   @override
   void initState() {
     super.initState();
-    _splashTimer = Timer(const Duration(seconds: 3), () {
+    _splashTimer = Timer(const Duration(seconds: 4), () {
       if (mounted) setState(() => _splashTimeUp = true);
     });
   }
