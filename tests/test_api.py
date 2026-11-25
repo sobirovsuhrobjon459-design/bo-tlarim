@@ -2057,14 +2057,23 @@ def test_davomat_olish_tahrirlash_va_vaqtlar():
     # O'quvchi ma'lumotlari: yashash manzili va telefon (rahbariyat/kurator kiritadi)
     assert profile["address"] is None and profile["phone"] is None and profile["can_edit_contact"] is True
     contact_url = f"/api/classes/{cid}/students/{ids['Ali Valiyev']}/contact"
-    saved = client.put(contact_url, json={"address": "  Chilonzor   9-kvartal ", "phone": "90 123 45 67"}, headers=as_user(701))
+    saved = client.put(contact_url, json={
+        "region": "Toshkent shahri", "district": "Chilonzor tumani", "mahalla": "  Qatortol   MFY ",
+        "address": " 9-kvartal, 12-uy ", "phone": "90 123 45 67",
+    }, headers=as_user(701))
     assert saved.status_code == 200, saved.text
-    assert saved.json() == {"address": "Chilonzor 9-kvartal", "phone": "+998901234567"}
+    assert saved.json() == {"region": "Toshkent shahri", "district": "Chilonzor tumani", "mahalla": "Qatortol MFY",
+                            "address": "9-kvartal, 12-uy", "phone": "+998901234567"}
     profile = client.get(f"/api/classes/{cid}/students/{ids['Ali Valiyev']}", headers=as_user(701)).json()
-    assert profile["address"] == "Chilonzor 9-kvartal" and profile["phone"] == "+998901234567"
+    assert profile["district"] == "Chilonzor tumani" and profile["mahalla"] == "Qatortol MFY"
+    assert profile["phone"] == "+998901234567"
+    # Noto'g'ri telefon, ro'yxatda yo'q viloyat, boshqa viloyatning tumani — qabul qilinmaydi
     assert client.put(contact_url, json={"phone": "12345"}, headers=as_user(701)).status_code == 422
+    assert client.put(contact_url, json={"region": "Mars"}, headers=as_user(701)).status_code == 422
+    assert client.put(contact_url, json={"region": "Andijon viloyati", "district": "Chilonzor tumani"},
+                      headers=as_user(701)).status_code == 422
     cleared = client.put(contact_url, json={"address": "", "phone": ""}, headers=as_user(701)).json()
-    assert cleared == {"address": None, "phone": None}
+    assert cleared == {"region": None, "district": None, "mahalla": None, "address": None, "phone": None}
 
     # Begona o'qituvchi ko'ra olmaydi
     _set_name(709, "Begona", "Odam")

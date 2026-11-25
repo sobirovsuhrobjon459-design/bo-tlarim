@@ -317,6 +317,9 @@ async function api(path, { method = "GET", body, keepalive = false } = {}) {
     try {
       const errorData = await response.json();
       if (typeof errorData.detail === "string") message = errorData.detail;
+      // Pydantic tekshiruvi (422): [{msg: "Value error, Telefon raqam noto'g'ri..."}] — o'zbekcha matnni ko'rsatamiz
+      else if (Array.isArray(errorData.detail) && typeof errorData.detail[0]?.msg === "string" && errorData.detail[0].msg.startsWith("Value error, "))
+        message = errorData.detail[0].msg.slice("Value error, ".length);
     } catch (_) {
       /* javobda JSON bo'lmasligi mumkin — standart xabar qoladi */
     }
@@ -2549,40 +2552,6 @@ function renderClassAttendanceTab(schoolClass) {
 
 // O'quvchini tahrirlash oynasi — ro'yxatdan ham, profildan ham ochiladi
 // O'quvchi profiliga sertifikat: fan, turi (Milliy sertifikat — ball / chet tili — daraja), amal qilish muddati
-function openEditStudentSheet(schoolClass, student, onSaved) {
-  const { sheet, close } = openSheet(`
-    <h3 style="margin:0 0 10px">✏️ O'quvchini tahrirlash</h3>
-    <label class="field-label" for="sheet-edit-name">Ism-familiya</label>
-    <input class="input" id="sheet-edit-name" maxlength="200" value="${escapeHtml(student.full_name)}" />
-    <button class="btn" id="sheet-save-student" style="margin-top:10px">💾 Saqlash</button>
-    <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
-  `);
-
-  const input = sheet.querySelector("#sheet-edit-name");
-  setTimeout(() => {
-    input.focus();
-    input.select();
-  }, 250);
-
-  const save = guarded(async () => {
-    const fullName = input.value.trim();
-    if (fullName.length < 2) throw new Error("Ism-familiyani kiriting");
-    await api(`/api/classes/${schoolClass.id}/students/${student.id}`, {
-      method: "PUT",
-      // Tug'ilgan sana hozircha so'ralmaydi — avval kiritilgan bo'lsa, o'chirib yubormaymiz
-      body: { full_name: fullName, birth_date: student.birth_date || null },
-    });
-    myClassesCache = null;
-    close();
-    showToast("✅ Saqlandi");
-    await onSaved();
-  });
-  sheet.querySelector("#sheet-save-student").addEventListener("click", save);
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") save(event);
-  });
-}
-
 function rateBadge(stats) {
   // Davomat hali olinmagan — belgi ko'rsatilmaydi (batafsili o'quvchi profilida)
   if (!stats || stats.rate === null || stats.rate === undefined) return "";
@@ -3118,12 +3087,19 @@ async function renderStudentProfile(schoolClass, studentId) {
 
   if (studentProfileTab.id !== student.id) studentProfileTab = { id: student.id, tab: "info" };
 
+  // Manzil: tepada viloyat va tuman (kattadan kichikka), ostida MFY va ko'cha/uy. Eski (erkin matnli) manzil — o'zicha
+  const placeParts = [student.region, student.district].filter(Boolean);
+  const placeMain = placeParts.length ? placeParts.join(", ") : student.mahalla || student.address || "";
+  const placeExtra = placeParts.length ? [student.mahalla, student.address].filter(Boolean).join(", ") : student.mahalla ? student.address || "" : "";
+  const canEditInfo = student.can_edit_contact || (student.can_edit_name && !schoolClass.is_group);
   const contactValue = (value, empty) => (value ? `<b>${value}</b>` : `<b class="subtitle" style="margin:0;font-weight:600">${empty}</b>`);
   const infoHtml = `
     <div class="student-hub" style="margin-top:0">
       <div class="hub-card" style="cursor:default">
         <span class="hub-icon">📍</span>
-        <span class="hub-text"><small class="hub-kicker">YASHASH MANZILI</small>${contactValue(student.address ? escapeHtml(student.address) : "", "Kiritilmagan")}</span>
+        <span class="hub-text"><small class="hub-kicker">YASHASH MANZILI</small>${
+          placeMain ? `<b>${escapeHtml(placeMain)}</b>${placeExtra ? `<small>${escapeHtml(placeExtra)}</small>` : ""}` : contactValue("", "Kiritilmagan")
+        }</span>
       </div>
       ${
         student.phone
@@ -3147,7 +3123,7 @@ async function renderStudentProfile(schoolClass, studentId) {
           : ""
       }
     </div>
-    ${student.can_edit_contact ? `<button class="btn btn-ghost" id="edit-contact-button" style="margin-top:10px">✏️ Manzil va telefonni ${student.address || student.phone ? "tahrirlash" : "kiritish"}</button>` : ""}
+    ${canEditInfo ? `<button class="btn btn-ghost" id="edit-info-button" style="margin-top:10px">✏️ Ma'lumotlarni tahrirlash</button>` : ""}
 
     <div class="student-hub" id="student-hub-links">
       <button type="button" class="hub-card" data-hub="class">
@@ -3177,15 +3153,8 @@ async function renderStudentProfile(schoolClass, studentId) {
     ${statusHistoryHtml ? `<p class="section-label" style="margin-top:18px">HOLAT TARIXI</p><div class="panel" style="padding:4px 0">${statusHistoryHtml}</div>` : ""}
 
     ${
-      student.can_manage || (student.can_edit_name && !schoolClass.is_group)
-        ? `<div class="row-between" style="gap:8px;margin-top:16px">
-             ${schoolClass.is_group || !student.can_edit_name ? "" : `<button class="btn btn-ghost" id="edit-student-button" style="margin:0">✏️ Tahrirlash</button>`}
-             ${
-               student.can_manage
-                 ? `<button class="btn btn-ghost" id="remove-student-button" style="margin:0">🚪 ${schoolClass.is_group ? "Guruhdan" : "Sinfdan"} chiqarish</button>`
-                 : ""
-             }
-           </div>`
+      student.can_manage
+        ? `<button class="btn btn-ghost" id="remove-student-button" style="margin-top:16px">🚪 ${schoolClass.is_group ? "Guruhdan" : "Sinfdan"} chiqarish</button>`
         : ""
     }`;
 
@@ -3242,7 +3211,7 @@ async function renderStudentProfile(schoolClass, studentId) {
   const reload = () => renderStudentProfile(schoolClass, student.id);
   document.querySelector('[data-action="back-students"]').addEventListener("click", guarded(() => renderClass(schoolClass.id, "students")));
   document.getElementById("student-status-button")?.addEventListener("click", () => openStudentStatusSheet(schoolClass, student, reload));
-  document.getElementById("edit-contact-button")?.addEventListener("click", () => openStudentContactSheet(schoolClass, student, reload));
+  document.getElementById("edit-info-button")?.addEventListener("click", guarded(() => openStudentInfoSheet(schoolClass, student, reload)));
 
   document.getElementById("student-hub-links").addEventListener(
     "click",
@@ -3255,7 +3224,6 @@ async function renderStudentProfile(schoolClass, studentId) {
     })
   );
 
-  document.getElementById("edit-student-button")?.addEventListener("click", () => openEditStudentSheet(schoolClass, student, reload));
   document.getElementById("remove-student-button")?.addEventListener(
     "click",
     guarded(async () => {
@@ -3272,29 +3240,98 @@ async function renderStudentProfile(schoolClass, studentId) {
   );
 }
 
-// O'quvchining yashash manzili va telefon raqami — rahbariyat yoki sinf kuratori kiritadi
-function openStudentContactSheet(schoolClass, student, onSaved) {
+/*
+  O'quvchi ma'lumotlarini tahrirlash — bitta oynada: ism-familiya (maktabning istalgan o'qituvchisi)
+  hamda yashash joyi va telefon (rahbariyat yoki sinf kuratori). Viloyat va tuman — maktab yaratishdagi
+  kabi ro'yxatdan tanlanadi, MFY va ko'cha/uy — yoziladi. Kim nimani o'zgartira olsa, faqat o'sha ko'rinadi.
+*/
+async function openStudentInfoSheet(schoolClass, student, onSaved) {
+  const canName = student.can_edit_name && !schoolClass.is_group;
+  const canContact = student.can_edit_contact;
+  const regions = canContact ? await loadRegions() : [];
+  // Eski erkin matnli manzil (viloyat tanlanmagan) — «Ko'cha, uy» maydonida qoladi, yo'qolib ketmaydi
   const { sheet, close } = openSheet(`
-    <h3 style="margin:0 0 10px">📍 ${escapeHtml(student.full_name)} — ma'lumotlar</h3>
-    <label class="field-label" for="contact-address">Yashash manzili</label>
-    <textarea class="input" id="contact-address" rows="2" maxlength="300"
-              placeholder="Masalan: Toshkent sh., Chilonzor tumani, 9-kvartal, 12-uy">${escapeHtml(student.address || "")}</textarea>
-    <label class="field-label" for="contact-phone">Telefon raqami</label>
-    <input class="input" id="contact-phone" type="tel" inputmode="tel" maxlength="30" placeholder="+998 90 123 45 67"
-           value="${escapeHtml(student.phone ? formatPhone(student.phone) : "")}" />
-    <button class="btn" id="contact-save" style="margin-top:14px">💾 Saqlash</button>
+    <h3 style="margin:0 0 10px">✏️ Ma'lumotlarni tahrirlash</h3>
+    ${
+      canName
+        ? `<label class="field-label" for="info-name">Ism-familiya</label>
+           <input class="input" id="info-name" maxlength="200" value="${escapeHtml(student.full_name)}" />`
+        : ""
+    }
+    ${
+      canContact
+        ? `<p class="section-label" style="margin:14px 0 4px">YASHASH MANZILI</p>
+           <label class="field-label" for="info-region">Viloyat</label>
+           <select id="info-region"><option value="">Viloyatni tanlang</option>${regions
+             .map((region) => `<option value="${escapeHtml(region.name)}">${escapeHtml(region.name)}</option>`)
+             .join("")}</select>
+           <label class="field-label" for="info-district">Tuman / shahar</label>
+           <select id="info-district" disabled><option value="">Avval viloyatni tanlang</option></select>
+           <label class="field-label" for="info-mahalla">MFY (mahalla)</label>
+           <input class="input" id="info-mahalla" maxlength="150" placeholder="Masalan: Yakkatut MFY"
+                  value="${escapeHtml(student.mahalla || "")}" />
+           <label class="field-label" for="info-address">Ko'cha, uy (ixtiyoriy)</label>
+           <input class="input" id="info-address" maxlength="300" placeholder="Masalan: O'zbekiston ko'chasi, 12-uy"
+                  value="${escapeHtml(student.address || "")}" />
+           <p class="section-label" style="margin:14px 0 4px">ALOQA</p>
+           <label class="field-label" for="info-phone">Telefon raqami</label>
+           <input class="input" id="info-phone" type="tel" inputmode="tel" maxlength="30" placeholder="+998 90 123 45 67"
+                  value="${escapeHtml(student.phone ? formatPhone(student.phone) : "")}" />`
+        : ""
+    }
+    <button class="btn" id="info-save" style="margin-top:14px">💾 Saqlash</button>
     <button class="btn btn-ghost" data-sheet-close style="margin-top:8px">Bekor qilish</button>
   `);
-  sheet.querySelector("#contact-save").addEventListener(
+
+  const regionSelect = sheet.querySelector("#info-region");
+  const districtSelect = sheet.querySelector("#info-district");
+  if (regionSelect) {
+    const fillDistricts = (keep = "") => {
+      const region = regions.find((item) => item.name === regionSelect.value);
+      districtSelect.innerHTML =
+        `<option value="">${region ? "Tuman / shaharni tanlang" : "Avval viloyatni tanlang"}</option>` +
+        (region ? region.districts.map((d) => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join("") : "");
+      districtSelect.disabled = !region;
+      if (keep && region?.districts.includes(keep)) districtSelect.value = keep;
+    };
+    if (student.region && regions.some((region) => region.name === student.region)) regionSelect.value = student.region;
+    fillDistricts(student.district || "");
+    regionSelect.addEventListener("change", () => fillDistricts());
+  }
+
+  const value = (id) => sheet.querySelector(id)?.value.trim() || "";
+  sheet.querySelector("#info-save").addEventListener(
     "click",
     guarded(async () => {
-      await api(`/api/classes/${schoolClass.id}/students/${student.id}/contact`, {
-        method: "PUT",
-        body: {
-          address: sheet.querySelector("#contact-address").value.trim() || null,
-          phone: sheet.querySelector("#contact-phone").value.trim() || null,
-        },
-      });
+      const fullName = value("#info-name");
+      if (canName && fullName.length < 2) throw new Error("Ism-familiyani kiriting");
+      if (canContact && value("#info-region") && !value("#info-district")) throw new Error("Tuman / shaharni tanlang");
+      if (canContact && value("#info-phone")) {
+        const digits = value("#info-phone").replace(/\D/g, "");
+        if (!(digits.length === 9 || (digits.length === 12 && digits.startsWith("998"))))
+          throw new Error("Telefon raqam noto'g'ri. Masalan: +998 90 123 45 67");
+      }
+      // Avval manzil va telefon (telefon xato bo'lsa — hech narsa saqlanmaydi), keyin ism
+      if (canContact) {
+        await api(`/api/classes/${schoolClass.id}/students/${student.id}/contact`, {
+          method: "PUT",
+          body: {
+            region: value("#info-region") || null,
+            district: value("#info-district") || null,
+            mahalla: value("#info-mahalla") || null,
+            address: value("#info-address") || null,
+            phone: value("#info-phone") || null,
+          },
+        });
+      }
+      if (canName && fullName !== student.full_name) {
+        await api(`/api/classes/${schoolClass.id}/students/${student.id}`, {
+          method: "PUT",
+          // Tug'ilgan sana bu oynada so'ralmaydi — avval kiritilgan bo'lsa, o'chirib yubormaymiz
+          body: { full_name: fullName, birth_date: student.birth_date || null },
+        });
+        myClassesCache = null;
+      }
       close();
       showToast("✅ Saqlandi");
       await onSaved();
