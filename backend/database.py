@@ -820,6 +820,9 @@ class ClassStudent(Base):
     basket_closed_at: Mapped[datetime | None] = mapped_column(default=None)
     # Boshqa sinfga biriktirilganda — o'sha sinfdagi yangi yozuvi
     reassigned_to_id: Mapped[int | None] = mapped_column(default=None)
+    # O'quvchi ma'lumotlari: yashash manzili va telefon raqami (rahbariyat yoki kurator kiritadi)
+    address: Mapped[str | None] = mapped_column(String(300), default=None)
+    phone: Mapped[str | None] = mapped_column(String(20), default=None)
 
     school_class: Mapped["SchoolClass"] = relationship(back_populates="students")
 
@@ -2007,6 +2010,19 @@ class StudentIn(BaseModel):
         self.full_name = " ".join(self.full_name.split())
         if len(self.full_name) < 2:
             raise ValueError("O'quvchining ism-familiyasini kiriting")
+        return self
+
+
+class StudentContactIn(BaseModel):
+    """O'quvchining yashash manzili va telefon raqami (bo'sh qoldirilsa — o'chiriladi)."""
+
+    address: str | None = Field(None, max_length=300)
+    phone: str | None = Field(None, max_length=30)
+
+    @model_validator(mode="after")
+    def normalize(self) -> "StudentContactIn":
+        self.address = " ".join((self.address or "").split()) or None
+        self.phone = _clean_phone(self.phone)
         return self
 
 

@@ -182,6 +182,7 @@ from .database import (
     SchoolInvite,
     SchoolProfileIn,
     StudentImportIn,
+    StudentContactIn,
     StudentIn,
     StudentsBulkIn,
     SessionLocal,
@@ -298,7 +299,8 @@ def _add_missing_columns() -> None:
                             "deleted_at": "TIMESTAMP", "delete_requested_at": "TIMESTAMP", "verified_at": "TIMESTAMP"},
         "class_students": {"discount_percent": "INTEGER DEFAULT 0", "student_code": "INTEGER", "added_by_user_id": "INTEGER",
                            "source_student_id": "INTEGER", "removed_reason": "TEXT", "removed_by_user_id": "INTEGER",
-                           "basket_closed_at": "TIMESTAMP", "reassigned_to_id": "INTEGER"},
+                           "basket_closed_at": "TIMESTAMP", "reassigned_to_id": "INTEGER",
+                           "address": "VARCHAR(300)", "phone": "VARCHAR(20)"},
         "class_tests": {"source_test_id": "INTEGER"},
         "promo_codes": {"per_teacher_limit": "INTEGER DEFAULT 3"},
         "school_members": {
@@ -13259,6 +13261,26 @@ def edit_student(
     return _class_view(db, school_class, with_details=True, member=member)
 
 
+@app.put("/api/classes/{class_id}/students/{student_id}/contact")
+def edit_student_contact(
+    class_id: int, student_id: int, body: StudentContactIn, user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """O'quvchining yashash manzili va telefon raqami — rahbariyat yoki sinf kuratori yozadi."""
+
+    school_class, member = _school_class(db, user, class_id)
+    student = db.get(ClassStudent, student_id)
+    if not student or student.class_id != school_class.id or student.removed_at is not None:
+        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    if student.source_student_id is not None:
+        raise HTTPException(status_code=422, detail="Ma'lumotlar o'quvchining o'z sinfida tahrirlanadi")
+    if not _can_manage_class(school_class, member):
+        raise HTTPException(status_code=403, detail="Manzil va telefonni rahbariyat yoki sinf kuratori kiritadi")
+    student.address, student.phone = body.address, body.phone
+    db.commit()
+    return {"address": student.address, "phone": student.phone}
+
+
 # O'quvchi holati: maktabda / uyda / ruxsat berilgan (javob) / kasal
 STUDENT_STATUSES = {
     "at_school": ("Maktabda", "🏫"),
@@ -13465,7 +13487,11 @@ def student_profile(class_id: int, student_id: int, user: User = Depends(get_cur
         "class_id": school_class.id,
         "class_name": school_class.name,
         "full_name": student.full_name,
-        "birth_date": student.birth_date,
+        "birth_date": owner.birth_date,
+        # Yashash manzili va telefon — asl (sinfdagi) yozuvdan
+        "address": owner.address,
+        "phone": owner.phone,
+        "can_edit_contact": student.source_student_id is None and _can_manage_class(school_class, member),
         "created_at": student.created_at,
         "added_by": added_by.full_name if added_by else None,
         "removed": student.removed_at is not None,

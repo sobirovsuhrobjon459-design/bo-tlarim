@@ -2054,6 +2054,18 @@ def test_davomat_olish_tahrirlash_va_vaqtlar():
     students = client.get(f"/api/classes/{cid}", headers=as_user(701)).json()["students"]
     assert all("stats" in student for student in students)
 
+    # O'quvchi ma'lumotlari: yashash manzili va telefon (rahbariyat/kurator kiritadi)
+    assert profile["address"] is None and profile["phone"] is None and profile["can_edit_contact"] is True
+    contact_url = f"/api/classes/{cid}/students/{ids['Ali Valiyev']}/contact"
+    saved = client.put(contact_url, json={"address": "  Chilonzor   9-kvartal ", "phone": "90 123 45 67"}, headers=as_user(701))
+    assert saved.status_code == 200, saved.text
+    assert saved.json() == {"address": "Chilonzor 9-kvartal", "phone": "+998901234567"}
+    profile = client.get(f"/api/classes/{cid}/students/{ids['Ali Valiyev']}", headers=as_user(701)).json()
+    assert profile["address"] == "Chilonzor 9-kvartal" and profile["phone"] == "+998901234567"
+    assert client.put(contact_url, json={"phone": "12345"}, headers=as_user(701)).status_code == 422
+    cleared = client.put(contact_url, json={"address": "", "phone": ""}, headers=as_user(701)).json()
+    assert cleared == {"address": None, "phone": None}
+
     # Begona o'qituvchi ko'ra olmaydi
     _set_name(709, "Begona", "Odam")
     assert client.get(f"/api/attendance/{attendance['id']}", headers=as_user(709)).status_code in (403, 404)
