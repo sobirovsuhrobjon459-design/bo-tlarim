@@ -2249,7 +2249,7 @@ function openClassSettings(schoolClass, tab) {
     <select id="sheet-curator">
       <option value="">— ${schoolClass.is_group ? "O'qituvchi" : "Kurator"} tayinlanmagan —</option>
       ${(currentSchool?.members || [])
-        .filter((member) => schoolClass.is_group || member.role !== "owner")
+    
         .map(
           (member) =>
             `<option value="${member.user_id}" ${schoolClass.curator?.user_id === member.user_id ? "selected" : ""}>${escapeHtml(member.name)} — ${subjectsText(member.subjects)}</option>`
