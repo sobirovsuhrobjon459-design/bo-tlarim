@@ -1,7 +1,7 @@
 """
 15-versiya: Milliy sertifikat tituli (2 bet) — chizilishi va skanerlanishi.
 
-Matematika/Fizika/Tarix/Geografiya tuzilishidagi oflayn test (1–32 A–D, 33–35 A–F, 36–45 a/b) imtihondagidek
+Matematika, Fizika, Tarix (shu tuzilishdagi) oflayn testi (1–32 A–D, 33–35 A–F, 36–45 a/b) imtihondagidek
 2 betlik titulda chiqadi: 1-betda ID, variant va 1–35; 2-betda yotqizilgan ID va 36–45 yozish kataklari.
 """
 
@@ -197,6 +197,8 @@ def test_mos_kelmaydigan_test_eski_titulda():
     cases = {
         "boshqa tuzilish": _ms_test(key_questions=_ms_questions()[:30]),
         "onlayn": _ms_test(enrollment_type="open"),
+        # Tuzilishi mos, lekin 2-beti hali tasdiqlanmagan fan
+        "Geografiya": _ms_test(subject="Geografiya"),
         # 33–35 to'rt variantli — imtihon formati emas
         "33-35 A-D": _ms_test(key_questions=[{**q, "option_count": 4, "correct": "A"} if q["number"] in (33, 34, 35) else q
                                              for q in _ms_questions()]),

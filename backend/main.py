@@ -4909,8 +4909,8 @@ def _draw_sheet_brand(sheet, card_bottom: float) -> None:
 
 # ---------- 15-versiya: Milliy sertifikat tituli (2 bet) — imtihondagi "Javoblar varaqasi" ko'rinishida ----------
 #
-# Tuzilishi Milliy sertifikatdagidek oflayn test (Matematika, Fizika, Tarix, Geografiya): 1–32 (A–D),
-# 33–35 (A–F), 36–45 — yozma (a, b). Boshqa testlar (Kimyo, Biologiya, Ona tili, DTM, erkin test) — o'z titulida.
+# Milliy sertifikat tuzilishidagi oflayn test (hozircha Matematika, Fizika, Tarix — MS15_READY_SUBJECTS): 1–32 (A–D),
+# 33–35 (A–F), 36–45 — yozma (a, b). Boshqa testlar (Geografiya, Kimyo, Biologiya, Ona tili, DTM, erkin) — o'z titulida.
 #   1-bet: fan, o'quvchi ID (4 xona), variant, test ma'lumoti; 1–35 doirachalar; diqqat, bo'yash namunasi, F.I.O.;
 #          dalolatnoma (imtihondagidek).
 #   2-bet: o'quvchi ID — 1-betdagi blokning o'zi, chapga 90° burilgan; 36–45 yozish kataklari (ichi och katakchali).
@@ -4933,6 +4933,8 @@ MS15_ID_STEP = 13.6         # ID raqamlari (1 … 9, 0) oralig'i
 MS15_ID_BLOCK = (120.0, 186.0)  # ID bloki (eni, bo'yi) — 2-betda shu blok yotqizilgan
 MS15_SUBJECTS = ("Matematika", "Fizika", "Kimyo", "Biologiya", "Tarix", "Geografiya")
 MS15_WRITTEN = [f"{number}{part}" for number in range(36, 46) for part in "ab"]
+# Titul tayyor (imtihondagi 2-beti tasdiqlangan) fanlar; qolganlari — o'z namunasi kelguncha eski titulda
+MS15_READY_SUBJECTS = {"matematika", "fizika", "tarix"}
 MS15_CELL_SUBJECTS = {"tarix"}  # 2-betda javob katakchalarga harfma-harf yoziladigan fanlar
 MS15_CELL_DIVIDER = colors.HexColor("#F2AE80")  # katakchalar orasidagi chiziq: ko'rinadi, skaner uchun "qog'oz"
 MS15_CELL_NOTE = ("Eslatma: Sh, Ch, Ng tovushlaridagi har bir belgi alohida katakchada, O‘, G‘ tovushlari esa bitta "
@@ -4969,6 +4971,9 @@ def _ms15_plan(test: Test, all_items: list, variants: list[str] | None) -> dict 
 
     if getattr(test, "enrollment_type", None) != "closed" or (variants and len(variants) > 4):
         return None
+    subject = " ".join((test.subject or "").split()).lower()
+    if subject not in MS15_READY_SUBJECTS:
+        return None
     closed = [item for item in all_items if item[1] != "text"]
     written = [item for item in all_items if item[1] == "text"]
     expected = [(str(number), 6 if number >= 33 else 4) for number in range(1, 36)]
@@ -4977,7 +4982,6 @@ def _ms15_plan(test: Test, all_items: list, variants: list[str] | None) -> dict 
     if [item[0] for item in written] != MS15_WRITTEN:
         return None
     layout = _ms15_layout()
-    subject = " ".join((test.subject or "").split()).lower()
     return {"ms15": True, "width": layout["width"], "height": layout["height"], "edge_marks": SHEET_EDGE_MARKS,
             "pages": [closed, written], "column_width": 0.0, "reserved": 0, "layout": layout,
             "style": {"name_area": layout["name_area"]},
