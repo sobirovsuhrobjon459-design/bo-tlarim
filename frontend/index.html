@@ -28,8 +28,11 @@
 
   <!-- Ochilish ekrani: har kirishda kamida 3 soniya ko'rinadi, keyin ilova tayyor bo'lgach so'nib yo'qoladi -->
   <style>
-    /* Brend ochilish ekrani: to'q yashil fon, qush, "Chittak", shior va burchakdagi yashil to'lqinlar */
-    .boot-splash{position:fixed;inset:0;z-index:10000;overflow:hidden;transition:opacity .45s ease;
+    /* Brend ochilish ekrani ("Zinapoya"): to'q yashil fon, to'rtta o'sib chiquvchi pog'ona, qush ulardan
+       sakrab yuqoriga chiqadi (qo'ngan pog'ona yashil yonadi), keyin "Chittak" va shior ko'tariladi.
+       Yopilishda qush uchib ketadi, pog'onalar pasayadi. Mobil ilovadagi ochilish ekrani (main.dart) ham xuddi shunday.
+       --u: telefon kengligining 1% i (keng ekranda 420px telefonga teng qilib cheklangan). */
+    .boot-splash{--u:min(1vw,4.2px);position:fixed;inset:0;z-index:10000;overflow:hidden;transition:opacity .4s ease;
       display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#fff;
       background:radial-gradient(110% 70% at 50% 52%,#0A4537 0%,#05362D 50%,#032B27 100%);
       font-family:"Plus Jakarta Sans",-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -38,22 +41,50 @@
       background:radial-gradient(circle,rgba(0,200,83,.58) 0%,rgba(0,200,83,.22) 34%,rgba(0,200,83,0) 66%);
       animation:boot-glow 1.4s ease-out both, boot-breathe 3.2s ease-in-out 1.4s infinite;pointer-events:none}
     .boot-splash > *{position:relative}
-    .boot-splash .bird{width:min(46vw,190px);height:auto;margin-bottom:6px;filter:drop-shadow(0 18px 26px rgba(0,0,0,.35));
-      animation:boot-drop .9s cubic-bezier(.34,1.56,.64,1) both, boot-float 2.6s ease-in-out .9s infinite}
+    .boot-splash .stairs{width:calc(72 * var(--u));height:calc(62 * var(--u));margin-bottom:calc(7 * var(--u))}
+    .boot-splash .step{position:absolute;bottom:0;left:calc(var(--i) * 18 * var(--u));width:calc(16 * var(--u));
+      height:calc((var(--i) + 1) * 10 * var(--u));border-radius:calc(2.5 * var(--u)) calc(2.5 * var(--u)) 0 0;transform-origin:bottom;
+      background:linear-gradient(180deg,rgba(62,220,126,.6),rgba(0,168,68,.06));
+      animation:boot-grow .55s cubic-bezier(.22,1,.36,1) calc(.05s + var(--i) * .08s) both}
+    /* Qush qo'ngan paytda (--t) pog'ona yonadi */
+    .boot-splash .step::before{content:"";position:absolute;inset:0;border-radius:inherit;opacity:0;
+      background:linear-gradient(180deg,#3EDC7E,rgba(0,168,68,.15));box-shadow:0 0 calc(6 * var(--u)) rgba(62,220,126,.55);
+      animation:boot-lit .35s ease var(--t) forwards}
+    .boot-splash .hopper{position:absolute;left:0;bottom:0;width:calc(18 * var(--u));
+      transform:translate(calc(53 * var(--u)),calc(-40 * var(--u)));animation:boot-hop 1.3s linear .45s both}
+    .boot-splash .hopper img{display:block;width:100%;height:auto;filter:drop-shadow(0 8px 12px rgba(0,0,0,.35))}
+    .boot-splash .words{display:flex;flex-direction:column;align-items:center}
     .boot-splash b{font-size:clamp(38px,11vw,52px);font-weight:800;letter-spacing:-.045em;line-height:1.05;
-      animation:boot-rise .6s cubic-bezier(.22,1,.36,1) .35s both}
+      animation:boot-rise .6s cubic-bezier(.22,1,.36,1) 1.2s both}
     .boot-splash small{margin-top:10px;font-size:clamp(16px,4.6vw,20px);font-weight:700;line-height:1.3;color:#3EDC7E;
-      animation:boot-rise .6s cubic-bezier(.22,1,.36,1) .55s both}
-    .boot-splash .waves{position:absolute!important;right:0;bottom:0;width:min(78vw,420px);height:auto;
-      animation:boot-wave 1s cubic-bezier(.22,1,.36,1) .2s both}
+      animation:boot-rise .6s cubic-bezier(.22,1,.36,1) 1.35s both}
+    .boot-splash.is-leaving .hopper{animation:boot-hop-away .5s cubic-bezier(.5,0,.75,0) forwards}
+    .boot-splash.is-leaving .step{animation:boot-shrink .3s ease-in calc(var(--i) * .04s) forwards}
+    .boot-splash.is-leaving .words{animation:boot-out .3s ease forwards}
     .boot-splash.is-hidden{opacity:0;pointer-events:none}
     @keyframes boot-glow{from{opacity:0;transform:translate(8%,-8%) scale(.85)}to{opacity:1;transform:none}}
     @keyframes boot-breathe{0%,100%{opacity:1}50%{opacity:.72}}
-    @keyframes boot-drop{from{transform:translateY(-38px) scale(.82);opacity:0}to{transform:none;opacity:1}}
-    @keyframes boot-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+    @keyframes boot-grow{from{transform:scaleY(0)}to{transform:none}}
+    @keyframes boot-shrink{to{transform:scaleY(0)}}
+    @keyframes boot-lit{to{opacity:1}}
     @keyframes boot-rise{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
-    @keyframes boot-wave{from{transform:translate(18%,22%);opacity:0}to{transform:none;opacity:1}}
-    @media (prefers-reduced-motion: reduce){.boot-splash *{animation:none!important}}
+    @keyframes boot-out{to{opacity:0}}
+    /* Sakrashlar: har pog'ona markaziga (18u qadam, 10u balandlik) qo'nadi; ko'tarilish ease-out, tushish ease-in */
+    @keyframes boot-hop{
+      0%{transform:translate(calc(-1 * var(--u)),calc(-10 * var(--u))) scale(.3);opacity:0;animation-timing-function:ease-out}
+      12%{transform:translate(calc(-1 * var(--u)),calc(-10 * var(--u)));opacity:1;animation-timing-function:ease-out}
+      20%{transform:translate(calc(8 * var(--u)),calc(-30 * var(--u)));animation-timing-function:ease-in}
+      32%{transform:translate(calc(17 * var(--u)),calc(-20 * var(--u)));animation-timing-function:ease-out}
+      44%{transform:translate(calc(26 * var(--u)),calc(-40 * var(--u)));animation-timing-function:ease-in}
+      56%{transform:translate(calc(35 * var(--u)),calc(-30 * var(--u)));animation-timing-function:ease-out}
+      68%{transform:translate(calc(44 * var(--u)),calc(-50 * var(--u)));animation-timing-function:ease-in}
+      80%{transform:translate(calc(53 * var(--u)),calc(-40 * var(--u)));animation-timing-function:ease-out}
+      88%{transform:translate(calc(53 * var(--u)),calc(-40 * var(--u))) scale(1.12,.86)}
+      100%{transform:translate(calc(53 * var(--u)),calc(-40 * var(--u)));opacity:1}}
+    @keyframes boot-hop-away{
+      from{transform:translate(calc(53 * var(--u)),calc(-40 * var(--u)))}
+      to{transform:translate(calc(110 * var(--u)),calc(-120 * var(--u))) rotate(16deg) scale(.6);opacity:0}}
+    @media (prefers-reduced-motion: reduce){.boot-splash *,.boot-splash *::before,.boot-splash::before{animation:none!important}}
   </style>
 
   <!--
@@ -92,17 +123,17 @@
 </head>
 <body>
   <div class="boot-splash" id="boot-splash" aria-label="Chittak yuklanmoqda">
-    <img class="bird" src="/img/splash-bird.png" alt="" />
-    <b>Chittak</b>
-    <small>Ilg'or ta'lim,<br />tezkor natija</small>
-    <svg class="waves" viewBox="0 0 420 260" aria-hidden="true">
-      <defs>
-        <linearGradient id="boot-w1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0E6B45" /><stop offset="1" stop-color="#0A5A3B" /></linearGradient>
-        <linearGradient id="boot-w2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2FB862" /><stop offset="1" stop-color="#00A844" /></linearGradient>
-      </defs>
-      <path fill="url(#boot-w1)" d="M420 40C330 70 250 120 190 190C160 225 120 250 70 260H420Z" />
-      <path fill="url(#boot-w2)" d="M420 120C350 140 290 180 250 230C240 243 228 253 214 260H420Z" />
-    </svg>
+    <div class="stairs" aria-hidden="true">
+      <span class="step" style="--i:0;--t:.6s"></span>
+      <span class="step" style="--i:1;--t:.87s"></span>
+      <span class="step" style="--i:2;--t:1.18s"></span>
+      <span class="step" style="--i:3;--t:1.49s"></span>
+      <div class="hopper"><img src="/img/splash-bird.png" alt="" /></div>
+    </div>
+    <div class="words">
+      <b>Chittak</b>
+      <small>Ilg'or ta'lim,<br />tezkor natija</small>
+    </div>
   </div>
   <script>
     // Kamida 3 soniya (sahifa ochila boshlagandan) va ilova birinchi sahifani chizgach yopiladi.
@@ -115,8 +146,10 @@
         var ready = document.querySelector("#app .page");
         if ((elapsed >= MIN_MS && ready) || elapsed >= MAX_MS) {
           clearInterval(timer);
-          splash.classList.add("is-hidden");
-          setTimeout(function () { splash.remove(); }, 450);
+          // Avval qush uchib ketadi va pog'onalar pasayadi, keyin ekran so'nadi
+          splash.classList.add("is-leaving");
+          setTimeout(function () { splash.classList.add("is-hidden"); }, 250);
+          setTimeout(function () { splash.remove(); }, 700);
         }
       }, 100);
     })();

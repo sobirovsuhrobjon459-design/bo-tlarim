@@ -244,9 +244,14 @@ class _OfflineView extends StatelessWidget {
 }
 
 
-// Ochilish ekrani — Mini App'dagi bilan bir xil: to'q yashil fon, qush, "Chittak", shior va
-// burchakdagi yashil to'lqinlar. Qush sakrab tushadi, yozuvlar ko'tariladi, to'lqinlar suzib kiradi.
+// Ochilish ekrani ("Zinapoya") — saytdagi (frontend/index.html) bilan bir xil: to'q yashil fon, to'rtta
+// o'sib chiquvchi pog'ona, qush ulardan sakrab yuqoriga chiqadi (qo'ngan pog'ona yashil yonadi), keyin
+// "Chittak" va shior ko'tariladi. Bu yerda yopilishda shunchaki so'nadi: ostida saytdagi xuddi shu ekran
+// turadi va u o'zi qushni uchirib yopiladi (ikkalasi uchsa, qush ikki marta uchib ketgandek ko'rinardi).
 const _splashBg = Color(0xFF033331);
+const _lime = Color(0xFF3EDC7E);
+// CSS'dagi cubic-bezier(.22,1,.36,1)
+const _outQuint = Cubic(0.22, 1, 0.36, 1);
 
 class _SplashView extends StatefulWidget {
   const _SplashView();
@@ -255,34 +260,118 @@ class _SplashView extends StatefulWidget {
   State<_SplashView> createState() => _SplashViewState();
 }
 
+// Qushning bir lahzadagi holati: (x, y) — "u" birligida (ekran kengligining 1% i), sx/sy — cho'zilish
+class _HopKey {
+  const _HopKey(this.t, this.x, this.y, {this.sx = 1, this.sy = 1, this.opacity = 1, this.curve = Curves.linear});
+
+  final double t, x, y, sx, sy, opacity;
+  final Curve curve; // shu nuqtadan keyingisigacha bo'lgan harakat egri chizig'i
+
+  _HopKey lerp(_HopKey b, double t) {
+    final k = curve.transform(((t - this.t) / (b.t - this.t)).clamp(0.0, 1.0));
+    double mix(double p, double q) => p + (q - p) * k;
+    return _HopKey(t, mix(x, b.x), mix(y, b.y), sx: mix(sx, b.sx), sy: mix(sy, b.sy), opacity: mix(opacity, b.opacity));
+  }
+}
+
+// Saytdagi @keyframes boot-hop bilan bir xil: har pog'ona markaziga (18u qadam, 10u balandlik) qo'nadi,
+// ko'tarilish easeOut, tushish easeIn; oxirgi pog'onada bir oz "yassilanadi"
+const _hopKeys = [
+  _HopKey(0, -1, -10, sx: .3, sy: .3, opacity: 0, curve: Curves.easeOut),
+  _HopKey(.12, -1, -10, curve: Curves.easeOut),
+  _HopKey(.20, 8, -30, curve: Curves.easeIn),
+  _HopKey(.32, 17, -20, curve: Curves.easeOut),
+  _HopKey(.44, 26, -40, curve: Curves.easeIn),
+  _HopKey(.56, 35, -30, curve: Curves.easeOut),
+  _HopKey(.68, 44, -50, curve: Curves.easeIn),
+  _HopKey(.80, 53, -40, curve: Curves.easeOut),
+  _HopKey(.88, 53, -40, sx: 1.12, sy: .86),
+  _HopKey(1, 53, -40),
+];
+
+_HopKey _hopAt(double t) {
+  for (var i = 0; i < _hopKeys.length - 1; i++) {
+    if (t <= _hopKeys[i + 1].t) return _hopKeys[i].lerp(_hopKeys[i + 1], t);
+  }
+  return _hopKeys.last;
+}
+
 class _SplashViewState extends State<_SplashView> with TickerProviderStateMixin {
-  late final AnimationController _intro = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))
+  // Butun kirish 1,95 soniya. Quyidagi vaqtlar (ms) saytdagi CSS'dagi delay/duration bilan bir xil.
+  static const _totalMs = 1950;
+  static const _hopStartMs = 450, _hopMs = 1300;
+  static const _litMs = [600, 870, 1180, 1490]; // qush har pog'onaga qo'nadigan payt
+
+  late final AnimationController _intro = AnimationController(vsync: this, duration: const Duration(milliseconds: _totalMs))
     ..forward();
-  late final AnimationController _float = AnimationController(vsync: this, duration: const Duration(milliseconds: 1300))
+  late final AnimationController _breathe = AnimationController(vsync: this, duration: const Duration(milliseconds: 1600))
     ..repeat(reverse: true);
 
   @override
   void dispose() {
     _intro.dispose();
-    _float.dispose();
+    _breathe.dispose();
     super.dispose();
   }
 
-  // Bosqich: [start, end] oralig'ida 0→1 (umumiy 1,2 soniyalik kirish ichida)
-  Animation<double> _step(double start, double end, Curve curve) =>
-      CurvedAnimation(parent: _intro, curve: Interval(start, end, curve: curve));
+  // [startMs, startMs + durMs] oralig'ida 0→1
+  Animation<double> _at(int startMs, int durMs, Curve curve) => CurvedAnimation(
+        parent: _intro,
+        curve: Interval(startMs / _totalMs, ((startMs + durMs) / _totalMs).clamp(0.0, 1.0), curve: curve),
+      );
+
+  Widget _step(int i, double u) {
+    final grow = _at(50 + 80 * i, 550, _outQuint);
+    final lit = _at(_litMs[i], 350, Curves.ease);
+    final radius = BorderRadius.vertical(top: Radius.circular(2.5 * u));
+    return AnimatedBuilder(
+      animation: _intro,
+      builder: (_, _) => Transform(
+        alignment: Alignment.bottomCenter,
+        transform: Matrix4.diagonal3Values(1, grow.value, 1),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: radius,
+                gradient: const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Color(0x993EDC7E), Color(0x0F00A844)],
+                ),
+              ),
+            ),
+            Opacity(
+              opacity: lit.value,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: radius,
+                  gradient: const LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [_lime, Color(0x2600A844)],
+                  ),
+                  boxShadow: [BoxShadow(color: const Color(0x8C3EDC7E), blurRadius: 6 * u)],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    final bird = _step(0.0, 0.75, Curves.elasticOut);
-    final birdFade = _step(0.0, 0.3, Curves.easeOut);
-    final title = _step(0.3, 0.8, Curves.easeOutCubic);
-    final slogan = _step(0.45, 0.95, Curves.easeOutCubic);
-    final waves = _step(0.15, 1.0, Curves.easeOutCubic);
-    final glow = _step(0.0, 1.0, Curves.easeOut);
     final size = MediaQuery.of(context).size;
-    final width = size.width;
+    final u = (size.width < 420 ? size.width : 420) / 100; // saytdagi --u
     final glowSize = size.longestSide * 0.85;
+    final titleSize = (size.width * 0.11).clamp(38.0, 52.0);
+    final sloganSize = (size.width * 0.046).clamp(16.0, 20.0);
+    final glow = _at(0, 1400, Curves.easeOut);
+    final title = _at(1200, 600, _outQuint);
+    final slogan = _at(1350, 600, _outQuint);
 
     Widget rise(Animation<double> a, Widget child) => AnimatedBuilder(
           animation: a,
@@ -308,9 +397,9 @@ class _SplashViewState extends State<_SplashView> with TickerProviderStateMixin 
             right: -glowSize * 0.42,
             top: -glowSize * 0.42,
             child: AnimatedBuilder(
-              animation: Listenable.merge([glow, _float]),
+              animation: Listenable.merge([glow, _breathe]),
               builder: (context, _) => Opacity(
-                opacity: glow.value * (1 - 0.28 * _float.value),
+                opacity: glow.value * (1 - 0.28 * _breathe.value),
                 child: Container(
                   width: glowSize,
                   height: glowSize,
@@ -325,48 +414,72 @@ class _SplashViewState extends State<_SplashView> with TickerProviderStateMixin 
               ),
             ),
           ),
-          Positioned(
-            right: 0,
-            bottom: 0,
-            child: AnimatedBuilder(
-              animation: waves,
-              builder: (_, child) => Opacity(
-                opacity: waves.value,
-                child: Transform.translate(offset: Offset(60 * (1 - waves.value), 50 * (1 - waves.value)), child: child),
-              ),
-              child: CustomPaint(size: Size(width * 0.78, width * 0.78 * 260 / 420), painter: _WavesPainter()),
-            ),
-          ),
           Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                AnimatedBuilder(
-                  animation: Listenable.merge([bird, _float]),
-                  builder: (_, child) => Opacity(
-                    opacity: birdFade.value,
-                    child: Transform.translate(
-                      offset: Offset(0, -38 * (1 - bird.value) - 6 * _float.value),
-                      child: Transform.scale(scale: 0.82 + 0.18 * bird.value, child: child),
-                    ),
+                SizedBox(
+                  width: 72 * u,
+                  height: 62 * u,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      for (var i = 0; i < 4; i++)
+                        Positioned(
+                          left: i * 18 * u,
+                          bottom: 0,
+                          width: 16 * u,
+                          height: (i + 1) * 10 * u,
+                          child: _step(i, u),
+                        ),
+                      Positioned(
+                        left: 0,
+                        bottom: 0,
+                        width: 18 * u,
+                        child: AnimatedBuilder(
+                          animation: _intro,
+                          builder: (_, child) {
+                            final ms = _intro.value * _totalMs;
+                            final k = _hopAt(((ms - _hopStartMs) / _hopMs).clamp(0.0, 1.0));
+                            return Opacity(
+                              opacity: k.opacity.clamp(0.0, 1.0),
+                              child: Transform.translate(
+                                offset: Offset(k.x * u, k.y * u),
+                                child: Transform(
+                                  alignment: Alignment.center,
+                                  transform: Matrix4.diagonal3Values(k.sx, k.sy, 1),
+                                  child: child,
+                                ),
+                              ),
+                            );
+                          },
+                          child: Image.asset('assets/splash_bird.png'),
+                        ),
+                      ),
+                    ],
                   ),
-                  child: Image.asset('assets/splash_bird.png', width: 180),
                 ),
-                const SizedBox(height: 8),
+                SizedBox(height: 7 * u),
                 rise(
                   title,
-                  const Text(
+                  Text(
                     'Chittak',
-                    style: TextStyle(color: Colors.white, fontSize: 46, fontWeight: FontWeight.w800, letterSpacing: -2),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: titleSize,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.045 * titleSize,
+                      height: 1.05,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 10),
                 rise(
                   slogan,
-                  const Text(
+                  Text(
                     "Ilg'or ta'lim,\ntezkor natija",
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: Color(0xFF3EDC7E), fontSize: 19, fontWeight: FontWeight.w700, height: 1.3),
+                    style: TextStyle(color: _lime, fontSize: sloganSize, fontWeight: FontWeight.w700, height: 1.3),
                   ),
                 ),
               ],
@@ -376,34 +489,4 @@ class _SplashViewState extends State<_SplashView> with TickerProviderStateMixin 
       ),
     );
   }
-}
-
-// O'ng pastdagi ikki qavatli yashil to'lqin (Mini App'dagi SVG bilan bir xil shakl, 420x260 o'lchamda chizilgan)
-class _WavesPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    canvas.scale(size.width / 420, size.height / 260);
-    final back = Path()
-      ..moveTo(420, 40)
-      ..cubicTo(330, 70, 250, 120, 190, 190)
-      ..cubicTo(160, 225, 120, 250, 70, 260)
-      ..lineTo(420, 260)
-      ..close();
-    final front = Path()
-      ..moveTo(420, 120)
-      ..cubicTo(350, 140, 290, 180, 250, 230)
-      ..cubicTo(240, 243, 228, 253, 214, 260)
-      ..lineTo(420, 260)
-      ..close();
-    canvas.drawPath(back, Paint()..color = const Color(0xFF0C6340));
-    canvas.drawPath(
-      front,
-      Paint()
-        ..shader = const LinearGradient(colors: [Color(0xFF2FB862), Color(0xFF00A844)])
-            .createShader(const Rect.fromLTWH(214, 120, 206, 140)),
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
