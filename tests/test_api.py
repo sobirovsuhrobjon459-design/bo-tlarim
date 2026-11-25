@@ -5880,7 +5880,7 @@ def test_evalbee_uslubidagi_titul():
     for version, anchor_count, height in ((9, 30, 668), (8, 45, 842)):
         test_id = create_test(enrollment_type="closed", key_questions=questions)["id"]
         with SessionLocal() as session:
-            assert session.get(Test, test_id).sheet_version == 14  # yangi test — eng yangi titul
+            assert session.get(Test, test_id).sheet_version == 15  # yangi test — eng yangi titul
             session.get(Test, test_id).sheet_version = version
             session.commit()
         base = f"/api/teacher/tests/{test_id}"
@@ -6293,7 +6293,7 @@ def test_varaqdagi_oquvchi_raqami_boyicha_taniladi():
                 headers=as_user(555))
     detail = client.get(f"/api/teacher/tests/{test_id}", headers=as_user(555)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1, "Birinchi Bola"), (2, "Ikkinchi Bola")]
-    assert detail["sheet_version"] == 14
+    assert detail["sheet_version"] == 15
 
     url = f"/api/teacher/tests/{test_id}/scan"
     photo = _sheet_photo(test_id, {"id0": "0", "id1": "0", "id2": "0", "id3": "2", 1: "B", 2: "C"})
@@ -6663,7 +6663,7 @@ def test_skaner_natijasi_sinf_natijalariga_yoziladi():
     assert client.post(f"{base}/classes", json={"class_ids": [cid]}, headers=as_user(701)).json() == {"added": 0}
     detail = client.get(base, headers=as_user(701)).json()
     assert [(s["number"], s["name"]) for s in detail["students"]] == [(1001, "Ali Valiyev"), (1002, "Zuhra Karimova")]
-    assert detail["sheet_version"] == 14
+    assert detail["sheet_version"] == 15
 
     # Zuhra (1002) varag'i: 1-savol to'g'ri, 2-savol to'g'ri
     scanned = client.post(f"{base}/scan", json={"image_base64": _sheet_photo(test["id"], {
@@ -7068,7 +7068,7 @@ def test_dtm_ismli_titul_skanerlanadi():
     from backend.database import Test
 
     with SessionLocal() as session:
-        assert session.get(Test, created["id"]).sheet_version == 14  # yangi DTM testi — sertifikat bo'limi bilan
+        assert session.get(Test, created["id"]).sheet_version == 15  # yangi DTM testi — sertifikat bo'limi bilan
 
     for version, grayscale in ((14, False), (14, True), (13, False), (12, False)):
         with SessionLocal() as session:
@@ -7323,7 +7323,7 @@ def _dtm14_scanned_sheet(sections: list[str], marks: set[tuple[str, str]],
     personal = client.get(f"{base}/answer-sheet?personal=true", headers=as_user(701)).content
     with SessionLocal() as session:
         sheet_test = session.get(Test, created["id"])
-        assert sheet_test.sheet_version == 14
+        assert sheet_test.sheet_version == 15
         bubbles: list[dict] = []
         main.generate_answer_sheet_pdf(sheet_test, bubbles=bubbles)
         session.expunge(sheet_test)

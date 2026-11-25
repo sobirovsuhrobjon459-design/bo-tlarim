@@ -14048,6 +14048,18 @@ function mergeScan(scan, collected) {
     merged.match = scan.match;
     merged.sheetNumber = scan.sheet_number;
     merged.numberStatus = scan.sheet_number_status;
+    merged.pageMismatch = null;
+  } else if (scan.sheet_number) {
+    // Milliy sertifikat tituli: 2-betda ham ID bor — betlar aralashmasin (boshqa o'quvchining 2-beti)
+    if (!merged.sheetNumber) {
+      merged.sheetNumber = scan.sheet_number; // 1-betdagi ID o'qilmagan bo'lsa — 2-betdagisi olinadi
+      merged.numberStatus = scan.sheet_number_status;
+      merged.match = merged.match || scan.match;
+    } else if (merged.sheetNumber !== scan.sheet_number) {
+      merged.pageMismatch = { page: scan.page, number: scan.sheet_number };
+    } else {
+      merged.pageMismatch = null;
+    }
   }
   merged.page = scan.page;
   merged.pageCount = scan.page_count;
@@ -15680,6 +15692,13 @@ function renderScanReview(testId, test, scan) {
     </div>
     ${variantChipsHtml(scan.variants, scan.variant || "A")}
     ${scan.variants?.length && !scan.variant ? `<div class="notice">🔀 Varaqdagi variant aniq o'qilmadi — to'g'risini tanlang.</div>` : ""}
+    ${
+      scan.pageMismatch
+        ? `<div class="notice">⚠️ ${scan.pageMismatch.page}-sahifadagi ID — ${String(scan.pageMismatch.number).padStart(4, "0")},
+             1-sahifada esa ${String(scan.sheetNumber).padStart(4, "0")}. Boshqa o'quvchining varag'i bo'lishi mumkin —
+             «🔄 Qaytadan skanerlash» bilan to'g'ri sahifani skanerlang.</div>`
+        : ""
+    }
     ${scanCertificatesHtml(scan.certificates)}
     <p class="subtitle" style="margin:4px 4px 10px">
       ✅ O'qildi: <b>${scan.questions.length - needsCheck.length - empty}</b> ·
@@ -15850,7 +15869,7 @@ function renderScanReview(testId, test, scan) {
 
   // Ketma-ket skanerlash: o'quvchi raqamidan tanildi, shubhali savol yo'q — o'zi saqlanadi
   const variantKnown = !scan.variants?.length || Boolean(scan.variant);
-  if (scan.match?.status === "pending" && !needsCheck.length && !morePages && variantKnown) {
+  if (scan.match?.status === "pending" && !needsCheck.length && !morePages && variantKnown && !scan.pageMismatch) {
     guarded(save)();
   }
 }

@@ -1,0 +1,181 @@
+"""
+15-versiya: Milliy sertifikat tituli (2 bet) — chizilishi va skanerlanishi.
+
+Matematika/Fizika/Tarix/Geografiya tuzilishidagi oflayn test (1–32 A–D, 33–35 A–F, 36–45 a/b) imtihondagidek
+2 betlik titulda chiqadi: 1-betda ID, variant va 1–35; 2-betda yotqizilgan ID va 36–45 yozish kataklari.
+"""
+
+import base64
+import io
+
+from test_api import SessionLocal, as_user, client, create_test, main, register_teacher, reset_database
+
+ZOOM = 2.0
+
+
+def _ms_questions() -> list[dict]:
+    questions = [{"number": n, "question_type": "single", "option_count": 6 if n >= 33 else 4,
+                  "correct": "ABCDEF"[n % (6 if n >= 33 else 4)]} for n in range(1, 36)]
+    number = 36
+    for question in range(36, 46):
+        for part in "ab":
+            questions.append({"number": number, "label": f"{question}{part}", "question_type": "text",
+                              "correct": str(question)})
+            number += 1
+    return questions
+
+
+def _ms_test(**overrides) -> int:
+    body = {"enrollment_type": "closed", "subject": "Matematika", "key_questions": _ms_questions()}
+    body.update(overrides)
+    return create_test(**body)["id"]
+
+
+def _sheet(test_id: int, variants: list[str] | None = None, students: list | None = None) -> tuple[bytes, list[dict]]:
+    from backend.database import Test
+
+    with SessionLocal() as session:
+        test = session.get(Test, test_id)
+        bubbles: list[dict] = []
+        pdf = main.generate_answer_sheet_pdf(test, bubbles=bubbles, variants=variants, students=students)
+    return pdf, bubbles
+
+
+def _photo(pdf: bytes, bubbles: list[dict], page: int, marks: dict, writing: dict | None = None) -> str:
+    """Betning "surati": PDF beti rasmga aylanadi, doirachalar bo'yaladi, kataklarga yoziladi, qiyshaytiriladi."""
+
+    import fitz
+    from PIL import Image, ImageDraw
+
+    rendered = fitz.open(stream=pdf, filetype="pdf")[page - 1].get_pixmap(matrix=fitz.Matrix(ZOOM, ZOOM))
+    image = Image.frombytes("RGB", (rendered.width, rendered.height), rendered.samples)
+    height = image.height / ZOOM
+    draw = ImageDraw.Draw(image)
+    for bubble in bubbles:
+        if bubble["page"] != page or bubble["kind"] in ("mark", "code"):
+            continue
+        cx, cy = bubble["x"] * ZOOM, (height - bubble["y"]) * ZOOM
+        if bubble["kind"] == "write":
+            if bubble["label"] in (writing or {}):
+                draw.text((cx - 20, cy - 10), writing[bubble["label"]], fill=(20, 30, 120), font_size=26)
+            continue
+        if bubble["letter"] in marks.get(bubble["ref"], "").split(","):
+            r = bubble["r"] * ZOOM
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(30, 40, 110))
+    background = Image.new("RGB", (image.width + 300, image.height + 300), (90, 70, 60))
+    background.paste(image.rotate(3, expand=True, fillcolor=(90, 70, 60)), (120, 110))
+    buffer = io.BytesIO()
+    background.save(buffer, "JPEG", quality=85)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+def _id_marks(number: int) -> dict:
+    return {f"id{index}": digit for index, digit in enumerate(f"{number:04d}")}
+
+
+def test_milliy_sertifikat_tituli_ikki_betli():
+    """Yangi oflayn Matematika testi — 15-versiya, titul 2 bet: 1-betda 35 savol, 2-betda 20 ta yozish katagi."""
+
+    import fitz
+
+    from backend.database import Test
+
+    reset_database()
+    register_teacher()
+    test_id = _ms_test()
+    with SessionLocal() as session:
+        assert session.get(Test, test_id).sheet_version == 15
+
+    layout = client.get(f"/api/teacher/tests/{test_id}/scan/layout", headers=as_user(555)).json()
+    assert layout["page_count"] == 2
+    assert layout["sheet_page"]["height"] == main.A4[1] and layout["sheet_page"]["name_box"] is True
+    by_page = {page: [b for b in layout["bubbles"] if b["page"] == page] for page in (1, 2)}
+    questions = {}
+    for bubble in by_page[1]:
+        if bubble["kind"] == "single":
+            questions.setdefault(bubble["ref"], []).append(bubble["letter"])
+    assert len(questions) == 35 and questions[1] == list("ABCD") and questions[35] == list("ABCDEF")
+    for page in (1, 2):  # ID ikkala betda: 4 xona × 10 raqam; burchak/chet belgilari va kod — har betda
+        ids = [b for b in by_page[page] if b["kind"] == "id"]
+        assert len(ids) == 40 and {b["ref"] for b in ids} == {"id0", "id1", "id2", "id3"}
+        assert sum(b["kind"] == "mark" for b in by_page[page]) == 20 and any(b["kind"] == "code" for b in by_page[page])
+    written = [b for b in by_page[2] if b["kind"] == "write"]
+    assert [b["label"] for b in written] == [f"{n}{p}" for n in range(36, 46) for p in "ab"]
+    assert not any(b["kind"] == "write" for b in by_page[1])
+    assert all(b["w"] > 150 and b["h"] > 30 for b in written)  # yozishga yetarli katta
+    # 2-betdagi ID — yotqizilgan: har xona bitta gorizontal qator (1-betda — tik ustun)
+    for page, along in ((1, "y"), (2, "x")):
+        row = [b for b in by_page[page] if b["ref"] == "id0"]
+        assert len({round(b["x" if along == "y" else "y"]) for b in row}) == 1
+
+    pdf = client.get(f"/api/teacher/tests/{test_id}/answer-sheet", headers=as_user(555))
+    pages = fitz.open(stream=pdf.content, filetype="pdf")
+    assert len(pages) == 2
+    first, second = pages[0].get_text(), pages[1].get_text()
+    assert "JAVOBLAR VARAQASI" in first and "MILLIY SERTIFIKAT" in first and "Sinov test" in first
+    assert "DALOLATNOMASI" in first and "36–45: YOZMA JAVOBLAR" in second and "YOZILMASIN" in second
+
+    # Variantli test: 1-betda variant doirachalari (ko'pi bilan 4 ta)
+    _, bubbles = _sheet(test_id, variants=["A", "B", "C"])
+    assert [b["letter"] for b in bubbles if b["kind"] == "variant"] == ["A", "B", "C"]
+    assert all(b["page"] == 1 for b in bubbles if b["kind"] == "variant")
+
+    # Ismli titul: har o'quvchiga 2 bet, ID ikkala betda bo'yalgan
+    pdf, _ = _sheet(test_id, students=[(17, "Aliyev Vali"), (18, "Karimova Zeb")])
+    named = fitz.open(stream=pdf, filetype="pdf")
+    assert len(named) == 4 and "Aliyev Vali" in named[1].get_text() and "Karimova Zeb" in named[2].get_text()
+
+
+def test_milliy_sertifikat_tituli_skanerlanadi():
+    """1-bet: ID, 1–35 javoblar; 2-bet: o'sha ID va yozma kataklar rasmi (yozilgani — bo'sh emas)."""
+
+    from backend.omr import written_is_blank
+
+    reset_database()
+    register_teacher()
+    test_id = _ms_test()
+    pdf, bubbles = _sheet(test_id)
+    base = f"/api/teacher/tests/{test_id}"
+
+    marks = {**_id_marks(1234), 1: "B", 17: "D", 32: "A", 33: "E", 35: "F"}
+    first = client.post(f"{base}/scan", json={"image_base64": _photo(pdf, bubbles, 1, marks), "page": 1},
+                        headers=as_user(555))
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert body["answers"] == {"1": "B", "17": "D", "32": "A", "33": "E", "35": "F"}, body["answers"]
+    assert body["sheet_number"] == 1234 and body["page_count"] == 2 and body["written"] == []
+    assert body["name_image"].startswith("data:image/png")
+
+    photo = _photo(pdf, bubbles, 2, _id_marks(1234), writing={"36a": "2√3", "41b": "-1/2"})
+    second = client.post(f"{base}/scan", json={"image_base64": photo, "page": 2}, headers=as_user(555))
+    assert second.status_code == 200, second.text
+    body = second.json()
+    assert body["sheet_number"] == 1234 and body["answers"] == {}
+    images = {item["label"]: item["image"] for item in body["written"]}
+    assert len(images) == 20
+    assert not written_is_blank(images["36a"]) and not written_is_blank(images["41b"])
+    # Bo'sh katak — katakchalari bo'lsa ham bo'sh deb o'qiladi (AI'ga yuborilmaydi)
+    assert written_is_blank(images["36b"]) and written_is_blank(images["45a"])
+
+
+def test_mos_kelmaydigan_test_eski_titulda():
+    """Tuzilishi boshqa (yoki onlayn) test 15-versiyada ham avvalgi bitta betlik titulda chiqadi."""
+
+    reset_database()
+    register_teacher()
+    cases = {
+        "boshqa tuzilish": _ms_test(key_questions=_ms_questions()[:30]),
+        "onlayn": _ms_test(enrollment_type="open"),
+        # 33–35 to'rt variantli — imtihon formati emas
+        "33-35 A-D": _ms_test(key_questions=[{**q, "option_count": 4, "correct": "A"} if q["number"] in (33, 34, 35) else q
+                                             for q in _ms_questions()]),
+    }
+    for name, test_id in cases.items():
+        _, bubbles = _sheet(test_id)
+        assert max(b["page"] for b in bubbles) == 1, name
+        assert not any(b["kind"] == "write" and b["page"] == 2 for b in bubbles), name
+
+    # 5 tadan ko'p variant — 1-betga sig'maydi: eski titul
+    test_id = _ms_test()
+    _, bubbles = _sheet(test_id, variants=["A", "B", "C", "D", "E"])
+    assert max(b["page"] for b in bubbles) == 1

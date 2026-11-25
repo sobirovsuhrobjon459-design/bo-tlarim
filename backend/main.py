@@ -3860,6 +3860,11 @@ def _evalbee_plan(test: Test, variants: list[str] | None = None, key_override: d
         plan = _dtm13_plan(test, items, variants)
         if plan:
             return plan
+    if (test.sheet_version or 1) >= 15 and not dtm_test:
+        # 15-versiya: Milliy sertifikat tuzilishidagi oflayn test — imtihondagidek 2 betlik titul
+        plan = _ms15_plan(test, all_items, variants)
+        if plan:
+            return plan
     if (test.sheet_version or 1) >= 11 and not dtm_test:
         # Yozma savollar faqat oflayn testda titulga chiziladi (onlayn testda o'quvchi ilovada yozadi).
         # Faqat 12-versiyadan: oldin chop etilgan titullar o'z joylashuvida qoladi
@@ -4902,6 +4907,349 @@ def _draw_sheet_brand(sheet, card_bottom: float) -> None:
     sheet.restoreState()
 
 
+# ---------- 15-versiya: Milliy sertifikat tituli (2 bet) — imtihondagi "Javoblar varaqasi" ko'rinishida ----------
+#
+# Tuzilishi Milliy sertifikatdagidek oflayn test (Matematika, Fizika, Tarix, Geografiya): 1–32 (A–D),
+# 33–35 (A–F), 36–45 — yozma (a, b). Boshqa testlar (Kimyo, Biologiya, Ona tili, DTM, erkin test) — o'z titulida.
+#   1-bet: fan, o'quvchi ID (4 xona), variant, test ma'lumoti; 1–35 doirachalar; diqqat, bo'yash namunasi, F.I.O.;
+#          dalolatnoma (imtihondagidek).
+#   2-bet: o'quvchi ID — 1-betdagi blokning o'zi, chapga 90° burilgan; 36–45 yozish kataklari (ichi och katakchali).
+#          ID ikkala betda: skaner 2-bet qaysi o'quvchiniki ekanini biladi (betlar aralashsa — ogohlantiradi).
+# Chiziq va halqalar — to'q sariq (qora-oqda kulrang: skaner halqalarni ko'radi), doiracha ichidagi harf/raqam —
+# och (skaner uchun "qog'oz"), katakchalar — undan ham och (yozuvga xalaqit bermaydi, katak "bo'sh" deb o'qiladi).
+# Skaner belgilari (burchak va chet kvadratlari, pastki kod) — boshqa titullardagidek qora va o'sha joyda.
+
+MS15_INK = colors.HexColor("#E2691D")
+MS15_LETTER = colors.HexColor("#F6B48A")
+MS15_FAINT = colors.HexColor("#F8D9C4")
+MS15_BANNER = colors.HexColor("#F6B98E")
+MS15_MARGIN = 48.0          # ramka chap/o'ng chetdan va pastdan (chet belgilari ramkadan tashqarida)
+MS15_TOP = 46.0             # ramka tepadan
+MS15_RADIUS = 6.2           # A–D doirachasi
+MS15_WIDE_RADIUS = 5.8      # A–F doirachasi (ustunga sig'ishi uchun biroz kichik)
+MS15_ROW = 29.0             # 1–35 qatorlari oralig'i
+MS15_ID_RADIUS = 5.6
+MS15_ID_STEP = 13.6         # ID raqamlari (1 … 9, 0) oralig'i
+MS15_ID_BLOCK = (120.0, 186.0)  # ID bloki (eni, bo'yi) — 2-betda shu blok yotqizilgan
+MS15_SUBJECTS = ("Matematika", "Fizika", "Kimyo", "Biologiya", "Tarix", "Geografiya")
+MS15_WRITTEN = [f"{number}{part}" for number in range(36, 46) for part in "ab"]
+
+
+def _ms15_layout() -> dict:
+    """Bandlar chegaralari (PDF koordinatasi — pastdan). Chizish va skaner (ism joyi) bir xil o'lchamni ishlatadi."""
+
+    width, height = A4
+    left, right = MS15_MARGIN, width - MS15_MARGIN
+    header = height - MS15_TOP - 40          # sarlavha bandining pastki chizig'i
+    info = header - 200                      # fan | ID | variant | test bandining pastki chizig'i
+    grid_top = info - 10
+    grid = grid_top - (7 * MS15_ROW + 14)    # 1–35
+    notes_top = grid - 10
+    notes = notes_top - 132                  # diqqat | F.I.O.
+    id_band = header - (MS15_ID_BLOCK[0] + 12)  # 2-bet: yotqizilgan ID bloki bandi
+    warn = id_band - 8 - 40                  # 2-bet: "Talabgor diqqatiga" bandi
+    middle = (left + right) / 2
+    return {
+        "width": width, "height": height, "left": left, "right": right, "top": height - MS15_TOP,
+        "bottom": MS15_MARGIN, "header": header, "info": info, "grid_top": grid_top, "grid": grid,
+        "notes_top": notes_top, "notes": notes, "middle": middle, "id_band": id_band, "warn": warn,
+        # Skaner o'qituvchiga ko'rsatadigan ism rasmi (tepadan sanalgan): 1-betdagi F.I.O. qismi
+        "name_area": (middle + 8, height - (notes_top - 24), right - 8, height - (notes + 4)),
+    }
+
+
+def _ms15_plan(test: Test, all_items: list, variants: list[str] | None) -> dict | None:
+    """Milliy sertifikat tuzilishidagi oflayn test uchun 2 betlik titul rejasi; mos kelmasa — None."""
+
+    if getattr(test, "enrollment_type", None) != "closed" or (variants and len(variants) > 4):
+        return None
+    closed = [item for item in all_items if item[1] != "text"]
+    written = [item for item in all_items if item[1] == "text"]
+    expected = [(str(number), 6 if number >= 33 else 4) for number in range(1, 36)]
+    if [(item[0], item[2]) for item in closed] != expected or any(item[1] != "single" for item in closed):
+        return None
+    if [item[0] for item in written] != MS15_WRITTEN:
+        return None
+    layout = _ms15_layout()
+    return {"ms15": True, "width": layout["width"], "height": layout["height"], "edge_marks": SHEET_EDGE_MARKS,
+            "pages": [closed, written], "column_width": 0.0, "reserved": 0, "layout": layout,
+            "style": {"name_area": layout["name_area"]}}
+
+
+def _draw_ms15_card(sheet, test: Test, plan: dict, page: int, with_answers: bool, student: tuple | None,
+                    bubbles: list | None, variants: list[str] | None, key_variant: str | None) -> None:
+    """15-versiya Milliy sertifikat titulining bitta beti (A4, (0, 0) — chap-past burchak)."""
+
+    layout = plan["layout"]
+    width, height = layout["width"], layout["height"]
+    left, right, bottom = layout["left"], layout["right"], layout["bottom"]
+    digits = f"{student[0]:04d}" if student else None
+    student_variant = student[2] if student and len(student) > 2 else None
+
+    def note(item: dict) -> None:
+        if bubbles is not None:
+            bubbles.append({"page": page, **item})
+
+    def text(x: float, y: float, value: str, size: float, font: str | None = None, align: str = "center",
+             color=None, room: float | None = None) -> None:
+        _dtm13_text(sheet, x, y, value, size, font or SHEET_SANS_BOLD, align, color or MS15_INK, room)
+
+    def frame(x: float, y: float, w: float, h: float, radius: float = 0, line: float = 0.9) -> None:
+        sheet.setStrokeColor(MS15_INK)
+        sheet.setLineWidth(line)
+        if radius:
+            sheet.roundRect(x, y, w, h, radius, stroke=1, fill=0)
+        else:
+            sheet.rect(x, y, w, h, stroke=1, fill=0)
+
+    def rule(x1: float, y1: float, x2: float, y2: float) -> None:
+        sheet.setStrokeColor(MS15_INK)
+        sheet.setLineWidth(0.9)
+        sheet.line(x1, y1, x2, y2)
+
+    def bubble(x: float, y: float, label: str, filled: bool = False, radius: float = MS15_RADIUS,
+               size: float = 6.4) -> None:
+        sheet.setStrokeColor(MS15_INK)
+        sheet.setLineWidth(0.8)
+        sheet.setFillColor(colors.black if filled else colors.white)
+        sheet.circle(x, y, radius, stroke=1, fill=1)
+        if label and not filled:
+            sheet.setFillColor(MS15_LETTER)
+            sheet.setFont(SHEET_SANS_BOLD, size)
+            sheet.drawCentredString(x, y - size * 0.36, label)
+
+    def id_block(origin, flat: bool) -> None:
+        """
+        O'quvchi ID bloki: yozuv, 4 ta yozish katagi, ostida har xonaga 1 … 9, 0. flat (2-bet) — chapga 90°
+        burilgan: yozuv va kataklar chapda, raqamlar o'ngga qarab; 1-xona — eng pastki qator.
+        """
+
+        block_width, block_height = MS15_ID_BLOCK
+        x0, y0 = origin
+
+        def place(u: float, v: float) -> tuple[float, float]:  # blok ichidagi nuqta → varaqdagi joyi
+            return (x0 - v, y0 + u) if flat else (x0 + u, y0 + v)
+
+        sheet.saveState()
+        sheet.translate(x0, y0)
+        if flat:
+            sheet.rotate(90)
+        text(block_width / 2, block_height - 12, "O‘quvchi ID raqami", 7.4)
+        for column in range(4):
+            u = block_width / 2 + (column - 1.5) * 22
+            sheet.setStrokeColor(MS15_INK)
+            sheet.setLineWidth(0.9)
+            sheet.setFillColor(colors.white)
+            sheet.rect(u - 9, block_height - 40, 18, 18, stroke=1, fill=1)
+            if digits:
+                text(u, block_height - 35, digits[column], 11, REPORT_FONT_BOLD, color=colors.black)
+            for row, digit in enumerate([1, 2, 3, 4, 5, 6, 7, 8, 9, 0]):  # imtihon varag'idagidek: 1 … 9, 0
+                v = block_height - 54 - row * MS15_ID_STEP
+                bubble(u, v, str(digit), bool(digits) and int(digits[column]) == digit, MS15_ID_RADIUS, 6.2)
+                x, y = place(u, v)
+                note({"ref": f"id{column}", "label": "ID", "kind": "id", "letter": str(digit),
+                      "x": x, "y": y, "r": MS15_ID_RADIUS})
+        sheet.restoreState()
+
+    def name_lines(x1: float, x2: float, first: float, gap: float, captions: list[str]) -> None:
+        if student:
+            text((x1 + x2) / 2, first + 6, student[1][:60], 12, REPORT_FONT_BOLD, color=colors.black,
+                 room=x2 - x1 - 24)
+        for index, caption in enumerate(captions):
+            y = first - index * gap
+            rule(x1 + 12, y, x2 - 12, y)
+            text((x1 + x2) / 2, y - 10, caption, 7.5)
+
+    # Skaner belgilari: burchaklar, chap/o'ng chet belgilari va pastdagi kod (qora)
+    sheet.setFillColor(colors.black)
+    _draw_sheet_marks(sheet, test, width, height, bubbles, page, plan["edge_marks"])
+
+    # Sarlavha: bet raqami, "JAVOBLAR VARAQASI", logo
+    header = layout["header"]
+    frame(left, header, right - left, 40)
+    text(left + 12, header + 11, str(page), 22, REPORT_FONT_BOLD, align="left")
+    text(width / 2, header + 22, "JAVOBLAR VARAQASI", 14, REPORT_FONT_BOLD)
+    text(width / 2, header + 9, "MILLIY SERTIFIKAT" if page == 1 else "36–45: YOZMA JAVOBLAR", 7.2)
+    try:
+        logo_height = 22.0
+        sheet.drawImage(str(SHEET_LOGO), right - 8 - logo_height * SHEET_LOGO_RATIO, header + 9,
+                        logo_height * SHEET_LOGO_RATIO, logo_height, mask="auto")
+    except Exception:
+        logging.getLogger("backend").warning("Milliy sertifikat titul logosi chizilmadi", exc_info=True)
+
+    if page == 1:
+        # 1) Fan | O'quvchi ID | Variant | Test ma'lumoti
+        info = layout["info"]
+        frame(left, info, right - left, header - info)
+        fan_right = left + 118
+        id_right = fan_right + MS15_ID_BLOCK[0]
+        shown_variants = (variants or [])[:4]
+        test_left = id_right + 62 if shown_variants else id_right
+        for x in {fan_right, id_right, test_left}:
+            rule(x, info, x, header)
+        text((left + fan_right) / 2, header - 16, "Test topshiriladigan fan", 7.4)
+        for index, name in enumerate(MS15_SUBJECTS):  # imtihondagidek; skaner o'qimaydi (fan testda ma'lum)
+            y = header - 40 - index * 20
+            bubble(left + 16, y, "")
+            text(left + 28, y - 3, name, 8.5, SHEET_SANS, "left", colors.HexColor("#333333"))
+        id_block((fan_right, header - MS15_ID_BLOCK[1] - 4), flat=False)
+        if shown_variants:
+            middle = (id_right + test_left) / 2
+            text(middle, header - 16, "Variant", 7.4)
+            for index, name in enumerate(shown_variants):
+                y = header - 44 - index * 22
+                bubble(middle, y, name, student_variant == name)
+                note({"ref": "variant", "label": "Variant", "kind": "variant", "letter": name,
+                      "x": middle, "y": y, "r": MS15_RADIUS})
+        middle = (test_left + right) / 2
+        room = right - test_left - 20
+        text(middle, header - 16, "TEST MA'LUMOTI", 7.4)
+        text(middle, header - 52, test.title, 9, REPORT_FONT_BOLD, color=colors.black, room=room)
+        text(middle, header - 68, f"Kod: {test.code}", 7.5, SHEET_SANS, color=REPORT_MUTED, room=room)
+        rule(test_left + 12, header - 140, right - 12, header - 140)
+        text(middle, header - 150, "(Sana)", 7.5)
+
+        # 2) 1–35: 5 ustun × 7 qator; oxirgi ustun kengroq (33–35 — A–F)
+        grid_top, grid = layout["grid_top"], layout["grid"]
+        frame(left, grid, right - left, grid_top - grid)
+        weights = [1, 1, 1, 1, 1.32]
+        unit = (right - left) / sum(weights)
+        column_left = [left + sum(weights[:index]) * unit + 5 for index in range(5)]
+        for index, x in enumerate(column_left):
+            frame(x, grid + 7, weights[index] * unit - 10, grid_top - grid - 14, line=0.7)
+            rule(x + 20, grid + 7, x + 20, grid_top - 7)
+        for index, (label, question_type, options, correct, ref) in enumerate(plan["pages"][0]):
+            x = column_left[index // 7]
+            y = grid_top - 7 - MS15_ROW / 2 - (index % 7) * MS15_ROW
+            text(x + 10, y - 3.2, str(label), 9, REPORT_FONT_BOLD)
+            wide = options > 4
+            pitch, radius = (13.6, MS15_WIDE_RADIUS) if wide else (14.6, MS15_RADIUS)
+            correct_letters = set((correct or "").split(","))
+            for option in range(options):
+                letter = chr(65 + option)
+                option_x = x + 31 + option * pitch
+                bubble(option_x, y, letter, with_answers and letter in correct_letters, radius, 6.0 if wide else 6.4)
+                note({"ref": ref, "label": label, "kind": question_type, "letter": letter,
+                      "x": option_x, "y": y, "r": radius})
+
+        # 3) Diqqat va bo'yash namunasi | F.I.O.
+        notes_top, notes, middle = layout["notes_top"], layout["notes"], layout["middle"]
+        frame(left, notes, right - left, notes_top - notes)
+        rule(middle, notes, middle, notes_top)
+        center = (left + middle) / 2
+        text(center, notes_top - 18, "TALABGOR DIQQATIGA!", 8.4)
+        text(center, notes_top - 36, "SHARIKLI HAVORANG PASTALI RUCHKADAN", 7)
+        text(center, notes_top - 46, "FOYDALANING", 7)
+        text(center, notes_top - 60, "O‘ZGARTIRILGAN JAVOBLAR HISOBGA OLINMAYDI", 7, room=middle - left - 12)
+        sample_x, sample_y = left + 14, notes + 36
+        text(sample_x, sample_y, "DOIRAGA BO‘YASH NAMUNASI", 7.6, align="left")
+        text(sample_x, sample_y - 18, "To‘g‘ri:", 7.2, align="left")
+        text(sample_x + 62, sample_y - 18, "Noto‘g‘ri:", 7.2, align="left")
+        sheet.setStrokeColor(DTM13_PEN)
+        sheet.setFillColor(DTM13_PEN)
+        sheet.circle(sample_x + 42, sample_y - 15.5, 5.4, stroke=0, fill=1)
+        for index in range(4):
+            x, y = sample_x + 116 + index * 16, sample_y - 15.5
+            bubble(x, y, "", radius=5.4)
+            sheet.setStrokeColor(DTM13_PEN)
+            sheet.setFillColor(DTM13_PEN)
+            sheet.setLineWidth(1.1)
+            if index == 0:
+                sheet.circle(x, y, 1.6, stroke=0, fill=1)
+            elif index == 1:
+                sheet.line(x - 3.4, y - 3.4, x + 3.4, y + 3.4)
+                sheet.line(x - 3.4, y + 3.4, x + 3.4, y - 3.4)
+            elif index == 2:
+                sheet.line(x - 3.2, y, x - 0.8, y - 3)
+                sheet.line(x - 0.8, y - 3, x + 3.6, y + 3.6)
+            else:
+                sheet.wedge(x - 5.4, y - 5.4, x + 5.4, y + 5.4, 90, 180, stroke=0, fill=1)
+        text((middle + right) / 2, notes_top - 18, "TALABGOR TOMONIDAN TO‘LDIRILISHI SHART", 7.6,
+             room=right - middle - 12)
+        name_lines(middle, right, notes_top - 52, 32, ["(Familiya)", "(Ismi)", "(Otasining ismi)"])
+
+        # 4) Dalolatnoma — imtihondagidek (nazoratchi, ya'ni o'qituvchi to'ldiradi)
+        act_top = notes - 10
+        frame(left, bottom, right - left, act_top - bottom)
+        sheet.setFillColor(MS15_BANNER)
+        sheet.rect(left, act_top - 16, right - left, 16, stroke=0, fill=1)
+        text(width / 2, act_top - 11.5, "Diqqat! Quyidagi dalolatnoma guruh nazoratchilari tomonidan rasmiylashtiriladi",
+             7.6, SHEET_SANS, color=colors.white)
+        text(width / 2, act_top - 32, "TEST SINOVIDAN CHETLASHTIRISH DALOLATNOMASI", 9, REPORT_FONT_BOLD)
+        for index, caption in enumerate(["(Chetlashtirish vaqti va sababi)", "Guruh nazoratchisi F.I.O. / imzo"]):
+            y = act_top - 56 - index * 26
+            rule(left + 12, y, right - 12, y)
+            text(width / 2, y - 9, caption, 6.8, SHEET_SANS)
+        return
+
+    # ===== 2-bet =====
+    # 1) Yotqizilgan ID bloki (chapda) | F.I.O.
+    id_band = layout["id_band"]
+    frame(left, id_band, right - left, header - id_band)
+    split = left + MS15_ID_BLOCK[1] + 12
+    rule(split, id_band, split, header)
+    id_block((left + 6 + MS15_ID_BLOCK[1], id_band + 6), flat=True)
+    middle = (split + right) / 2
+    text(middle, header - 16, "TALABGOR TOMONIDAN TO‘LDIRILADI", 7.4)
+    text(middle, header - 30, "(ID raqami 1-betdagi bilan bir xil bo‘lsin)", 6.8, SHEET_SANS)
+    name_lines(split, right, header - 66, 40, ["(Familiya)", "(Ismi)"])
+
+    # 2) "Talabgor diqqatiga" | "Diqqat, yozilmasin" (imtihondagidek — tekshiruvchi ustuni)
+    warn, side = layout["warn"], 66
+    frame(left, warn, right - left, 40)
+    rule(right - side, warn, right - side, warn + 40)
+    text((left + right - side) / 2, warn + 23, "TALABGOR DIQQATIGA", 11, REPORT_FONT_BOLD)
+    text((left + right - side) / 2, warn + 9, "O‘ZGARTIRILGAN JAVOBLAR HISOBGA OLINMAYDI", 8, SHEET_SANS)
+    text(right - side / 2, warn + 23, "DIQQAT", 8)
+    text(right - side / 2, warn + 11, "YOZILMASIN", 6.6, SHEET_SANS)
+
+    # 3) 36–45: a) va b) yozish kataklari — skaner rasm qilib qirqadi (AI yoki o'qituvchi o'qiydi)
+    written_top = warn - 8
+    frame(left, bottom, right - left, written_top - bottom)
+    rule(right - side, bottom, right - side, written_top)
+    rule(left + 24, bottom, left + 24, written_top)
+    row = (written_top - bottom) / 10
+    box_width = (right - side - left - 24 - 2 * 22 - 14) / 2
+    box_height = row - 12
+    for index, (label, _, _, _, ref) in enumerate(plan["pages"][1]):
+        line, part = divmod(index, 2)
+        row_bottom = written_top - (line + 1) * row
+        if part == 0:
+            if line:
+                sheet.saveState()
+                sheet.setDash(2, 2)
+                rule(left, row_bottom + row, right, row_bottom + row)
+                sheet.restoreState()
+            text(left + 12, row_bottom + row / 2 - 3.5, label[:-1], 10, REPORT_FONT_BOLD)
+            for mark in range(2):  # tekshiruvchi ustunidagi chiziqchalar
+                x = right - side + 8 + mark * 27
+                rule(x, row_bottom + row / 2 - 4, x + 20, row_bottom + row / 2 - 4)
+        label_x = left + 30 + part * (box_width + 26)
+        text(label_x, row_bottom + row / 2 - 3.5, f"{label[-1]})", 9.5, REPORT_FONT_BOLD, align="left")
+        box_left, box_bottom = label_x + 14, row_bottom + 6
+        # Ichi daftardagidek kvadrat katakchalar (~5 mm) — juda och
+        cells = max(1, round(box_height / 14))
+        size = box_height / cells
+        sheet.saveState()
+        path = sheet.beginPath()
+        path.roundRect(box_left, box_bottom, box_width, box_height, 6)
+        sheet.clipPath(path, stroke=0, fill=0)
+        sheet.setStrokeColor(MS15_FAINT)
+        sheet.setLineWidth(0.5)
+        for step in range(1, cells):
+            sheet.line(box_left, box_bottom + step * size, box_left + box_width, box_bottom + step * size)
+        columns = int(box_width / size)
+        offset = (box_width - columns * size) / 2
+        for step in range(columns + 1):
+            x = box_left + offset + step * size
+            sheet.line(x, box_bottom, x, box_bottom + box_height)
+        sheet.restoreState()
+        frame(box_left, box_bottom, box_width, box_height, radius=6)
+        note({"ref": ref, "label": label, "kind": "write", "letter": "",
+              "x": box_left + box_width / 2, "y": box_bottom + box_height / 2, "w": box_width, "h": box_height,
+              "r": 0})
+
+
 def _draw_compact_sheets(sheet, test: Test, with_answers: bool, bubbles: list | None, students: list | None,
                          variants: list[str] | None, key_override: dict | None, key_variant: str | None) -> None:
     """Ixcham titullar: bitta A4 ga sig'ganicha (ostma-ost, orasida qirqish chizig'i)."""
@@ -4912,6 +5260,8 @@ def _draw_compact_sheets(sheet, test: Test, with_answers: bool, bubbles: list | 
     draw_card = _draw_evalbee_card if version >= 8 else _draw_grid_card if version >= 7 else _draw_compact_card
     if plan.get("dtm13"):
         draw_card = _draw_dtm13_card
+    if plan.get("ms15"):
+        draw_card = _draw_ms15_card
     page_count = len(plan["pages"])
     per_sheet = int(A4[1] // (plan["height"] - 1)) if page_count == 1 and version < 8 else 1
     left = (A4[0] - plan["width"]) / 2  # titul A4 dan tor bo'lsa — o'rtada
