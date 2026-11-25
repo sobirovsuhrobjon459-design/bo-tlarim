@@ -829,6 +829,9 @@ class ClassStudent(Base):
     mahalla: Mapped[str | None] = mapped_column(String(150), default=None)
     address: Mapped[str | None] = mapped_column(String(300), default=None)
     phone: Mapped[str | None] = mapped_column(String(20), default=None)
+    # O'quvchi o'qiydigan sinf raqami (1–11). Fan guruhi / yo'nalish sinfida (masalan "Iqtisod-2")
+    # turli sinf o'quvchilari bo'ladi — ro'yxat (Excel) "Sinf" ustunida shu chiqadi
+    grade: Mapped[int | None] = mapped_column(default=None)
 
     school_class: Mapped["SchoolClass"] = relationship(back_populates="students")
 
@@ -2030,6 +2033,7 @@ class StudentContactIn(BaseModel):
     mahalla: str | None = Field(None, max_length=150)
     address: str | None = Field(None, max_length=300)
     phone: str | None = Field(None, max_length=30)
+    grade: int | None = Field(None, ge=1, le=11)
 
     @model_validator(mode="after")
     def normalize(self) -> "StudentContactIn":
