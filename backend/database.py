@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import BigInteger, ForeignKey, String, Text, UniqueConstraint, case, create_engine, select, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, object_session, relationship, sessionmaker
 
+from .regions import REGIONS, is_valid_location
+
 # ========== 1) Sozlamalar (.env) ==========
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -820,7 +822,11 @@ class ClassStudent(Base):
     basket_closed_at: Mapped[datetime | None] = mapped_column(default=None)
     # Boshqa sinfga biriktirilganda — o'sha sinfdagi yangi yozuvi
     reassigned_to_id: Mapped[int | None] = mapped_column(default=None)
-    # O'quvchi ma'lumotlari: yashash manzili va telefon raqami (rahbariyat yoki kurator kiritadi)
+    # O'quvchi ma'lumotlari (rahbariyat yoki kurator kiritadi): yashash joyi — viloyat, tuman/shahar
+    # (regions.py ro'yxatidan), MFY va ko'cha/uy (erkin matn) — hamda telefon raqami
+    region: Mapped[str | None] = mapped_column(String(100), default=None)
+    district: Mapped[str | None] = mapped_column(String(100), default=None)
+    mahalla: Mapped[str | None] = mapped_column(String(150), default=None)
     address: Mapped[str | None] = mapped_column(String(300), default=None)
     phone: Mapped[str | None] = mapped_column(String(20), default=None)
 
@@ -2014,14 +2020,26 @@ class StudentIn(BaseModel):
 
 
 class StudentContactIn(BaseModel):
-    """O'quvchining yashash manzili va telefon raqami (bo'sh qoldirilsa — o'chiriladi)."""
+    """
+    O'quvchining yashash joyi (viloyat, tuman/shahar, MFY, ko'cha/uy) va telefon raqami.
+    Bo'sh qoldirilgan maydon o'chiriladi. Tuman tanlangan viloyatniki bo'lishi shart.
+    """
 
+    region: str | None = Field(None, max_length=100)
+    district: str | None = Field(None, max_length=100)
+    mahalla: str | None = Field(None, max_length=150)
     address: str | None = Field(None, max_length=300)
     phone: str | None = Field(None, max_length=30)
 
     @model_validator(mode="after")
     def normalize(self) -> "StudentContactIn":
-        self.address = " ".join((self.address or "").split()) or None
+        clean = lambda value: " ".join((value or "").split()) or None  # noqa: E731
+        self.region, self.district = clean(self.region), clean(self.district)
+        self.mahalla, self.address = clean(self.mahalla), clean(self.address)
+        if self.region and self.region not in REGIONS:
+            raise ValueError("Viloyat ro'yxatdan tanlansin")
+        if self.district and not (self.region and is_valid_location(self.region, self.district)):
+            raise ValueError("Tuman / shahar tanlangan viloyatdan bo'lsin")
         self.phone = _clean_phone(self.phone)
         return self
 
