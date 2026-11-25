@@ -5513,6 +5513,8 @@ function renderPupilPassword({ oldPassword = "", forced = false } = {}) {
   );
 }
 
+let pupilProfileTab = "info"; // o'quvchi kabinetida ochiq tab (qaytib kelganda o'sha tab turadi)
+
 async function renderPupilHome() {
   let me;
   try {
@@ -5582,48 +5584,96 @@ async function renderPupilHome() {
         .join("")
     : `<p class="subtitle">Dars jadvali hali tuzilmagan.</p>`;
 
-  showPage(`
-    ${
-      pupilIsRoot()
-        ? `<div class="page-header"><h2 style="margin:0;flex:1">🏫 Maktabim</h2></div>`
-        : `<div class="page-header">
-             <button class="back-button" type="button" data-action="pupil-back" style="margin:0">←</button>
-             <h2 style="margin:0;flex:1">🏫 Maktabim</h2>
-           </div>`
-    }
-    <section class="hero-card">
-      <div class="hero-who">
-        <div class="hero-hello">${escapeHtml(me.name)}</div>
-        <div class="hero-chips">
-          <span class="hero-chip is-sun">${escapeHtml(me.class_name)}</span>
-          <span class="hero-chip">${escapeHtml(me.school_name)}</span>
-          ${me.code ? `<span class="hero-chip">ID ${me.code}</span>` : ""}
-        </div>
-      </div>
-    </section>
+  // Ma'lumotlar — xodimlar ko'radigan o'quvchi sahifasidagidek (renderStudentProfile), faqat o'qish uchun
+  const placeParts = [me.region, me.district].filter(Boolean);
+  const placeMain = placeParts.length ? placeParts.join(", ") : me.mahalla || me.address || "";
+  const placeExtra = placeParts.length ? [me.mahalla, me.address].filter(Boolean).join(", ") : me.mahalla ? me.address || "" : "";
+  const missing = `<b class="subtitle" style="margin:0;font-weight:600">Kiritilmagan</b>`;
+  const dorm = me.dorm;
+  const dormBody = dorm
+    ? `<b>${dorm.building ? `${escapeHtml(dorm.building)} · ` : ""}${escapeHtml(dorm.room)}-xona</b>
+       <small>${dorm.floor !== null && dorm.floor !== undefined ? `${dorm.floor}-qavat · ` : ""}${
+         dorm.warden ? `Tarbiyachi: ${escapeHtml(dorm.warden)}` : "Tarbiyachi tayinlanmagan"
+       }</small>`
+    : `<b>Yotoqxonada emas</b><small>Xonaga joylashtirilmagan</small>`;
+  const pay = me.payments;
+  const payBody = pay
+    ? pay.monthly_fee
+      ? `<b class="${pay.total_debt > 0 ? "is-debt" : "is-ok"}">${pay.total_debt > 0 ? `Qarz: ${money(pay.total_debt)}` : "Qarzi yo'q ✅"}</b>
+         <small>${pay.current ? `${escapeHtml(pay.current.label)}: ${
+           pay.current.status === "paid" ? "to'langan" : pay.current.status === "partial" ? `qisman, qoldi ${money(pay.current.remaining)}` : `to'lanmagan (${money(pay.current.due)})`
+         }` : ""}${pay.discount ? ` · chegirma ${pay.discount}%` : ""}</small>`
+      : `<b>Oylik to'lov belgilanmagan</b>`
+    : "";
+  const card = (icon, kicker, body) => `
+    <div class="hub-card" style="cursor:default">
+      <span class="hub-icon">${icon}</span>
+      <span class="hub-text"><small class="hub-kicker">${kicker}</small>${body}</span>
+    </div>`;
+  const infoHtml = `
+    <div class="student-hub" style="margin-top:0">
+      ${card("📍", "YASHASH MANZILI", placeMain ? `<b>${escapeHtml(placeMain)}</b>${placeExtra ? `<small>${escapeHtml(placeExtra)}</small>` : ""}` : missing)}
+      ${card("📞", "TELEFON RAQAMI", me.phone ? `<b>${escapeHtml(formatPhone(me.phone))}</b>` : missing)}
+      ${me.birth_date ? card("🎂", "TUG'ILGAN SANA", `<b>${plainDate(me.birth_date)}</b>`) : ""}
+      ${me.grade ? card("🎓", "O'QIYDIGAN SINFI", `<b>${me.grade}-sinf</b>`) : ""}
+    </div>
+    <p class="subtitle" style="margin:8px 2px 0">Ma'lumot xato bo'lsa — sinf kuratoriga ayting.</p>
+    <div class="student-hub">
+      ${card("📚", "SINF", `<b>${escapeHtml(me.class_name)}</b><small>${me.curator ? `Kurator: ${escapeHtml(me.curator)}` : "Kurator tayinlanmagan"}</small>`)}
+      ${card("🛏", "YOTOQXONA", dormBody)}
+      ${pay ? card("💳", "TO'LOV", payBody) : ""}
+    </div>
+    <p class="section-label" style="margin-top:18px">DARS JADVALI</p>
+    ${scheduleHtml}`;
+
+  const resultsPanelHtml = `
     <div class="stats-grid">
-      <div class="stat-tile"><span class="stat-value">${stats.rate === null ? "—" : `${stats.rate}%`}</span>Davomat</div>
       <div class="stat-tile"><span class="stat-value">${rating.rank ? `${rating.rank}-o'rin` : "—"}</span>Sinfda${rating.rank ? ` (${rating.class_size} ta)` : ""}</div>
       <div class="stat-tile"><span class="stat-value">${rating.avg === null ? "—" : `${rating.avg}%`}</span>O'rtacha natija</div>
     </div>
     ${
       rating.rank
         ? `<p class="subtitle" style="margin:8px 0 0">🏆 Reyting sinfning ${rating.test_count} ta test va sinov natijasi bo'yicha
-             (o'rtacha foiz). Sinf o'rtachasi: <b>${rating.class_avg}%</b>${me.curator ? ` · Kurator: ${escapeHtml(me.curator)}` : ""}</p>`
-        : me.curator
-          ? `<p class="subtitle" style="margin:8px 0 0">Kurator: ${escapeHtml(me.curator)}</p>`
-          : ""
+             (o'rtacha foiz). Sinf o'rtachasi: <b>${rating.class_avg}%</b></p>`
+        : ""
     }
+    <p class="section-label" style="margin-top:14px">NATIJALAR (${me.results.length})</p>
+    <div class="panel" style="padding:4px 0">${resultsHtml}</div>`;
 
-    <p class="section-label" style="margin-top:18px">DAVOMAT — ${stats.total} TA DARS</p>
+  const attendancePanelHtml = `
     ${attendanceCountsHtml(stats)}
-    <div class="panel" style="padding:4px 0;margin-top:8px">${historyHtml}</div>
+    <p class="section-label" style="margin-top:14px">DARSLAR TARIXI (${stats.total})</p>
+    <div class="panel" style="padding:4px 0">${historyHtml}</div>`;
 
-    <p class="section-label" style="margin-top:18px">NATIJALAR</p>
-    <div class="panel" style="padding:4px 0">${resultsHtml}</div>
+  const tab = pupilProfileTab;
+  showPage(`
+    ${
+      pupilIsRoot()
+        ? `<div class="page-header"><h2 style="margin:0;flex:1">${escapeHtml(me.name)}</h2></div>`
+        : `<div class="page-header">
+             <button class="back-button" type="button" data-action="pupil-back" style="margin:0">←</button>
+             <h2 style="margin:0;flex:1">${escapeHtml(me.name)}</h2>
+           </div>`
+    }
+    <div class="card student-hero" style="cursor:default">
+      <span class="student-avatar" style="width:56px;height:56px;font-size:20px">${initials(me.name)}</span>
+      <div class="card-body" style="width:100%">
+        <h3 style="margin:0">${escapeHtml(me.name)}</h3>
+        <p style="margin:4px 0 0">📚 ${escapeHtml(me.class_name)}${me.code ? ` · 🆔 ID: <b>${me.code}</b>` : ""}</p>
+        ${me.status ? `<div style="margin-top:6px">${studentStatusChip(me.status)}</div>` : ""}
+        ${me.status?.note ? `<p class="subtitle" style="margin:4px 0 0">💬 ${escapeHtml(me.status.note)}</p>` : ""}
+      </div>
+      ${rateBadge(stats)}
+    </div>
 
-    <p class="section-label" style="margin-top:18px">DARS JADVALI</p>
-    ${scheduleHtml}
+    <div class="tabs student-tabs" style="margin-top:14px">
+      <button class="tab ${tab === "info" ? "active" : ""}" data-pupil-tab="info">Ma'lumotlar</button>
+      <button class="tab ${tab === "results" ? "active" : ""}" data-pupil-tab="results">Natijalar</button>
+      <button class="tab ${tab === "attendance" ? "active" : ""}" data-pupil-tab="attendance">Davomat</button>
+    </div>
+    <div data-pupil-panel="info" ${tab === "info" ? "" : "hidden"}>${infoHtml}</div>
+    <div data-pupil-panel="results" ${tab === "results" ? "" : "hidden"}>${resultsPanelHtml}</div>
+    <div data-pupil-panel="attendance" ${tab === "attendance" ? "" : "hidden"}>${attendancePanelHtml}</div>
 
     <div class="row-between" style="gap:8px;margin-top:20px">
       <button class="btn btn-ghost" id="pupil-change-password" style="margin:0">🔑 Parolni o'zgartirish</button>
@@ -5632,6 +5682,14 @@ async function renderPupilHome() {
     <p class="subtitle" style="text-align:center;margin-top:10px;font-size:13px">Login: ${escapeHtml(me.login)}</p>
   `, { exitRoot: pupilIsRoot() });
 
+  // Tab almashganda faqat panel ko'rinishi o'zgaradi — ma'lumotlar allaqachon yuklangan
+  document.querySelectorAll("[data-pupil-tab]").forEach((button) =>
+    button.addEventListener("click", () => {
+      pupilProfileTab = button.dataset.pupilTab;
+      document.querySelectorAll("[data-pupil-tab]").forEach((item) => item.classList.toggle("active", item === button));
+      document.querySelectorAll("[data-pupil-panel]").forEach((panel) => (panel.hidden = panel.dataset.pupilPanel !== pupilProfileTab));
+    })
+  );
   document.querySelector('[data-action="pupil-back"]')?.addEventListener("click", guarded(pupilBack));
   document.getElementById("pupil-change-password").addEventListener("click", () => renderPupilPassword());
   document.getElementById("pupil-logout").addEventListener(

@@ -17027,6 +17027,18 @@ def pupil_home(pupil=Depends(get_current_pupil), db: Session = Depends(get_db)):
         "class_name": school_class.name,
         "school_name": school.name if school else "",
         "curator": curator.full_name if curator else None,
+        # Profil — xodimlar ko'radigan o'quvchi sahifasidagidek (faqat o'qish uchun): ma'lumotlar, holat,
+        # yotoqxona va to'lov (ota-ona qarzni ko'radi)
+        "birth_date": student.birth_date,
+        "region": student.region,
+        "district": student.district,
+        "mahalla": student.mahalla,
+        "address": student.address,
+        "phone": student.phone,
+        "grade": student.grade,
+        "status": _status_view(db, _current_statuses(db, [student.id]).get(student.id)),
+        "dorm": _student_dorm_view(db, student),
+        "payments": _student_payment_summary(db, school_class, student) if not school_class.subject else None,
         "attendance": {
             "stats": stats,
             "history": [{"taken_at": taken_at, "subject": subject, "status": status} for taken_at, subject, status in history],
