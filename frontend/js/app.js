@@ -2248,13 +2248,22 @@ function openClassSettings(schoolClass, tab) {
     }</label>
     <select id="sheet-curator">
       <option value="">— ${schoolClass.is_group ? "O'qituvchi" : "Kurator"} tayinlanmagan —</option>
-      ${(currentSchool?.members || [])
-    
-        .map(
+      ${(() => {
+        // Maktab admini ham kurator bo'la oladi (server ruxsat beradi). Avval admin ro'yxatdan
+        // chiqarib tashlanardi — admin kurator bo'lgan sinfda "tayinlanmagan" ko'rinib,
+        // "Saqlash" bosilganda kurator jimgina olib tashlanardi.
+        const members = currentSchool?.members || [];
+        const curatorId = schoolClass.curator?.user_id ?? null;
+        const options = members.map(
           (member) =>
-            `<option value="${member.user_id}" ${schoolClass.curator?.user_id === member.user_id ? "selected" : ""}>${escapeHtml(member.name)} — ${subjectsText(member.subjects)}</option>`
-        )
-        .join("")}
+            `<option value="${member.user_id}" ${Number(curatorId) === Number(member.user_id) ? "selected" : ""}>${escapeHtml(member.name)} — ${subjectsText(member.subjects)}</option>`
+        );
+        // Joriy kurator ro'yxatda topilmasa ham tanlangan holda ko'rsatiladi — saqlashda yo'qolmasin
+        if (curatorId !== null && !members.some((member) => Number(member.user_id) === Number(curatorId))) {
+          options.unshift(`<option value="${curatorId}" selected>${escapeHtml(schoolClass.curator?.name || "Joriy kurator")}</option>`);
+        }
+        return options.join("");
+      })()}
     </select>
     <p class="subtitle" style="margin:4px 0 0">${
       schoolClass.is_group
