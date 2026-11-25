@@ -242,6 +242,53 @@ def test_ona_tili_tituli_esse_bilan():
     assert max(b["page"] for b in bubbles) == 2
 
 
+def test_biologiya_kimyo_tituli_yozma_ish_betlari():
+    """Biologiya/Kimyo: 2-bet — 36–40; 41, 42, 43 — har biri bet: band javoblari qatori + yechim rasmi."""
+
+    import fitz
+
+    from backend.database import Attempt
+    from backend.omr import written_is_blank
+    from test_api import _subject_key
+
+    reset_database()
+    register_teacher()
+    test_id = _ms_test(subject="Biologiya", key_questions=_subject_key("Biologiya"))
+    pdf, bubbles = _sheet(test_id)
+    pages = fitz.open(stream=pdf, filetype="pdf")
+    assert len(pages) == 5
+    assert "Namuna" in pages[1].get_text() and "41: YOZMA ISH" in pages[2].get_text()
+    labels = {page: [b["label"] for b in bubbles if b["kind"] == "write" and b["page"] == page] for page in range(1, 6)}
+    assert labels == {1: [], 2: ["36", "37", "38", "39", "40"], 3: ["41.1", "41.2", "41.3", "41.4"],
+                      4: ["42.1", "42.2", "42.3", "42.4", "42.5"], 5: ["43.1", "43.2", "43.3"]}
+    solutions = [(b["page"], b["ref"], b["letter"]) for b in bubbles if b["kind"] == "page_image"]
+    assert solutions == [(3, "solution", "3"), (4, "solution", "4"), (5, "solution", "5")]
+
+    base = f"/api/teacher/tests/{test_id}"
+    photo = _photo(pdf, bubbles, 3, {}, writing={"41.2": "FOTOSINTEZ"})
+    body = client.post(f"{base}/scan", json={"image_base64": photo, "page": 3}, headers=as_user(555)).json()
+    images = {item["label"]: item["image"] for item in body["written"]}
+    assert len(images) == 4 and not written_is_blank(images["41.2"]) and written_is_blank(images["41.1"])
+    assert [(item["ref"], item["page"]) for item in body["page_images"]] == [("solution", 3)]
+
+    saved = client.post(f"{base}/scan/save", headers=as_user(555), json={
+        "name": "Karimov Anvar", "answers": {"1": "A"},
+        "page_images": [{"ref": "solution", "page": 3, "image": body["page_images"][0]["image"]}],
+    })
+    assert saved.status_code == 200, saved.text
+    with SessionLocal() as session:
+        attempt_id = session.query(Attempt).filter_by(offline_name="Karimov Anvar").one().id
+    detail = client.get(f"{base}/students/{attempt_id}/detail", headers=as_user(555)).json()
+    assert detail["solution_photos"] == 1
+    photos = client.get(f"{base}/students/{attempt_id}/sheet/photos", headers=as_user(555)).json()
+    assert [page["page"] for page in photos["pages"]] == [3]
+
+    # Kimyo ham shunday (bandlar soni boshqa: 3, 3, 3)
+    _, bubbles = _sheet(_ms_test(subject="Kimyo", key_questions=_subject_key("Kimyo")))
+    assert max(b["page"] for b in bubbles) == 5
+    assert [b["label"] for b in bubbles if b["kind"] == "write" and b["page"] == 3] == ["41.1", "41.2", "41.3"]
+
+
 def test_mos_kelmaydigan_test_eski_titulda():
     """Tuzilishi boshqa (yoki onlayn) test 15-versiyada ham avvalgi bitta betlik titulda chiqadi."""
 

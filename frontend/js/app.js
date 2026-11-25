@@ -17295,6 +17295,11 @@ async function renderStudentDetail(testId, attemptId) {
           }${written.map(writtenCard).join("")}`
         : ""
     }
+    ${
+      detail.solution_photos
+        ? `<button type="button" class="btn btn-ghost" id="solution-photos-button" style="margin:0 0 8px">🧾 Yozma ish yechimi — titul rasmi (${detail.solution_photos} bet)</button>`
+        : ""
+    }
     ${detail.essay ? essayGradingHtml(detail.essay) : ""}
     ${
       canEdit
@@ -17485,6 +17490,12 @@ async function renderStudentDetail(testId, attemptId) {
     ?.addEventListener(
       "click",
       guarded(() => openSheetImages(`/api/teacher/tests/${testId}/students/${attemptId}/essay/photos`, "📄 Qo'lda yozilgan esse"))
+    );
+  document
+    .getElementById("solution-photos-button")
+    ?.addEventListener(
+      "click",
+      guarded(() => openSheetImages(`/api/teacher/tests/${testId}/students/${attemptId}/sheet/photos`, "🧾 Yozma ish yechimi"))
     );
 }
 
