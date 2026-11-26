@@ -64,6 +64,8 @@ from sqlalchemy import String, case, cast, delete, distinct, event, func, inspec
 from sqlalchemy.orm import Session, defer, object_session, selectinload
 
 from . import keymath
+from .barcode import BAR_HEIGHT as BARCODE_HEIGHT, MODULE as BARCODE_MODULE, modules as barcode_modules
+from .barcode import parse_sheet_value, sheet_value as barcode_value
 from .memory import MEMORY_WARN_MB, limit_malloc_arenas, release_memory, rss_mb, storage_report
 from .rasch import grade_for, rasch_scores
 from .timetable import ClassInput, Period, TeacherInput, build_timetable
@@ -5140,6 +5142,28 @@ def _draw_ms15_card(sheet, test: Test, plan: dict, page: int, with_answers: bool
     except Exception:
         logging.getLogger("backend").warning("Milliy sertifikat titul logosi chizilmadi", exc_info=True)
 
+    # Shtrix-kod (EAN-13): o'quvchi ID (ismli titulda), bet raqami, test raqami — betlar aralashsa ham skaner har
+    # betni o'z egasiga yig'adi va betni o'zi aniqlaydi. Sarlavhadagi bo'sh joyda: boshqa narsaga tegmaydi
+    number = student[0] if student else 0
+    bars = barcode_modules(barcode_value(number, page, getattr(test, "id", 0) or 0))
+    bar_left, bar_bottom = left + 34, header + 13
+    sheet.setFillColor(colors.black)
+    run_start = None
+    for index, bit in enumerate(bars + "0"):
+        if bit == "1" and run_start is None:
+            run_start = index
+        elif bit == "0" and run_start is not None:
+            sheet.rect(bar_left + run_start * BARCODE_MODULE, bar_bottom, (index - run_start) * BARCODE_MODULE,
+                       BARCODE_HEIGHT, stroke=0, fill=1)
+            run_start = None
+    total = len(plan["pages"])
+    text(bar_left + len(bars) * BARCODE_MODULE / 2, header + 4.5,
+         f"ID {number:04d} · {page}/{total}-bet" if number else f"{page}/{total}-bet", 6.2,
+         color=colors.black)
+    note({"ref": "barcode", "label": "Shtrix-kod", "kind": "barcode", "letter": "",
+          "x": bar_left, "y": bar_bottom + BARCODE_HEIGHT / 2, "w": len(bars) * BARCODE_MODULE, "h": BARCODE_HEIGHT,
+          "r": 0})
+
     if page == 1:
         # 1) Fan | O'quvchi ID | Variant | Test ma'lumoti
         info = layout["info"]
@@ -9842,16 +9866,33 @@ def scan_sheet(
             old_result = scan_answer_sheet(image, old_bubbles, page=1, prepared=prepared)
             if old_result["sheet_number_status"] == "ok":
                 result = old_result
+        page, code = body.page, result.get("barcode")
+        if code:
+            # Shtrix-kodli titul (Milliy sertifikat): boshqa testning varag'i aralashib qolmasin
+            if code["test"] != test.id % 100000:
+                raise HTTPException(status_code=422, detail="Bu varaq boshqa testning titulidan — shtrix-kodi mos emas")
+            if code["page"] != page and 1 <= code["page"] <= page_count:
+                # Betlar aralash skanerlanadi: qaysi bet ekani shtrix-koddan bilinadi — o'sha bet bo'yicha o'qiladi
+                page = code["page"]
+                result = scan_answer_sheet(image, bubbles, page=page, prepared=prepared, sheet=shape)
+            _apply_sheet_barcode(result, code)
     except ScanError as error:
         raise HTTPException(status_code=422, detail=str(error))
-    if result["sheet_code"] is None and any(b["kind"] == "code" and b["page"] == body.page for b in bubbles):
+    if result["sheet_code"] is None and any(b["kind"] == "code" and b["page"] == page for b in bubbles):
         # Imtihon kodi kataklari bor, lekin o'qilmadi — varaq to'liq yoki to'g'ri ko'rinmagan (masalan bir qismi
         # kadrdan chiqib ketgan). Bunday suratdan javob o'qilsa, ular xato bo'lishi mumkin — qayta suratga olinadi
         raise HTTPException(
             status_code=422,
             detail="Varaq to'liq ko'rinmadi — titulning 4 ta burchagi kadrda bo'lsin, tekis va yorug' joyda qayta suratga oling",
         )
-    return _scan_response(db, teacher, test, result, body.page, variants, page_count)
+    return _scan_response(db, teacher, test, result, page, variants, page_count)
+
+
+def _apply_sheet_barcode(result: dict, code: dict) -> None:
+    """Ismli titulning shtrix-kodidagi ID — bo'yalgan doirachalardan ustun (oldindan bosilgan, xato bo'lmaydi)."""
+
+    if code.get("number"):
+        result["sheet_number"], result["sheet_number_status"] = code["number"], "ok"
 
 
 def _sheet_layout(test: Test, db: Session, page: int = 1) -> tuple[list[str], list[dict], int]:
@@ -9970,6 +10011,8 @@ def scan_layout(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
         "sheet_page": _sheet_geometry(test, variants),
         "page_count": page_count,
         "sheet_code": sheet_code(test),
+        # Shtrix-kodli titulda (Milliy sertifikat) — kod ichidagi test raqami: boshqa testning varag'i o'qilmaydi
+        "test_code": test.id % 100000,
         # Natija ekranida doirachalarni ranglash uchun (yashil — to'g'ri, qizil — xato, sariq — to'g'ri javob)
         "keys": {name: _sheet_key(db, test, name) for name in (variants or ["A"])},
     }

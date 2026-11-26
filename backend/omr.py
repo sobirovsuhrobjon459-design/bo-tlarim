@@ -614,7 +614,7 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
     # Har savol qatori (va raqam/variant qatori) chop etilgan halqalari bo'yicha tekislanadi
     rows: dict = {}
     for bubble in page_bubbles:
-        if bubble["kind"] not in ("mark", "code", "anchor", "write"):
+        if bubble["kind"] not in ("mark", "code", "anchor", "write", "page_image", "barcode"):
             rows.setdefault(bubble["ref"], []).append(bubble)
     # Qatorlar ustun bo'yicha tepadan pastga: har biri eng yaqin tekislangan qatorning
     # siljishidan boshlab qidiriladi — qog'oz silliq egiladi, kuchli bo'rtish ham "kuzatiladi"
@@ -633,8 +633,14 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
 
     written = []
     page_images = []
+    barcode = None
     for bubble in page_bubbles:
         if bubble["kind"] in ("mark", "anchor"):
+            continue
+        if bubble["kind"] == "barcode":
+            # Shtrix-kod: chap cheti (x) va o'rtasi (y) — tekislangan varaqdagi joyi chet belgilari bo'yicha
+            left, middle = corrected(bubble["x"], sheet.height - bubble["y"])
+            barcode = read_sheet_barcode(warped, left, middle, bubble["w"], bubble["h"])
             continue
         # PDF koordinatasi pastdan, rasm esa tepadan sanaladi
         x, y = placed(bubble)
@@ -736,7 +742,7 @@ def scan_answer_sheet(data: bytes, bubbles: list[dict], page: int = 1,
 
     return {"answers": answers, "questions": result, "name_image": name_image, "certificates": certificates,
             "sheet_number": sheet_number, "sheet_number_status": number_status, "variant": variant,
-            "sheet_code": sheet_code, "written": written, "page_images": page_images}
+            "sheet_code": sheet_code, "written": written, "page_images": page_images, "barcode": barcode}
 
 
 CERT_BALL_MAX = 75.0  # Milliy sertifikatning eng katta bali
@@ -777,6 +783,41 @@ def read_certificates(cert_rows: dict, cert_balls: dict, cert_levels: dict) -> l
         value = f"lang:{filled[0]}" if len(filled) == 1 else ("unclear" if filled else None)
         certificates.append({"index": key, "label": group["label"], "kind": "lang", "value": value})
     return sorted(certificates, key=lambda item: int(item["index"].split("-")[0]))
+
+
+def read_sheet_barcode(warped: np.ndarray, left: float, middle: float, width: float, height: float) -> dict | None:
+    """
+    Titul sarlavhasidagi EAN-13 shtrix-kod (joyi va modul eni ma'lum): bir necha gorizontal chiziq bo'ylab har
+    modul o'rtasi o'lchanadi; qog'oz siljigani / cho'zilgani uchun ozgina siljish va masshtab bilan qidiriladi.
+    Nazorat raqami to'g'ri kelgan birinchi o'qish olinadi. Natija: {"number", "page", "test"} yoki None.
+    """
+
+    from .barcode import MODULES, decode, parse_sheet_value
+
+    gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    module = width / MODULES
+    margin = 6.0  # pt — qidiriladigan siljish
+    x1 = max(0, round((left - margin) * SCALE))
+    x2 = min(gray.shape[1], round((left + width + margin) * SCALE))
+    for dy in (0.0, -0.22, 0.22):
+        top = round((middle + dy * height - 0.18 * height) * SCALE)
+        bottom = round((middle + dy * height + 0.18 * height) * SCALE)
+        if top < 0 or bottom > gray.shape[0] or bottom - top < 2 or x2 - x1 < 10:
+            continue
+        profile = gray[top:bottom, x1:x2].mean(axis=0)
+        positions = np.arange(x1, x2) / SCALE
+        for stretch in (1.0, 0.985, 1.015, 0.97, 1.03):
+            centers = (np.arange(MODULES) + 0.5) * module * stretch
+            for shift in np.arange(-margin, margin + 0.01, 0.25):
+                values = np.interp(left + shift + centers, positions, profile)
+                low, high = float(values.min()), float(values.max())
+                if high - low < 40:
+                    break  # bu chiziqda kod yo'q (yoki juda xira)
+                bits = "".join("1" if value < (low + high) / 2 else "0" for value in values)
+                found = parse_sheet_value(decode(bits))
+                if found:
+                    return found
+    return None
 
 
 WRITTEN_MARGIN = 3.0  # yozma katak atrofidan qo'shib olinadigan joy (pt): chetga chiqqan yozuv ham kirsin

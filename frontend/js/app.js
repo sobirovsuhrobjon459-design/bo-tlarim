@@ -14015,7 +14015,15 @@ async function scanSheetFromPhoto(testId, test, page = 1, collected = null) {
   showToast("⏳ Varaq o'qilmoqda…");
   const image = await shrinkPhoto(file);
   try {
-    renderScanReview(testId, test, await readSheetImage(testId, image, page, collected));
+    const raw = await api(`/api/teacher/tests/${testId}/scan`, { method: "POST", body: { image_base64: image, page } });
+    const { merged, complete, number } = collectScanPage(testId, raw, collected);
+    if (!complete) {
+      // Ko'p betli titul: o'quvchining boshqa betlari hali yo'q — keyingi varaq skanerlanadi
+      showToast(`🧾 ID ${String(number).padStart(4, "0")} — ${merged.pagesDone.length}/${merged.pageCount} bet olindi`);
+      await scanSheetPage(testId, test);
+      return;
+    }
+    renderScanReview(testId, test, merged);
   } catch (error) {
     if (!isOfflineError(error) || page !== 1) throw error;
     await queueSheet(testId, image);
@@ -14105,10 +14113,11 @@ function mergeScan(scan, collected) {
   if (scan.page === 1) {
     merged.certificates = scan.certificates?.length ? scan.certificates : null;
     merged.variants = scan.variants || [];
-    merged.variant = scan.variant || scan.match?.variant || null;
-    merged.match = scan.match;
-    merged.sheetNumber = scan.sheet_number;
-    merged.numberStatus = scan.sheet_number_status;
+    merged.variant = scan.variant || scan.match?.variant || merged.match?.variant || null;
+    // Aralash skanerlashda 1-bet keyin kelishi mumkin — oldingi betlardan olingan ID/o'quvchi yo'qolmasin
+    merged.match = scan.match || merged.match || null;
+    merged.sheetNumber = scan.sheet_number || merged.sheetNumber || null;
+    merged.numberStatus = scan.sheet_number ? scan.sheet_number_status : merged.numberStatus || scan.sheet_number_status;
     merged.pageMismatch = null;
   } else if (scan.sheet_number) {
     // Milliy sertifikat tituli: 2-betda ham ID bor — betlar aralashmasin (boshqa o'quvchining 2-beti)
@@ -14122,9 +14131,56 @@ function mergeScan(scan, collected) {
       merged.pageMismatch = null;
     }
   }
+  if (!merged.variants && scan.variants) merged.variants = scan.variants;
   merged.page = scan.page;
   merged.pageCount = scan.page_count;
+  merged.pagesDone = [...new Set([...(merged.pagesDone || []), scan.page])].sort((a, b) => a - b);
   return merged;
+}
+
+/*
+  Aralash skanerlash (shtrix-kodli ko'p betli titul — Milliy sertifikat): betlar istalgan tartibda keladi.
+  Har bet o'quvchisi (ID) bo'yicha yig'iladi; hamma betlari to'lganda tekshiruv ekrani ochiladi.
+  To'lmaganlar shu yerda kutadi: { testId, sheets: Map(ID → yig'ilgan natija), last: oxirgi ID }.
+*/
+let scanPile = null;
+
+function scanPileOf(testId) {
+  if (!scanPile || scanPile.testId !== testId) scanPile = { testId, sheets: new Map(), last: null };
+  return scanPile;
+}
+
+// Kutayotgan (to'liq bo'lmagan) o'quvchilar — skaner ekranida ko'rsatiladi
+function scanPileHtml(testId) {
+  if (!scanPile || scanPile.testId !== testId || !scanPile.sheets.size) return "";
+  const items = [...scanPile.sheets.entries()]
+    .map(([number, merged]) => `ID ${String(number).padStart(4, "0")} — ${merged.pagesDone.length}/${merged.pageCount}`)
+    .join(" · ");
+  return `<p class="subtitle" id="scan-pile" style="text-align:center;margin:0 0 8px">⏳ Betlari to'planmoqda: ${escapeHtml(items)}</p>`;
+}
+
+// Skanerlangan bet: shtrix-kodli ko'p betli titulda — o'quvchisi bo'yicha yig'iladi; aks holda avvalgidek
+// (ketma-ket: 1-bet, keyin 2-bet …). Natija: { merged, complete } — complete bo'lsa tekshiruv ekrani ochiladi
+function collectScanPage(testId, scan, collected) {
+  if ((scan.page_count || 1) <= 1 || !scan.barcode) return { merged: mergeScan(scan, collected), complete: true };
+  const pile = scanPileOf(testId);
+  // Bo'sh titulning ID'siz beti (esse, yechim) — hozirgina skanerlangan o'quvchiniki deb olinadi
+  const number = scan.sheet_number || (pile.last && !pile.sheets.get(pile.last)?.pagesDone.includes(scan.page) ? pile.last : null);
+  if (!number) return { merged: mergeScan(scan, collected), complete: true };
+  const base = pile.sheets.get(number) || (collected?.sheetNumber === number ? collected : null);
+  const merged = mergeScan(scan, base);
+  if (!merged.sheetNumber) merged.sheetNumber = number;
+  const complete = merged.pagesDone.length >= (merged.pageCount || 1);
+  if (complete) {
+    pile.sheets.delete(number);
+    if (pile.last === number) pile.last = null;
+  } else {
+    // Xotira tejaladi: bet ko'rinishlari (tekislangan rasm) kutayotganlarda saqlanmaydi
+    delete merged.sheetViews;
+    pile.sheets.set(number, merged);
+    pile.last = number;
+  }
+  return { merged, complete, number };
 }
 
 /* ---------- Jonli skaner: kamerani varaqqa tutish kifoya ---------- */
@@ -14820,6 +14876,96 @@ function interpolateOffset(points, y) {
   return [0, 0];
 }
 
+/*
+  Milliy sertifikat titulining shtrix-kodi (EAN-13, sarlavhada): "2" + o'quvchi ID (4) + bet (2) + test (5) + nazorat.
+  Joyi va modul eni titul tuzilishidan ma'lum — bir necha gorizontal chiziqda har modul o'rtasi o'lchanadi, ozgina
+  siljish va cho'zilish bilan qidiriladi (serverdagi omr.read_sheet_barcode bilan bir xil). Worker ichida ham
+  ishlaydi — hamma jadval shu funksiya ichida. Natija: { number, page, test } yoki null.
+*/
+function readSheetBarcode(sheet, bubbles) {
+  const box = bubbles.find((bubble) => bubble.kind === "barcode");
+  if (!box) return null;
+  const L = ["0001101", "0011001", "0010011", "0111101", "0100011", "0110001", "0101111", "0111011", "0110111", "0001011"];
+  const R = L.map((code) => [...code].map((bit) => (bit === "0" ? "1" : "0")).join(""));
+  const G = R.map((code) => [...code].reverse().join(""));
+  const PARITY = ["LLLLLL", "LLGLGG", "LLGGLG", "LLGGGL", "LGLLGG", "LGGLLG", "LGGGLL", "LGLGLG", "LGLGGL", "LGGLGL"];
+  const checkDigit = (digits) => {
+    let total = 0;
+    for (let i = 0; i < 12; i += 1) total += Number(digits[i]) * (i % 2 ? 3 : 1);
+    return (10 - (total % 10)) % 10;
+  };
+  const decode = (bits) => {
+    if (bits.slice(0, 3) !== "101" || bits.slice(45, 50) !== "01010" || bits.slice(92) !== "101") return null;
+    let digits = "";
+    let parity = "";
+    for (let i = 0; i < 6; i += 1) {
+      const chunk = bits.slice(3 + i * 7, 10 + i * 7);
+      if (L.includes(chunk)) {
+        digits += L.indexOf(chunk);
+        parity += "L";
+      } else if (G.includes(chunk)) {
+        digits += G.indexOf(chunk);
+        parity += "G";
+      } else return null;
+    }
+    if (!PARITY.includes(parity)) return null;
+    for (let i = 0; i < 6; i += 1) {
+      const chunk = bits.slice(50 + i * 7, 57 + i * 7);
+      if (!R.includes(chunk)) return null;
+      digits += R.indexOf(chunk);
+    }
+    const value = PARITY.indexOf(parity) + digits;
+    if (checkDigit(value) !== Number(value[12]) || value[0] !== "2" || !Number(value.slice(5, 7))) return null;
+    return { number: Number(value.slice(1, 5)), page: Number(value.slice(5, 7)), test: Number(value.slice(7, 12)) };
+  };
+
+  const MODULES = 95;
+  const module = box.w / MODULES;
+  const left = box.x;
+  const middle = SHEET_PAGE.height - box.y;
+  const margin = 6;
+  const x1 = Math.max(0, Math.round((left - margin) * READ_SCALE));
+  const x2 = Math.min(sheet.W, Math.round((left + box.w + margin) * READ_SCALE));
+  for (const dy of [0, -0.22, 0.22]) {
+    const top = Math.round((middle + dy * box.h - 0.18 * box.h) * READ_SCALE);
+    const bottom = Math.round((middle + dy * box.h + 0.18 * box.h) * READ_SCALE);
+    if (top < 0 || bottom > sheet.H || bottom - top < 2 || x2 - x1 < 10) continue;
+    // Ustunlar bo'yicha o'rtacha yorqinlik (profil)
+    const profile = new Float32Array(x2 - x1);
+    for (let x = x1; x < x2; x += 1) {
+      let sum = 0;
+      for (let y = top; y < bottom; y += 1) sum += sheet.warped[y * sheet.W + x];
+      profile[x - x1] = sum / (bottom - top);
+    }
+    const at = (pt) => {
+      const position = pt * READ_SCALE - x1;
+      const index = Math.floor(position);
+      if (index < 0) return profile[0];
+      if (index >= profile.length - 1) return profile[profile.length - 1];
+      const t = position - index;
+      return profile[index] * (1 - t) + profile[index + 1] * t;
+    };
+    for (const stretch of [1, 0.985, 1.015, 0.97, 1.03]) {
+      for (let shift = -margin; shift <= margin + 0.01; shift += 0.25) {
+        const values = [];
+        let low = Infinity;
+        let high = -Infinity;
+        for (let i = 0; i < MODULES; i += 1) {
+          const value = at(left + shift + (i + 0.5) * module * stretch);
+          values.push(value);
+          low = Math.min(low, value);
+          high = Math.max(high, value);
+        }
+        if (high - low < 40) break;
+        const threshold = (low + high) / 2;
+        const found = decode(values.map((value) => (value < threshold ? "1" : "0")).join(""));
+        if (found) return found;
+      }
+    }
+  }
+  return null;
+}
+
 // Tayyorlangan varaqdan javoblarni o'qish (doirachalar joyi — serverdan olingan titul tuzilishi)
 function readSheetAnswers(sheet, bubbles, page = 1) {
   const pageBubbles = bubbles.filter((bubble) => bubble.page === page);
@@ -14866,7 +15012,7 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
   // Har savol qatori chop etilgan halqalari ustiga moslanadi (ustun bo'yicha tepadan pastga)
   const rows = new Map();
   for (const bubble of pageBubbles) {
-    if (["mark", "code", "anchor", "write", "page_image"].includes(bubble.kind)) continue;
+    if (["mark", "code", "anchor", "write", "page_image", "barcode"].includes(bubble.kind)) continue;
     if (!rows.has(bubble.ref)) rows.set(bubble.ref, []);
     rows.get(bubble.ref).push(bubble);
   }
@@ -14914,7 +15060,7 @@ function readSheetAnswers(sheet, bubbles, page = 1) {
   const written = []; // yozma javob kataklari: varaqdagi joyi (punktlarda) — rasm qilib qirqiladi
   const pageImages = []; // Milliy sertifikat tituli: esse / yechim beti — butunligicha rasm
   for (const bubble of pageBubbles) {
-    if (bubble.kind === "mark" || bubble.kind === "anchor") continue;
+    if (bubble.kind === "mark" || bubble.kind === "anchor" || bubble.kind === "barcode") continue;
     const [x, y] = placed(bubble);
     if (bubble.kind === "page_image") {
       pageImages.push({ ref: bubble.ref, label: bubble.label, page: Number(bubble.letter), x, y, w: bubble.w, h: bubble.h });
@@ -15083,11 +15229,26 @@ function analyzeFrame(source, sourceWidth, sourceHeight, options) {
   );
   const sheet = prepareSheetFrame(gray, fullWidth, fullHeight, full);
   if (!sheet) return answer;
-  let result = readSheetAnswers(sheet, options.layout.bubbles, options.page);
-  if (options.page === 1 && options.layout.old_bubbles && result.sheet_number_status !== "ok") {
+  // Shtrix-kodli titul (Milliy sertifikat): qaysi bet ekani va (ismli titulda) kimniki ekani koddan bilinadi —
+  // betlar istalgan tartibda skanerlanadi. Boshqa testning varag'i — o'qilmaydi
+  const code = readSheetBarcode(sheet, options.layout.bubbles);
+  if (code && options.layout.test_code !== undefined && code.test !== options.layout.test_code) {
+    answer.wrongTest = true;
+    return answer;
+  }
+  const page = code && code.page >= 1 && code.page <= (options.layout.page_count || 1) ? code.page : options.page;
+  let result = readSheetAnswers(sheet, options.layout.bubbles, page);
+  if (page === 1 && options.layout.old_bubbles && result.sheet_number_status !== "ok") {
     // Oldin chop etilgan 3 xonali ID'li titul
     const old = readSheetAnswers(sheet, options.layout.old_bubbles, 1);
     if (old.sheet_number_status === "ok") result = old;
+  }
+  result.page = page;
+  result.barcode = code;
+  if (code?.number) {
+    // Ismli titul: ID oldindan bosilgan — bo'yalgan doirachalardan ustun
+    result.sheet_number = code.number;
+    result.sheet_number_status = "ok";
   }
   // Natija ekraniga faqat tekislangan kulrang varaq kerak
   answer.read = { result, sheet: { W: sheet.W, H: sheet.H, warped: sheet.warped } };
@@ -15122,6 +15283,7 @@ function createScanWorker() {
       edgeMarkOffsets,
       locateMark,
       interpolateOffset,
+      readSheetBarcode,
       readSheetAnswers,
       readSheetCertificates,
       analyzeFrame,
@@ -15404,6 +15566,7 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     </div>
     <p class="live-status" id="live-status">📷 Kamera ochilmoqda…</p>
     ${liveSession?.count ? `<p class="subtitle" style="text-align:center;margin:0 0 8px">✅ Skanerlandi: <b>${liveSession.count}</b> ta varaq</p>` : ""}
+    <div id="scan-pile-host">${scanPileHtml(testId)}</div>
     <button class="btn btn-ghost" id="live-photo">🖼 Galereyadan / oddiy surat</button>
   `);
 
@@ -15489,13 +15652,22 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
 
   // Telefonda o'qilgan natija: serverni kutmaydi — o'quvchi ID bo'yicha saqlangan ro'yxatdan topiladi,
   // javoblar saqlangan kalit bilan tekshiriladi. Saqlash navbat orqali (internet bo'lmasa ham)
+  // Ko'p betli titulning beti o'quvchisiga yig'ildi, lekin hali hamma betlari yo'q — kamera keyingi varaqni kutadi
+  const keepCollecting = (merged, number) => {
+    waitForNewSheet = true;
+    const pile = document.getElementById("scan-pile-host");
+    if (pile) pile.innerHTML = scanPileHtml(testId);
+    resume(`🧾 ID ${String(number).padStart(4, "0")} — ${merged.pagesDone.length}/${merged.pageCount} bet olindi. Keyingi varaqni qo'ying`);
+  };
+
   const accept = async ({ result, sheet }) => {
     busy = true;
     clearInterval(liveTimer);
+    const readPage = result.page || page; // shtrix-kodli titulda — betning o'zi aytadi
     const signature = result.sheet_number
       ? `#${result.sheet_number}`
       : result.questions.map((question) => question.chosen || "-").join("");
-    if (page === 1 && liveSession?.lastSignature && signature === liveSession.lastSignature) {
+    if (readPage === 1 && liveSession?.lastSignature && signature === liveSession.lastSignature) {
       waitForNewSheet = true;
       resume("✅ Bu varaq saqlangan — keyingisini qo'ying");
       return;
@@ -15507,23 +15679,27 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
       highlights: undefined,
       written: sheetWrittenImages(sheet, result.written),
       page_images: sheetWrittenImages(sheet, result.page_images),
-      name_image: page === 1 && SHEET_PAGE.nameBox ? sheetNameImage(sheet) : null,
-      match: page === 1 ? localSheetMatch(layout, result.sheet_number) : null,
+      name_image: readPage === 1 && SHEET_PAGE.nameBox ? sheetNameImage(sheet) : null,
+      match: result.sheet_number ? localSheetMatch(layout, result.sheet_number) : null,
       variants: layout.variants || [],
-      page,
+      page: readPage,
       page_count: layout.page_count,
       pending_students: (layout.students || [])
         .filter((student) => student.status === "pending")
         .map(({ id, name }) => ({ id, name })),
     };
-    stopLiveScan();
     liveSession = liveSession || { count: 0 };
-    const merged = mergeScan(scan, collected);
+    const { merged, complete, number } = collectScanPage(testId, scan, collected);
     merged.live = true;
     merged.local = true;
+    if (!complete) {
+      keepCollecting(merged, number);
+      return;
+    }
+    stopLiveScan();
     merged.sheetViews = {
       ...(merged.sheetViews || {}),
-      [page]: { sheet, positions: result.positions, highlights: result.highlights },
+      [readPage]: { sheet, positions: result.positions, highlights: result.highlights },
     };
     renderScanReview(testId, test, merged);
   };
@@ -15535,8 +15711,13 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     status.textContent = "⏳ Varaq o'qilmoqda…";
     const image = snapshot();
     try {
-      const scan = await readSheetImage(testId, image, page, collected);
-      if (page === 1 && liveSession?.lastSignature && sheetSignature(scan) === liveSession.lastSignature) {
+      const raw = await api(`/api/teacher/tests/${testId}/scan`, { method: "POST", body: { image_base64: image, page } });
+      const { merged: scan, complete, number } = collectScanPage(testId, raw, collected);
+      if (!complete) {
+        keepCollecting(scan, number);
+        return;
+      }
+      if (raw.page === 1 && liveSession?.lastSignature && sheetSignature(scan) === liveSession.lastSignature) {
         // Hozirgina saqlangan varaq — qayta o'qilmaydi
         status.textContent = "✅ Bu varaq saqlangan — keyingisini qo'ying";
         waitForNewSheet = true;
@@ -15626,7 +15807,11 @@ async function startLiveScan(testId, test, page = 1, collected = null) {
     };
   }
 
-  const handle = ({ width, height, corners, read }) => {
+  const handle = ({ width, height, corners, read, wrongTest }) => {
+    if (wrongTest) {
+      status.textContent = "⚠️ Bu varaq boshqa testning titulidan (shtrix-kodi mos emas) — chetga oling";
+      return;
+    }
     // Topilgan burchaklar videoning ustida ko'rsatiladi
     overlay.width = video.clientWidth;
     overlay.height = video.clientHeight;
@@ -15698,7 +15883,10 @@ const SCAN_STATUS_NOTE = {
 function renderScanReview(testId, test, scan) {
   const needsCheck = scan.questions.filter((question) => question.status === "multiple" || question.status === "unsure");
   const empty = scan.questions.filter((question) => question.status === "empty").length;
-  const morePages = scan.page < scan.pageCount;
+  // Ko'p betli titul: hali skanerlanmagan betlar (aralash skanerlashda tartib boshqacha bo'lishi mumkin)
+  const donePages = scan.pagesDone || Array.from({ length: scan.page || 1 }, (_, index) => index + 1);
+  const missingPages = Array.from({ length: scan.pageCount || 1 }, (_, index) => index + 1).filter((page) => !donePages.includes(page));
+  const morePages = missingPages.length > 0;
 
   const questionRow = (question) => {
     const chosen = new Set((question.chosen || "").split(",").filter(Boolean));
@@ -15740,7 +15928,7 @@ function renderScanReview(testId, test, scan) {
     <!-- Amallar — rasmning darhol tagida; o'quvchi ma'lumoti (ism, ID) undan pastda -->
     ${
       morePages
-        ? `<button class="btn" id="scan-next-page" style="margin-top:4px">📷 ${scan.page + 1}-sahifani skanerlash</button>`
+        ? `<button class="btn" id="scan-next-page" style="margin-top:4px">📷 ${missingPages[0]}-sahifani skanerlash</button>`
         : `<button class="btn" id="scan-save" style="margin-top:4px">✅ Qabul qilish — keyingi titul</button>`
     }
     <button class="btn btn-ghost" id="scan-retake">🔄 Qaytadan skanerlash</button>
@@ -15777,7 +15965,7 @@ function renderScanReview(testId, test, scan) {
     <p class="subtitle" style="margin:4px 4px 10px">
       ✅ O'qildi: <b>${scan.questions.length - needsCheck.length - empty}</b> ·
       ⚠️ Tekshiring: <b>${needsCheck.length}</b> · ⬜ Bo'sh: <b>${empty}</b>
-      ${scan.pageCount > 1 ? ` · 📄 ${scan.page}/${scan.pageCount}-sahifa` : ""}
+      ${scan.pageCount > 1 ? ` · 📄 ${donePages.length}/${scan.pageCount} bet` : ""}
     </p>
     ${needsCheck.length ? `<div class="notice">Sariq qatorlarni varaqqa qarab tuzating: harfni bosing (qayta bosilsa — bekor).</div>` : ""}
     ${needsCheck.length ? `<div class="panel answer-sheet">${needsCheck.map(questionRow).join("")}</div>` : ""}
@@ -15916,7 +16104,7 @@ function renderScanReview(testId, test, scan) {
       await scanSheetPage(testId, test);
     })
   );
-  document.getElementById("scan-next-page")?.addEventListener("click", guarded(() => scanSheetPage(testId, test, scan.page + 1, scan)));
+  document.getElementById("scan-next-page")?.addEventListener("click", guarded(() => scanSheetPage(testId, test, missingPages[0], scan)));
   // next — o'qituvchi «Qabul qilish» ni bosdi: saqlanib, darhol keyingi titulga o'tiladi
   const save = async (next = false) => {
     // Ro'yxatdan tanlangan yoki raqam bo'yicha topilgan (natijasi bor bo'lsa ham) o'quvchi

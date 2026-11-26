@@ -296,6 +296,63 @@ def test_biologiya_kimyo_tituli_yozma_ish_betlari():
     assert [b["label"] for b in bubbles if b["kind"] == "write" and b["page"] == 3] == ["41.1", "41.2", "41.3"]
 
 
+def test_shtrix_kod_betlar_aralash_skanerlanadi():
+    """Har betda shtrix-kod: skaner betni o'zi aniqlaydi, ismli titulda ID koddan olinadi, boshqa test rad etiladi."""
+
+    from backend.barcode import decode, modules, parse_sheet_value, sheet_value
+    from test_api import _subject_key
+
+    assert parse_sheet_value(decode(modules(sheet_value(1101, 3, 123456)))) == {"number": 1101, "page": 3, "test": 23456}
+    assert decode("0" * 95) is None
+
+    reset_database()
+    register_teacher()
+    test_id = _ms_test(subject="Biologiya", key_questions=_subject_key("Biologiya"))
+    pdf, bubbles = _sheet(test_id, students=[(1101, "Aliyev Vali")])
+    assert sorted(b["page"] for b in bubbles if b["kind"] == "barcode") == [1, 2, 3, 4, 5]
+    layout = client.get(f"/api/teacher/tests/{test_id}/scan/layout", headers=as_user(555)).json()
+    assert layout["test_code"] == test_id % 100000
+
+    base = f"/api/teacher/tests/{test_id}"
+    # 4-betning surati "1-bet" deb yuborildi — skaner shtrix-koddan 4-bet ekanini va ID'ni (bo'yalmagan) biladi
+    photo = _photo(pdf, bubbles, 4, {}, writing={"42.2": "MITOZ"})
+    body = client.post(f"{base}/scan", json={"image_base64": photo, "page": 1}, headers=as_user(555)).json()
+    assert body["page"] == 4 and body["sheet_number"] == 1101 and body["barcode"]["page"] == 4
+    assert [item["label"] for item in body["written"]] == ["42.1", "42.2", "42.3", "42.4", "42.5"]
+
+    # Boshqa testning varag'i — rad etiladi
+    other = _ms_test(subject="Biologiya", key_questions=_subject_key("Biologiya"))
+    wrong = client.post(f"/api/teacher/tests/{other}/scan", json={"image_base64": photo, "page": 1}, headers=as_user(555))
+    assert wrong.status_code == 422 and "boshqa test" in wrong.json()["detail"]
+
+
+def test_shtrix_kod_telefondagi_skanerda_oqiladi():
+    """Telefondagi skanerning readSheetBarcode funksiyasi (app.js) — V8'da, titulning chizilgan rasmi ustida."""
+
+    import re
+    from pathlib import Path
+
+    import fitz
+    import numpy as np
+    from py_mini_racer import MiniRacer
+
+    reset_database()
+    register_teacher()
+    test_id = _ms_test()
+    pdf, bubbles = _sheet(test_id, students=[(4321, "Valiyev Ali")])
+    source = Path(main.__file__).resolve().parent.parent.joinpath("frontend", "js", "app.js").read_text(encoding="utf-8")
+    function = re.search(r"^function readSheetBarcode\(sheet, bubbles\) \{.*?^\}$", source, re.S | re.M).group(0)
+    context = MiniRacer()
+    context.eval(f"const SHEET_PAGE = {{ height: {main.A4[1]} }}; const READ_SCALE = 2;\n{function}")
+    for page in (1, 2):
+        pix = fitz.open(stream=pdf, filetype="pdf")[page - 1].get_pixmap(matrix=fitz.Matrix(2, 2), colorspace=fitz.csGRAY)
+        gray = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width)[:240]  # faqat tepa (sarlavha)
+        sheet = {"W": int(gray.shape[1]), "H": int(gray.shape[0]), "warped": gray.ravel().tolist()}
+        page_bubbles = [b for b in bubbles if b["page"] == page]
+        found = context.call("readSheetBarcode", sheet, page_bubbles)
+        assert found == {"number": 4321, "page": page, "test": test_id % 100000}, found
+
+
 def test_mos_kelmaydigan_test_eski_titulda():
     """Tuzilishi boshqa (yoki onlayn) test 15-versiyada ham avvalgi bitta betlik titulda chiqadi."""
 
