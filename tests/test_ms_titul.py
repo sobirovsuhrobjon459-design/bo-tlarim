@@ -184,6 +184,13 @@ def test_tarix_tituli_katakchali():
     assert not written_is_blank(images["36a"]) and not written_is_blank(images["40b"])
     assert written_is_blank(images["36b"]) and written_is_blank(images["45b"])
 
+    # Geografiya — Tarixdagidek katakchali, o'z namunasi va "Diqqat! Yozilmasin" ustuni bilan
+    geo_pdf, geo_bubbles = _sheet(_ms_test(subject="Geografiya"))
+    geo_text = fitz.open(stream=geo_pdf, filetype="pdf")[1].get_text()
+    assert "YOZILMASIN" in geo_text and "tutuq belgisi" in geo_text and "Bo‘shang" not in geo_text
+    geo_written = [b for b in geo_bubbles if b["kind"] == "write"]
+    assert len(geo_written) == 20 and all(b["page"] == 2 and 330 < b["w"] < 420 for b in geo_written)
+
     # Matematika — katakchasiz (erkin katak)
     _, bubbles = _sheet(_ms_test())
     assert all(b["w"] < 300 for b in bubbles if b["kind"] == "write")
@@ -297,8 +304,8 @@ def test_mos_kelmaydigan_test_eski_titulda():
     cases = {
         "boshqa tuzilish": _ms_test(key_questions=_ms_questions()[:30]),
         "onlayn": _ms_test(enrollment_type="open"),
-        # Tuzilishi mos, lekin 2-beti hali tasdiqlanmagan fan
-        "Geografiya": _ms_test(subject="Geografiya"),
+        # Tuzilishi mos, lekin titul namunasi hali yo'q fan
+        "Rus tili": _ms_test(subject="Rus tili"),
         # 33–35 to'rt variantli — imtihon formati emas
         "33-35 A-D": _ms_test(key_questions=[{**q, "option_count": 4, "correct": "A"} if q["number"] in (33, 34, 35) else q
                                              for q in _ms_questions()]),

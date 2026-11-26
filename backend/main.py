@@ -4936,7 +4936,7 @@ MS15_WRITTEN = [f"{number}{part}" for number in range(36, 46) for part in "ab"]
 # Titul tayyor (imtihondagi 2-beti tasdiqlangan) fanlar; qolganlari — o'z namunasi kelguncha eski titulda
 MS15_NATIVE_SUBJECT = "ona tili va adabiyot"
 MS15_SCIENCE_SUBJECTS = {"kimyo", "biologiya"}  # 36–40 — qisqa javob, 41–43 — yozma ish (har biriga bet)
-MS15_READY_SUBJECTS = {"matematika", "fizika", "tarix", MS15_NATIVE_SUBJECT, *MS15_SCIENCE_SUBJECTS}
+MS15_READY_SUBJECTS = {"matematika", "fizika", "tarix", "geografiya", MS15_NATIVE_SUBJECT, *MS15_SCIENCE_SUBJECTS}
 MS15_WORK_BANDS = 7          # yozma ishdagi bandlar soni — ko'pi bilan
 MS15_SCIENCE_NOTE = ("Talabgorlar diqqatiga! O‘zgartirilgan javoblar hisobga olinmaydi. Sharikli ko‘k ruchkadan "
                      "foydalaning. Bosh harflarda yozing. Har bir belgi alohida katakchaga yoziladi.")
@@ -4952,7 +4952,10 @@ MS15_NATIVE_CELLS = 14       # 36–44: har qatorda katakchalar soni (imtihondag
 MS15_ESSAY_LINES = 32        # esse betidagi chiziqlar
 MS15_ESSAY_RED = colors.HexColor("#F08A8A")   # har 10 qator — rangli (qatorlarni sanash oson)
 MS15_ESSAY_LINE = colors.HexColor("#B9B9B9")
-MS15_CELL_SUBJECTS = {"tarix"}  # 2-betda javob katakchalarga harfma-harf yoziladigan fanlar
+MS15_CELL_SUBJECTS = {"tarix", "geografiya"}  # 2-betda javob katakchalarga harfma-harf yoziladigan fanlar
+MS15_GEO_NOTE = ("Javobni namunadagidek bosh harflar bilan yozing: har bir belgi — harf, raqam, tutuq belgisi va "
+                 "chiziqcha — alohida katakchaga yoziladi. O‘zgartirilgan javoblar hisobga olinmaydi.")
+MS15_GEO_SAMPLE = ["S", "H", "C", "H", "O", "‘", "G", "‘", "1", "2", "’", "N", "G", "-"]
 MS15_CELL_DIVIDER = colors.HexColor("#F2AE80")  # katakchalar orasidagi chiziq: ko'rinadi, skaner uchun "qog'oz"
 MS15_CELL_NOTE = ("Eslatma: Sh, Ch, Ng tovushlaridagi har bir belgi alohida katakchada, O‘, G‘ tovushlari esa bitta "
                   "katakchada yoziladi. Javoblar varaqasini to‘ldirish uchun namuna: Bo‘shang, Nuh II, Tamg‘a, 1929-yil")
@@ -5026,7 +5029,7 @@ def _ms15_plan(test: Test, all_items: list, variants: list[str] | None) -> dict 
             "style": {"name_area": layout["name_area"]},
             # 2-bet ko'rinishi: Ona tili — 36–44 katakchalari; Kimyo/Biologiya — 36–40 qatorlari (3–5-bet — yozma ish);
             # Tarix — harfma-harf qatorlar; qolganlari — erkin katak
-            "native": native, "science": science, "cells": subject in MS15_CELL_SUBJECTS}
+            "native": native, "science": science, "cells": subject in MS15_CELL_SUBJECTS, "geo": subject == "geografiya"}
 
 
 def _draw_ms15_card(sheet, test: Test, plan: dict, page: int, with_answers: bool, student: tuple | None,
@@ -5335,12 +5338,16 @@ def _draw_ms15_cells(sheet, plan: dict, layout: dict, text, frame, rule, note) -
     """
 
     left, right, bottom = layout["left"], layout["right"], layout["bottom"]
+    # Geografiya: namunasi boshqa va o'ngda "Diqqat! Yozilmasin" ustuni (tekshiruvchi uchun, imtihondagidek)
+    geo = plan.get("geo")
+    note_text, sample = (MS15_GEO_NOTE, MS15_GEO_SAMPLE) if geo else (MS15_CELL_NOTE, MS15_CELL_SAMPLE)
+    side = 70 if geo else 0
 
     # 1) Eslatma va namuna
     note_top = layout["id_band"] - 8
     note_bottom = note_top - 58
     frame(left, note_bottom, right - left, note_top - note_bottom)
-    words, lines, current = MS15_CELL_NOTE.split(), [], ""
+    words, lines, current = note_text.split(), [], ""
     for word in words:  # ikki qatorga bo'linadi (ramka eniga qarab)
         trial = f"{current} {word}".strip()
         if current and stringWidth(trial, SHEET_SANS, 7.6) > right - left - 16:
@@ -5351,10 +5358,10 @@ def _draw_ms15_cells(sheet, plan: dict, layout: dict, text, frame, rule, note) -
     lines.append(current)
     for index, line in enumerate(lines[:2]):
         text(left + 8, note_top - 12 - index * 10, line, 7.6, SHEET_SANS, "left", colors.HexColor("#333333"))
-    cell = 14.0
-    sample_left = (left + right - len(MS15_CELL_SAMPLE) * cell) / 2
+    cell = 18.0 if geo else 14.0
+    sample_left = (left + right - len(sample) * cell) / 2
     sample_bottom = note_bottom + 7
-    for index, letter in enumerate(MS15_CELL_SAMPLE):
+    for index, letter in enumerate(sample):
         x = sample_left + index * cell
         if letter:
             frame(x, sample_bottom, cell, 17, line=0.6)
@@ -5370,9 +5377,11 @@ def _draw_ms15_cells(sheet, plan: dict, layout: dict, text, frame, rule, note) -
     label_width = 18
     strip_left = left + number_width + 6
     cells_left = strip_left + label_width
-    cells_right = right - 6
+    cells_right = right - side - 6
     count = max(1, round((cells_right - cells_left) / 15.5))
     size = (cells_right - cells_left) / count
+    if side:
+        rule(right - side, bottom, right - side, written_top)
     for index, (label, _, _, _, ref) in enumerate(plan["pages"][1]):
         line, part = divmod(index, 2)
         block_top = written_top - line * block
@@ -5380,6 +5389,13 @@ def _draw_ms15_cells(sheet, plan: dict, layout: dict, text, frame, rule, note) -
             if line:
                 rule(left, block_top, right, block_top)
             text(left + number_width / 2, block_top - block / 2 - 3.5, label[:-1], 10, REPORT_FONT_BOLD)
+            if side:  # "Diqqat! Yozilmasin" va tekshiruvchi chiziqchalari
+                middle = right - side / 2
+                text(middle, block_top - 14, "DIQQAT!", 7, REPORT_FONT_BOLD)
+                text(middle, block_top - 23, "YOZILMASIN", 6.4, REPORT_FONT_BOLD)
+                for mark in range(2):
+                    x = right - side + 8 + mark * 29
+                    rule(x, block_top - block + 10, x + 22, block_top - block + 10)
         strip_bottom = block_top - 4 - (part + 1) * strip_height - part * 4
         # Katakchalar orasidagi chiziqlar (och), keyin ramkalar (to'q)
         sheet.setStrokeColor(MS15_CELL_DIVIDER)
