@@ -9038,6 +9038,44 @@ def delete_student(
     return {"ok": True}
 
 
+@app.post("/api/teacher/tests/{test_id}/students/{attempt_id}/reset")
+def reset_student_result(
+    test_id: int, attempt_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
+):
+    """
+    Titulli (offline) testda o'quvchi natijasini tozalash: o'qilgan javoblar, yozma kataklar, esse, titul rasmlari
+    va sinfdagi bali o'chadi. O'quvchi ro'yxatda "kutilmoqda" bo'lib qoladi — varag'ini qayta skanerlash (yoki
+    javoblarini qayta kiritish) mumkin; qayta saqlanganda token odatdagidek yechiladi.
+    """
+
+    test = _get_own_test(db, teacher, test_id)
+    attempt = db.get(Attempt, attempt_id)
+    if not attempt or attempt.test_id != test.id or attempt.user_id is not None or attempt.status not in ("done", "pending"):
+        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    if attempt.status != "done":
+        raise HTTPException(status_code=400, detail="Bu o'quvchining natijasi hali yo'q")
+
+    for model in (StudentAnswer, WrittenAnswer, EssayImage, SheetImage):
+        db.execute(delete(model).where(model.attempt_id == attempt.id))
+    attempt.status = "pending"
+    attempt.correct = attempt.wrong = attempt.seconds = 0
+    attempt.percent = 0
+    attempt.finished_at = None
+    attempt.saved_answers = None
+    attempt.variant = None
+    attempt.dtm_certificates = None
+    attempt.essay_text = attempt.essay_score = attempt.essay_ai_score = attempt.essay_ai_comment = None
+    # Sinf natijalarida — "qatnashmagan" (bali bo'sh)
+    if attempt.class_student_id:
+        for score in db.scalars(
+            select(ClassTestScore).join(ClassTest, ClassTest.id == ClassTestScore.test_id).where(
+                ClassTest.source_test_id == test.id, ClassTestScore.student_id == attempt.class_student_id)
+        ).all():
+            score.score = None
+    db.commit()
+    return {"ok": True, "name": attempt.offline_name}
+
+
 @app.get("/api/teacher/tests/{test_id}/students/{attempt_id}/detail")
 def student_answer_detail(
     test_id: int, attempt_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
@@ -9060,6 +9098,8 @@ def student_answer_detail(
         "edit": _teacher_answer_sheet(db, test, attempt),
         # Yozma javobni qo'lda kiritish klaviaturasi: "math" (√, kasr) yoki "text" (oddiy harflar)
         "keyboard": subject_keyboard(test.subject),
+        # Titulli (offline) testda o'qilgan natijani tozalash mumkin — varaq qayta skanerlanadi
+        "can_reset": test.enrollment_type == "closed" and attempt.user_id is None and attempt.status == "done",
     }
 
 

@@ -17548,6 +17548,12 @@ async function renderStudentDetail(testId, attemptId) {
     }
     ${detail.essay ? essayGradingHtml(detail.essay) : ""}
     ${
+      detail.can_reset
+        ? `<button type="button" class="btn btn-ghost danger-text" id="reset-result-button" style="margin-top:16px">🧹 Natijani tozalash</button>
+           <p class="subtitle" style="margin:4px 4px 0;font-size:13px">O'qilgan javoblar o'chadi, o'quvchi ro'yxatda qoladi — varag'ini qayta skanerlash mumkin.</p>`
+        : ""
+    }
+    ${
       canEdit
         ? `<div class="sticky-footer" id="ans-save-bar" ${pending ? "" : "hidden"}>
              <button class="btn" id="ans-save" style="margin:0">💾 ${pending ? "Saqlash" : "O'zgarishlarni saqlash"}</button>
@@ -17743,6 +17749,20 @@ async function renderStudentDetail(testId, attemptId) {
       "click",
       guarded(() => openSheetImages(`/api/teacher/tests/${testId}/students/${attemptId}/sheet/photos`, "🧾 Yozma ish yechimi"))
     );
+  document.getElementById("reset-result-button")?.addEventListener(
+    "click",
+    guarded(async () => {
+      const confirmed = await askConfirm(
+        `${detail.name} natijasi tozalansinmi? O'qilgan javoblar, yozma javoblar va titul rasmlari o'chadi. ` +
+          "O'quvchi ro'yxatda qoladi — varag'ini qayta skanerlaysiz (token qayta yechiladi)."
+      );
+      if (!confirmed) return;
+      await api(`/api/teacher/tests/${testId}/students/${attemptId}/reset`, { method: "POST", body: {} });
+      unsavedChanges = false;
+      showToast("🧹 Natija tozalandi — varaqni qayta skanerlang");
+      await renderTestDetail(testId);
+    })
+  );
 }
 
 // Skanerlangan titul rasmi: oynada to'liq; rasm bosilsa — kattalashadi (kichik yozuvni o'qish uchun)
