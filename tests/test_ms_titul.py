@@ -197,7 +197,7 @@ def test_tarix_tituli_katakchali():
 
 
 def test_ona_tili_tituli_esse_bilan():
-    """Ona tili: 2-betda 36–39 (bitta qator) va 40–44 (a, b) katakchalari; 3–4-bet — esse, rasmi saqlanadi."""
+    """Ona tili: 2-betda 36–39 (bitta qator) va 40–44 (a, b) katakchalari; 3-bet — esse (bitta bet), rasmi saqlanadi."""
 
     import fitz
 
@@ -211,14 +211,14 @@ def test_ona_tili_tituli_esse_bilan():
                        essay_topic="Kitob — bilim manbai")
     pdf, bubbles = _sheet(test_id)
     pages = fitz.open(stream=pdf, filetype="pdf")
-    assert len(pages) == 4
+    assert len(pages) == 3
     assert "bosh harflar bilan" in pages[1].get_text() and "YOZILMASIN" in pages[1].get_text()
-    assert "ESSE" in pages[2].get_text() and "Familiya, ismi" in pages[3].get_text()
+    assert "ESSE" in pages[2].get_text() and "Familiya, ismi" in pages[2].get_text()
     written = [b for b in bubbles if b["kind"] == "write"]
     assert [b["label"] for b in written] == main.MS15_NATIVE_WRITTEN and all(b["page"] == 2 for b in written)
     essay = [b for b in bubbles if b["kind"] == "page_image"]
-    assert [(b["page"], b["ref"], b["letter"]) for b in essay] == [(3, "essay", "1"), (4, "essay", "2")]
-    for page in (2, 3, 4):  # har betda skaner belgilari bor
+    assert [(b["page"], b["ref"], b["letter"]) for b in essay] == [(3, "essay", "1")]
+    for page in (2, 3):  # har betda skaner belgilari bor
         assert sum(b["kind"] == "mark" and b["page"] == page for b in bubbles) == 20
 
     base = f"/api/teacher/tests/{test_id}"

@@ -4944,7 +4944,7 @@ MS15_SCIENCE_NOTE = ("Talabgorlar diqqatiga! O‘zgartirilgan javoblar hisobga o
                      "foydalaning. Bosh harflarda yozing. Har bir belgi alohida katakchaga yoziladi.")
 MS15_SCIENCE_SAMPLE = ["0", "1", "2", "3", ".", ":", "‘", "", "C", "a", "₃", "(", "P", "O", "₄", ")", "₂", "",
                        "A", "B", "C", "D", "E", "F", "I", "J"]
-# Ona tili: 36–39 — bitta javob, 40–44 — a va b; 45 — esse (3–4-bet)
+# Ona tili: 36–39 — bitta javob, 40–44 — a va b; 45 — esse (3-bet)
 MS15_NATIVE_WRITTEN = ["36", "37", "38", "39"] + [f"{number}{part}" for number in range(40, 45) for part in "ab"]
 MS15_NATIVE_NOTE = ("36–44-savollar javobini quyidagi namuna asosida bosh harflar bilan yozing. Sh, Ch, Ng "
                     "tovushlaridagi har bir belgi alohida katakchada, O‘, G‘ tovushlari esa bitta katakchada yoziladi.")
@@ -5024,7 +5024,7 @@ def _ms15_plan(test: Test, all_items: list, variants: list[str] | None) -> dict 
     else:
         pages = [closed, written]
     if native and getattr(test, "essay_max", None):
-        pages += [["essay"], ["essay"]]  # 3–4-bet: esse (skaner betni butunligicha rasm qiladi)
+        pages += [["essay"]]  # 3-bet: esse — imtihondagidek bitta bet (skaner betni butunligicha rasm qiladi)
     layout = _ms15_layout()
     return {"ms15": True, "width": layout["width"], "height": layout["height"], "edge_marks": SHEET_EDGE_MARKS,
             "pages": pages, "column_width": 0.0, "reserved": 0, "layout": layout,
@@ -5133,7 +5133,7 @@ def _draw_ms15_card(sheet, test: Test, plan: dict, page: int, with_answers: bool
     else:
         subtitles = {1: "MILLIY SERTIFIKAT",
                      2: "36–44: YOZMA JAVOBLAR" if plan.get("native") else "36–45: YOZMA JAVOBLAR",
-                     3: "45: ESSE", 4: "45: ESSE (DAVOMI)"}
+                     3: "45: ESSE"}
     text(width / 2, header + 9, subtitles.get(page, ""), 7.2)
     try:
         logo_height = 22.0
@@ -5272,7 +5272,7 @@ def _draw_ms15_card(sheet, test: Test, plan: dict, page: int, with_answers: bool
     if page >= 3 and plan.get("science"):  # Kimyo, Biologiya: 41, 42, 43 — yozma ish
         _draw_ms15_work(sheet, plan, layout, page, student, text, frame, rule, note)
         return
-    if page >= 3:  # Ona tili: esse (3-bet) va uning davomi (4-bet)
+    if page >= 3:  # Ona tili: esse (3-bet)
         _draw_ms15_essay(sheet, layout, page, student, text, frame, rule, note)
         return
 
@@ -5648,7 +5648,7 @@ def _draw_ms15_work(sheet, plan: dict, layout: dict, page: int, student: tuple |
 
 def _draw_ms15_essay(sheet, layout: dict, page: int, student: tuple | None, text, frame, rule, note) -> None:
     """
-    Ona tili essesi: 3-bet ("ESSE") va 4-bet (davomi) — chiziqli. Har 10 qator rangli (sanash oson).
+    Ona tili essesi: 3-bet ("ESSE") — chiziqli (imtihondagidek bitta bet). Har 10 qator rangli (sanash oson).
     Skaner chiziqli qismni butunligicha rasm qiladi: u o'quvchining qo'lda yozgan essesi bo'lib saqlanadi.
     """
 
