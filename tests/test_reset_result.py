@@ -52,3 +52,42 @@ def test_titulli_testda_natijani_tozalash():
     client.post(f"/api/attempts/{started['attempt_id']}/finish", json={"answers": {"1": "B"}}, headers=as_user(901))
     response = client.post(f"/api/teacher/tests/{online['id']}/students/{started['attempt_id']}/reset", headers=as_user(555))
     assert response.status_code == 404
+
+
+def test_natijasi_yoq_oquvchi_qatnashmadi_yoki_chetlatildi():
+    """Titulli testda natijasi kiritilmagan o'quvchi "qatnashmadi" / "chetlatildi" deb belgilanadi."""
+    from backend.database import Attempt
+
+    reset_database()
+    register_teacher()
+    created = create_test(enrollment_type="closed")
+    base = f"/api/teacher/tests/{created['id']}"
+    assert client.post(f"{base}/students", json={"names": ["Aliyev Vali", "Karimova Zebo"]},
+                       headers=as_user(555)).status_code == 200
+    detail = client.get(base, headers=as_user(555)).json()
+    ids = {student["name"]: student["id"] for student in detail["students"]}
+    assert detail["missing"] == 2
+
+    vali = ids["Aliyev Vali"]
+    page = client.get(f"{base}/students/{vali}/detail", headers=as_user(555)).json()
+    assert page["can_mark"] is True and page["mark"] is None
+    assert client.put(f"{base}/students/{vali}/mark", json={"mark": "boshqa"}, headers=as_user(555)).status_code == 422
+    assert client.put(f"{base}/students/{vali}/mark", json={"mark": "absent"}, headers=as_user(555)).status_code == 200
+    zebo = ids["Karimova Zebo"]
+    assert client.put(f"{base}/students/{zebo}/mark", json={"mark": "expelled"}, headers=as_user(555)).status_code == 200
+
+    detail = client.get(base, headers=as_user(555)).json()
+    marks = {student["name"]: student["mark"] for student in detail["students"]}
+    assert marks == {"Aliyev Vali": "absent", "Karimova Zebo": "expelled"} and detail["missing"] == 0
+
+    # Belgini olib tashlash
+    assert client.put(f"{base}/students/{zebo}/mark", json={"mark": None}, headers=as_user(555)).status_code == 200
+    assert client.get(base, headers=as_user(555)).json()["missing"] == 1
+
+    # Keyin varag'i skanerlansa — belgi o'zi olib tashlanadi; natijasi borga belgi qo'yilmaydi
+    assert client.post(f"{base}/scan/save", json={"attempt_id": vali, "answers": {"1": "B"}},
+                       headers=as_user(555)).status_code == 200
+    with SessionLocal() as session:
+        attempt = session.get(Attempt, vali)
+        assert attempt.status == "done" and attempt.offline_mark is None
+    assert client.put(f"{base}/students/{vali}/mark", json={"mark": "absent"}, headers=as_user(555)).status_code == 400

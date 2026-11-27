@@ -416,6 +416,9 @@ class Attempt(Base):
     # DTM testi: o'qituvchi shu natijaga kiritgan sertifikatlar (JSON): {"3": {"kind": "ms", "value": "57.90"},
     # "0": {"kind": "cert"}, "1": {"kind": "none"}} — blok raqami bo'yicha; o'quvchi profilidagisidan ustun
     dtm_certificates: Mapped[str | None] = mapped_column(Text, default=None)
+    # Titulli (offline) testda natijasi kiritilmagan o'quvchi: "absent" — qatnashmadi, "expelled" — chetlatildi.
+    # Holati "pending" qoladi; varag'i keyin skanerlansa belgi o'zi olib tashlanadi
+    offline_mark: Mapped[str | None] = mapped_column(String(20), default=None)
     started_at: Mapped[datetime] = mapped_column(default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(default=None)
     # pending  — o'qituvchi yopiq testga qo'shgan, javoblari hali kiritilmagan

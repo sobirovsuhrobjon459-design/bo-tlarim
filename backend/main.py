@@ -287,7 +287,7 @@ def _add_missing_columns() -> None:
         "test_attempts": {
             "offline_name": "VARCHAR(200)", "saved_answers": "TEXT", "sheet_number": "INTEGER", "variant": "VARCHAR(2)",
             "class_student_id": "INTEGER", "essay_text": "TEXT", "essay_score": "INTEGER", "dtm_certificates": "TEXT",
-            "essay_ai_score": "INTEGER", "essay_ai_comment": "TEXT",
+            "essay_ai_score": "INTEGER", "essay_ai_comment": "TEXT", "offline_mark": "VARCHAR(20)",
         },
         "users": {"username": "VARCHAR(64)", "photo_url": "VARCHAR(500)", "deleted_at": "TIMESTAMP",
                   "deleted_tg_hash": "VARCHAR(64)"},
@@ -8803,10 +8803,13 @@ def test_detail(test_id: int, teacher: Teacher = Depends(get_current_teacher), d
                 "editable": attempt.user_id is None,  # faqat o'qituvchi qo'shgan o'quvchi tahrirlanadi
                 "number": attempt.sheet_number,
                 "variant": attempt.variant,
+                # Natijasi yo'q o'quvchi: "absent" — qatnashmadi, "expelled" — chetlatildi
+                "mark": attempt.offline_mark if attempt.status == "pending" else None,
             }
         )
 
-    filled = sum(1 for student in students if student["has_answers"])
+    # Qatnashmagan / chetlatilgan o'quvchi "kiritilmagan" hisoblanmaydi
+    filled = sum(1 for student in students if student["has_answers"] or student["mark"])
 
     return {
         "id": test.id,
@@ -9038,6 +9041,36 @@ def delete_student(
     return {"ok": True}
 
 
+OFFLINE_MARKS = {"absent": "Qatnashmadi", "expelled": "Chetlatildi"}
+
+
+class OfflineMarkIn(BaseModel):
+    mark: str | None = Field(default=None, pattern="^(absent|expelled)$")
+
+
+@app.put("/api/teacher/tests/{test_id}/students/{attempt_id}/mark")
+def mark_student(
+    test_id: int, attempt_id: int, body: OfflineMarkIn, teacher: Teacher = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """
+    Titulli (offline) testda natijasi kiritilmagan o'quvchi: "absent" — qatnashmadi, "expelled" — test sinovidan
+    chetlatildi; None — belgini olib tashlash. O'quvchi ro'yxatda qoladi; "kiritilmagan" deb sanalmaydi.
+    """
+
+    test = _get_own_test(db, teacher, test_id)
+    attempt = db.get(Attempt, attempt_id)
+    if not attempt or attempt.test_id != test.id or attempt.user_id is not None or attempt.status not in ("done", "pending"):
+        raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+    if test.enrollment_type != "closed":
+        raise HTTPException(status_code=400, detail="Bu belgi faqat titulli (offline) testda")
+    if attempt.status != "pending":
+        raise HTTPException(status_code=400, detail="O'quvchining natijasi bor — avval natijani tozalang")
+    attempt.offline_mark = body.mark
+    db.commit()
+    return {"ok": True, "mark": attempt.offline_mark}
+
+
 @app.post("/api/teacher/tests/{test_id}/students/{attempt_id}/reset")
 def reset_student_result(
     test_id: int, attempt_id: int, teacher: Teacher = Depends(get_current_teacher), db: Session = Depends(get_db)
@@ -9065,6 +9098,7 @@ def reset_student_result(
     attempt.variant = None
     attempt.dtm_certificates = None
     attempt.essay_text = attempt.essay_score = attempt.essay_ai_score = attempt.essay_ai_comment = None
+    attempt.offline_mark = None
     # Sinf natijalarida — "qatnashmagan" (bali bo'sh)
     if attempt.class_student_id:
         for score in db.scalars(
@@ -9100,6 +9134,9 @@ def student_answer_detail(
         "keyboard": subject_keyboard(test.subject),
         # Titulli (offline) testda o'qilgan natijani tozalash mumkin — varaq qayta skanerlanadi
         "can_reset": test.enrollment_type == "closed" and attempt.user_id is None and attempt.status == "done",
+        # Natijasi yo'q o'quvchini "qatnashmadi" yoki "chetlatildi" deb belgilash
+        "can_mark": test.enrollment_type == "closed" and attempt.user_id is None and attempt.status == "pending",
+        "mark": attempt.offline_mark if attempt.status == "pending" else None,
     }
 
 
@@ -9550,6 +9587,7 @@ def _store_offline_answers(db: Session, test: Test, teacher: Teacher, attempt: A
     total_questions = _grade_answers(db, attempt, test, answers)
     _calculate_attempt_score(db, attempt, test)
     attempt.status = "done"
+    attempt.offline_mark = None  # "qatnashmadi / chetlatildi" belgisi — varaq skanerlandi, endi kerak emas
     attempt.finished_at = utcnow()
 
     if _charges_tokens(test, teacher) and not was_filled:
@@ -10113,10 +10151,17 @@ def finish_scanning(
         name = attempt.offline_name or "Noma'lum"
         number = f" · ID {attempt.sheet_number:04d}" if attempt.sheet_number else ""
         lines.append(f"{place}. {name}{number} — {attempt.correct}/{total} · {round(attempt.percent, 1)}%")
-    waiting = [attempt.offline_name or "Noma'lum" for attempt in attempts if attempt.status == "pending"]
+    waiting = [attempt.offline_name or "Noma'lum" for attempt in attempts
+               if attempt.status == "pending" and not attempt.offline_mark]
     if waiting:
         lines += ["", f"⏳ Hali tekshirilmagan ({len(waiting)}): " + ", ".join(waiting[:60])
                   + (" …" if len(waiting) > 60 else "")]
+    for mark, label in OFFLINE_MARKS.items():
+        marked = [attempt.offline_name or "Noma'lum" for attempt in attempts
+                  if attempt.status == "pending" and attempt.offline_mark == mark]
+        if marked:
+            lines += ["", f"{'🚫' if mark == 'absent' else '⛔'} {label} ({len(marked)}): " + ", ".join(marked[:60])
+                      + (" …" if len(marked) > 60 else "")]
 
     # Telegram xabari 4096 belgigacha — qatorlar bo'yicha bo'laklanadi
     chunks, current = [], ""

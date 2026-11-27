@@ -17086,6 +17086,9 @@ function wireTestMenu(groups) {
   });
 }
 
+// Titulli testda natijasi yo'q o'quvchining belgisi
+const OFFLINE_MARK_LABELS = { absent: "🚫 Qatnashmadi", expelled: "⛔ Chetlatildi" };
+
 async function renderTestDetail(testId) {
   const test = await api(`/api/teacher/tests/${testId}`);
   const isClosedTest = test.enrollment_type === "closed";
@@ -17106,7 +17109,9 @@ async function renderTestDetail(testId) {
               <p class="subtitle" style="margin:2px 0 0">
                 ${student.has_answers
             ? `✅ ${student.correct}/${test.count} • ${student.percent}% — batafsil ›`
-            : student.editable ? "⏳ Javoblar kiritilmagan — kiritish ›" : "⏳ Javoblar kiritilmagan"
+            : student.mark
+              ? `${OFFLINE_MARK_LABELS[student.mark] || ""} — o'zgartirish ›`
+              : student.editable ? "⏳ Javoblar kiritilmagan — kiritish ›" : "⏳ Javoblar kiritilmagan"
           }
               </p>
             </div>
@@ -17510,6 +17515,20 @@ async function renderStudentDetail(testId, attemptId) {
     </div>
     <div class="stats-grid" id="ans-stats">${statsHtml()}</div>
     ${
+      detail.can_mark
+        ? `<div class="card" style="cursor:default;display:block;margin-bottom:10px">
+             <p class="subtitle" style="margin:0 0 8px">${
+               detail.mark ? `Belgi: <b>${OFFLINE_MARK_LABELS[detail.mark]}</b>` : "Varag'i yo'qmi? O'quvchini belgilang:"
+             }</p>
+             <div class="row-between" style="gap:8px">
+               <button type="button" class="btn ${detail.mark === "absent" ? "" : "btn-ghost"}" data-offline-mark="absent" style="margin:0">🚫 Qatnashmadi</button>
+               <button type="button" class="btn ${detail.mark === "expelled" ? "" : "btn-ghost"}" data-offline-mark="expelled" style="margin:0">⛔ Chetlatildi</button>
+             </div>
+             ${detail.mark ? `<button type="button" class="btn btn-ghost" data-offline-mark="" style="margin:8px 0 0">↩️ Belgini olib tashlash</button>` : ""}
+           </div>`
+        : ""
+    }
+    ${
       !canEdit
         ? ""
         : pending
@@ -17749,6 +17768,18 @@ async function renderStudentDetail(testId, attemptId) {
       "click",
       guarded(() => openSheetImages(`/api/teacher/tests/${testId}/students/${attemptId}/sheet/photos`, "🧾 Yozma ish yechimi"))
     );
+  document.querySelectorAll("[data-offline-mark]").forEach((button) =>
+    button.addEventListener(
+      "click",
+      guarded(async () => {
+        const mark = button.dataset.offlineMark || null;
+        await api(`/api/teacher/tests/${testId}/students/${attemptId}/mark`, { method: "PUT", body: { mark } });
+        unsavedChanges = false;
+        showToast(mark ? `${OFFLINE_MARK_LABELS[mark]} — belgilandi` : "Belgi olib tashlandi");
+        await renderTestDetail(testId);
+      })
+    )
+  );
   document.getElementById("reset-result-button")?.addEventListener(
     "click",
     guarded(async () => {
